@@ -5,12 +5,14 @@ __all__ = [
 import uuid
 import binascii
 import logging
+import importlib
 
 
 class config():
 
     def __init__(self, database='gae'):
         self.database = database
+        self.db_property = importlib.import_module(".db_property", "actingweb" + ".db_" + database)
         #########
         # Basic settings for this app
         #########

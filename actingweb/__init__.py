@@ -1,1 +1,1 @@
-__all__ = ["actor", "oauth", "auth", "property", "trust", "config"]
+__all__ = ["actor", "oauth", "auth", "aw_proxy", "peertrustee", "property", "subscription", "trust", "config"]

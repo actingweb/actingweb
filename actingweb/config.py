@@ -4,13 +4,13 @@ __all__ = [
 
 import uuid
 import binascii
-import os
 import logging
 
 
 class config():
 
-    def __init__(self):
+    def __init__(self, database='gae'):
+        self.database = database
         #########
         # Basic settings for this app
         #########
@@ -111,7 +111,6 @@ class config():
         #########
         # Only touch the below if you know what you are doing
         #########
-        logging.getLogger().handlers[0].setLevel(self.logLevel)  # Hack to get access to GAE logger
         self.root = self.proto + self.fqdn + "/"            # root URI used to identity actor externally
         self.auth_realm = self.fqdn                         # Authentication realm used in Basic auth
 
@@ -120,3 +119,4 @@ class config():
 
     def newToken(self, length=40):
         return binascii.hexlify(os.urandom(int(length // 2)))
+

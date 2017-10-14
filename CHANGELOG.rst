@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+Oct 7, 2017
+-----------
+- Split out actingweb module as a separate library and repository
+
 Jul 9, 2017
 -----------
 - Fix bug with unique actor setting and actor already exists

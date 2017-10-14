@@ -1,31 +1,31 @@
 ======================================================
-README - acting-web-gae-library - an ActingWeb Library
+README - actingweb - an ActingWeb Library
 ======================================================
-This is a python and Google AppEngine implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
-distributed micro-services model. It is both a demo application implementing the micro-services model as 
-described in the specification, and it serves as the reference implementation for the ActingWeb REST protocol 
+This is a python library implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
+distributed micro-services model. It serves as the reference implementation for the ActingWeb REST protocol 
 specification for how such micro-services interact.
 
 Repository and documentation
 ----------------------------
 
 The repository for this library can be found at 
-`https://bitbucket.org/gregerw/acting-web-gae-library <https://bitbucket.org/gregerw/acting-web-gae-library>`_.
+`https://bitbucket.org/gregerw/actingweb <https://bitbucket.org/gregerw/actingweb>`_.
 
+**TO-DO**
 The latest documentation for the released version (release branch) of this library can be found at 
 `http://acting-web-gae-library.readthedocs.io/ <http://acting-web-gae-library.readthedocs.io/>`_.
 
 The master branch of the library has the latest features and bug fixes and the updated documentation can be found at
 `http://acting-web-gae-library.readthedocs.io/en/master <http://acting-web-gae-library.readthedocs.io/en/master>`_.
 
-Features of acting-web-gae-library
+Features of actingweb library
 ----------------------------------
-The latest code in master is at all times deployed to `https://actingwebdemo.appspot.com/ <https://actingwebdemo.appspot.com/>`_
-It has implemented a simple sign-up page as a front-end to a REST-based factory URL that will instantiate a new actor with a guid to identify the actor. The guid is then embedded in the actor's root URL, e.g. ``https://actingwebdemo.appspot.com/9f1c331a3e3b5cf38d4c3600a2ab5d54``. 
+The latest code in master is at all times deployed to `https://actingwebdemo.greger.io/ <https://actingwebdemo.greger.io/>`_
+It has implemented a simple sign-up page as a front-end to a REST-based factory URL that will instantiate a new actor with a guid to identify the actor. The guid is then embedded in the actor's root URL, e.g. ``https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54``. 
 
 If you try to create an actor, you will get to a simple web front-end where you can set the actor's data (properties) and delete the actor. You can later access the actor (both /www and REST) by using the Creator you set as username and the passphrase you get when creating the actor and log in.
 
-**acting-web-gae-library** is a close to complete implementation of the full ActingWeb specification where all functionality can be accessed through the actor's root URL (e.g. ``https://actingwebdemo.appspot.com/9f1c331a3e3b5cf38d4c3600a2ab5d54``):
+**acting-web-gae-library** is a close to complete implementation of the full ActingWeb specification where all functionality can be accessed through the actor's root URL (e.g. ``https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54``):
 
 - ``/properties``: attributed/value pairs as flat or nested json can be set, accessed, and deleted to store this actor's data
 - ``/meta``: a publicly available json structure allowing actor's to discover each other's capabilities
@@ -35,12 +35,12 @@ If you try to create an actor, you will get to a simple web front-end where you 
 - ``/resources``: a skeleton to simplify exposure of any type of resource (where /properties is not suited)
 - ``/oauth``: used to initiate a www-based oauth flow to tie the actor to a specific OAuth user and service. Available if OAuth is turned on and a 3rd party OAuth service has been configured in config.py. /www will also be redirected to /oauth (*OAuth is not enabled in the online actingwebdemo mini-application*)
 
-**Sidenote**: The **acting-web-gae-library** also implements a simple mechanism for protecting the /www path with oauth (not in the specification). On successful OAuth authorisation, it will set a browser cookie to the oauth token. This is not used in the inline demo and requires also that the identity of the user authorising OAuth access is the same user already tied to the instantiated actor. There is a programming hook that allows such verification as part of the OAuth flow, but it is not enabled in the actingwebdemo mini-application.
+**Sidenote**: The **actingweb  library** also implements a simple mechanism for protecting the /www path with oauth (not in the specification). On successful OAuth authorisation, it will set a browser cookie to the oauth token. This is not used in the inline demo and requires also that the identity of the user authorising OAuth access is the same user already tied to the instantiated actor. There is a programming hook that allows such verification as part of the OAuth flow, but it is not enabled in the actingwebdemo mini-application.
 
-Other applications using the acting-web-gae-library
+Other applications using the actingweb library
 ---------------------------------------------------
 There is also another demo application available for `Cisco Spark <http://www.ciscospark.com>`_
-. It uses the actingweb-gae-library to implement a Cisco Spark bot and integration. If you have signed up as a Cisco Spark user, you can try it out by sending a message to armyknife@sparkbot.io. 
+. It uses the actingweb library to implement a Cisco Spark bot and integration. If you have signed up as a Cisco Spark user, you can try it out by sending a message to armyknife@sparkbot.io. 
 
 More details about the Spark Army Knife can be found on `this blog <http://stuff.ttwedel.no/tag/spark>`_
 . The code repository can be found at `https://bitbucket.org/gregerw/spark-army-knife <https://bitbucket.org/gregerw/spark-army-knife>`_.

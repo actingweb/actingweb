@@ -164,7 +164,7 @@ class db_subscription_list():
         """ Retrieves the subscriptions of an actorId from the database as an array"""
         if not actorId:
             return None
-        self.handle = Subscription.query(id=actorId)
+        self.handle = Subscription.query(actorId, None)
         self.subscriptions = []
         if self.handle:
             for t in self.handle:
@@ -195,3 +195,4 @@ class db_subscription_list():
 
     def __init__(self):
         self.handle = None
+        self.subscriptions = []

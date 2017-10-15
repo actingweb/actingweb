@@ -123,7 +123,7 @@ class db_property_list():
         """ Retrieves the properties of an actorId from the database """
         if not actorId:
             return None
-        self.handle = Property.query(actorId)
+        self.handle = Property.query(actorId, None)
         if self.handle:
             self.props = {}
             for d in self.handle:

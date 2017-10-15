@@ -59,16 +59,16 @@ def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True,
     """
 
     fullpath = '/' + path + '/' + subpath
-    type = select_auth_type(path=path, subpath=subpath)
+    type = select_auth_type(path=path, subpath=subpath, config=config)
     auth_obj = auth(id, type=type, config=config)
     if not auth_obj.actor:
         if add_response:
             appreq.response.set_status(404, 'Actor not found')
-        return (config, None, None)
+        return (None, None)
     auth_obj.checkAuthentication(appreq=appreq, path=fullpath)
     if add_response:
         add_auth_response(appreq, auth_obj)
-    return (config, auth_obj.actor, auth_obj)
+    return (auth_obj.actor, auth_obj)
 
 
 class auth():

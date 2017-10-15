@@ -46,9 +46,12 @@ class db_subscription_diff():
             return None
         if not self.handle:
             if not seqnr:
-                self.handle = SubscriptionDiff.query(id=actorId, subid=subid)
+                self.handle = SubscriptionDiff.query(actorId, SubscriptionDiff.subid ==subid)
             else:
-                self.handle = SubscriptionDiff.query(id=actorId, subid=subid, seqnr=seqnr)
+                self.handle = SubscriptionDiff.query(
+                    actorId,
+                    SubscriptionDiff.subid == subid,
+                    SubscriptionDiff.seqnr == seqnr)
         if self.handle:
             t = self.handle
             return {
@@ -106,9 +109,9 @@ class db_subscription_diff_list():
         if not actorId:
             return None
         if not subid:
-            self.handle = SubscriptionDiff.query(id=actorId, scan_index_forward=True)
+            self.handle = SubscriptionDiff.query(actorId, scan_index_forward=True)
         else:
-            self.handle = SubscriptionDiff.query(id=actorId, subid=subid, scan_index_forward=True)
+            self.handle = SubscriptionDiff.query(actorId, SubscriptionDiff.subid == subid, scan_index_forward=True)
         self.diffs = []
         if self.handle:
             for t in self.handle:

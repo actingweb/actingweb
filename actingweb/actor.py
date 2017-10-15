@@ -160,7 +160,7 @@ class actor():
             return False
         self.deletePeerTrustee(shorttype='*')
         if not self.property_list:
-            self.property_list = property.properties(actorId=self.id)
+            self.property_list = property.properties(actorId=self.id, config=self.config)
         self.property_list.delete()
         subs = subscription.subscriptions(actorId=self.id, config=self.config)
         subs.fetch()

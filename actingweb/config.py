@@ -11,20 +11,30 @@ import os
 
 class config():
 
-    def __init__(self, database='gae'):
-        if database == 'gae':
-            self.env = 'appengine'
-        elif database == 'dynamodb':
-            self.env = 'aws'
-        else:
-            self.env = ''
+    def __init__(self, **kwargs):
+        # Values that can be changed as part of instantiating config
+        self.fqdn = "actingwebdemo-dev.appspot.com"  # The host and domain, i.e. FQDN, of the URL
+        self.proto = "https://"  # http or https
+        self.env = ''
+        self.database = 'dynamodb'
+        for k,v in kwargs.iteritems():
+            if k == 'database':
+                self.database = v
+                if v == 'gae':
+                    self.env = 'appengine'
+                elif v == 'dynamodb':
+                    self.env = 'aws'
+            elif k == 'fqdn':
+                self.fqdn = v
+            elif k == 'proto':
+                self.proto = v
         # Dynamically load all the database modules
-        self.db_actor = importlib.import_module(".db_actor", "actingweb" + ".db_" + database)
-        self.db_peertrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + database)
-        self.db_property = importlib.import_module(".db_property", "actingweb" + ".db_" + database)
-        self.db_subscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + database)
-        self.db_subscription_diff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + database)
-        self.db_trust = importlib.import_module(".db_trust", "actingweb" + ".db_" + database)
+        self.db_actor = importlib.import_module(".db_actor", "actingweb" + ".db_" + self.database)
+        self.db_peertrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + self.database)
+        self.db_property = importlib.import_module(".db_property", "actingweb" + ".db_" + self.database)
+        self.db_subscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + self.database)
+        self.db_subscription_diff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + self.database)
+        self.db_trust = importlib.import_module(".db_trust", "actingweb" + ".db_" + self.database)
         self.module = {}
         if self.env == 'appengine':
             self.module["deferred"] = importlib.import_module(".deferred", "google.appengine.api")
@@ -40,8 +50,6 @@ class config():
         self.unique_creator = False                          # Will enforce unique creator field across all actors
         self.force_email_prop_as_creator = True             # Use "email" property to set creator value (after creation and property set)
         self.www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
-        self.fqdn = "actingwebdemo-dev.appspot.com"         # The host and domain, i.e. FQDN, of the URL
-        self.proto = "https://"                             # http or https
         self.logLevel = logging.DEBUG  # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
         #########
         # ActingWeb settings for this app

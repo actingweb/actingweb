@@ -2,6 +2,7 @@ import logging
 import os
 from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute, BooleanAttribute
+from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
 
 """
     db_trust handles all db operations for a trust
@@ -14,6 +15,19 @@ __all__ = [
 ]
 
 
+class SecretIndex(GlobalSecondaryIndex):
+    """
+    Secondary index on trust
+    """
+    class Meta:
+        index_name = 'secret-index'
+        read_capacity_units = 2
+        write_capacity_units = 1
+        projection = AllProjection()
+
+    secret = UnicodeAttribute(default=0, hash_key=True)
+
+
 class Trust(Model):
     """ Data model for a trust relationship """
     class Meta:
@@ -21,16 +35,17 @@ class Trust(Model):
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
-    peerid = UnicodeAttribute(hash_key=True)
+    peerid = UnicodeAttribute(range_key=True)
     baseuri = UnicodeAttribute()
     type = UnicodeAttribute()
     relationship = UnicodeAttribute()
-    secret = UnicodeAttribute(range_key=True)
+    secret = UnicodeAttribute()
     desc = UnicodeAttribute()
     approved = BooleanAttribute()
     peer_approved = BooleanAttribute()
     verified = BooleanAttribute()
     verificationToken = UnicodeAttribute()
+    secret_index = SecretIndex()
 
 
 class db_trust():
@@ -139,7 +154,7 @@ class db_trust():
             return False
         if not token or len(token) == 0:
             return False
-        res = Trust.get(secret=token)
+        res = Trust.secret_index.get(secret=token)
         if res:
             return True
         return False
@@ -162,7 +177,7 @@ class db_trust_list():
         """ Retrieves the trusts of an actorId from the database as an array"""
         if not actorId:
             return None
-        self.handle = Trust.query(id=actorId)
+        self.handle = Trust.query(actorId, None)
         self.trusts = []
         if self.handle:
             for t in self.handle:
@@ -196,4 +211,6 @@ class db_trust_list():
     def __init__(self):
         self.handle = None
         self.trusts = []
+        if not Trust.exists():
+            Trust.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
 

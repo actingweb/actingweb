@@ -41,15 +41,14 @@ class db_peertrustee():
             logging.debug("Attempt to get db_peertrustee without peerid or type")
             return None
         if not self.handle and peerid:
-            self.handle = PeerTrustee.get(id=actorId, peerid=peerid)
+            self.handle = PeerTrustee.get(actorId, peerid)
         elif not self.handle and type:
-            self.handle = PeerTrustee.query(id=actorId, type=type)
-            if len(self.handle) > 1:
+            if PeerTrustee.count(actorId, PeerTrustee.type == type) > 1:
                 logging.error('Found more than one peer of this peer trustee type(' + 
                               shorttype + '). Unable to determine which, need peerid lookup.')
                 return False
-            if len(self.handle) == 1:
-                self.handle = self.handle[0]
+            for h in PeerTrustee.query(actorId, PeerTrustee.type == type):
+                self.handle = h
         if self.handle:
             t = self.handle
             return {
@@ -113,6 +112,8 @@ class db_peertrustee():
 
     def __init__(self):
         self.handle = None
+        if not PeerTrustee.exists():
+            PeerTrustee.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
 
 
 class db_peertrustee_list():
@@ -126,7 +127,7 @@ class db_peertrustee_list():
         """ Retrieves the peer trustees of an actorId from the database """
         if not actorId:
             return None
-        self.handle = PeerTrustee.query(id=actorId)
+        self.handle = PeerTrustee.query(actorId, None)
         self.peertrustees = []
         if self.handle:
             for t in self.handle:

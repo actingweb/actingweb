@@ -1,11 +1,13 @@
-from google.appengine.ext import ndb
 import logging
+import os
+from pynamodb.models import Model
+from pynamodb.attributes import UnicodeAttribute, NumberAttribute, BooleanAttribute
 
 """
     db_subscription handles all db operations for a subscription
 
     db_subscription_list handles list of subscriptions
-    Google datastore for google is used as a backend.
+    AWS Dynamodb is used as a backend.
 """
 
 __all__ = [
@@ -14,16 +16,20 @@ __all__ = [
 ]
 
 
-class Subscription(ndb.Model):
-    id = ndb.StringProperty(required=True)
-    peerid = ndb.StringProperty(required=True)
-    subid = ndb.StringProperty(required=True)
-    granularity = ndb.StringProperty()
-    target = ndb.StringProperty()
-    subtarget = ndb.StringProperty()
-    resource = ndb.StringProperty()
-    seqnr = ndb.IntegerProperty(default=1)
-    callback = ndb.BooleanProperty()
+class Subscription(Model):
+    class Meta:
+        table_name = "subscriptions"
+        host = os.getenv('AWS_DB_HOST', None)
+
+    id = UnicodeAttribute(hash_key=True)
+    peerid = UnicodeAttribute(range_key=True)
+    subid = UnicodeAttribute()
+    granularity = UnicodeAttribute()
+    target = UnicodeAttribute()
+    subtarget = UnicodeAttribute()
+    resource = UnicodeAttribute()
+    seqnr = NumberAttribute(default=1)
+    callback = BooleanAttribute
 
 
 class db_subscription():
@@ -41,9 +47,9 @@ class db_subscription():
             logging.debug("Attempt to get subscription without peerid or subid")
             return None
         if not self.handle:
-            self.handle = Subscription.query(Subscription.id == actorId,
-                                             Subscription.peerid == peerid,
-                                             Subscription.subid == subid).get(use_cache=False)
+            self.handle = Subscription.get(id=actorId,
+                                           peerid=peerid,
+                                           subid=subid)
         if self.handle:
             t = self.handle
             return {
@@ -77,22 +83,22 @@ class db_subscription():
             logging.debug("Attempted modification of db_subscription without db handle")
             return False
         if peerid and len(peerid) > 0:
-            self.handle.peerid = peerid
+            self.handle.peerid.set(peerid)
         if subid and len(subid) > 0:
-            self.handle.subid = subid
+            self.handle.subid.set(subid)
         if granularity and len(granularity) > 0:
-            self.handle.granularity = granularity
+            self.handle.granularity.set(granularity)
         if callback is not None:
-            self.handle.callback = callback
+            self.handle.callback.set(callback)
         if target and len(target) > 0:
-            self.handle.target = target
+            self.handle.target.set(target)
         if subtarget and len(subtarget) > 0:
-            self.handle.subtarget = subtarget
+            self.handle.subtarget.set(subtarget)
         if resource and len(resource) > 0:
-            self.handle.resource = resource
+            self.handle.resource.set(resource)
         if seqnr:
-            self.handle.seqnr = seqnr
-        self.handle.put(use_cache=False)
+            self.handle.seqnr.set(seqnr)
+        self.handle.save()
         return True
 
     def create(self, actorId=None,
@@ -128,7 +134,7 @@ class db_subscription():
                                    resource=resource,
                                    seqnr=seqnr,
                                    callback=callback)
-        self.handle.put(use_cache=False)
+        self.handle.save()
         return True
 
     def delete(self):
@@ -136,12 +142,15 @@ class db_subscription():
         if not self.handle:
             logging.debug("Attempted delete of db_subscription with no handle set.")
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.delete()
         self.handle = None
         return True
 
     def __init__(self):
         self.handle = None
+        if not Subscription.exists():
+            Subscription.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+
 
 
 class db_subscription_list():
@@ -155,7 +164,7 @@ class db_subscription_list():
         """ Retrieves the subscriptions of an actorId from the database as an array"""
         if not actorId:
             return None
-        self.handle = Subscription.query(Subscription.id == actorId).fetch(use_cache=False)
+        self.handle = Subscription.query(id=actorId)
         self.subscriptions = []
         if self.handle:
             for t in self.handle:
@@ -180,7 +189,7 @@ class db_subscription_list():
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
+            p.delete()
         self.handle = None
         return True
 

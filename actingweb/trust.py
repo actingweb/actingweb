@@ -1,6 +1,3 @@
-import actor
-from db_gae import db_trust
-import datetime
 import config
 import logging
 
@@ -67,15 +64,15 @@ class trust():
         self.trust["type"] = type
         Config = config.config()
         if not relationship or len(relationship) == 0:
-            self.trust["relationship"] = Config.default_relationship
+            self.trust["relationship"] = self.config.default_relationship
         else:
             self.trust["relationship"] = relationship
         if not secret or len(secret) == 0:
-            self.trust["secret"] = Config.newToken()
+            self.trust["secret"] = self.config.newToken()
         else:
             self.trust["secret"] = secret
         # Be absolutely sure that the secret is not already used
-        testhandle = db_trust.db_trust()
+        testhandle = db_trust.self.config.db_trust()
         if testhandle.isTokenInDB(actorId=self.actorId, token=self.trust["secret"]):
             logging.warn("Found a non-unique token where it should be unique")
             return False
@@ -83,7 +80,7 @@ class trust():
         self.trust["peer_approved"] = peer_approved
         self.trust["verified"] = verified
         if not verificationToken or len(verificationToken) == 0:
-            self.trust["verificationToken"] = Config.newToken()
+            self.trust["verificationToken"] = self.config.newToken()
         self.trust["desc"] = desc
         self.trust["id"] = self.actorId
         self.trust["peerid"] = self.peerid
@@ -99,8 +96,9 @@ class trust():
                                   verificationToken=self.trust["verificationToken"],
                                   desc=self.trust["desc"])
 
-    def __init__(self, actorId=None, peerid=None, token=None):
-        self.handle = db_trust.db_trust()
+    def __init__(self, actorId=None, peerid=None, token=None, config=None):
+        self.config = config
+        self.handle = self.config.db_trust.self.config.db_trust()
         self.trust = {}
         if not actorId or len(actorId) == 0:
             logging.debug("No actorid set in initialisation of trust")
@@ -128,7 +126,7 @@ class trusts():
         if self.trusts is not None:
             return self.trusts
         if not self.list:
-            db_trust.db_trust_list()
+            self.config.db_trust.db_trust_list()
         if not self.trusts:
             self.trusts = self.list.fetch(actorId=self.actorId)
         return self.trusts
@@ -140,13 +138,14 @@ class trusts():
         self.list.delete()
         return True
 
-    def __init__(self,  actorId=None):
+    def __init__(self,  actorId=None, config=None):
         """ Properties must always be initialised with an actorId """
+        self.config = config
         if not actorId:
             self.list = None
             logging.debug("No actorId in initialisation of trusts")
             return
-        self.list = db_trust.db_trust_list()
+        self.list = self.config.db_trust.db_trust_list()
         self.actorId = actorId
         self.trusts = None
         self.fetch()

@@ -1,3 +1,4 @@
+import os
 from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
@@ -30,7 +31,7 @@ class Property(Model):
     """
     class Meta:
         table_name = "properties"
-        host = "http://localhost:8000"
+        host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
     name = UnicodeAttribute(range_key=True)
@@ -62,7 +63,6 @@ class db_property():
             self.handle = Property.get(actorId, name)
         except Property.DoesNotExist:
             return None
-
         return self.handle.value
 
     def get_actorId_from_property(self, name=None, value=None):

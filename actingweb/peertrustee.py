@@ -1,11 +1,3 @@
-from db_gae import db_peertrustee
-import datetime
-import time
-import urllib
-from google.appengine.api import urlfetch
-from google.appengine.ext import deferred
-import json
-import config
 import logging
 
 __all__ = [
@@ -25,7 +17,7 @@ class peertrustee():
 
     def create(self, baseuri=None, passphrase=None):
         if not self.handle:
-            self.handle = db_peertrustee.db_peertrustee()
+            self.handle = self.config.db_peertrustee.db_peertrustee()
         if not self.actorId or not self.peerid:
             logging.debug("Attempt to create new peer trustee without actorId or peerid set")
             return False
@@ -44,8 +36,9 @@ class peertrustee():
             return False
         return self.handle.delete()
 
-    def __init__(self, actorId=None, peerid=None, shorttype=None, type=None):
-        self.handle = db_peertrustee.db_peertrustee()
+    def __init__(self, actorId=None, peerid=None, shorttype=None, type=None, config=None):
+        self.config = config
+        self.handle = self.config.db_peertrustee.db_peertrustee()
         self.peertrustee = {}
         self.type = None
         if not actorId or len(actorId) == 0:
@@ -54,11 +47,10 @@ class peertrustee():
         if type:
             self.type = type
         elif not type and shorttype:
-            Config = config.config()
-            if not Config.actors[shorttype]:
+            if not self.config.actors[shorttype]:
                 logging.error('Got request to initialise peer trustee with unknown shorttype(' + shorttype + ')')
                 return
-            self.type = Config.actors[shorttype]["type"]
+            self.type = self.config.actors[shorttype]["type"]
         elif not peerid:
             logging.debug("Peerid and shorttype are not set in initialisation of peertrustee. One is required")
             return

@@ -1,5 +1,9 @@
-from google.appengine.ext import ndb
 import logging
+import datetime
+import os
+
+from pynamodb.models import Model
+from pynamodb.attributes import UnicodeAttribute, NumberAttribute, UTCDateTimeAttribute
 
 """
     db_subscription_diff handles all db operations for a subscription diff
@@ -14,12 +18,16 @@ __all__ = [
 ]
 
 
-class SubscriptionDiff(ndb.Model):
-    id = ndb.StringProperty(required=True)
-    subid = ndb.StringProperty(required=True)
-    timestamp = ndb.DateTimeProperty(auto_now_add=True)
-    diff = ndb.TextProperty()
-    seqnr = ndb.IntegerProperty()
+class SubscriptionDiff(Model):
+    class Meta:
+        table_name = "subscriptiondiffs"
+        host = os.getenv('AWS_DB_HOST', None)
+
+    id = UnicodeAttribute(hash_key=True)
+    subid = UnicodeAttribute(hash_key=True)
+    timestamp = UTCDateTimeAttribute(default=datetime.datetime.now())
+    diff = UnicodeAttribute()
+    seqnr = NumberAttribute(default=1)
 
 
 class db_subscription_diff():
@@ -38,14 +46,9 @@ class db_subscription_diff():
             return None
         if not self.handle:
             if not seqnr:
-                self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId,
-                                                     SubscriptionDiff.subid == subid
-                                                     ).get(use_cache=False)
+                self.handle = SubscriptionDiff.query(id=actorId, subid=subid)
             else:
-                self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId,
-                                                     SubscriptionDiff.subid == subid,
-                                                     SubscriptionDiff.seqnr == seqnr
-                                                     ).get(use_cache=False)
+                self.handle = SubscriptionDiff.query(id=actorId, subid=subid, seqnr=seqnr)
         if self.handle:
             t = self.handle
             return {
@@ -74,19 +77,21 @@ class db_subscription_diff():
                                        subid=subid,
                                        diff=diff,
                                        seqnr=seqnr)
-        self.handle.put(use_cache=False)
+        self.handle.save()
         return True
 
     def delete(self):
         """ Deletes the subscription diff in the database """
         if not self.handle:
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.delete()
         self.handle = None
         return True
 
     def __init__(self):
         self.handle = None
+        if not SubscriptionDiff.exists():
+            SubscriptionDiff.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
 
 
 class db_subscription_diff_list():
@@ -101,10 +106,9 @@ class db_subscription_diff_list():
         if not actorId:
             return None
         if not subid:
-            self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId).order(SubscriptionDiff.seqnr).fetch(use_cache=False)
+            self.handle = SubscriptionDiff.query(id=actorId, scan_index_forward=True)
         else:
-            self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId,
-                                                 SubscriptionDiff.subid == subid).order(SubscriptionDiff.seqnr).fetch(use_cache=False)
+            self.handle = SubscriptionDiff.query(id=actorId, subid=subid, scan_index_forward=True)
         self.diffs = []
         if self.handle:
             for t in self.handle:
@@ -131,9 +135,10 @@ class db_subscription_diff_list():
             seqnr = 0
         for p in self.handle:
             if seqnr == 0 or p.seqnr <= seqnr:
-                p.key.delete(use_cache=False)
+                p.delete()
         self.handle = None
         return True
 
     def __init__(self):
         self.handle = None
+        self.diffs = []

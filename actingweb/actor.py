@@ -1,11 +1,6 @@
-from db_gae import db_actor
 import datetime
-import time
 import base64
 import property
-import urllib
-from google.appengine.api import urlfetch
-from google.appengine.ext import deferred
 import json
 import config
 import trust
@@ -19,43 +14,42 @@ __all__ = [
 ]
 
 
-def getPeerInfo(url):
-    """Contacts an another actor over http/s to retrieve meta information."""
-    try:
-        logging.debug('Getting peer info at url(' + url + ')')
-        urlfetch.set_default_fetch_deadline(20)
-        response = urlfetch.fetch(url=url + '/meta',
-                                  method=urlfetch.GET
-                                  )
-        res = {
-            "last_response_code": response.status_code,
-            "last_response_message": response.content,
-            "data": json.loads(response.content),
-        }
-        logging.debug('Got peer info from url(' + url +
-                      ') with body(' + response.content + ')')
-    except:
-        res = {
-            "last_response_code": 500,
-        }
-    return res
-
-
 class actor():
 
     ###################
     # Basic operations
     ###################
 
-    def __init__(self, id=None):
+    def __init__(self, id=None, config=None):
+        self.config = config
         self.property_list = None
         self.subs_list = None
         self.actor = None
         self.passphrase = None
         self.creator = None
         self.id = id
-        self.handle = db_actor.db_actor()
+        self.handle = self.config.db_actor.db_actor()
         self.get(id=id)
+
+    def getPeerInfo(self,  url):
+        """Contacts an another actor over http/s to retrieve meta information."""
+        try:
+            logging.debug('Getting peer info at url(' + url + ')')
+            if self.config.env == "appengine":
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+            response = self.config.module["urlfetch"].fetch(url=url + '/meta')
+            res = {
+                "last_response_code": response.status_code,
+                "last_response_message": response.content,
+                "data": json.loads(response.content),
+            }
+            logging.debug('Got peer info from url(' + url +
+                          ') with body(' + response.content + ')')
+        except:
+            res = {
+                "last_response_code": 500,
+            }
+        return res
 
     def get(self, id=None):
         """Retrieves an actor from storage or initialises if it does not exist."""
@@ -70,8 +64,7 @@ class actor():
             self.id = self.actor["id"]
             self.creator = self.actor["creator"]
             self.passphrase = self.actor["passphrase"]
-            Config = config.config()
-            if Config.force_email_prop_as_creator:
+            if self.config.force_email_prop_as_creator:
                 em = self.getProperty("email").value
                 if em and len(em) > 0:
                     self.modify(creator=em)
@@ -112,9 +105,8 @@ class actor():
             self.creator = creator
         else:
             self.creator = "creator"
-        Config = config.config()
-        if Config.unique_creator:
-            in_db = db_actor.db_actor()
+        if self.config.unique_creator:
+            in_db = self.config.db_actor.db_actor()
             exists = in_db.getByCreator(creator=self.creator)
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
@@ -125,7 +117,7 @@ class actor():
                         anactor = actor(id=c["id"])
                         anactor.delete()
                 else:
-                    if Config.force_email_prop_as_creator and self.creator == "creator":
+                    if self.config.force_email_prop_as_creator and self.creator == "creator":
                         for c in exists:
                             anactor = actor(id=c["id"])
                             em = anactor.getProperty("email").value
@@ -142,10 +134,10 @@ class actor():
         if passphrase and len(passphrase) > 0:
             self.passphrase = passphrase
         else:
-            self.passphrase = Config.newToken()
-        self.id = Config.newUUID(seed)
+            self.passphrase = self.config.newToken()
+        self.id = self.config.newUUID(seed)
         if not self.handle:
-            self.handle = db_actor.db_actor()
+            self.handle = self.config.db_actor.db_actor()
         self.handle.create(creator=self.creator,
                            passphrase=self.passphrase,
                            actorId=self.id)
@@ -170,10 +162,10 @@ class actor():
         if not self.property_list:
             self.property_list = property.properties(actorId=self.id)
         self.property_list.delete()
-        subs = subscription.subscriptions(actorId=self.id)
+        subs = subscription.subscriptions(actorId=self.id, config=self.config)
         subs.fetch()
         subs.delete()
-        trusts = trust.trusts(actorId=self.id)
+        trusts = trust.trusts(actorId=self.id, config=self.config)
         relationships = trusts.fetch()
         for rel in relationships:
             self.deleteReciprocalTrust(peerid=rel["peerid"], deletePeer=True)
@@ -186,48 +178,47 @@ class actor():
 
     def setProperty(self, name, value):
         """Sets an actor's property name to value."""
-        prop = property.property(self.id, name)
+        prop = property.property(self.id, name, config=self.config)
         prop.set(value)
 
     def getProperty(self, name):
         """Retrieves a property object named name."""
-        prop = property.property(self.id, name)
+        prop = property.property(self.id, name, config=self.config)
         return prop
 
     def deleteProperty(self, name):
         """Deletes a property name."""
-        prop = property.property(self.id, name)
+        prop = property.property(self.id, name, config=self.config)
         prop.delete()
 
     def deleteProperties(self):
         """Deletes all properties."""
         if not self.property_list:
-            self.property_list = property.properties(actorId=self.id)
+            self.property_list = property.properties(actorId=self.id, config=self.config)
         return self.property_list.delete()
 
     def getProperties(self):
         """Retrieves properties from db and returns a dict."""
-        self.property_list = property.properties(actorId=self.id)
+        self.property_list = property.properties(actorId=self.id, config=self.config)
         return self.property_list.fetch()
 
     def deletePeerTrustee(self, shorttype=None, peerid=None):
         if not peerid and not shorttype:
             return False
-        Config = config.config()
         if shorttype == '*':
-            for t in Config.actors:
+            for t in self.config.actors:
                 self.deletePeerTrustee(shorttype=t)
             return True
-        if shorttype and not Config.actors[shorttype]:
+        if shorttype and not self.config.actors[shorttype]:
             logging.error('Got a request to delete an unknown actor type(' + shorttype + ')')
             return False
         if peerid:
-            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=peerid)
+            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=peerid, config=self.config)
             peerData = new_peer.get()
             if not peerData or len(peerData) == 0:
                 return False
         elif shorttype:
-            new_peer = peertrustee.peertrustee(actorId=self.id, shorttype=shorttype)
+            new_peer = peertrustee.peertrustee(actorId=self.id, shorttype=shorttype, config=self.config)
             peerData = new_peer.get()
             if not peerData or len(peerData) == 0:
                 return False
@@ -237,11 +228,14 @@ class actor():
                    base64.b64encode('trustee:' + peerData["passphrase"]),
                    }
         try:
-            urlfetch.set_default_fetch_deadline(20)
-            response = urlfetch.fetch(url=peerData["baseuri"],
-                                      method=urlfetch.DELETE,
-                                      headers=headers
-                                      )
+            if self.config.env == 'appengine':
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                response = self.config.module["urlfetch"].fetch(url=peerData["baseuri"],
+                                          method=self.config.module["urlfetch"].DELETE,
+                                          headers=headers
+                                          )
+            else:
+                response = self.config.module["urlfetch"].delete(url=peerData["baseuri"], headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -269,23 +263,22 @@ class actor():
         """
         if not peerid and not shorttype:
             return None
-        Config = config.config()
-        if shorttype and not Config.actors[shorttype]:
+        if shorttype and not self.config.actors[shorttype]:
             logging.error('Got a request to create an unknown actor type(' + shorttype + ')')
             return None
         if peerid:
-            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=peerid)
+            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=peerid, config=self.config)
         else:
-            new_peer = peertrustee.peertrustee(actorId=self.id, shorttype=shorttype)
+            new_peer = peertrustee.peertrustee(actorId=self.id, shorttype=shorttype, config=self.config)
         peerData = new_peer.get()
         if peerData and len(peerData) > 0:
             logging.debug('Found peer in getPeer, now checking existing trust...')
-            db_trust = trust.trust(actorId=self.id, peerid=peerData["peerid"])
+            db_trust = trust.trust(actorId=self.id, peerid=peerData["peerid"], config=self.config)
             new_trust = db_trust.get()
             if new_trust and len(new_trust) > 0:
                 return peerData
             logging.debug('Did not find existing trust, will create a new one')
-        factory = Config.actors[shorttype]['factory']
+        factory = self.config.actors[shorttype]['factory']
         # If peer did not exist, create it as trustee
         if not peerData or len(peerData) == 0:
             if len(factory) == 0:
@@ -293,18 +286,21 @@ class actor():
                             shorttype + ') does not have factory set.')
             params = {
                 'creator': 'trustee',
-                'trustee_root': Config.root + self.id
+                'trustee_root': self.config.root + self.id
             }
             data = json.dumps(params)
             logging.debug(
                 'Creating peer actor at factory(' + factory + ') with data(' +
                 str(data) + ')')
             try:
-                urlfetch.set_default_fetch_deadline(20)
-                response = urlfetch.fetch(url=factory,
-                                        method=urlfetch.POST,
-                                        payload=data
-                                        )
+                if self.config.env == 'appengine':
+                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                    response = self.config.module["urlfetch"].fetch(url=factory,
+                                            method=self.config.module["urlfetch"].POST,
+                                            payload=data
+                                            )
+                else:
+                    response = self.config.module["urlfetch"].post(url=factory, payload=data)
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
             except:
@@ -321,7 +317,7 @@ class actor():
                 return None
             if 'Location' in response.headers:
                 baseuri = response.headers['Location']
-            res = getPeerInfo(baseuri)
+            res = self.getPeerInfo(baseuri)
             if not res or res["last_response_code"] < 200 or res["last_response_code"] >= 300:
                 return None
             info = res["data"]
@@ -329,7 +325,7 @@ class actor():
                 logging.info(
                     "Received invalid peer info when trying to create peer actor at: " + factory)
                 return None
-            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=info["id"], type=info["type"])
+            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=info["id"], type=info["type"], config=self.config)
             if not new_peer.create(baseuri=baseuri, passphrase=data["passphrase"]):
                 logging.error('Failed to create in db new peer actor(' + 
                             peer["id"] + ') at ' + baseuri)
@@ -338,9 +334,9 @@ class actor():
         newPeerData = new_peer.get()
         new_trust = self.createReciprocalTrust(
                         url=newPeerData["baseuri"],
-                        secret=Config.newToken(),
+                        secret=self.config.newToken(),
                         desc='Trust from trustee to ' + shorttype,
-                        relationship=Config.actors[shorttype]['relationship']
+                        relationship=self.config.actors[shorttype]['relationship']
                         )
         if not new_trust or len(new_trust) == 0:
             logging.warn("Not able to establish trust relationship with peer at factory(" +
@@ -356,15 +352,20 @@ class actor():
                        }
             data = json.dumps(params)
             try:
-                urlfetch.set_default_fetch_deadline(20)
-                response = urlfetch.fetch(url=newPeerData["baseuri"] +
-                                          '/trust/' +
-                                          Config.actors[shorttype]['relationship'] +
-                                          '/' + self.id,
-                                          method=urlfetch.PUT,
-                                          payload=data,
-                                          headers=headers,
-                                          )
+                if self.config.env == 'appengine':
+                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                    response = self.config.module["urlfetch"].fetch(url=newPeerData["baseuri"] +
+                                              '/trust/' +
+                                              self.config.actors[shorttype]['relationship'] +
+                                              '/' + self.id,
+                                              method=self.config.module["urlfetch"].PUT,
+                                              payload=data,
+                                              headers=headers
+                                              )
+                else:
+                    response = self.config.module["urlfetch"].put(
+                        url=newPeerData["baseuri"] + '/trust/' + self.config.actors[shorttype]['relationship'] +
+                        '/' + self.id, data=data, headers=headers)
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
             except:
@@ -377,11 +378,11 @@ class actor():
     def getTrustRelationship(self, peerid=None):
         if not peerid:
             return None
-        return trust.trust(actorId=self.id, peerid=peerid).get()
+        return trust.trust(actorId=self.id, peerid=peerid, config=self.config).get()
 
     def getTrustRelationships(self, relationship='', peerid='', type=''):
         """Retrieves all trust relationships or filtered."""
-        list = trust.trusts(actorId=self.id)
+        list = trust.trusts(actorId=self.id, config=self.config)
         relationships = list.fetch()
         rels = []
         for rel in relationships:
@@ -420,18 +421,25 @@ class actor():
             logging.debug(
                 'Trust relationship has been approved, notifying peer at url(' + requrl + ')')
             try:
-                urlfetch.set_default_fetch_deadline(20)
-                response = urlfetch.fetch(url=requrl,
-                                          method=urlfetch.POST,
-                                          payload=data,
-                                          headers=headers
-                                          )
+                if self.config.env == 'appengine':
+                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                    response = self.config.module["urlfetch"].fetch(url=requrl,
+                                              method=self.config.module["urlfetch"].POST,
+                                              payload=data,
+                                              headers=headers
+                                              )
+                else:
+                    response = self.config.module["urlfetch"].post(
+                        url=requrl,
+                        data=data,
+                        headers=headers
+                        )
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
             except:
                 logging.debug('Not able to notify peer at url(' + requrl + ')')
                 self.last_response_code = 500
-        db_trust = trust.trust(actorId=self.id, peerid=peerid)
+        db_trust = trust.trust(actorId=self.id, peerid=peerid, config=self.config)
         return db_trust.modify(baseuri=baseuri,
                                        secret=secret,
                                        desc=desc,
@@ -446,8 +454,7 @@ class actor():
             return False
         if not secret or len(secret) == 0:
             return False
-        Config = config.config()
-        res = getPeerInfo(url)
+        res = self.getPeerInfo(url)
         if not res or res["last_response_code"] < 200 or res["last_response_code"] >= 300:
             return False
         peer = res["data"]
@@ -461,10 +468,10 @@ class actor():
                     "Peer is of the wrong actingweb type: " + peer["type"])
                 return False
         if not relationship or len(relationship) == 0:
-            relationship = Config.default_relationship
+            relationship = self.config.default_relationship
         # Create trust, so that peer can do a verify on the relationship (using
         # verificationToken) when we request the relationship
-        db_trust = trust.trust(actorId=self.id, peerid=peer["id"])
+        db_trust = trust.trust(actorId=self.id, peerid=peer["id"], config=self.config)
         if not db_trust.create(baseuri=url, secret=secret, type=peer["type"],
                          relationship=relationship, approved=True,
                          verified=False, desc=desc):
@@ -474,9 +481,9 @@ class actor():
         # It is not verified until the peer has verified us
         new_trust = db_trust.get()
         params = {
-            'baseuri': Config.root + self.id,
+            'baseuri': self.config.root + self.id,
             'id': self.id,
-            'type': Config.type,
+            'type': self.config.type,
             'secret': secret,
             'desc': desc,
             'verify': new_trust["verificationToken"],
@@ -486,13 +493,21 @@ class actor():
         logging.debug('Creating reciprocal trust at url(' +
                       requrl + ') and body (' + str(data) + ')')
         try:
-            urlfetch.set_default_fetch_deadline(20)
-            response = urlfetch.fetch(url=requrl,
-                                      method=urlfetch.POST,
-                                      payload=data,
-                                      headers={
-                                          'Content-Type': 'application/json', }
-                                      )
+            if self.config.env == 'appengine':
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                response = self.config.module["urlfetch"].fetch(url=requrl,
+                                          method=self.config.module["urlfetch"].POST,
+                                          payload=data,
+                                          headers={
+                                              'Content-Type': 'application/json', }
+                                          )
+            else:
+                response = self.config.module["urlfetch"].post(
+                    url=requrl,
+                    data=data,
+                    headers={
+                        'Content-Type': 'application/json', }
+                    )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -502,7 +517,7 @@ class actor():
             return False
         if self.last_response_code == 201 or self.last_response_code == 202:
             # Reload the trust to check if approval was done
-            mod_trust = trust.trust(actorId=self.id, peerid=peer["id"])
+            mod_trust = trust.trust(actorId=self.id, peerid=peer["id"], config=self.config)
             mod_trust_data = mod_trust.get()
             if not mod_trust_data or len(mod_trust_data) == 0:
                 logging.error(
@@ -538,10 +553,13 @@ class actor():
             logging.debug('Verifying trust at requesting peer(' + peerid +
                           ') at url (' + requrl + ') and secret(' + secret + ')')
             try:
-                urlfetch.set_default_fetch_deadline(20)
-                response = urlfetch.fetch(url=requrl,
-                                          method=urlfetch.GET,
-                                          headers=headers)
+                if self.config.env == 'appengine':
+                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                    response = self.config.module["urlfetch"].fetch(url=requrl,
+                                              method=self.config.module["urlfetch"].GET,
+                                              headers=headers)
+                else:
+                    response = self.config.module["urlfetch"].get(url=requrl, headers=headers)
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
                 try:
@@ -560,7 +578,7 @@ class actor():
                 logging.debug(
                     'No response when verifying trust at url' + requrl + ')')
                 verified = False
-        new_trust = trust.trust(actorId=self.id, peerid=peerid)
+        new_trust = trust.trust(actorId=self.id, peerid=peerid, config=self.config)
         if not new_trust.create(baseuri=baseuri, secret=secret, type=type, approved=approved, peer_approved=peer_approved,
                                 relationship=relationship, verified=verified, desc=desc):
             return False
@@ -585,10 +603,13 @@ class actor():
                 logging.debug(
                     'Deleting reciprocal relationship at url(' + url + ')')
                 try:
-                    urlfetch.set_default_fetch_deadline(20)
-                    response = urlfetch.fetch(url=url,
-                                              method=urlfetch.DELETE,
-                                              headers=headers)
+                    if self.config.env == 'appengine':
+                        self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                        response = self.config.module["urlfetch"].fetch(url=url,
+                                                  method=self.config.module["urlfetch"].DELETE,
+                                                  headers=headers)
+                    else:
+                        response = self.config.module["urlfetch"].delete(url=url, headers=headers)
                 except:
                     logging.debug(
                         'Failed to delete reciprocal relationship at url(' + url + ')')
@@ -602,14 +623,14 @@ class actor():
                 else:
                     successOnce = True
             if not self.subs_list:
-                self.subs_list = subscription.subscriptions(actorId=self.id).fetch()
+                self.subs_list = subscription.subscriptions(actorId=self.id, config=self.config).fetch()
             # Delete this peer's subscriptions
             for sub in self.subs_list:
                 if sub["peerid"] == rel["peerid"]:
                     logging.debug("Deleting subscription(" + sub["subscriptionid"] + ") as part of trust deletion.")
                     subObj = self.getSubscriptionObj(peerid=sub["peerid"], subid=sub["subscriptionid"], callback=sub["callback"])
                     subObj.delete()
-            db_trust = trust.trust(actorId=self.id, peerid=rel["peerid"])
+            db_trust = trust.trust(actorId=self.id, peerid=rel["peerid"], config=self.config)
             db_trust.delete()
         if deletePeer and (not successOnce or failedOnce):
             return False
@@ -617,7 +638,7 @@ class actor():
 
     def createSubscription(self, peerid=None, target=None, subtarget=None, resource=None, granularity=None, subid=None, callback=False):
         new_sub = subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback)
+            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
         new_sub.create(target=target, subtarget=subtarget, resource=resource,
                        granularity=granularity)
         return new_sub.get()
@@ -626,7 +647,6 @@ class actor():
         """Creates a new subscription at peerid."""
         if not peerid or not target:
             return False
-        Config = config.config()
         relationships = self.getTrustRelationships(peerid=peerid)
         if not relationships:
             return False
@@ -649,12 +669,15 @@ class actor():
         try:
             logging.debug('Creating remote subscription at url(' +
                           requrl + ') with body (' + str(data) + ')')
-            urlfetch.set_default_fetch_deadline(20)
-            response = urlfetch.fetch(url=requrl,
-                                      method=urlfetch.POST,
-                                      payload=data,
-                                      headers=headers
-                                      )
+            if self.config.env == 'appengine':
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                response = self.config.module["urlfetch"].fetch(url=requrl,
+                                          method=self.config.module["urlfetch"].POST,
+                                          payload=data,
+                                          headers=headers
+                                          )
+            else:
+                response = self.config.module["urlfetch"].post(url=requrl, payload=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -681,7 +704,7 @@ class actor():
         if not self.id:
             return None
         if not self.subs_list:
-            self.subs_list = subscription.subscriptions(actorId=self.id).fetch()
+            self.subs_list = subscription.subscriptions(actorId=self.id, config=self.config).fetch()
         ret = []
         for sub in self.subs_list:
             if not peerid or (peerid and sub["peerid"] == peerid):
@@ -697,14 +720,14 @@ class actor():
         if not subid:
             return False
         return subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback).get()
+            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config).get()
 
     def getSubscriptionObj(self, peerid=None, subid=None, callback=False):
         """Retrieves a single subscription identified by peerid and subid."""
         if not subid:
             return False
         return subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback)
+            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
 
     def deleteRemoteSubscription(self, peerid=None, subid=None):
         if not subid or not peerid:
@@ -723,10 +746,13 @@ class actor():
                    }
         try:
             logging.debug('Deleting remote subscription at url(' + url + ')')
-            urlfetch.set_default_fetch_deadline(20)
-            response = urlfetch.fetch(url=url,
-                                      method=urlfetch.DELETE,
-                                      headers=headers)
+            if self.config.env == 'appengine':
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                response = self.config.module["urlfetch"].fetch(url=url,
+                                          method=self.config.module["urlfetch"].DELETE,
+                                          headers=headers)
+            else:
+                response = self.config.module["urlfetch"].delete(url=url, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
             if response.status_code == 204:
@@ -743,7 +769,7 @@ class actor():
         if not subid:
             return False
         sub = subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback)
+            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
         return sub.delete()
 
     def callbackSubscription(self, peerid=None, subObj=None, sub=None, diff=None, blob=None):
@@ -773,8 +799,7 @@ class actor():
             except:
                 params['data'] = blob
         if sub["granularity"] == "low":
-            Config = config.config()
-            params['url'] = Config.root + self.id + '/subscriptions/' + \
+            params['url'] = self.config.root + self.id + '/subscriptions/' + \
                 trust["peerid"] + '/' + sub["subscriptionid"] + '/' + str(diff["sequence"])
         requrl = trust["baseuri"] + '/callbacks/subscriptions/' + self.id + '/' + sub["subscriptionid"]
         data = json.dumps(params)
@@ -784,12 +809,19 @@ class actor():
         try:
             logging.debug('Doing a callback on subscription at url(' +
                           requrl + ') with body(' + str(data) + ')')
-            urlfetch.set_default_fetch_deadline(20)
-            response = urlfetch.fetch(url=requrl,
-                                      method=urlfetch.POST,
-                                      payload=data.encode('utf-8'),
-                                      headers=headers
-                                      )
+            if self.config.env == 'appengine':
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                response = self.config.module["urlfetch"].fetch(url=requrl,
+                                          method=self.config.module["urlfetch"].POST,
+                                          payload=data.encode('utf-8'),
+                                          headers=headers
+                                          )
+            else:
+                response = self.config.module["urlfetch"].fetch(
+                    url=requrl,
+                    data=data.encode('utf-8'),
+                    headers=headers
+                    )
         except:
             logging.debug(
                 'Peer did not respond to callback on url(' + requrl + ')')
@@ -924,9 +956,12 @@ class actor():
                 logging.warn("Failed when registering a diff to subscription (" +
                              sub["subscriptionid"] + "). Will not send callback.")
             else:
-                deferred.defer(self.callbackSubscription, peerid=sub["peerid"], subObj=subObj,
+                if self.config.module["deferred"]:
+                    deferred.defer(self.callbackSubscription, peerid=sub["peerid"], subObj=subObj,
                                sub=subObjData, diff=diff, blob=finblob)
-
+                else:
+                    self.callbackSubscription(peerid = sub["peerid"], subObj = subObj,
+                    sub = subObjData, diff = diff, blob = finblob)
 
 class actors():
     """ Handles all actors
@@ -940,7 +975,8 @@ class actors():
         self.actors = self.list.fetch()
         return self.actors
 
-    def __init__(self, filter=None):
-        self.list = db_actor.db_actor_list()
+    def __init__(self, filter=None, config=None):
+        self.config = config
+        self.list = self.config.db_actor.db_actor_list()
         self.actors = None
         self.fetch()

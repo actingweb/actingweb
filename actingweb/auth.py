@@ -1,10 +1,8 @@
-import urllib
 import actor
 import trust
 import logging
 import time
 
-import config
 import oauth
 import base64
 import math
@@ -20,16 +18,15 @@ __all__ = [
 # oauth through config.py, and everything else is basic+trust
 
 
-def select_auth_type(path, subpath):
+def select_auth_type(path, subpath, config=None):
     """Selects authentication type based on path and subpath.
 
     Currently are only basic and oauth supported. Peer auth is automatic if an Authorization Bearer <token> header is included in the http request.
     """
-    conf = config.config()
     if path == 'oauth':
         return 'oauth'
     if path == 'www':
-        return conf.www_auth
+        return config.www_auth
     return 'basic'
 
 def add_auth_response(appreq=None, auth_obj=None):
@@ -47,7 +44,7 @@ def add_auth_response(appreq=None, auth_obj=None):
     return True
 
 
-def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True):
+def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True, config=None):
     """Initialises actingweb by loading a config object, an actor object, and authentication object.
     
 
@@ -61,18 +58,17 @@ def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True)
             403 is forbidden, text in response['text']
     """
 
-    conf = config.config()
     fullpath = '/' + path + '/' + subpath
     type = select_auth_type(path=path, subpath=subpath)
-    auth_obj = auth(id, type=type)
+    auth_obj = auth(id, type=type, config=config)
     if not auth_obj.actor:
         if add_response:
             appreq.response.set_status(404, 'Actor not found')
-        return (conf, None, None)
+        return (config, None, None)
     auth_obj.checkAuthentication(appreq=appreq, path=fullpath)
     if add_response:
         add_auth_response(appreq, auth_obj)
-    return (conf, auth_obj.actor, auth_obj)
+    return (config, auth_obj.actor, auth_obj)
 
 
 class auth():
@@ -109,7 +105,8 @@ class auth():
 
     """
 
-    def __init__(self, id, type='basic'):
+    def __init__(self, id, type='basic', config=None):
+        self.config = config
         self.token = None
         self.cookie_redirect = None
         self.cookie = None
@@ -134,12 +131,10 @@ class auth():
             "peerid": '',           # Peerid if there is a relationship
             "approved": False,      # True if the peer is approved
         }
-        Config = config.config()
-        self.config = Config
-        self.actor = actor.actor(id)
+        self.actor = actor.actor(id, config=self.config)
         if not self.actor.id:
             self.actor = None
-            self.oauth = oauth.oauth(token=None)
+            self.oauth = oauth.oauth(token=None, config=self.config)
             self.token = None
             self.expiry = None
             self.refresh_expiry = None
@@ -148,21 +143,21 @@ class auth():
         # We need to initialise oauth for use towards the external oauth service
         self.property = 'oauth_token'  # Property name used to set self.token
         self.token = self.actor.getProperty(self.property).value
-        self.oauth = oauth.oauth(token=self.token)
+        self.oauth = oauth.oauth(token=self.token, config=self.config)
         self.expiry = self.actor.getProperty('oauth_token_expiry').value
         self.refresh_expiry = self.actor.getProperty('oauth_refresh_token_expiry').value
         self.refresh_token = self.actor.getProperty('oauth_refresh_token').value    
         if self.type == 'basic':
-            self.realm = Config.auth_realm
+            self.realm = self.config.auth_realm
         elif self.type == 'oauth':
             if self.oauth.enabled():
                 self.cookie = 'oauth_token'
                 if self.actor.getProperty('cookie_redirect').value:
-                    self.cookie_redirect = Config.root + \
+                    self.cookie_redirect = self.config.root + \
                         self.actor.getProperty('cookie_redirect').value
                 else:
                     self.cookie_redirect = None
-                self.redirect = str(Config.root + self.actor.id + '/oauth')
+                self.redirect = str(self.config.root + self.actor.id + '/oauth')
             else:
                 self.type = 'none'
 

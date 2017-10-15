@@ -1,4 +1,7 @@
-from google.appengine.ext import ndb
+import os
+from pynamodb.models import Model
+from pynamodb.attributes import UnicodeAttribute
+from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
 import logging
 
 """
@@ -12,13 +15,31 @@ __all__ = [
 ]
 
 
-class Actor(ndb.Model):
+class CreatorIndex(GlobalSecondaryIndex):
     """
-       NDB data model for an actor
+    Secondary index on actor
     """
-    id = ndb.StringProperty(required=True)
-    creator = ndb.StringProperty()
-    passphrase = ndb.StringProperty()
+    class Meta:
+        index_name = 'creator-index'
+        read_capacity_units = 2
+        write_capacity_units = 1
+        projection = AllProjection()
+
+    creator = UnicodeAttribute(default=0, hash_key=True)
+
+
+class Actor(Model):
+    """
+       DynamoDB data model for an actor
+    """
+    class Meta:
+        table_name = "actors"
+        host = os.getenv('AWS_DB_HOST', None)
+
+    id = UnicodeAttribute(hash_key=True)
+    creator = UnicodeAttribute()
+    passphrase = UnicodeAttribute()
+    creator_index = CreatorIndex()
 
 
 class db_actor():
@@ -31,7 +52,13 @@ class db_actor():
         """ Retrieves the actor from the database """
         if not actorId:
             return None
-        self.handle = Actor.query(Actor.id == actorId).get(use_cache=False)
+        try:
+            if self.handle:
+                self.handle.refresh()
+            else:
+                self.handle = Actor.get(actorId)
+        except Actor.DoesNotExist:
+            return None
         if self.handle:
             t = self.handle
             return {
@@ -46,11 +73,11 @@ class db_actor():
         """ Retrieves the actor from db based on creator field
 
             Returns None if none was found. If one is found, that one is
-            loaded in the object. If more, the last one found is loaded.
+            loaded in the object. If more, all are returned.
         """
         if not creator:
             return None
-        self.handle = Actor.query(Actor.creator == creator).fetch(use_cache=False)
+        self.handle = Actor.creator_index.query(creator)
         if not self.handle or len(self.handle) == 0:
             return None
         ret = []
@@ -69,10 +96,10 @@ class db_actor():
             logging.debug("Attempted modification of db_actor without db handle")
             return False
         if creator and len(creator) > 0:
-            self.handle.creator = creator
+            self.handle.creator.set(creator)
         if passphrase and len(passphrase) > 0:
-            self.handle.passphrase = passphrase
-        self.handle.put(use_cache=False)
+            self.handle.passphrase.set(passphrase)
+        self.handle.save()
         return True
 
     def create(self, actorId=None, creator=None,
@@ -84,10 +111,13 @@ class db_actor():
             creator = ''
         if not passphrase:
             passphrase = ''
+        if self.get(actorId=actorId):
+            logging.warn("Trying to create actor that exists(" + actorId + ")")
+            return False
         self.handle = Actor(id=actorId,
                             creator=creator,
                             passphrase=passphrase)
-        self.handle.put(use_cache=False)
+        self.handle.save()
         return True
 
     def delete(self):
@@ -95,12 +125,14 @@ class db_actor():
         if not self.handle:
             logging.debug("Attempted delete of db_actor without db handle")
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.delete()
         self.handle = None
         return True
 
     def __init__(self):
         self.handle = None
+        if not Actor.exists():
+            Actor.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
 
 
 class db_actor_list():
@@ -110,7 +142,7 @@ class db_actor_list():
 
     def fetch(self):
         """ Retrieves the actors in the database """
-        self.handle = Actor.query().fetch(use_cache=False)
+        self.handle = Actor.query()
         if self.handle:
             ret = []
             for t in self.handle:

@@ -1,9 +1,6 @@
 import urllib
 import logging
 import json
-from google.appengine.api import urlfetch
-
-import config
 
 __all__ = [
     'oauth',
@@ -39,9 +36,8 @@ def PaginationLinks(self):
 
 class oauth():
 
-    def __init__(self, token=None):
-        Config = config.config()
-        self.config = Config.oauth
+    def __init__(self, token=None, config=None):
+        self.config = config.oauth
         self.token = token
         self.first = None
         self.next = None
@@ -86,8 +82,15 @@ class oauth():
             else:
                 headers = {'Content-Type': 'application/json'}
         try:
-            urlfetch.set_default_fetch_deadline(20)
-            response = urlfetch.fetch(url=url, payload=data, method=urlfetch.POST, headers=headers)
+            if self.config.env == 'appengine':
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                response = self.config.module["urlfetch"].fetch(
+                    url=url,
+                    payload=data,
+                    method=self.config.module["urlfetch"].POST,
+                    headers=headers)
+            else:
+                response = self.config.module["urlfetch"].post(url=url, data=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -131,8 +134,15 @@ class oauth():
             else:
                 headers = {'Content-Type': 'application/json'}
         try:
-            urlfetch.set_default_fetch_deadline(20)
-            response = urlfetch.fetch(url=url, payload=data, method=urlfetch.PUT, headers=headers)
+            if self.config.env == 'appengine':
+                self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                response = self.config.module["urlfetch"](
+                    url=url,
+                    payload=data,
+                    method=self.config.module["urlfetch"].PUT,
+                    headers=headers)
+            else:
+                response = self.config.module["urlfetch"].post(url=url, data=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -156,12 +166,23 @@ class oauth():
         if params:
             url = url + '?' + urllib.urlencode(params)
         logging.info('Oauth GET request: ' + url)
-        urlfetch.set_default_fetch_deadline(60)
         try:
-            response = urlfetch.fetch(url=url,
-                                      method=urlfetch.GET,
-                                      headers={'Authorization': 'Bearer ' + self.token}
-                                      )
+            if self.config.env == 'appengine':
+                urlfetch.self.config.module["urlfetch"].set_default_fetch_deadline(60)
+                response = self.config.module["urlfetch"].fetch(
+                    url=url,
+                    method=self.config.module["urlfetch"].GET,
+                    headers={
+                        'Authorization': 'Bearer ' + self.token,
+                    }
+                    )
+            else:
+                response = self.config.module["urlfetch"].get(
+                    url=url,
+                    headers={
+                        'Authorization': 'Bearer ' + self.token,
+                    }
+                    )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -192,10 +213,16 @@ class oauth():
             return None
         logging.info('Oauth DELETE request: ' + url)
         try:
-            response = urlfetch.fetch(url=url,
-                                      method=urlfetch.DELETE,
-                                      headers={'Authorization': 'Bearer ' + self.token}
-                                      )
+            if self.config.env == 'appengine':
+                response = self.config.module["urlfetch"].fetch(url=url,
+                                          method=self.config.module["urlfetch"].DELETE,
+                                          headers={'Authorization': 'Bearer ' + self.token}
+                                          )
+            else:
+                response = self.config.module["urlfetch"].delete(
+                    url=url,
+                    headers={'Authorization': 'Bearer ' + self.token}
+                    )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:

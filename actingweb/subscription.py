@@ -1,5 +1,3 @@
-from db_gae import db_subscription
-from db_gae import db_subscription_diff
 import config
 import datetime
 import logging
@@ -37,8 +35,8 @@ class subscription():
             return False
         if not self.subid:
             now = datetime.datetime.now()
-            seed = Config.root + now.strftime("%Y%m%dT%H%M%S%f")
-            self.subid = Config.newUUID(seed)
+            seed = self.config.root + now.strftime("%Y%m%dT%H%M%S%f")
+            self.subid = self.config.newUUID(seed)
         if not self.handle.create(actorId=self.actorId,
                                   peerid=self.peerid,
                                   subid=self.subid,
@@ -118,8 +116,9 @@ class subscription():
         diff_list.fetch(actorId=self.actorId, subid=self.subid)
         diff_list.delete(seqnr=seqnr)
 
-    def __init__(self, actorId=None, peerid=None, subid=None, callback=False):
-        self.handle = db_subscription.db_subscription()
+    def __init__(self, actorId=None, peerid=None, subid=None, callback=False, config=None):
+        self.config = config
+        self.handle = self.config.db_subscription.db_subscription()
         self.subscription = {}
         if not actorId:
             return False
@@ -152,7 +151,7 @@ class subscriptions():
             logging.debug("Already deleted list in subscriptions")
             return False
         for sub in self.subscriptions:
-            diff_list = db_subscription_diff.db_subscription_diff_list()
+            diff_list = self.config.db_subscription_diff.db_subscription_diff_list()
             diff_list.fetch(actorId=self.actorId, subid=sub["subscriptionid"])
             diff_list.delete()
         self.list.delete()
@@ -160,13 +159,14 @@ class subscriptions():
         self.subscriptions = None
         return True
 
-    def __init__(self,  actorId=None):
+    def __init__(self,  actorId=None, config=None):
         """ Properties must always be initialised with an actorId """
+        self.config = config
         if not actorId:
             self.list = None
             logging.debug("No actorId in initialisation of subscriptions")
             return
-        self.list = db_subscription.db_subscription_list()
+        self.list = self.config.db_subscription.db_subscription_list()
         self.actorId = actorId
         self.subscriptions = None
         self.fetch()

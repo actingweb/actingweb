@@ -6,13 +6,32 @@ import uuid
 import binascii
 import logging
 import importlib
+import os
 
 
 class config():
 
     def __init__(self, database='gae'):
-        self.database = database
+        if database == 'gae':
+            self.env = 'appengine'
+        elif database == 'dynamodb':
+            self.env = 'aws'
+        else:
+            self.env = ''
+        # Dynamically load all the database modules
+        self.db_actor = importlib.import_module(".db_actor", "actingweb" + ".db_" + database)
+        self.db_peertrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + database)
         self.db_property = importlib.import_module(".db_property", "actingweb" + ".db_" + database)
+        self.db_subscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + database)
+        self.db_subscription_diff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + database)
+        self.db_trust = importlib.import_module(".db_trust", "actingweb" + ".db_" + database)
+        self.module = {}
+        if self.env == 'appengine':
+            self.module["deferred"] = importlib.import_module(".deferred", "google.appengine.api")
+            self.module["urlfetch"] = importlib.import_module(".urlfetch", "google.appengine.ext")
+        else:
+            self.module["deferred"] = None
+            self.module["urlfetch"] = importlib.import_module("urlfetch")
         #########
         # Basic settings for this app
         #########
@@ -113,6 +132,10 @@ class config():
         #########
         # Only touch the below if you know what you are doing
         #########
+        if self.env == 'appengine':
+            logging.getLogger().handlers[0].setLevel(self.logLevel)  # Hack to get access to GAE logger
+        else:
+            logging.basicConfig(level=self.logLevel)
         self.root = self.proto + self.fqdn + "/"            # root URI used to identity actor externally
         self.auth_realm = self.fqdn                         # Authentication realm used in Basic auth
 

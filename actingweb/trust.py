@@ -62,7 +62,6 @@ class trust():
         self.trust = {}
         self.trust["baseuri"] = baseuri
         self.trust["type"] = type
-        Config = config.config()
         if not relationship or len(relationship) == 0:
             self.trust["relationship"] = self.config.default_relationship
         else:
@@ -72,7 +71,7 @@ class trust():
         else:
             self.trust["secret"] = secret
         # Be absolutely sure that the secret is not already used
-        testhandle = db_trust.self.config.db_trust()
+        testhandle = self.config.db_trust.db_trust()
         if testhandle.isTokenInDB(actorId=self.actorId, token=self.trust["secret"]):
             logging.warn("Found a non-unique token where it should be unique")
             return False
@@ -98,7 +97,7 @@ class trust():
 
     def __init__(self, actorId=None, peerid=None, token=None, config=None):
         self.config = config
-        self.handle = self.config.db_trust.self.config.db_trust()
+        self.handle = self.config.db_trust.db_trust()
         self.trust = {}
         if not actorId or len(actorId) == 0:
             logging.debug("No actorid set in initialisation of trust")

@@ -21,6 +21,7 @@ __all__ = [
 class SubscriptionDiff(Model):
     class Meta:
         table_name = "subscriptiondiffs"
+        region = 'us-west-1'
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -46,12 +47,16 @@ class db_subscription_diff():
             return None
         if not self.handle:
             if not seqnr:
-                self.handle = SubscriptionDiff.query(actorId, SubscriptionDiff.subid ==subid)
+                self.handle = SubscriptionDiff.query(
+                    actorId,
+                    SubscriptionDiff.subid == subid,
+                    consistent_read=True)
             else:
                 self.handle = SubscriptionDiff.query(
                     actorId,
                     SubscriptionDiff.subid == subid,
-                    SubscriptionDiff.seqnr == seqnr)
+                    SubscriptionDiff.seqnr == seqnr,
+                    consistent_read=True)
         if self.handle:
             t = self.handle
             return {
@@ -108,10 +113,19 @@ class db_subscription_diff_list():
         """ Retrieves the subscription diffs of an actorId from the database as an array"""
         if not actorId:
             return None
+        self.actorId = actorId
+        self.subid = subid
         if not subid:
-            self.handle = SubscriptionDiff.query(actorId, scan_index_forward=True)
+            self.handle = SubscriptionDiff.scan(
+                SubscriptionDiff.id == self.actorId,
+                scan_index_forward=True,
+                consistent_read=True)
         else:
-            self.handle = SubscriptionDiff.query(actorId, SubscriptionDiff.subid == subid, scan_index_forward=True)
+            self.handle = SubscriptionDiff.scan(
+                SubscriptionDiff.id == self.actorId,
+                SubscriptionDiff.subid == self.subid,
+                scan_index_forward=True,
+                consistent_read=True)
         self.diffs = []
         if self.handle:
             for t in self.handle:
@@ -136,6 +150,17 @@ class db_subscription_diff_list():
             return False
         if not seqnr or not isinstance(seqnr, int):
             seqnr = 0
+        if not self.subid:
+            self.handle = SubscriptionDiff.scan(
+                SubscriptionDiff.id == self.actorId,
+                scan_index_forward=True,
+                consistent_read=True)
+        else:
+            self.handle = SubscriptionDiff.scan(
+                SubscriptionDiff.id == self.actorId,
+                SubscriptionDiff.subid == self.subid,
+                scan_index_forward=True,
+                consistent_read=True)
         for p in self.handle:
             if seqnr == 0 or p.seqnr <= seqnr:
                 p.delete()
@@ -145,3 +170,5 @@ class db_subscription_diff_list():
     def __init__(self):
         self.handle = None
         self.diffs = []
+        self.actorId = None
+        self.subid = None

@@ -1,14 +1,6 @@
-import datetime
-import time
-import base64
-import property
 import urllib
-from google.appengine.api import urlfetch
-from google.appengine.ext import deferred
 import json
-import config
 import trust
-import subscription
 import logging
 
 __all__ = [
@@ -24,7 +16,8 @@ class aw_proxy():
     the trust established with the peer. 
     """
 
-    def __init__(self, trust_target=None, peer_target=None):
+    def __init__(self, trust_target=None, peer_target=None, config=None):
+        self.config = config
         self.last_response_code = 0
         self.last_response_message = 0
         self.last_location = None
@@ -35,7 +28,10 @@ class aw_proxy():
             self.actorid = peer_target["id"]
             self.trust = None
             if peer_target["peerid"]:
-                self.trust = trust.trust(actorId=self.actorid, peerid=peer_target["peerid"]).get()
+                self.trust = trust.trust(
+                    actorId=self.actorid,
+                    peerid=peer_target["peerid"],
+                    config=self.config).get()
                 if not self.trust or len(self.trust) == 0:
                     self.trust = None
 
@@ -54,10 +50,17 @@ class aw_proxy():
         logging.debug(
             'Getting trust peer resource at (' + url + ')')
         try:
-            response = urlfetch.fetch(url=url,
-                                      method=urlfetch.GET,
-                                      headers=headers
-                                      )
+            if self.config.env == 'appengine':
+                response = self.config.module["urlfetch"].fetch(
+                    url=url,
+                    method=self.config.module["urlfetch"].GET,
+                    headers=headers
+                    )
+            else:
+                response = self.config.module["urlfetch"].get(
+                    url=url,
+                    headers=headers
+                    )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -96,11 +99,19 @@ class aw_proxy():
             'Creating trust peer resource at (' + url + ') with data(' +
             str(data) + ')')
         try:
-            response = urlfetch.fetch(url=url,
-                                      method=urlfetch.POST,
-                                      payload=data,
-                                      headers=headers
-                                      )
+            if self.config.env == 'appengine':
+                response = self.config.module["urlfetch"].fetch(
+                    url=url,
+                    method=self.config.module["urlfetch"].POST,
+                    payload=data,
+                    headers=headers
+                    )
+            else:
+                response = self.config.module["urlfetch"].fetch(
+                    url=url,
+                    data=data,
+                    headers=headers
+                    )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -143,11 +154,19 @@ class aw_proxy():
             'Changing trust peer resource at (' + url + ') with data(' +
             str(data) + ')')
         try:
-            response = urlfetch.fetch(url=url,
-                                      method=urlfetch.PUT,
-                                      payload=data,
-                                      headers=headers
-                                      )
+            if self.config.env == 'appengine':
+                response = self.config.module["urlfetch"].fetch(
+                    url=url,
+                    method=self.config.module["urlfetch"].PUT,
+                    payload=data,
+                    headers=headers
+                    )
+            else:
+                response = self.config.module["urlfetch"].put(
+                    url=url,
+                    data=data,
+                    headers=headers
+                )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -181,10 +200,17 @@ class aw_proxy():
         logging.debug(
             'Deleting trust peer resource at (' + url + ')')
         try:
-            response = urlfetch.fetch(url=url,
-                                      method=urlfetch.DELETE,
-                                      headers=headers
-                                      )
+            if self.config.env == 'appengine':
+                response = self.config.module["urlfetch"].fetch(
+                    url=url,
+                    method=self.config.module["urlfetch"].DELETE,
+                    headers=headers
+                    )
+            else:
+                response = self.config.module["urlfetch"].delete(
+                    url=url,
+                    headers=headers
+                    )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:

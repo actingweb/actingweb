@@ -34,6 +34,7 @@ class Actor(Model):
     """
     class Meta:
         table_name = "actors"
+        region = 'us-west-1'
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -56,7 +57,7 @@ class db_actor():
             if self.handle:
                 self.handle.refresh()
             else:
-                self.handle = Actor.get(actorId)
+                self.handle = Actor.get(actorId, consistent_read=True)
         except Actor.DoesNotExist:
             return None
         if self.handle:
@@ -96,9 +97,9 @@ class db_actor():
             logging.debug("Attempted modification of db_actor without db handle")
             return False
         if creator and len(creator) > 0:
-            self.handle.creator.set(creator)
+            self.handle.creator = creator
         if passphrase and len(passphrase) > 0:
-            self.handle.passphrase.set(passphrase)
+            self.handle.passphrase = passphrase
         self.handle.save()
         return True
 
@@ -142,7 +143,7 @@ class db_actor_list():
 
     def fetch(self):
         """ Retrieves the actors in the database """
-        self.handle = Actor.query()
+        self.handle = Actor.scan()
         if self.handle:
             ret = []
             for t in self.handle:

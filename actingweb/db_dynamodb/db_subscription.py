@@ -19,6 +19,7 @@ __all__ = [
 class Subscription(Model):
     class Meta:
         table_name = "subscriptions"
+        region = 'us-west-1'
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -49,7 +50,8 @@ class db_subscription():
         if not self.handle:
             self.handle = Subscription.get(id=actorId,
                                            peerid=peerid,
-                                           subid=subid)
+                                           subid=subid,
+                                           consistent_read=True)
         if self.handle:
             t = self.handle
             return {
@@ -83,21 +85,21 @@ class db_subscription():
             logging.debug("Attempted modification of db_subscription without db handle")
             return False
         if peerid and len(peerid) > 0:
-            self.handle.peerid.set(peerid)
+            self.handle.peerid = peerid
         if subid and len(subid) > 0:
-            self.handle.subid.set(subid)
+            self.handle.subid = subid
         if granularity and len(granularity) > 0:
-            self.handle.granularity.set(granularity)
+            self.handle.granularity = granularity
         if callback is not None:
-            self.handle.callback.set(callback)
+            self.handle.callback = callback
         if target and len(target) > 0:
-            self.handle.target.set(target)
+            self.handle.target = target
         if subtarget and len(subtarget) > 0:
-            self.handle.subtarget.set(subtarget)
+            self.handle.subtarget = subtarget
         if resource and len(resource) > 0:
-            self.handle.resource.set(resource)
+            self.handle.resource = resource
         if seqnr:
-            self.handle.seqnr.set(seqnr)
+            self.handle.seqnr = seqnr
         self.handle.save()
         return True
 
@@ -164,7 +166,8 @@ class db_subscription_list():
         """ Retrieves the subscriptions of an actorId from the database as an array"""
         if not actorId:
             return None
-        self.handle = Subscription.query(actorId, None)
+        self.actorId = actorId
+        self.handle = Subscription.scan(Subscription.id == self.actorId, consistent_read=True)
         self.subscriptions = []
         if self.handle:
             for t in self.handle:
@@ -186,6 +189,9 @@ class db_subscription_list():
 
     def delete(self):
         """ Deletes all the subscriptions for an actor in the database """
+        if not self.actorId:
+            return False
+        self.handle = Subscription.scan(Subscription.id == self.actorId, consistent_read=True)
         if not self.handle:
             return False
         for p in self.handle:
@@ -195,4 +201,7 @@ class db_subscription_list():
 
     def __init__(self):
         self.handle = None
+        self.actorId = None
         self.subscriptions = []
+        if not Subscription.exists():
+            Subscription.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)

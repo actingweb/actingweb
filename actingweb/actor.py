@@ -2,7 +2,6 @@ import datetime
 import base64
 import property
 import json
-import config
 import trust
 import subscription
 import logging
@@ -300,7 +299,13 @@ class actor():
                                             payload=data
                                             )
                 else:
-                    response = self.config.module["urlfetch"].post(url=factory, payload=data)
+                    response = self.config.module["urlfetch"].post(
+                        url=factory,
+                        data=data,
+                        headers={
+                            'Content-Type': 'application/json'
+                        }
+                    )
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
             except:
@@ -317,6 +322,11 @@ class actor():
                 return None
             if 'Location' in response.headers:
                 baseuri = response.headers['Location']
+            elif 'location' in response.headers:
+                baseuri = response.headers['location']
+            else:
+                logging.warn("No location uri found in response when creating a peer as trustee")
+                baseuri = ""
             res = self.getPeerInfo(baseuri)
             if not res or res["last_response_code"] < 200 or res["last_response_code"] >= 300:
                 return None
@@ -677,7 +687,7 @@ class actor():
                                           headers=headers
                                           )
             else:
-                response = self.config.module["urlfetch"].post(url=requrl, payload=data, headers=headers)
+                response = self.config.module["urlfetch"].post(url=requrl, data=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except:
@@ -817,7 +827,7 @@ class actor():
                                           headers=headers
                                           )
             else:
-                response = self.config.module["urlfetch"].fetch(
+                response = self.config.module["urlfetch"].post(
                     url=requrl,
                     data=data.encode('utf-8'),
                     headers=headers

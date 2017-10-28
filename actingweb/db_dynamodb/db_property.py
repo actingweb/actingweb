@@ -31,6 +31,7 @@ class Property(Model):
     """
     class Meta:
         table_name = "properties"
+        region = 'us-west-1'
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -60,7 +61,7 @@ class db_property():
                 return None
             return self.handle.value
         try:
-            self.handle = Property.get(actorId, name)
+            self.handle = Property.get(actorId, name, consistent_read=True)
         except Property.DoesNotExist:
             return None
         return self.handle.value
@@ -94,7 +95,7 @@ class db_property():
             self.handle = Property(id=actorId, name=name,
                                    value=value)
         else:
-            self.handle.value.set(value)
+            self.handle.value = value
         self.handle.save()
         return True
 
@@ -123,7 +124,8 @@ class db_property_list():
         """ Retrieves the properties of an actorId from the database """
         if not actorId:
             return None
-        self.handle = Property.query(actorId, None)
+        self.actorId = actorId
+        self.handle = Property.scan(Property.id == actorId)
         if self.handle:
             self.props = {}
             for d in self.handle:
@@ -134,6 +136,9 @@ class db_property_list():
 
     def delete(self):
         """ Deletes all the properties in the database """
+        if not self.actorId:
+            return False
+        self.handle = Property.scan(Property.id == self.actorId)
         if not self.handle:
             return False
         for p in self.handle:
@@ -143,3 +148,4 @@ class db_property_list():
 
     def __init__(self):
         self.handle = None
+        self.actorId = None

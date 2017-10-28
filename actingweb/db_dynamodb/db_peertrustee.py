@@ -17,6 +17,7 @@ class PeerTrustee(Model):
 
     class Meta:
         table_name = "peertrustees"
+        region = 'us-west-1'
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -40,15 +41,18 @@ class db_peertrustee():
         if not peerid and not type:
             logging.debug("Attempt to get db_peertrustee without peerid or type")
             return None
-        if not self.handle and peerid:
-            self.handle = PeerTrustee.get(actorId, peerid)
-        elif not self.handle and type:
-            if PeerTrustee.count(actorId, PeerTrustee.type == type) > 1:
-                logging.error('Found more than one peer of this peer trustee type(' + 
-                              shorttype + '). Unable to determine which, need peerid lookup.')
-                return False
-            for h in PeerTrustee.query(actorId, PeerTrustee.type == type):
-                self.handle = h
+        try:
+            if not self.handle and peerid:
+                self.handle = PeerTrustee.get(actorId, peerid, consistent_read=True)
+            elif not self.handle and type:
+                if PeerTrustee.count(actorId, PeerTrustee.type == type) > 1:
+                    logging.error('Found more than one peer of this peer trustee type(' +
+                                  shorttype + '). Unable to determine which, need peerid lookup.')
+                    return False
+                for h in PeerTrustee.query(actorId, PeerTrustee.type == type):
+                    self.handle = h
+        except PeerTrustee.DoesNotExist:
+            self.handle = None
         if self.handle:
             t = self.handle
             return {
@@ -94,11 +98,11 @@ class db_peertrustee():
             logging.debug("Attempted modification of db_peertrustee without db handle")
             return False
         if baseuri and len(baseuri) > 0:
-            self.handle.baseuri.set(baseuri)
+            self.handle.baseuri = baseuri
         if passphrase and len(passphrase) > 0:
-            self.handle.passphrase.set(passphrase)
+            self.handle.passphrase = passphrase
         if type and len(type) > 0:
-            self.handle.type.set(type)
+            self.handle.type = type
         self.handle.save()
         return True
 
@@ -127,8 +131,9 @@ class db_peertrustee_list():
         """ Retrieves the peer trustees of an actorId from the database """
         if not actorId:
             return None
-        self.handle = PeerTrustee.query(actorId, None)
+        self.actorId = actorId
         self.peertrustees = []
+        self.handle = PeerTrustee.scan(PeerTrustee.actorId == self.actorId)
         if self.handle:
             for t in self.handle:
                 self.peertrustees.append(
@@ -145,6 +150,7 @@ class db_peertrustee_list():
 
     def delete(self):
         """ Deletes all the peertrustees in the database """
+        self.handle = PeerTrustee.scan(PeerTrustee.actorId == self.actorId)
         if not self.handle:
             return False
         for p in self.handle:
@@ -154,3 +160,4 @@ class db_peertrustee_list():
 
     def __init__(self):
         self.handle = None
+        self.actorId = None

@@ -418,6 +418,7 @@ class auth():
         self.acl["relationship"] = "creator"
         self.acl["authenticated"] = True
         self.response['code'] = 200
+        self.response['text'] = "Ok"
         return True
 
     def checkTokenAuth(self, appreq):
@@ -441,11 +442,12 @@ class auth():
                     self.acl["approved"] = True
                     self.acl["authenticated"] = True
                     self.response['code'] = 200
+                    self.response['text'] = "Ok"
                     self.token = self.actor.passphrase
                     return True
             else:
                 logging.warn('Attempted trustee bearer token auth with <80 bit strength token.')
-        tru = trust.trust(actorId=self.actor.id, token=token)
+        tru = trust.trust(actorId=self.actor.id, token=token, config=self.config)
         new_trust = tru.get()
         if new_trust:
             logging.debug('Found trust with token: (' + str(new_trust) + ')')
@@ -455,6 +457,7 @@ class auth():
             self.acl["approved"] = new_trust["approved"]
             self.acl["authenticated"] = True
             self.response['code'] = 200
+            self.response['text'] = "Ok"
             self.token = new_trust["secret"]
             self.trust = new_trust
             return True

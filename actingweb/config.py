@@ -144,6 +144,14 @@ class config():
             logging.getLogger().handlers[0].setLevel(self.logLevel)  # Hack to get access to GAE logger
         else:
             logging.basicConfig(level=self.logLevel)
+            # Turn off debugging for pynamodb and botocore, too noisy
+            if self.logLevel == logging.DEBUG:
+                log = logging.getLogger("pynamodb")
+                log.setLevel(logging.INFO)
+                log.propagate = True
+                log = logging.getLogger("botocore")
+                log.setLevel(logging.INFO)
+                log.propagate = True
         self.root = self.proto + self.fqdn + "/"            # root URI used to identity actor externally
         self.auth_realm = self.fqdn                         # Authentication realm used in Basic auth
 

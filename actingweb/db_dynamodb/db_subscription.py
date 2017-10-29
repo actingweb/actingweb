@@ -23,14 +23,15 @@ class Subscription(Model):
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
-    peerid = UnicodeAttribute(range_key=True)
+    peer_sub_id = UnicodeAttribute(range_key=True)
+    peerid = UnicodeAttribute()
     subid = UnicodeAttribute()
-    granularity = UnicodeAttribute()
-    target = UnicodeAttribute()
-    subtarget = UnicodeAttribute()
-    resource = UnicodeAttribute()
+    granularity = UnicodeAttribute(null=True)
+    target = UnicodeAttribute(null=True)
+    subtarget = UnicodeAttribute(null=True)
+    resource = UnicodeAttribute(null=True)
     seqnr = NumberAttribute(default=1)
-    callback = BooleanAttribute
+    callback = BooleanAttribute()
 
 
 class db_subscription():
@@ -47,26 +48,26 @@ class db_subscription():
         if not peerid or not subid:
             logging.debug("Attempt to get subscription without peerid or subid")
             return None
-        if not self.handle:
-            self.handle = Subscription.get(id=actorId,
-                                           peerid=peerid,
-                                           subid=subid,
-                                           consistent_read=True)
-        if self.handle:
-            t = self.handle
-            return {
-                "id": t.id,
-                "peerid": t.peerid,
-                "subscriptionid": t.subid,
-                "granularity": t.granularity,
-                "target": t.target,
-                "subtarget": t.subtarget,
-                "resource": t.resource,
-                "sequence": t.seqnr,
-                "callback": t.callback,
-            }
-        else:
-            return None
+        try:
+            # We only expect one
+            for t in Subscription.query(actorId,
+                                        Subscription.peer_sub_id == peerid + ":" + subid,
+                                        consistent_read=True):
+                self.handle = t
+                return {
+                    "id": t.id,
+                    "peerid": t.peerid,
+                    "subscriptionid": t.subid,
+                    "granularity": (t.granularity or ''),
+                    "target": (t.target or ''),
+                    "subtarget": (t.subtarget or ''),
+                    "resource": (t.resource or ''),
+                    "sequence": t.seqnr,
+                    "callback": t.callback,
+                }
+        except Subscription.DoesNotExist:
+            pass
+        return None
 
     def modify(self, actorId=None,
                peerid=None,
@@ -78,7 +79,6 @@ class db_subscription():
                seqnr=None,
                callback=None):
         """ Modify a subscription
-
             If bools are none, they will not be changed.
         """
         if not self.handle:
@@ -110,33 +110,29 @@ class db_subscription():
                target=None,
                subtarget=None,
                resource=None,
-               seqnr=None,
-               callback=None):
+               seqnr=1,
+               callback=False):
         """ Create a new subscription """
         if not actorId or not peerid or not subid:
             return False
-        if not granularity:
-            granularity = ''
-        if not target:
-            target = ''
-        if not subtarget:
-            subtarget = ''
-        if not resource:
-            resource = ''
-        if not seqnr:
-            seqnr = 1
-        if not callback:
-            callback = False
+        if self.get(actorId=actorId, peerid=peerid, subid=subid):
+            return False
         self.handle = Subscription(id=actorId,
+                                   peer_sub_id=peerid + ":" + subid,
                                    peerid=peerid,
                                    subid=subid,
-                                   granularity=granularity,
-                                   target=target,
-                                   subtarget=subtarget,
-                                   resource=resource,
                                    seqnr=seqnr,
                                    callback=callback)
+        if granularity and len(granularity) > 0:
+            self.handle.granularity = granularity
+        if target and len(target) > 0:
+            self.handle.target = target
+        if subtarget and len(subtarget) > 0:
+            self.handle.subtarget = subtarget
+        if resource and len(resource) > 0:
+            self.handle.resource = resource
         self.handle.save()
+        self.handle.dump("data.json")
         return True
 
     def delete(self):
@@ -167,7 +163,7 @@ class db_subscription_list():
         if not actorId:
             return None
         self.actorId = actorId
-        self.handle = Subscription.scan(Subscription.id == self.actorId, consistent_read=True)
+        self.handle = Subscription.query(self.actorId, consistent_read=True)
         self.subscriptions = []
         if self.handle:
             for t in self.handle:
@@ -176,10 +172,10 @@ class db_subscription_list():
                     "id": t.id,
                     "peerid": t.peerid,
                     "subscriptionid": t.subid,
-                    "granularity": t.granularity,
-                    "target": t.target,
-                    "subtarget": t.subtarget,
-                    "resource": t.resource,
+                    "granularity": (t.granularity or ''),
+                    "target": (t.target or ''),
+                    "subtarget": (t.subtarget or ''),
+                    "resource": (t.resource or ''),
                     "sequence": t.seqnr,
                     "callback": t.callback,
                 })
@@ -191,7 +187,7 @@ class db_subscription_list():
         """ Deletes all the subscriptions for an actor in the database """
         if not self.actorId:
             return False
-        self.handle = Subscription.scan(Subscription.id == self.actorId, consistent_read=True)
+        self.handle = Subscription.query(self.actorId, consistent_read=True)
         if not self.handle:
             return False
         for p in self.handle:

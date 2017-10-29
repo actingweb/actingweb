@@ -25,7 +25,7 @@ class CreatorIndex(GlobalSecondaryIndex):
         write_capacity_units = 1
         projection = AllProjection()
 
-    creator = UnicodeAttribute(default=0, hash_key=True)
+    creator = UnicodeAttribute(hash_key=True)
 
 
 class Actor(Model):

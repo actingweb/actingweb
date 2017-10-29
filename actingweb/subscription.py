@@ -1,4 +1,3 @@
-import config
 import datetime
 import logging
 
@@ -26,7 +25,6 @@ class subscription():
 
     def create(self, target=None, subtarget=None, resource=None, granularity=None, seqnr=1):
         """Create new subscription and push it to db"""
-        Config = config.config()
         if self.subscription and len(self.subscription) > 0:
             logging.debug("Attempted creation of subscription when already loaded from storage")
             return False
@@ -79,7 +77,7 @@ class subscription():
         if not self.actorId or not self.subid or not blob:
             logging.debug("Attempted addDiff without actorid, subid, or blob")
             return False
-        diff = db_subscription_diff.db_subscription_diff()
+        diff = self.config.db_subscription_diff.db_subscription_diff()
         diff.create(actorId=self.actorId,
                     subid=self.subid,
                     diff=blob,
@@ -96,23 +94,23 @@ class subscription():
             return None
         if not isinstance(seqnr, int):
             return None
-        diff = db_subscription_diff.db_subscription_diff()
+        diff = self.config.db_subscription_diff.db_subscription_diff()
         return diff.get(actorId=self.actorId, subid=self.subid, seqnr=seqnr)
 
     def getDiffs(self):
         """Get all the diffs available for this subscription ordered by the timestamp, oldest first"""
-        diff_list = db_subscription_diff.db_subscription_diff_list()
+        diff_list = self.config.db_subscription_diff.db_subscription_diff_list()
         return diff_list.fetch(actorId=self.actorId, subid=self.subid)
 
     def clearDiff(self, seqnr):
         """Clears one specific diff"""
-        diff = db_subscription_diff.db_subscription_diff()
+        diff = self.config.db_subscription_diff.db_subscription_diff()
         diff.get(actorId=self.actorId, subid=self.subid, seqnr=seqnr)
         return diff.delete()
 
     def clearDiffs(self, seqnr=0):
         """Clear all diffs up to and including a seqnr"""
-        diff_list = db_subscription_diff.db_subscription_diff_list()
+        diff_list = self.config.db_subscription_diff.db_subscription_diff_list()
         diff_list.fetch(actorId=self.actorId, subid=self.subid)
         diff_list.delete(seqnr=seqnr)
 
@@ -141,7 +139,7 @@ class subscriptions():
         if self.subscriptions is not None:
             return self.subscriptions
         if not self.list:
-            self.list = db_trust.db_trust_list()
+            self.list = self.config.db_subscription.db_subscription_list()
         if not self.subscriptions:
             self.subscriptions = self.list.fetch(actorId=self.actorId)
         return self.subscriptions

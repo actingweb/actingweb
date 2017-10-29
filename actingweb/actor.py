@@ -705,7 +705,10 @@ class actor():
         if self.last_response_code == 201:
             self.createSubscription(peerid=peerid, target=target,
                                     subtarget=subtarget, resource=resource, granularity=granularity, subid=subid, callback=True)
-            return response.headers['Location']
+            if 'Location' in response.headers:
+                return response.headers['Location']
+            elif 'location' in response.headers:
+                return response.headers['location']
         else:
             return None
 

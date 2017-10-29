@@ -451,6 +451,9 @@ class auth():
         new_trust = tru.get()
         if new_trust:
             logging.debug('Found trust with token: (' + str(new_trust) + ')')
+            if new_trust["peerid"] == self.actor.id:
+                logging.error("Peer == actor!!")
+                return False
         if new_trust and len(new_trust) > 0:
             self.acl["relationship"] = new_trust["relationship"]
             self.acl["peerid"] = new_trust["peerid"]

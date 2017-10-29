@@ -43,11 +43,9 @@ class db_trust():
         if not actorId:
             return None
         if not self.handle and peerid:
-            logging.debug('    Retrieving trust from db based on peerid(' + peerid + ')')
             self.handle = Trust.query(Trust.id == actorId,
                                       Trust.peerid == peerid).get(use_cache=False)
         elif not self.handle and token:
-            logging.debug('    Retrieving trust from db based on token(' + token + ')')
             self.handle = Trust.query(Trust.id == actorId,
                                       Trust.secret == token).get(use_cache=False)
         if self.handle:

@@ -131,6 +131,7 @@ class config():
             ('trustee', 'trust', '', 'a'),                  # creator/trustee/admin
             ('admin', 'trust', '', 'a'),
             ('owner', 'subscriptions', '', 'a'),             # Owner can create++ own subscriptions
+            ('friend', 'subscriptions/<id>', '', 'a'),       # Owner can create subscriptions
             ('creator', 'subscriptions', '', 'a'),           # Creator can do everything
             ('trustee', 'subscriptions', '', 'a'),           # Trustee can do everything
             ('creator', '/', '', 'a'),                       # Root access for actor

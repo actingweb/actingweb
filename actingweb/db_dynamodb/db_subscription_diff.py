@@ -25,7 +25,7 @@ class SubscriptionDiff(Model):
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
-    subid = UnicodeAttribute(hash_key=True)
+    subid = UnicodeAttribute(range_key=True)
     timestamp = UTCDateTimeAttribute(default=datetime.datetime.now())
     diff = UnicodeAttribute()
     seqnr = NumberAttribute(default=1)
@@ -47,16 +47,18 @@ class db_subscription_diff():
             return None
         if not self.handle:
             if not seqnr:
-                self.handle = SubscriptionDiff.query(
+                query = SubscriptionDiff.query(
                     actorId,
                     SubscriptionDiff.subid == subid,
                     consistent_read=True)
             else:
-                self.handle = SubscriptionDiff.query(
+                query = SubscriptionDiff.query(
                     actorId,
-                    SubscriptionDiff.subid == subid,
-                    SubscriptionDiff.seqnr == seqnr,
+                    (SubscriptionDiff.subid == subid) &
+                    (SubscriptionDiff.seqnr == seqnr),
                     consistent_read=True)
+            for t in query:
+                self.handle = t
         if self.handle:
             t = self.handle
             return {
@@ -71,16 +73,12 @@ class db_subscription_diff():
 
     def create(self, actorId=None,
                subid=None,
-               diff=None,
-               seqnr=None):
+               diff='',
+               seqnr=1):
         """ Create a new subscription diff """
         if not actorId or not subid:
             logging.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
-        if not seqnr:
-            seqnr = 1
-        if not diff:
-            diff = ''
         self.handle = SubscriptionDiff(id=actorId,
                                        subid=subid,
                                        diff=diff,
@@ -116,13 +114,13 @@ class db_subscription_diff_list():
         self.actorId = actorId
         self.subid = subid
         if not subid:
-            self.handle = SubscriptionDiff.scan(
-                SubscriptionDiff.id == self.actorId,
-                scan_index_forward=True,
+            self.handle = SubscriptionDiff.query(
+                actorId,
+                scan_index_forward = True,
                 consistent_read=True)
         else:
-            self.handle = SubscriptionDiff.scan(
-                SubscriptionDiff.id == self.actorId,
+            self.handle = SubscriptionDiff.query(
+                actorId,
                 SubscriptionDiff.subid == self.subid,
                 scan_index_forward=True,
                 consistent_read=True)
@@ -151,13 +149,13 @@ class db_subscription_diff_list():
         if not seqnr or not isinstance(seqnr, int):
             seqnr = 0
         if not self.subid:
-            self.handle = SubscriptionDiff.scan(
-                SubscriptionDiff.id == self.actorId,
+            self.handle = SubscriptionDiff.query(
+                self.actorId,
                 scan_index_forward=True,
                 consistent_read=True)
         else:
-            self.handle = SubscriptionDiff.scan(
-                SubscriptionDiff.id == self.actorId,
+            self.handle = SubscriptionDiff.query(
+                self.actorId,
                 SubscriptionDiff.subid == self.subid,
                 scan_index_forward=True,
                 consistent_read=True)
@@ -172,3 +170,5 @@ class db_subscription_diff_list():
         self.diffs = []
         self.actorId = None
         self.subid = None
+        if not SubscriptionDiff.exists():
+            SubscriptionDiff.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)

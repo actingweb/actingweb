@@ -25,7 +25,7 @@ class SecretIndex(GlobalSecondaryIndex):
         write_capacity_units = 1
         projection = AllProjection()
 
-    secret = UnicodeAttribute(default=0, hash_key=True)
+    secret = UnicodeAttribute(hash_key=True)
 
 
 class Trust(Model):
@@ -72,7 +72,9 @@ class db_trust():
                 logging.debug('    Retrieving trust from db based on token(' + token + ')')
                 res = Trust.secret_index.query(token)
                 for h in res:
-                    self.handle = h
+                    if actorId == h.id:
+                        self.handle = h
+                        break
         except Trust.DoesNotExist:
             return None
         if not self.handle:

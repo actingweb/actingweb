@@ -25,7 +25,8 @@ class SubscriptionDiff(Model):
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
-    subid = UnicodeAttribute(range_key=True)
+    subid_seqnr = UnicodeAttribute(range_key=True)
+    subid = UnicodeAttribute()
     timestamp = UTCDateTimeAttribute(default=datetime.datetime.now())
     diff = UnicodeAttribute()
     seqnr = NumberAttribute(default=1)
@@ -49,16 +50,20 @@ class db_subscription_diff():
             if not seqnr:
                 query = SubscriptionDiff.query(
                     actorId,
-                    SubscriptionDiff.subid == subid,
+                    SubscriptionDiff.subid_seqnr.startswith(subid),
                     consistent_read=True)
+                # Find the record with lowest seqnr
+                for t in query:
+                    if not self.handle:
+                        self.handle = t
+                        continue
+                    if t.seqnr < self.handle.seqnr:
+                        self.handle = t
             else:
-                query = SubscriptionDiff.query(
+                self.handle = SubscriptionDiff.get(
                     actorId,
-                    (SubscriptionDiff.subid == subid) &
-                    (SubscriptionDiff.seqnr == seqnr),
+                    subid + ":" + unicode(str(seqnr), encoding='UTF-8'),
                     consistent_read=True)
-            for t in query:
-                self.handle = t
         if self.handle:
             t = self.handle
             return {
@@ -80,6 +85,7 @@ class db_subscription_diff():
             logging.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
         self.handle = SubscriptionDiff(id=actorId,
+                                       subid_seqnr=subid + ":" + unicode(str(seqnr), encoding='UTF-8'),
                                        subid=subid,
                                        diff=diff,
                                        seqnr=seqnr)
@@ -116,13 +122,11 @@ class db_subscription_diff_list():
         if not subid:
             self.handle = SubscriptionDiff.query(
                 actorId,
-                scan_index_forward = True,
                 consistent_read=True)
         else:
             self.handle = SubscriptionDiff.query(
                 actorId,
-                SubscriptionDiff.subid == self.subid,
-                scan_index_forward=True,
+                SubscriptionDiff.subid.startswith(subid),
                 consistent_read=True)
         self.diffs = []
         if self.handle:
@@ -135,6 +139,9 @@ class db_subscription_diff_list():
                     "diff": t.diff,
                     "sequence": t.seqnr,
                 })
+                logging.debug("Unsorted: " + str(self.diffs))
+                sorted(self.diffs, key=lambda diff: diff["sequence"])
+                logging.debug("Sorted: " + str(self.diffs))
             return self.diffs
         else:
             return []
@@ -151,13 +158,11 @@ class db_subscription_diff_list():
         if not self.subid:
             self.handle = SubscriptionDiff.query(
                 self.actorId,
-                scan_index_forward=True,
                 consistent_read=True)
         else:
             self.handle = SubscriptionDiff.query(
                 self.actorId,
-                SubscriptionDiff.subid == self.subid,
-                scan_index_forward=True,
+                SubscriptionDiff.subid.startswith(self.subid),
                 consistent_read=True)
         for p in self.handle:
             if seqnr == 0 or p.seqnr <= seqnr:

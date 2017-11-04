@@ -1,7 +1,3 @@
-__all__ = [
-    'config',
-]
-
 import uuid
 import binascii
 import logging

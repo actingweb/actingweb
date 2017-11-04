@@ -7,12 +7,6 @@ import subscription
 import logging
 import peertrustee
 
-__all__ = [
-    'actor',
-    'actors',
-]
-
-
 class actor():
 
     ###################

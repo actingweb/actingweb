@@ -1,11 +1,4 @@
-import config
 import logging
-
-__all__ = [
-    'trust',
-    'trusts',
-]
-
 
 class trust():
 

@@ -139,9 +139,7 @@ class db_subscription_diff_list():
                     "diff": t.diff,
                     "sequence": t.seqnr,
                 })
-                logging.debug("Unsorted: " + str(self.diffs))
                 sorted(self.diffs, key=lambda diff: diff["sequence"])
-                logging.debug("Sorted: " + str(self.diffs))
             return self.diffs
         else:
             return []

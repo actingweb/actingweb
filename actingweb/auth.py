@@ -7,12 +7,6 @@ import oauth
 import base64
 import math
 
-__all__ = [
-    'auth',
-    'init_actingweb',
-    'add_auth_response',
-]
-
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Fairly simple: /oauth is always oauth, /www can be either basic+trust or
 # oauth through config.py, and everything else is basic+trust
@@ -38,7 +32,7 @@ def add_auth_response(appreq=None, auth_obj=None):
     if auth_obj.response['code'] == 302:
         appreq.redirect(auth_obj.redirect)
     elif auth_obj.response['code'] == 401:
-        appreq.response.out.write("Authentication required")
+        appreq.response.write("Authentication required")
     for h in auth_obj.response['headers']:
         appreq.response.headers[h["header"]] = h["value"]
     return True
@@ -68,6 +62,8 @@ def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True,
     auth_obj.checkAuthentication(appreq=appreq, path=fullpath)
     if add_response:
         add_auth_response(appreq, auth_obj)
+    # Initialize the on_aw object with auth (.actor) and webobj (.config) for functions in on_aw
+    appreq.on_aw.aw_init(auth=auth_obj, webobj=appreq)
     return (auth_obj.actor, auth_obj)
 
 

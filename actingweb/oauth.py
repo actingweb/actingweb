@@ -2,10 +2,6 @@ import urllib
 import logging
 import json
 
-__all__ = [
-    'oauth',
-]
-
 # This function code is from latest urlfetch. For some reason the
 # Appengine version of urlfetch does not include links()
 

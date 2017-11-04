@@ -1,9 +1,3 @@
-__all__ = [
-    'property',
-    'properties',
-]
-
-
 class property():
     """
         property is the main entity keeping a property.

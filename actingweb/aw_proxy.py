@@ -3,11 +3,6 @@ import json
 import trust
 import logging
 
-__all__ = [
-    'aw_proxy',
-]
-
-
 class aw_proxy():
     """ Proxy to other trust peers to execute RPC style calls
 

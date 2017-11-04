@@ -1,10 +1,5 @@
 import logging
 
-__all__ = [
-    'peertrustee',
-]
-
-
 class peertrustee():
 
     def get(self):

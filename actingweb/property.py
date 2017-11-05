@@ -1,11 +1,3 @@
-from db_gae import db_property
-
-__all__ = [
-    'property',
-    'properties',
-]
-
-
 class property():
     """
         property is the main entity keeping a property.
@@ -18,7 +10,7 @@ class property():
         """ Retrieves the property from the database """
         if not self.dbprop:
             # New property after a delete()
-            self.dbprop = db_property.db_property()
+            self.dbprop = self.config.db_property.db_property()
             self.value=None
         self.value = self.dbprop.get(actorId=self.actorId, name=self.name)
         return self.value
@@ -27,7 +19,7 @@ class property():
         """ Sets a new value for this property """
         if not self.dbprop:
             # New property after a delete()
-            self.dbprop = db_property.db_property()
+            self.dbprop = self.config.db_property.db_property()
         if not self.actorId or not self.name:
             return False
         # Make sure we have made a dip in db to avoid two properties
@@ -52,11 +44,12 @@ class property():
     def getActorId(self):
         return self.actorId
 
-    def __init__(self,  actorId=None, name=None, value=None):
+    def __init__(self,  actorId=None, name=None, value=None, config=None):
         """ A property must be initialised with actorId and name or
             name and value (to find an actor's property of a certain value)
         """
-        self.dbprop = db_property.db_property()
+        self.config = config
+        self.dbprop = self.config.db_property.db_property()
         self.name = name
         if not actorId and name and len(name) > 0 and value and len(value) > 0:
             self.actorId = self.dbprop.get_actorId_from_property(name=name,
@@ -96,12 +89,13 @@ class properties():
         self.list.delete()
         return True
 
-    def __init__(self,  actorId=None):
+    def __init__(self,  actorId=None, config=None):
         """ Properties must always be initialised with an actorId """
+        self.config = config
         if not actorId:
             self.list = None
             return False
-        self.list = db_property.db_property_list()
+        self.list = self.config.db_property.db_property_list()
         self.actorId = actorId
         self.props = None
         self.fetch()

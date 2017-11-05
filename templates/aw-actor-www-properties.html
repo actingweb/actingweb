@@ -1,9 +1,0 @@
-<html>
-  <body>
-
-    {% for property in properties %}
-	{{ property.name }}: {{ property.value }} <a href="/{{ id }}/properties/{{ property.name }}?_method=DELETE">Delete</a><br>
-    {% endfor %}
-
-  </body>
-</html>

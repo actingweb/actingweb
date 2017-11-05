@@ -1,16 +1,43 @@
-__all__ = [
-    'config',
-]
-
 import uuid
 import binascii
-import os
 import logging
+import importlib
+import os
 
 
 class config():
 
-    def __init__(self):
+    def __init__(self, **kwargs):
+        # Values that can be changed as part of instantiating config
+        self.fqdn = "actingwebdemo-dev.appspot.com"  # The host and domain, i.e. FQDN, of the URL
+        self.proto = "https://"  # http or https
+        self.env = ''
+        self.database = 'dynamodb'
+        for k,v in kwargs.iteritems():
+            if k == 'database':
+                self.database = v
+                if v == 'gae':
+                    self.env = 'appengine'
+                elif v == 'dynamodb':
+                    self.env = 'aws'
+            elif k == 'fqdn':
+                self.fqdn = v
+            elif k == 'proto':
+                self.proto = v
+        # Dynamically load all the database modules
+        self.db_actor = importlib.import_module(".db_actor", "actingweb" + ".db_" + self.database)
+        self.db_peertrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + self.database)
+        self.db_property = importlib.import_module(".db_property", "actingweb" + ".db_" + self.database)
+        self.db_subscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + self.database)
+        self.db_subscription_diff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + self.database)
+        self.db_trust = importlib.import_module(".db_trust", "actingweb" + ".db_" + self.database)
+        self.module = {}
+        if self.env == 'appengine':
+            self.module["deferred"] = importlib.import_module(".deferred", "google.appengine.api")
+            self.module["urlfetch"] = importlib.import_module(".urlfetch", "google.appengine.ext")
+        else:
+            self.module["deferred"] = None
+            self.module["urlfetch"] = importlib.import_module("urlfetch")
         #########
         # Basic settings for this app
         #########
@@ -19,8 +46,6 @@ class config():
         self.unique_creator = False                          # Will enforce unique creator field across all actors
         self.force_email_prop_as_creator = True             # Use "email" property to set creator value (after creation and property set)
         self.www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
-        self.fqdn = "actingwebdemo-dev.appspot.com"         # The host and domain, i.e. FQDN, of the URL
-        self.proto = "https://"                             # http or https
         self.logLevel = logging.DEBUG  # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
         #########
         # ActingWeb settings for this app
@@ -102,6 +127,7 @@ class config():
             ('trustee', 'trust', '', 'a'),                  # creator/trustee/admin
             ('admin', 'trust', '', 'a'),
             ('owner', 'subscriptions', '', 'a'),             # Owner can create++ own subscriptions
+            ('friend', 'subscriptions/<id>', '', 'a'),       # Owner can create subscriptions
             ('creator', 'subscriptions', '', 'a'),           # Creator can do everything
             ('trustee', 'subscriptions', '', 'a'),           # Trustee can do everything
             ('creator', '/', '', 'a'),                       # Root access for actor
@@ -111,7 +137,18 @@ class config():
         #########
         # Only touch the below if you know what you are doing
         #########
-        logging.getLogger().handlers[0].setLevel(self.logLevel)  # Hack to get access to GAE logger
+        if self.env == 'appengine':
+            logging.getLogger().handlers[0].setLevel(self.logLevel)  # Hack to get access to GAE logger
+        else:
+            logging.basicConfig(level=self.logLevel)
+            # Turn off debugging for pynamodb and botocore, too noisy
+            if self.logLevel == logging.DEBUG:
+                log = logging.getLogger("pynamodb")
+                log.setLevel(logging.INFO)
+                log.propagate = True
+                log = logging.getLogger("botocore")
+                log.setLevel(logging.INFO)
+                log.propagate = True
         self.root = self.proto + self.fqdn + "/"            # root URI used to identity actor externally
         self.auth_realm = self.fqdn                         # Authentication realm used in Basic auth
 
@@ -120,3 +157,4 @@ class config():
 
     def newToken(self, length=40):
         return binascii.hexlify(os.urandom(int(length // 2)))
+

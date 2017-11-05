@@ -1,43 +1,114 @@
-===============
 Getting Started
 ===============
 
-This ActingWeb library is inself a fully working app that can be deployed
-to Google AppEngine.
+The easiest way to get started is to start out with the actingwebdemo application
+`http://actingweb.readthedocs.io/ <http://actingweb.readthedocs.io/>`_.
 
-It does not really use anything AppEngine specific beyond the database (ndb),
-so it can easily be ported to e.g. running in a Docker container. The
-deployment is then a bit more complex as you need a database container as well.
-Building this into the current python library as an option is a TODO.
+It uses the webapp2 framework to set up the REST endpoints that the ActingWeb library uses to expose
+the bot functionality.
 
-Google AppEngine
+If you want to use flask or any other framework, that is also easy, you just need to set up the routing between the
+endpoints and call the right request handlers in the library.
+
+For each endpoint, you need to:
+
+- map the incoming route to your own handler and catch the necessary variables
+- in your handler, set up an aw_web_request object and copy in the request's data using the chosen web framework
+- call the right ActingWeb handler
+- copy over the results to your chosen web framework
+
+Webapp2 Example
 ----------------
 
-1. Go to https://cloud.google.com/appengine, and log in using your google account. 
-You can go to https://cloud.google.com/appengine/docs to get access to the quick 
-start, however, the tutorial I recommend is here. It covers a lot things in a 
-guestbook app you don’t really need to understand to get started, but it’s a 
-simple way to deploy your first app. If you plan to re-use your test app, 
-take care when choosing an app name as it cannot be changed and will be part of the
-app URL.
+With Webapp2, this is done the following way using the /<actor-id>/properties endpoint as an example:
 
-2. Once you have deployed your first python 2.7 app, you can either just re-use 
-that app (and replace the code) or create a new project at 
-https://console.cloud.google.com.  You then add the app with the same name 
-in Google AppEngineLauncher on your computer and a new local directory will be 
-created for you. Also remember, you will need the public URL created for your 
-Appengine App in the next step. 
+Set up route
++++++++++++++
 
-3. Copy the acting-web-gae-library code into your app directory and edit appl.yaml.
-The first line must be edited to your app name
 
-4. Deploy the app to Google AppEngine and you should get a sign-up form when you go
-to the URL of the app!
+```python
+webapp2.Route(r'/<id>/properties<:/?><name:(.*)>', actor_properties.actor_properties)
+```
 
-Use the library for your own projects
--------------------------------------
+Here, id and name are captured as variables.
 
-For how to use and extend the library, you can have a look at an example where
-the ActingWeb library is used for Cisco Spark, the free collaboration service:
-http://stuff.ttwedel.no/latest-armyknife-code-html
+Handle the request like Webapp2 requires
++++++++++++++++++++++++++++++++++++++++++
 
+```python
+from actingweb import aw_web_request
+from actingweb.handlers import properties
+
+import webapp2
+
+class actor_properties(webapp2.RequestHandler):
+
+    def init(self):
+        self.obj=aw_web_request.aw_webobj(
+            url=self.request.url,
+            params=self.request.params,
+            body=self.request.body,
+            headers=self.request.headers)
+        self.handler = properties.properties_handler(self.obj, self.app.registry.get('config'))
+
+    def get(self, id, name):
+        self.init()
+        # Process the request
+        self.handler.get(id, name)
+        # Pass results back to webapp2
+        self.response.set_status(self.obj.response.status_code, self.obj.response.status_message)
+        self.response.headers = self.obj.response.headers
+        self.response.write(self.obj.response.body)
+
+...
+```
+
+Here, the actor_properties is the handler as specified by Webapp2 where the get method is called by the framework.
+First thing it does is to initialize the request using the init() method. This method basically does two things:
+Instantiates an aw_web_request object with the Webapp2 request data, and then it creates an actingweb handler using
+the new object and an instance of the actingweb config object.
+
+Once that is done, the self.handler.get() method can be called, passing in the two variables from the URL.
+
+Finally, Webapp2 response is set using the output data from the aw_web_request object.
+
+For /properties, other methods must also be set up (put, post, and delete).
+
+Config Object
+-------------
+
+In order to set the configuration, an instance of the config object should be passed into the actingweb handler.
+
+Here's how to instantiate it:`
+
+```python
+        config = config.config(
+            database='dynamodb',
+            fqdn="actingwebdemo.greger.io",
+            proto="http://")
+```
+
+**TO-DO**
+Expose more variables through the config object and document them.
+
+Tailoring behaviour on requests
+--------------------------------
+
+The on_aw module implements a base class with a set of methods that will be called on certain actions.
+For example, requests to /bot can and should be handled by the application outside actingweb.
+
+> The /bot path can be used
+> to handle requests to the mini-application, for example to create a new actor or create a trust relationship between
+> two actors, or just to handle incoming requests that don't use the actor's id in the URL, but where the actor can be
+> identified through the POST data.``
+
+To make your own bot handler, make you own instance inheriting the on_aw_base class and override the correct method.
+
+```python
+from actingweb import on_aw
+
+class my_aw(on_aw.on_aw_base()):
+
+    def bot_post(self, path):
+        # Do stuff with posts to the bot
+```

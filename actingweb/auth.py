@@ -1,35 +1,26 @@
-import urllib
 import actor
 import trust
 import logging
 import time
 
-import config
 import oauth
 import base64
 import math
-
-__all__ = [
-    'auth',
-    'init_actingweb',
-    'add_auth_response',
-]
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Fairly simple: /oauth is always oauth, /www can be either basic+trust or
 # oauth through config.py, and everything else is basic+trust
 
 
-def select_auth_type(path, subpath):
+def select_auth_type(path, subpath, config=None):
     """Selects authentication type based on path and subpath.
 
     Currently are only basic and oauth supported. Peer auth is automatic if an Authorization Bearer <token> header is included in the http request.
     """
-    conf = config.config()
     if path == 'oauth':
         return 'oauth'
     if path == 'www':
-        return conf.www_auth
+        return config.www_auth
     return 'basic'
 
 def add_auth_response(appreq=None, auth_obj=None):
@@ -41,13 +32,13 @@ def add_auth_response(appreq=None, auth_obj=None):
     if auth_obj.response['code'] == 302:
         appreq.redirect(auth_obj.redirect)
     elif auth_obj.response['code'] == 401:
-        appreq.response.out.write("Authentication required")
+        appreq.response.write("Authentication required")
     for h in auth_obj.response['headers']:
         appreq.response.headers[h["header"]] = h["value"]
     return True
 
 
-def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True):
+def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True, config=None):
     """Initialises actingweb by loading a config object, an actor object, and authentication object.
     
 
@@ -61,18 +52,19 @@ def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True)
             403 is forbidden, text in response['text']
     """
 
-    conf = config.config()
     fullpath = '/' + path + '/' + subpath
-    type = select_auth_type(path=path, subpath=subpath)
-    auth_obj = auth(id, type=type)
+    type = select_auth_type(path=path, subpath=subpath, config=config)
+    auth_obj = auth(id, type=type, config=config)
     if not auth_obj.actor:
         if add_response:
             appreq.response.set_status(404, 'Actor not found')
-        return (conf, None, None)
+        return (None, None)
     auth_obj.checkAuthentication(appreq=appreq, path=fullpath)
     if add_response:
         add_auth_response(appreq, auth_obj)
-    return (conf, auth_obj.actor, auth_obj)
+    # Initialize the on_aw object with auth (.actor) and webobj (.config) for functions in on_aw
+    appreq.on_aw.aw_init(auth=auth_obj, webobj=appreq)
+    return (auth_obj.actor, auth_obj)
 
 
 class auth():
@@ -109,7 +101,8 @@ class auth():
 
     """
 
-    def __init__(self, id, type='basic'):
+    def __init__(self, id, type='basic', config=None):
+        self.config = config
         self.token = None
         self.cookie_redirect = None
         self.cookie = None
@@ -134,12 +127,10 @@ class auth():
             "peerid": '',           # Peerid if there is a relationship
             "approved": False,      # True if the peer is approved
         }
-        Config = config.config()
-        self.config = Config
-        self.actor = actor.actor(id)
+        self.actor = actor.actor(id, config=self.config)
         if not self.actor.id:
             self.actor = None
-            self.oauth = oauth.oauth(token=None)
+            self.oauth = oauth.oauth(token=None, config=self.config)
             self.token = None
             self.expiry = None
             self.refresh_expiry = None
@@ -148,21 +139,21 @@ class auth():
         # We need to initialise oauth for use towards the external oauth service
         self.property = 'oauth_token'  # Property name used to set self.token
         self.token = self.actor.getProperty(self.property).value
-        self.oauth = oauth.oauth(token=self.token)
+        self.oauth = oauth.oauth(token=self.token, config=self.config)
         self.expiry = self.actor.getProperty('oauth_token_expiry').value
         self.refresh_expiry = self.actor.getProperty('oauth_refresh_token_expiry').value
         self.refresh_token = self.actor.getProperty('oauth_refresh_token').value    
         if self.type == 'basic':
-            self.realm = Config.auth_realm
+            self.realm = self.config.auth_realm
         elif self.type == 'oauth':
             if self.oauth.enabled():
                 self.cookie = 'oauth_token'
                 if self.actor.getProperty('cookie_redirect').value:
-                    self.cookie_redirect = Config.root + \
+                    self.cookie_redirect = self.config.root + \
                         self.actor.getProperty('cookie_redirect').value
                 else:
                     self.cookie_redirect = None
-                self.redirect = str(Config.root + self.actor.id + '/oauth')
+                self.redirect = str(self.config.root + self.actor.id + '/oauth')
             else:
                 self.type = 'none'
 
@@ -423,6 +414,7 @@ class auth():
         self.acl["relationship"] = "creator"
         self.acl["authenticated"] = True
         self.response['code'] = 200
+        self.response['text'] = "Ok"
         return True
 
     def checkTokenAuth(self, appreq):
@@ -446,20 +438,25 @@ class auth():
                     self.acl["approved"] = True
                     self.acl["authenticated"] = True
                     self.response['code'] = 200
+                    self.response['text'] = "Ok"
                     self.token = self.actor.passphrase
                     return True
             else:
                 logging.warn('Attempted trustee bearer token auth with <80 bit strength token.')
-        tru = trust.trust(actorId=self.actor.id, token=token)
+        tru = trust.trust(actorId=self.actor.id, token=token, config=self.config)
         new_trust = tru.get()
         if new_trust:
             logging.debug('Found trust with token: (' + str(new_trust) + ')')
+            if new_trust["peerid"] == self.actor.id:
+                logging.error("Peer == actor!!")
+                return False
         if new_trust and len(new_trust) > 0:
             self.acl["relationship"] = new_trust["relationship"]
             self.acl["peerid"] = new_trust["peerid"]
             self.acl["approved"] = new_trust["approved"]
             self.acl["authenticated"] = True
             self.response['code'] = 200
+            self.response['text'] = "Ok"
             self.token = new_trust["secret"]
             self.trust = new_trust
             return True

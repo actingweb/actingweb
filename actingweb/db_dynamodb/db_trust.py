@@ -1,5 +1,8 @@
-from google.appengine.ext import ndb
 import logging
+import os
+from pynamodb.models import Model
+from pynamodb.attributes import UnicodeAttribute, BooleanAttribute
+from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
 
 """
     db_trust handles all db operations for a trust
@@ -12,19 +15,38 @@ __all__ = [
 ]
 
 
-class Trust(ndb.Model):
+class SecretIndex(GlobalSecondaryIndex):
+    """
+    Secondary index on trust
+    """
+    class Meta:
+        index_name = 'secret-index'
+        read_capacity_units = 2
+        write_capacity_units = 1
+        projection = AllProjection()
+
+    secret = UnicodeAttribute(hash_key=True)
+
+
+class Trust(Model):
     """ Data model for a trust relationship """
-    id = ndb.StringProperty(required=True)
-    peerid = ndb.StringProperty(required=True)
-    baseuri = ndb.StringProperty(required=True)
-    type = ndb.StringProperty(required=True)
-    relationship = ndb.StringProperty(required=True)
-    secret = ndb.StringProperty(required=True)
-    desc = ndb.TextProperty()
-    approved = ndb.BooleanProperty()
-    peer_approved = ndb.BooleanProperty()
-    verified = ndb.BooleanProperty()
-    verificationToken = ndb.StringProperty()
+    class Meta:
+        table_name = "trusts"
+        region = 'us-west-1'
+        host = os.getenv('AWS_DB_HOST', None)
+
+    id = UnicodeAttribute(hash_key=True)
+    peerid = UnicodeAttribute(range_key=True)
+    baseuri = UnicodeAttribute()
+    type = UnicodeAttribute()
+    relationship = UnicodeAttribute()
+    secret = UnicodeAttribute()
+    desc = UnicodeAttribute()
+    approved = BooleanAttribute()
+    peer_approved = BooleanAttribute()
+    verified = BooleanAttribute()
+    verificationToken = UnicodeAttribute()
+    secret_index = SecretIndex()
 
 
 class db_trust():
@@ -35,36 +57,43 @@ class db_trust():
     """
 
     def get(self,  actorId=None, peerid=None, token=None):
-        """ Retrieves the property from the database
+        """ Retrieves the trust from the database
 
             Either peerid or token must be set.
             If peerid is set, token will be ignored.
         """
         if not actorId:
             return None
-        if not self.handle and peerid:
-            self.handle = Trust.query(Trust.id == actorId,
-                                      Trust.peerid == peerid).get(use_cache=False)
-        elif not self.handle and token:
-            self.handle = Trust.query(Trust.id == actorId,
-                                      Trust.secret == token).get(use_cache=False)
-        if self.handle:
-            t = self.handle
-            return {
-                "id": t.id,
-                "peerid": t.peerid,
-                "baseuri": t.baseuri,
-                "type": t.type,
-                "relationship": t.relationship,
-                "secret": t.secret,
-                "desc": t.desc,
-                "approved": t.approved,
-                "peer_approved": t.peer_approved,
-                "verified": t.verified,
-                "verificationToken": t.verificationToken,
-            }
-        else:
+        try:
+            if not self.handle and peerid:
+                logging.debug('    Retrieving trust from db based on peerid(' + peerid + ')')
+                self.handle = Trust.get(actorId, peerid, consistent_read=True)
+            elif not self.handle and token:
+                logging.debug('    Retrieving trust from db based on token(' + token + ')')
+                res = Trust.secret_index.query(token)
+                for h in res:
+                    if actorId == h.id:
+                        self.handle = h
+                        break
+        except Trust.DoesNotExist:
             return None
+        if not self.handle:
+            return None
+        t = self.handle
+        return {
+            "id": t.id,
+            "peerid": t.peerid,
+            "baseuri": t.baseuri,
+            "type": t.type,
+            "relationship": t.relationship,
+            "secret": t.secret,
+            "desc": t.desc,
+            "approved": t.approved,
+            "peer_approved": t.peer_approved,
+            "verified": t.verified,
+            "verificationToken": t.verificationToken,
+        }
+
 
     def modify(self, baseuri=None,
                secret=None,
@@ -94,7 +123,7 @@ class db_trust():
             self.handle.verificationToken = verificationToken
         if peer_approved is not None:
             self.handle.peer_approved = peer_approved
-        self.handle.put(use_cache=False)
+        self.handle.save()
         return True
 
     def create(self, actorId=None, peerid=None,
@@ -116,14 +145,14 @@ class db_trust():
                             peer_approved=peer_approved,
                             verificationToken=verificationToken,
                             desc=desc)
-        self.handle.put(use_cache=False)
+        self.handle.save()
         return True
 
     def delete(self):
         """ Deletes the property in the database """
         if not self.handle:
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.delete()
         self.handle = None
         return True
 
@@ -133,14 +162,18 @@ class db_trust():
             return False
         if not token or len(token) == 0:
             return False
-        res = Trust.query(Trust.id == actorId, 
-                          Trust.secret == token).get(use_cache=False)
-        if res:
-            return True
+        for r in Trust.secret_index.query(token):
+            if r.id != actorId:
+                continue
+            else:
+                return True
         return False
 
     def __init__(self):
         self.handle = None
+        if not Trust.exists():
+            Trust.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+
 
 
 class db_trust_list():
@@ -154,7 +187,8 @@ class db_trust_list():
         """ Retrieves the trusts of an actorId from the database as an array"""
         if not actorId:
             return None
-        self.handle = Trust.query(Trust.id == actorId).fetch(use_cache=False)
+        self.actorId = actorId
+        self.handle = Trust.scan(Trust.id == self.actorId, consistent_read=True)
         self.trusts = []
         if self.handle:
             for t in self.handle:
@@ -178,12 +212,18 @@ class db_trust_list():
 
     def delete(self):
         """ Deletes all the properties in the database """
+        self.handle = Trust.scan(Trust.id == self.actorId, consistent_read=True)
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
+            p.delete()
         self.handle = None
         return True
 
     def __init__(self):
         self.handle = None
+        self.actorId = None
+        self.trusts = []
+        if not Trust.exists():
+            Trust.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+

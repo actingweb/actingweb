@@ -2,9 +2,11 @@
 CHANGELOG
 =========
 
-Oct 7, 2017
+Nov 5, 2017
 -----------
 - Split out actingweb module as a separate library and repository
+- Support AWS DynamoDB in sub-module
+- Refactor out a set of handlers to allow easy integration into any web framework
 
 Jul 9, 2017
 -----------

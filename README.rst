@@ -12,17 +12,17 @@ Building and installing
 
 ::
 
-# Build source distribution
-python setup.py sdist
+    # Build source distribution
+    python setup.py sdist
 
-# Build a binary distribution for python2:
-python setup.py bdist_wheel
+    # Build a binary distribution for python2:
+    python setup.py bdist_wheel
 
-# Upload to test server:
-python setup.py sdist upload -r pypitest
+    # Upload to test server:
+    python setup.py sdist upload -r pypitest
 
-# Upload to production server:
-twine upload dist/*
+    # Upload to production server:
+    twine upload dist/*
 
 
 Repository and documentation

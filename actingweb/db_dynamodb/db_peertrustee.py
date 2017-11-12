@@ -17,7 +17,9 @@ class PeerTrustee(Model):
 
     class Meta:
         table_name = "peertrustees"
-        region = 'us-west-1'
+        read_capacity_units = 1
+        write_capacity_units = 1
+        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -117,7 +119,7 @@ class db_peertrustee():
     def __init__(self):
         self.handle = None
         if not PeerTrustee.exists():
-            PeerTrustee.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+            PeerTrustee.create_table(wait=True)
 
 
 class db_peertrustee_list():

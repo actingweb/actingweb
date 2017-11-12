@@ -32,7 +32,9 @@ class Trust(Model):
     """ Data model for a trust relationship """
     class Meta:
         table_name = "trusts"
-        region = 'us-west-1'
+        read_capacity_units = 5
+        write_capacity_units = 2
+        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -172,7 +174,7 @@ class db_trust():
     def __init__(self):
         self.handle = None
         if not Trust.exists():
-            Trust.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+            Trust.create_table(wait=True)
 
 
 
@@ -225,5 +227,5 @@ class db_trust_list():
         self.actorId = None
         self.trusts = []
         if not Trust.exists():
-            Trust.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+            Trust.create_table(wait=True)
 

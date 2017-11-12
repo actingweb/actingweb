@@ -34,7 +34,9 @@ class Actor(Model):
     """
     class Meta:
         table_name = "actors"
-        region = 'us-west-1'
+        read_capacity_units = 6
+        write_capacity_units = 2
+        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -133,7 +135,7 @@ class db_actor():
     def __init__(self):
         self.handle = None
         if not Actor.exists():
-            Actor.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+            Actor.create_table(wait=True)
 
 
 class db_actor_list():

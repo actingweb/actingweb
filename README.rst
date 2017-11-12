@@ -7,6 +7,24 @@ It serves as the reference implementation for the ActingWeb REST protocol
 specification <http://actingweb.readthedocs.io/en/release/actingweb-spec.html>`_ for
 how such micro-services interact.
 
+Building and installing
+------------------------
+
+::
+
+# Build source distribution
+python setup.py sdist
+
+# Build a binary distribution for python2:
+python setup.py bdist_wheel
+
+# Upload to test server:
+python setup.py sdist upload -r pypitest
+
+# Upload to production server:
+twine upload dist/*
+
+
 Repository and documentation
 ----------------------------
 
@@ -62,20 +80,13 @@ you set as username and the passphrase you get when creating the actor and log i
 functionality can be accessed through the actor's root URL (e.g.
 ``https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54``):
 
-- ``/properties``: attributed/value pairs as flat or nested json can be set, accessed, and deleted to store
-    this actor's data
+- ``/properties``: attributed/value pairs as flat or nested json can be set, accessed, and deleted to store this actor's data
 - ``/meta``: a publicly available json structure allowing actor's to discover each other's capabilities
-- ``/trust``: access to requesting, approving, and managing trust relationships with other actors of
-    either the same type or any other actor "talking actingweb"
-- ``/subscriptions``: once a trust relationship is set up, this path allows access to establishing, retrieving,
-    and managing subscriptions that are based on paths and identified with target, sub-target, and
-        resource, e.g. ``/resources/folders/12345``
-- ``/callbacks``: used for verification when establishing trust/subscriptions, to receive callbacks on
-    subscriptions, as well as a programming hook to process webhooks from 3rd party services
+- ``/trust``: access to requesting, approving, and managing trust relationships with other actors of either the same type or any other actor "talking actingweb"
+- ``/subscriptions``: once a trust relationship is set up, this path allows access to establishing, retrieving, and managing subscriptions that are based on paths and identified with target, sub-target, and resource, e.g. ``/resources/folders/12345``
+- ``/callbacks``: used for verification when establishing trust/subscriptions, to receive callbacks on subscriptions, as well as a programming hook to process webhooks from 3rd party services
 - ``/resources``: a skeleton to simplify exposure of any type of resource (where /properties is not suited)
-- ``/oauth``: used to initiate a www-based oauth flow to tie the actor to a specific OAuth user and
-    service. Available if OAuth is turned on and a 3rd party OAuth service has been configured in config.py. /www
-    will also be redirected to /oauth (*OAuth is not enabled in the online actingwebdemo mini-application*)
+- ``/oauth``: used to initiate a www-based oauth flow to tie the actor to a specific OAuth user and service. Available if OAuth is turned on and a 3rd party OAuth service has been configured in config.py. /www will also be redirected to /oauth (*OAuth is not enabled in the online actingwebdemo mini-application*)
 
 **Sidenote**: The **actingweb  library** also implements a simple mechanism for protecting the /www path with oauth
 (not in the specification). On successful OAuth authorisation, it will set a browser cookie to the oauth

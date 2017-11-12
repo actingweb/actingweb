@@ -2,11 +2,13 @@
 CHANGELOG
 =========
 
-Nov 5, 2017
+v2.1.2: Nov 12, 2017
 -----------
-- Split out actingweb module as a separate library and repository
-- Support AWS DynamoDB in sub-module
+- Split out actingweb module as a separate pypi library and repository
+- Python2 support, not python3
+- Support AWS DynamoDB and Google Datastore in sub-modules
 - Refactor out a set of handlers to allow easy integration into any web framework
+- actingwebdemo as a full-functioning demo app to show how the library is used
 
 Jul 9, 2017
 -----------

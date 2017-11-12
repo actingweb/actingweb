@@ -19,7 +19,9 @@ __all__ = [
 class Subscription(Model):
     class Meta:
         table_name = "subscriptions"
-        region = 'us-west-1'
+        read_capacity_units = 2
+        write_capacity_units = 1
+        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -132,7 +134,6 @@ class db_subscription():
         if resource and len(resource) > 0:
             self.handle.resource = resource
         self.handle.save()
-        self.handle.dump("data.json")
         return True
 
     def delete(self):
@@ -147,7 +148,7 @@ class db_subscription():
     def __init__(self):
         self.handle = None
         if not Subscription.exists():
-            Subscription.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+            Subscription.create_table(wait=True)
 
 
 
@@ -200,4 +201,4 @@ class db_subscription_list():
         self.actorId = None
         self.subscriptions = []
         if not Subscription.exists():
-            Subscription.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+            Subscription.create_table(wait=True)

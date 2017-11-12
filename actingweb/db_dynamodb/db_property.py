@@ -21,6 +21,7 @@ class PropertyIndex(GlobalSecondaryIndex):
         index_name = 'property-index'
         read_capacity_units = 2
         write_capacity_units = 1
+        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
         projection = AllProjection()
 
     value = UnicodeAttribute(default=0, hash_key=True)
@@ -31,7 +32,8 @@ class Property(Model):
     """
     class Meta:
         table_name = "properties"
-        region = 'us-west-1'
+        read_capacity_units = 26
+        write_capacity_units = 2
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)
@@ -110,7 +112,7 @@ class db_property():
     def __init__(self):
         self.handle = None
         if not Property.exists():
-            Property.create_table(read_capacity_units=1, write_capacity_units=1, wait=True)
+            Property.create_table(wait=True)
 
 
 class db_property_list():

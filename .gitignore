@@ -1,5 +1,6 @@
 docs/_build
 _build
+build
 *.pyc
 .vscode/
 

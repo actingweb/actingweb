@@ -88,8 +88,66 @@ Here's how to instantiate it:`
             proto="http://")
 ```
 
-**TO-DO**
-Expose more variables through the config object and document them.
+
+All Configuration Variables and Their Defaults
+----------------------------------------------
+
+```python
+# Basic settings for this app
+fqdn = "actingwebdemo-dev.appspot.com"  # The host and domain, i.e. FQDN, of the URL
+proto = "https://"  # http or https
+database = 'dynamodb'                          # 'dynamodb' or 'gae' for Google Datastore
+ui = True                                      # Turn on the /www path
+devtest = True                                 # Enable /devtest path for test purposes, MUST be False in production
+unique_creator = False                          # Will enforce unique creator field across all actors
+force_email_prop_as_creator = True             # Use "email" property to set creator value (after creation and property set)
+www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
+logLevel = "DEBUG"                             # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
+
+# Configurable ActingWeb settings for this app
+type = "urn:actingweb:actingweb.org:gae-demo"  # The app type this actor implements
+desc = "GAE Demo actor: "                      # A human-readable description for this specific actor
+specification = ""                             # URL to a RAML/Swagger etc definition if available
+version = "1.0"                                # A version number for this app
+info = "http://actingweb.org/"                 # Where can more info be found
+
+# Trust settings for this app
+default_relationship = "associate"  # Default relationship if not specified
+auto_accept_default_relationship = False  # True if auto-approval
+
+# Known and trusted ActingWeb actors
+actors = {
+    '<SHORTTYPE>': {
+        'type': 'urn:<ACTINGWEB_TYPE>',
+        'factory': '<ROOT_URI>',
+        'relationship': 'friend',               # associate, friend, partner, admin
+        },
+}
+
+# OAuth settings for this app, fill in if OAuth is used
+oauth = {
+    'client_id': "",                                # An empty client_id turns off oauth capabilities
+    'client_secret': "",
+    'redirect_uri': proto + fqdn + "/oauth",
+    'scope': "",
+    'auth_uri': "",
+    'token_uri': "",
+    'response_type': "code",
+    'grant_type': "authorization_code",
+    'refresh_type': "refresh_token",
+}
+bot = {
+    'token': '',
+    'email': '',
+}
+
+# If myself is not found in actors, the myself actor is added:
+actors['myself'] = {
+    'type': type,
+    'factory': proto + fqdn + '/',
+    'relationship': 'friend',  # associate, friend, partner, admin
+}
+```
 
 Tailoring behaviour on requests
 --------------------------------

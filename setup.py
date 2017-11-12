@@ -14,6 +14,11 @@ setup(name='actingweb',
             'actingweb.db_dynamodb'
       ],
       python_requires='<3',
-      install_requires=[],
+      install_requires=[
+            'pynamodb',
+            'boto3',
+            'urlfetch',
+            'logging'
+      ],
       include_package_data=True,
       zip_safe=False)

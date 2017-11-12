@@ -378,8 +378,8 @@ allow use of OAuth to get access.
 +------------------+-----------------------------------------------------------------------------------+
 | resources        | The resources path is available and non-actingweb data, but relevant to the actor |
 |                  | can be found under the resources path. Example: GET /resources/lights to get all  |
+|                  | lights available.                                                                 |
 +------------------+-----------------------------------------------------------------------------------+
-|                  | lights available                                                                  |
 | methods          | The methods path is available and offers non-REST based API access.               |
 |                  | Example: */methods/soap/sendMessage*                                              |
 +------------------+-----------------------------------------------------------------------------------+

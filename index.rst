@@ -1,14 +1,18 @@
 =============================================
-acting-web-gae-library - an ActingWeb Library
+actingweb - an ActingWeb Python Library
 =============================================
-This is a python and Google AppEngine implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
-distributed micro-services model. It is both a demo application implementing the micro-services model as described in the specification, and it serves as the reference implementation for the ActingWeb REST protocol specification for how such micro-services interact.
+This is a python library implementing the REST-based `ActingWeb <http://actingweb.org>`_
+distributed micro-services model. It serves as the reference implementation for the ActingWeb REST
+protocol specification for how such micro-services interact. In order to follow the specification, an
+application needs to implement a set of API endpoints. These can be implemented using any REST framework
+(or just plain http requests). See `ActingWeb <http://actingweb.org>`_ for example/boilerplate project(s).
 
 .. toctree::
     :maxdepth: 2
 
+    LICENSE.txt
     README
-    CHANGELOG
     getting-started
+    CHANGELOG
     actingweb-spec
 

@@ -6,6 +6,7 @@ import trust
 import subscription
 import logging
 import peertrustee
+import attribute
 
 class actor():
 
@@ -163,6 +164,8 @@ class actor():
         for rel in relationships:
             self.deleteReciprocalTrust(peerid=rel["peerid"], deletePeer=True)
         trusts.delete()
+        buckets = attribute.buckets(actorId=self.id, config=self.config)
+        buckets.delete()
         self.handle.delete()
 
     ######################

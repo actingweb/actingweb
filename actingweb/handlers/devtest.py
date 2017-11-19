@@ -1,6 +1,7 @@
 import json
 from actingweb import auth
 from actingweb import aw_proxy
+from actingweb import attribute
 from actingweb.handlers import base_handler
 
 
@@ -23,7 +24,7 @@ class devtest_handler(base_handler.base_handler):
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
         except:
-            params = None
+            params = self.request.body.decode('utf-8', 'ignore')
         paths = path.split('/')
         if paths[0] == 'proxy':
             mytwin = myself.getPeerTrustee(shorttype='myself')
@@ -37,6 +38,12 @@ class devtest_handler(base_handler.base_handler):
         elif paths[0] == 'ping':
             self.response.set_status(204)
             return
+        elif paths[0] == 'attribute':
+            if len(paths) > 2:
+                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                params = bucket.set(paths[2], params)
+                self.response.set_status(204)
+                return
         self.response.set_status(404)
 
     def delete(self, id, path):
@@ -63,6 +70,17 @@ class devtest_handler(base_handler.base_handler):
         elif paths[0] == 'ping':
             self.response.set_status(204)
             return
+        elif paths[0] == 'attribute':
+            if len(paths) > 2:
+                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                bucket.unset(paths[2])
+                self.response.set_status(204)
+                return
+            else:
+                buckets = attribute.buckets(actorId=myself.id, config=self.config)
+                buckets.delete()
+                self.response.set_status(204)
+                return
         self.response.set_status(404)
 
     def get(self, id, path):
@@ -95,6 +113,26 @@ class devtest_handler(base_handler.base_handler):
         elif paths[0] == 'ping':
             self.response.set_status(204)
             return
+        elif paths[0] == 'attribute':
+            if len(paths) > 1:
+                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                params = bucket.get()
+                out = json.dumps(params)
+                self.response.write(out.encode('utf-8'))
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.set_status(200)
+                return
+            else:
+                buckets = attribute.buckets(actorId=myself.id, config=self.config)
+                params = buckets.fetch()
+                if len(params) == 0:
+                    self.response.set_status(404)
+                    return
+                out = json.dumps(params)
+                self.response.write(out.encode('utf-8'))
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.set_status(200)
+                return
         self.response.set_status(404)
 
     def post(self, id, path):
@@ -131,4 +169,14 @@ class devtest_handler(base_handler.base_handler):
         elif paths[0] == 'ping':
             self.response.set_status(204)
             return
+        elif paths[0] == 'attribute':
+            if paths[1] and len(paths[1]) > 0:
+                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                for k,v in params.iteritems():
+                    bucket.set(k, v)
+                out = json.dumps(params)
+                self.response.write(out.encode('utf-8'))
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.set_status(200)
+                return
         self.response.set_status(404)

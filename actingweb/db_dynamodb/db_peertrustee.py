@@ -7,12 +7,6 @@ from pynamodb.attributes import UnicodeAttribute
     Google datastore for google is used as a backend.
 """
 
-__all__ = [
-    'db_peertrustee',
-    'db_peertrustee_list',
-]
-
-
 class PeerTrustee(Model):
 
     class Meta:

@@ -10,12 +10,6 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, BooleanAttrib
     AWS Dynamodb is used as a backend.
 """
 
-__all__ = [
-    'db_subscription',
-    'db_subscription_list',
-]
-
-
 class Subscription(Model):
     class Meta:
         table_name = "subscriptions"

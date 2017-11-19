@@ -9,11 +9,6 @@ import logging
     Google datastore for google is used as a backend.
 """
 
-__all__ = [
-    'db_actor',
-    'db_actor_list',
-]
-
 
 class CreatorIndex(GlobalSecondaryIndex):
     """

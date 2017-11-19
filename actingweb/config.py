@@ -165,6 +165,7 @@ class config():
         self.db_actor = importlib.import_module(".db_actor", "actingweb" + ".db_" + self.database)
         self.db_peertrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + self.database)
         self.db_property = importlib.import_module(".db_property", "actingweb" + ".db_" + self.database)
+        self.db_attribute = importlib.import_module(".db_attribute", "actingweb" + ".db_" + self.database)
         self.db_subscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + self.database)
         self.db_subscription_diff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + self.database)
         self.db_trust = importlib.import_module(".db_trust", "actingweb" + ".db_" + self.database)

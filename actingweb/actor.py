@@ -77,7 +77,7 @@ class actor():
         Also note that this is a costly operation as all properties
         of this type will be retrieved and proceessed.
         """
-        actorId = property.property(name=name, value=value).getActorId()
+        actorId = property.property(name=name, value=value, config=self.config).getActorId()
         if not actorId:
             self.id = None
             self.creator = None
@@ -108,7 +108,7 @@ class actor():
                 # set creator to the email address.
                 if delete:
                     for c in exists:
-                        anactor = actor(id=c["id"])
+                        anactor = actor(id=c["id"], config=self.config)
                         anactor.delete()
                 else:
                     if self.config.force_email_prop_as_creator and self.creator == "creator":

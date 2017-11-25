@@ -46,7 +46,7 @@ class root_factory_handler(base_handler.base_handler):
             myself.setProperty('trustee_root', trustee_root)
         self.response.headers["Location"] = str(self.config.root + myself.id)
         if self.config.www_auth == 'oauth' and not is_json:
-            self.redirect(self.config.root + myself.id + '/www')
+            self.response.set_redirect(self.config.root + myself.id + '/www')
             return
         pair = {
             'id': myself.id,

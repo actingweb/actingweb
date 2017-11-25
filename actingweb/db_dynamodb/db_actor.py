@@ -51,10 +51,7 @@ class db_actor():
         if not actorId:
             return None
         try:
-            if self.handle:
-                self.handle.refresh()
-            else:
-                self.handle = Actor.get(actorId, consistent_read=True)
+            self.handle = Actor.get(actorId, consistent_read=True)
         except Actor.DoesNotExist:
             return None
         if self.handle:
@@ -76,13 +73,7 @@ class db_actor():
         if not creator:
             return None
         self.handle = Actor.creator_index.query(creator)
-        if not self.handle or len(self.handle) == 0:
-            return None
         ret = []
-        if len(self.handle) == 1:
-            ret.append(self.get(actorId=self.handle[0].id))
-            return ret
-        logging.warn("Found multiple actors with creator(" + creator + "):")
         for c in self.handle:
             logging.warn("    id (" + c.id + ")")
             ret.append(self.get(actorId=c.id))

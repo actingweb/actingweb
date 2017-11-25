@@ -37,9 +37,11 @@ class oauth_handler(base_handler.base_handler):
 
         redirect_uri = check.validateOAuthToken()
         if len(redirect_uri) > 0:
-            self.redirect(redirect_uri)
+            self.response.set_redirect(redirect_uri)
             return
         if len(redirect_uri) == 0:
+            self.on_aw.aw_init(auth=check, webobj=self)
+            self.on_aw.actions_on_oauth_success()
             if check.setCookieOnCookieRedirect(self):
                 return
             self.response.set_status(204, "OAuthorization Done")

@@ -1,7 +1,6 @@
 import os
 from pynamodb.models import Model
-from pynamodb.attributes import UnicodeAttribute
-from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
+from pynamodb.attributes import UnicodeAttribute, JSONAttribute, UTCDateTimeAttribute
 
 """
     db_attribute handles all db operations for an attribute (internal)
@@ -22,7 +21,8 @@ class Attribute(Model):
     bucket_name = UnicodeAttribute(range_key=True)
     bucket = UnicodeAttribute()
     name = UnicodeAttribute()
-    value = UnicodeAttribute()
+    value = JSONAttribute(null=True)
+    timestamp = UTCDateTimeAttribute(null=True)
 
 
 class db_attribute():
@@ -51,24 +51,39 @@ class db_attribute():
         except Attribute.DoesNotExist:
             return None
         self.value = {}
+        self.timestamp = {}
         for t in query:
             self.value[t.name] = t.value
+            self.timestamp[t.name] = t.timestamp
         return self.value
 
-    def set(self, actorId=None, bucket=None, name=None, value=None):
+    def get_timestamps(self):
+        if len(self.timestamp)> 0:
+            return self.timestamp
+        return None
+
+    def set(self, actorId=None, bucket=None, name=None, value=None, timestamp=None):
         """ Sets a new value for the bucket and attribute name
         """
         if not name or not bucket:
             return False
         self.value[name] = value
+        self.timestamp[name] = timestamp
         if not value or len(value) == 0:
-            item = Attribute.get(actorId, bucket + ":" + name)
             try:
+                item = Attribute.get(actorId, bucket + ":" + name)
                 item.delete()
             except Attribute.DoesNotExist:
                 pass
             return True
-        new = Attribute(id=actorId, bucket_name=bucket + ":" + name, bucket=bucket, name=name, value=value)
+        new = Attribute(
+            id=actorId,
+            bucket_name=bucket + ":" + name,
+            bucket=bucket,
+            name=name,
+            value=value,
+            timestamp=timestamp
+        )
         new.save()
         return True
 
@@ -93,11 +108,13 @@ class db_attribute():
         for t in query:
             t.delete()
         self.value = {}
+        self.timestamp = {}
         return True
 
     def __init__(self):
         self.bucket = None
         self.value = {}
+        self.timestamp = {}
         if not Attribute.exists():
             Attribute.create_table(wait=True)
 
@@ -124,6 +141,21 @@ class db_attribute_bucket_list():
             ret[t.bucket][t.name] = t.value
         return ret
 
+    def fetch_timestamps(self,  actorId=None):
+        """ Retrieves all the timestamps of attributes of an actorId from the database """
+        if not actorId:
+            return None
+        try:
+            query = Attribute.query(actorId)
+        except Attribute.DoesNotExist:
+            return None
+        ret = {}
+        for t in query:
+            if t.bucket not in ret:
+                ret[t.bucket] = {}
+            ret[t.bucket][t.name] = t.timestamp
+        return ret
+
     def delete(self, actorId=None):
         """ Deletes all the attributes in the database """
         if not actorId:
@@ -135,3 +167,7 @@ class db_attribute_bucket_list():
         for t in query:
             t.delete()
         return True
+
+    def __init__(self):
+        if not Attribute.exists():
+            Attribute.create_table(wait=True)

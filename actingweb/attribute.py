@@ -10,11 +10,21 @@ class attributes():
         """ Retrieves the attribute bucket from the database """
         return self.dbprop.get(actorId=self.actorId, bucket=self.bucket)
 
-    def set(self, name=None, value=None):
+    def get_timestamps(self):
+        """ Retrieves the attribute bucket timestamps (use get first) """
+        return self.dbprop.get_timestamps()
+
+    def set(self, name=None, value=None, timestamp=None):
         """ Sets a new value for this attribute """
         if not self.actorId or not self.bucket:
             return False
-        return self.dbprop.set(actorId=self.actorId, bucket=self.bucket, name=name, value=value)
+        return self.dbprop.set(
+            actorId=self.actorId,
+            bucket=self.bucket,
+            name=name,
+            value=value,
+            timestamp=timestamp
+        )
 
     def unset(self, name=None):
         if not name:
@@ -53,6 +63,11 @@ class buckets():
         if not self.actorId:
             return False
         return self.list.fetch(actorId=self.actorId)
+
+    def fetch_timestamps(self):
+        if not self.actorId:
+            return False
+        return self.list.fetch_timestamps(actorId=self.actorId)
 
     def delete(self):
         if not self.list:

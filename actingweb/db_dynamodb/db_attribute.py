@@ -21,7 +21,7 @@ class Attribute(Model):
     bucket_name = UnicodeAttribute(range_key=True)
     bucket = UnicodeAttribute()
     name = UnicodeAttribute()
-    value = JSONAttribute(null=True)
+    data = JSONAttribute(null=True)
     timestamp = UTCDateTimeAttribute(null=True)
 
 
@@ -34,15 +34,10 @@ class db_attribute():
         delete().
     """
 
-    def get(self,  actorId=None, bucket=None):
-        """ Retrieves the attributes from bucket from the database """
+    def get_bucket(self,  actorId=None, bucket=None):
+        """ Returns a dict of attributes from a bucket, each with data and timestamp """
         if not actorId or not bucket:
             return None
-        if len(self.value) > 0:
-            return self.value
-        if self.bucket and self.bucket != bucket:
-            return None
-        self.bucket = bucket
         try:
             query = Attribute.query(
                 actorId,
@@ -50,28 +45,35 @@ class db_attribute():
                 consistent_read=True)
         except Attribute.DoesNotExist:
             return None
-        self.value = {}
-        self.timestamp = {}
+        ret = {}
         for t in query:
-            self.value[t.name] = t.value
-            self.timestamp[t.name] = t.timestamp
-        return self.value
+            ret[t.name] = {
+                "data": t.data,
+                "timestamp": t.timestamp,
+            }
+        return ret
 
-    def get_timestamps(self):
-        if len(self.timestamp)> 0:
-            return self.timestamp
-        return None
+    def get_attr(self,  actorId=None, bucket=None, name=None):
+        """ Returns a dict of attributes from a bucket, each with data and timestamp """
+        if not actorId or not bucket or not name:
+            return None
+        try:
+            r = Attribute.get(actorId, bucket + ":" + name, consistent_read=True)
+        except Attribute.DoesNotExist:
+            return None
+        return {
+            "data": r.data,
+            "timestamp": r.timestamp,
+        }
 
-    def set(self, actorId=None, bucket=None, name=None, value=None, timestamp=None):
-        """ Sets a new value for the bucket and attribute name
+    def set_attr(self, actorId=None, bucket=None, name=None, data=None, timestamp=None):
+        """ Sets a data value for a given attribute in a bucket
         """
-        if not name or not bucket:
+        if not actorId or not name or not bucket:
             return False
-        self.value[name] = value
-        self.timestamp[name] = timestamp
-        if not value or len(value) == 0:
+        if not data or len(data) == 0:
             try:
-                item = Attribute.get(actorId, bucket + ":" + name)
+                item = Attribute.get(actorId, bucket + ":" + name, consistent_read=True)
                 item.delete()
             except Attribute.DoesNotExist:
                 pass
@@ -81,17 +83,16 @@ class db_attribute():
             bucket_name=bucket + ":" + name,
             bucket=bucket,
             name=name,
-            value=value,
+            data=data,
             timestamp=timestamp
         )
         new.save()
         return True
 
-    def delete(self, actorId=None, bucket=None, name=None):
+    def delete_attr(self, actorId=None, bucket=None, name=None):
         """ Deletes an attribute in a bucket
         """
-        del self.value[name]
-        return self.set(actorId=actorId, bucket=bucket, name=name, value=None)
+        return self.set_attr(actorId=actorId, bucket=bucket, name=name, data=None)
 
     def delete_bucket(self, actorId=None, bucket=None):
         """ Deletes an entire bucket
@@ -107,14 +108,9 @@ class db_attribute():
             return True
         for t in query:
             t.delete()
-        self.value = {}
-        self.timestamp = {}
         return True
 
     def __init__(self):
-        self.bucket = None
-        self.value = {}
-        self.timestamp = {}
         if not Attribute.exists():
             Attribute.create_table(wait=True)
 
@@ -138,22 +134,10 @@ class db_attribute_bucket_list():
         for t in query:
             if t.bucket not in ret:
                 ret[t.bucket] = {}
-            ret[t.bucket][t.name] = t.value
-        return ret
-
-    def fetch_timestamps(self,  actorId=None):
-        """ Retrieves all the timestamps of attributes of an actorId from the database """
-        if not actorId:
-            return None
-        try:
-            query = Attribute.query(actorId)
-        except Attribute.DoesNotExist:
-            return None
-        ret = {}
-        for t in query:
-            if t.bucket not in ret:
-                ret[t.bucket] = {}
-            ret[t.bucket][t.name] = t.timestamp
+            ret[t.bucket][t.name] = {
+                "data": t.data,
+                "timestamp": t.timestamp,
+            }
         return ret
 
     def delete(self, actorId=None):

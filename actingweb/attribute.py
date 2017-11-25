@@ -6,30 +6,41 @@ class attributes():
 
     """
 
-    def get(self):
+    def get_bucket(self):
         """ Retrieves the attribute bucket from the database """
-        return self.dbprop.get(actorId=self.actorId, bucket=self.bucket)
+        if not self.data or len(self.data) == 0:
+            self.data = self.dbprop.get_bucket(actorId=self.actorId, bucket=self.bucket)
+        return self.data
 
-    def get_timestamps(self):
-        """ Retrieves the attribute bucket timestamps (use get first) """
-        return self.dbprop.get_timestamps()
+    def get_attr(self, name=None):
+        """ Retrieves a single attribute """
+        if not name:
+            return None
+        if not name in self.data:
+            self.data[name] = self.dbprop.get_attr(actorId=self.actorId, bucket=self.bucket, name=name)
+        return self.data[name]
 
-    def set(self, name=None, value=None, timestamp=None):
-        """ Sets a new value for this attribute """
+    def set_attr(self, name=None, data=None, timestamp=None):
+        """ Sets new data for this attribute """
         if not self.actorId or not self.bucket:
             return False
-        return self.dbprop.set(
+        if not name in data:
+            self.data[name] = {}
+        self.data[name]["data"] = data
+        self.data[name]["timestamp"] = timestamp
+        return self.dbprop.set_attr(
             actorId=self.actorId,
             bucket=self.bucket,
             name=name,
-            value=value,
+            data=data,
             timestamp=timestamp
         )
 
     def unset(self, name=None):
         if not name:
             return False
-        return self.dbprop.delete(actorId=self.actorId, bucket=self.bucket, name=name)
+        del self.data[name]
+        return self.dbprop.delete_attr(actorId=self.actorId, bucket=self.bucket, name=name)
 
     def delete(self):
         """ Deletes the attribute bucket in the database """
@@ -37,6 +48,7 @@ class attributes():
             return False
         if self.dbprop.delete_bucket(actorId=self.actorId, bucket=self.bucket):
             self.dbprop = self.config.db_attribute.db_attribute()
+            self.data = {}
             return True
         else:
             return False
@@ -48,8 +60,9 @@ class attributes():
         self.dbprop = self.config.db_attribute.db_attribute()
         self.bucket = bucket
         self.actorId = actorId
-        if actorId and bucket and len(bucket) > 0:
-            self.get()
+        self.data = {}
+        if actorId and bucket and len(bucket) > 0 and config:
+            self.get_bucket()
 
 
 class buckets():

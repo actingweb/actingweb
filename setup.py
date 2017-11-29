@@ -6,7 +6,7 @@ def readme():
 
 
 setup(name='actingweb',
-      version='2.1.2',
+      version='2.2.0',
       description='The official ActingWeb library',
       long_description=readme(),
       classifiers=[

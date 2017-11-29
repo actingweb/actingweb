@@ -10,11 +10,14 @@ class on_aw_base():
         self.webobj = None
         self.auth = None
 
+    @classmethod
     def aw_init(self, auth, webobj=aw_web_request.aw_webobj()):
         self.auth = auth
         self.webobj = webobj
+        self.config = auth.config
+        self.myself = auth.actor
 
-
+    @classmethod
     def bot_post(self, path):
         """Called on POSTs to /bot.
 
@@ -23,7 +26,7 @@ class on_aw_base():
 
         # Safety valve to make sure we don't do anything if bot is not
         # configured.
-        if not self.webobj.config.bot['token'] or len(self.webobj.config.bot['token']) == 0:
+        if not self.config.bot['token'] or len(self.config.bot['token']) == 0:
             return False
 
         #try:
@@ -53,6 +56,7 @@ class on_aw_base():
         # Do something
         return True
 
+    @classmethod
     def get_callbacks(self, name):
         """Customizible function to handle GET /callbacks"""
         # return True if callback has been processed
@@ -63,11 +67,13 @@ class on_aw_base():
         # END OF SAMPLE CODE
         return False
 
+    @classmethod
     def delete_callbacks(self, name):
         """Customizible function to handle DELETE /callbacks"""
         # return True if callback has been processed
         return False
 
+    @classmethod
     def post_callbacks(self, name):
         """Customizible function to handle POST /callbacks"""
         # return True if callback has been processed
@@ -87,13 +93,14 @@ class on_aw_base():
         # END OF SAMPLE CODE
         return False
 
-
+    @classmethod
     def post_subscriptions(self, sub, peerid, data):
         """Customizible function to process incoming callbacks/subscriptions/ callback with json body, return True if processed, False if not."""
         logging.debug("Got callback and processed " + sub["subscriptionid"] +
                       " subscription from peer " + peerid + " with json blob: " + json.dumps(data))
         return True
 
+    @classmethod
     def delete_actor(self):
         # THIS METHOD IS CALLED WHEN AN ACTOR IS REQUESTED TO BE DELETED.
         # THE BELOW IS SAMPLE CODE
@@ -101,11 +108,17 @@ class on_aw_base():
         # END OF SAMPLE CODE
         return
 
-    def oauth_success(self, token=None):
+    @classmethod
+    def check_on_oauth_success(self, token=None):
+        # THIS METHOD IS CALLED WHEN AN OAUTH AUTHORIZATION HAS BEEN SUCCESSFULLY MADE AND BEFORE APPROVAL
+        return True
+
+    @classmethod
+    def actions_on_oauth_success(self):
         # THIS METHOD IS CALLED WHEN AN OAUTH AUTHORIZATION HAS BEEN SUCCESSFULLY MADE
         return True
 
-
+    @classmethod
     def get_resources(self, name):
         """ Called on GET to resources. Return struct for json out.
 
@@ -113,6 +126,7 @@ class on_aw_base():
         """
         return {}
 
+    @classmethod
     def delete_resources(self, name):
         """ Called on DELETE to resources. Return struct for json out.
 
@@ -120,6 +134,7 @@ class on_aw_base():
         """
         return {}
 
+    @classmethod
     def put_resources(self, name, params):
         """ Called on PUT to resources. Return struct for json out.
 
@@ -129,6 +144,7 @@ class on_aw_base():
         """
         return {}
 
+    @classmethod
     def post_resources(self, name, params):
         """ Called on POST to resources. Return struct for json out.
 
@@ -138,6 +154,7 @@ class on_aw_base():
         """
         return {}
 
+    @classmethod
     def www_paths(self, path=''):
         # THIS METHOD IS CALLED WHEN AN actorid/www/* PATH IS CALLED (AND AFTER ACTINGWEB DEFAULT PATHS HAVE BEEN HANDLED)
         # THE BELOW IS SAMPLE CODE

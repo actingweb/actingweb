@@ -20,11 +20,12 @@ class aw_request():
             ret.append(k)
         return ret
 
-    def __init__(self, url=None, params=None, body=None, headers=None):
+    def __init__(self, url=None, params=None, body=None, headers=None, cookies=None):
         self.headers = headers
         self.params = params
         self.body = body
         self.url = url
+        self.cookies = cookies
 
 
 class aw_response():
@@ -45,20 +46,31 @@ class aw_response():
         else:
             self.body = body
 
+    def set_cookie(self, name, value, max_age=1209600, path='/', secure=True):
+        self.cookies.append({
+            'name': name,
+            'value': value,
+            'max_age': max_age,
+            'path': path,
+            'secure': secure
+        })
+
+
+    def set_redirect(self, url):
+        self.redirect = url
+
     def __init__(self):
         self.status_code = 200
         self.status_message = 'Ok'
         self.headers = {}
         self.body = ''
+        self.redirect = None
+        self.cookies=[]
         self.template_values = {}
 
 
 class aw_webobj():
 
-    def redirect(self, url):
-        self.redirect = url
-
-    def __init__(self, url=None, params=None, body=None, headers=None):
-        self.request = aw_request(url=url, params=params, body=body, headers=headers)
+    def __init__(self, url=None, params=None, body=None, headers=None, cookies=None):
+        self.request = aw_request(url=url, params=params, body=body, headers=headers, cookies=cookies)
         self.response = aw_response()
-        self.redirect = None

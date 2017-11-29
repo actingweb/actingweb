@@ -23,18 +23,19 @@ def select_auth_type(path, subpath, config=None):
         return config.www_auth
     return 'basic'
 
+
 def add_auth_response(appreq=None, auth_obj=None):
     """Called after init_actingweb() if add_response was set to False, and now responses should be added."""
     if not appreq or not auth_obj:
         return False
     logging.debug("add_auth_response: " + str(auth_obj.response['code']) + ":" + auth_obj.response['text'])
-    appreq.response.set_status(auth_obj.response['code'], auth_obj.response['text'])
+    appreq.set_status(auth_obj.response['code'], auth_obj.response['text'])
     if auth_obj.response['code'] == 302:
-        appreq.redirect(auth_obj.redirect)
+        appreq.set_redirect(url=auth_obj.redirect)
     elif auth_obj.response['code'] == 401:
-        appreq.response.write("Authentication required")
+        appreq.write("Authentication required")
     for h in auth_obj.response['headers']:
-        appreq.response.headers[h["header"]] = h["value"]
+        appreq.headers[h["header"]] = h["value"]
     return True
 
 
@@ -61,7 +62,7 @@ def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True,
         return (None, None)
     auth_obj.checkAuthentication(appreq=appreq, path=fullpath)
     if add_response:
-        add_auth_response(appreq, auth_obj)
+        add_auth_response(appreq.response, auth_obj)
     # Initialize the on_aw object with auth (.actor) and webobj (.config) for functions in on_aw
     appreq.on_aw.aw_init(auth=auth_obj, webobj=appreq)
     return (auth_obj.actor, auth_obj)
@@ -333,7 +334,10 @@ class auth():
             return False
         if self.token:
             now = time.time()
-            auth = appreq.request.cookies.get(self.cookie)
+            if appreq.request.cookies and self.cookie in appreq.request.cookies:
+                auth = appreq.request.cookies[self.cookie]
+            else:
+                auth = ''
             if appreq.request.get('refresh') and appreq.request.get('refresh').lower() == 'true':
                 # Clear cookie and do a refresh if refresh=True is in GET param
                 auth = ''
@@ -353,7 +357,7 @@ class auth():
         if self.cookie_redirect:
             logging.debug('Cookie redirect already set!')
         else:
-            self.actor.setProperty('cookie_redirect', '/' + self.actor.id + path)
+            self.actor.setProperty('cookie_redirect', self.actor.id + path)
             self.cookie_redirect = '/' + self.actor.id + path
         self.response['code'] = 302
         return False
@@ -368,7 +372,7 @@ class auth():
         logging.debug('Setting Authorization cookie: ' + str(self.token))
         appreq.response.set_cookie(self.cookie, str(self.token),
                                    max_age=1209600, path='/', secure=True)
-        appreq.redirect(str(self.cookie_redirect))
+        appreq.response.set_redirect(str(self.cookie_redirect))
         self.actor.deleteProperty('cookie_redirect')
         return True
 

@@ -9,11 +9,6 @@ from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
     Google datastore for google is used as a backend.
 """
 
-__all__ = [
-    'db_trust',
-    'db_trust_list',
-]
-
 
 class SecretIndex(GlobalSecondaryIndex):
     """

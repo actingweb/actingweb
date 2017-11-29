@@ -12,11 +12,6 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, UTCDateTimeAt
     Google datastore for google is used as a backend.
 """
 
-__all__ = [
-    'db_subscription_diff',
-    'db_subscription_diff_list',
-]
-
 
 class SubscriptionDiff(Model):
     class Meta:

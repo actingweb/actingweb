@@ -2,9 +2,10 @@
 CHANGELOG
 =========
 
-v2.2.0: Nov 19, 2017
+v2.2.0: Nov 25, 2017
 --------------------
 - Add support for attribute.attributes() and attribute.buckets() (to be used for internal properties not exposed)
+- Various bug fixes to make the oauth flows work
 
 v2.1.2: Nov 12, 2017
 --------------------

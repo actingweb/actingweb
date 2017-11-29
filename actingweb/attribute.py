@@ -36,13 +36,13 @@ class attributes():
             timestamp=timestamp
         )
 
-    def unset(self, name=None):
+    def delete_attr(self, name=None):
         if not name:
             return False
         del self.data[name]
         return self.dbprop.delete_attr(actorId=self.actorId, bucket=self.bucket, name=name)
 
-    def delete(self):
+    def delete_bucket(self):
         """ Deletes the attribute bucket in the database """
         if not self.dbprop:
             return False

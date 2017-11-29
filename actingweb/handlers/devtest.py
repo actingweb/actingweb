@@ -74,7 +74,7 @@ class devtest_handler(base_handler.base_handler):
         elif paths[0] == 'attribute':
             if len(paths) > 2:
                 bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
-                bucket.unset(paths[2])
+                bucket.delete_attr(paths[2])
                 self.response.set_status(204)
                 return
             else:

@@ -10,6 +10,7 @@ class on_aw_base():
         self.webobj = None
         self.auth = None
 
+    @classmethod
     def aw_init(self, auth, webobj=aw_web_request.aw_webobj()):
         self.auth = auth
         self.webobj = webobj

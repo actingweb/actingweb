@@ -28,7 +28,7 @@ class Actor(Model):
        DynamoDB data model for an actor
     """
     class Meta:
-        table_name = "actors"
+        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_actors"
         read_capacity_units = 6
         write_capacity_units = 2
         region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')

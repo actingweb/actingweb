@@ -39,7 +39,8 @@ class attributes():
     def delete_attr(self, name=None):
         if not name:
             return False
-        del self.data[name]
+        if 'name' in self.data:
+            del self.data[name]
         return self.dbprop.delete_attr(actorId=self.actorId, bucket=self.bucket, name=name)
 
     def delete_bucket(self):

@@ -12,7 +12,7 @@ class Attribute(Model):
        DynamoDB data model for a property
     """
     class Meta:
-        table_name = "attributes"
+        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_attributes"
         read_capacity_units = 26
         write_capacity_units = 2
         host = os.getenv('AWS_DB_HOST', None)

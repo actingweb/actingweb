@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.2.1: Dec 3, 2017
+-------------------
+- Add support for environment variable AWS_DB_PREFIX to support multiple actingweb tables in same DynamoDB region
+
 v2.2.0: Nov 25, 2017
 --------------------
 - Add support for attribute.attributes() and attribute.buckets() (to be used for internal properties not exposed)

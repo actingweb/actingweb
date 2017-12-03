@@ -9,11 +9,6 @@ from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
     Google datastore for google is used as a backend.
 """
 
-__all__ = [
-    'db_trust',
-    'db_trust_list',
-]
-
 
 class SecretIndex(GlobalSecondaryIndex):
     """
@@ -31,7 +26,7 @@ class SecretIndex(GlobalSecondaryIndex):
 class Trust(Model):
     """ Data model for a trust relationship """
     class Meta:
-        table_name = "trusts"
+        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_trusts"
         read_capacity_units = 5
         write_capacity_units = 2
         region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')

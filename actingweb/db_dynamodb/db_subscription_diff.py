@@ -12,15 +12,10 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, UTCDateTimeAt
     Google datastore for google is used as a backend.
 """
 
-__all__ = [
-    'db_subscription_diff',
-    'db_subscription_diff_list',
-]
-
 
 class SubscriptionDiff(Model):
     class Meta:
-        table_name = "subscriptiondiffs"
+        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_subscriptiondiffs"
         read_capacity_units = 2
         write_capacity_units = 3
         region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')

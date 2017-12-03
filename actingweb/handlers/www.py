@@ -14,6 +14,7 @@ class www_handler(base_handler.base_handler):
             self.response.set_status(404, "Web interface is not enabled")
             return
         if not check.checkAuthorisation(path='www', subpath=path, method='GET'):
+            self.response.write('')
             self.response.set_status(403)
             return
 

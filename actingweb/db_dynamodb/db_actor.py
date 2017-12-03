@@ -9,11 +9,6 @@ import logging
     Google datastore for google is used as a backend.
 """
 
-__all__ = [
-    'db_actor',
-    'db_actor_list',
-]
-
 
 class CreatorIndex(GlobalSecondaryIndex):
     """
@@ -33,7 +28,7 @@ class Actor(Model):
        DynamoDB data model for an actor
     """
     class Meta:
-        table_name = "actors"
+        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_actors"
         read_capacity_units = 6
         write_capacity_units = 2
         region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
@@ -56,10 +51,7 @@ class db_actor():
         if not actorId:
             return None
         try:
-            if self.handle:
-                self.handle.refresh()
-            else:
-                self.handle = Actor.get(actorId, consistent_read=True)
+            self.handle = Actor.get(actorId, consistent_read=True)
         except Actor.DoesNotExist:
             return None
         if self.handle:
@@ -81,13 +73,7 @@ class db_actor():
         if not creator:
             return None
         self.handle = Actor.creator_index.query(creator)
-        if not self.handle or len(self.handle) == 0:
-            return None
         ret = []
-        if len(self.handle) == 1:
-            ret.append(self.get(actorId=self.handle[0].id))
-            return ret
-        logging.warn("Found multiple actors with creator(" + creator + "):")
         for c in self.handle:
             logging.warn("    id (" + c.id + ")")
             ret.append(self.get(actorId=c.id))

@@ -8,5 +8,5 @@ class callback_oauth_handler(base_handler.base_handler):
             return
         code = self.request.get('code')
         id = self.request.get('state')
-        self.redirect(self.config.root + str(id) + '/oauth?code=' + str(code))
+        self.response.set_redirect(self.config.root + str(id) + '/oauth?code=' + str(code))
 

@@ -33,7 +33,7 @@ def PaginationLinks(self):
 class oauth():
 
     def __init__(self, token=None, config=None):
-        self.config = config.oauth
+        self.config = config
         self.token = token
         self.first = None
         self.next = None
@@ -42,7 +42,7 @@ class oauth():
         self.last_response_message = ""
 
     def enabled(self):
-        if len(self.config['client_id']) == 0:
+        if len(self.config.oauth['client_id']) == 0:
             return False
         else:
             return True
@@ -240,13 +240,13 @@ class oauth():
 
     def oauthRedirectURI(self, state=''):
         params = {
-            'response_type': self.config['response_type'],
-            'client_id': self.config['client_id'],
-            'redirect_uri': self.config['redirect_uri'],
-            'scope': self.config['scope'],
+            'response_type': self.config.oauth['response_type'],
+            'client_id': self.config.oauth['client_id'],
+            'redirect_uri': self.config.oauth['redirect_uri'],
+            'scope': self.config.oauth['scope'],
             'state': state,
         }
-        uri = self.config['auth_uri'] + "?" + urllib.urlencode(params)
+        uri = self.config.oauth['auth_uri'] + "?" + urllib.urlencode(params)
         logging.info('OAuth redirect with url: ' + uri + ' and state:' + state)
         return uri
 
@@ -254,14 +254,14 @@ class oauth():
         if not code:
             return None
         params = {
-            'grant_type': self.config['grant_type'],
-            'client_id': self.config['client_id'],
-            'client_secret': self.config['client_secret'],
+            'grant_type': self.config.oauth['grant_type'],
+            'client_id': self.config.oauth['client_id'],
+            'client_secret': self.config.oauth['client_secret'],
             'code': code,
-            'redirect_uri': self.config['redirect_uri'],
+            'redirect_uri': self.config.oauth['redirect_uri'],
         }
         self.token = None
-        result = self.postRequest(url=self.config[
+        result = self.postRequest(url=self.config.oauth[
                                   'token_uri'], params=params, urlencode=True)
         if result and 'access_token' in result:
             self.token = result['access_token']
@@ -271,13 +271,13 @@ class oauth():
         if not refresh_token:
             return None
         params = {
-            'grant_type': self.config['refresh_type'],
-            'client_id': self.config['client_id'],
-            'client_secret': self.config['client_secret'],
+            'grant_type': self.config.oauth['refresh_type'],
+            'client_id': self.config.oauth['client_id'],
+            'client_secret': self.config.oauth['client_secret'],
             'refresh_token': refresh_token,
         }
         self.token = None
-        result = self.postRequest(url=self.config[
+        result = self.postRequest(url=self.config.oauth[
                                   'token_uri'], params=params, urlencode=True)
         if not result:
             self.token = None

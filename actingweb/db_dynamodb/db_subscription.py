@@ -10,15 +10,9 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, BooleanAttrib
     AWS Dynamodb is used as a backend.
 """
 
-__all__ = [
-    'db_subscription',
-    'db_subscription_list',
-]
-
-
 class Subscription(Model):
     class Meta:
-        table_name = "subscriptions"
+        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_subscriptions"
         read_capacity_units = 2
         write_capacity_units = 1
         region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')

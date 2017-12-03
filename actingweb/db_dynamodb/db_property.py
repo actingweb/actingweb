@@ -8,11 +8,6 @@ from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
     AWS DynamoDB is used as a backend.
 """
 
-__all__ = [
-    'db_property',
-    'db_property_list',
-]
-
 class PropertyIndex(GlobalSecondaryIndex):
     """
     Secondary index on property
@@ -31,7 +26,7 @@ class Property(Model):
        DynamoDB data model for a property
     """
     class Meta:
-        table_name = "properties"
+        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_properties"
         read_capacity_units = 26
         write_capacity_units = 2
         host = os.getenv('AWS_DB_HOST', None)

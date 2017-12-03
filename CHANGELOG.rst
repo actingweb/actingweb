@@ -2,8 +2,17 @@
 CHANGELOG
 =========
 
+v2.2.1: Dec 3, 2017
+-------------------
+- Add support for environment variable AWS_DB_PREFIX to support multiple actingweb tables in same DynamoDB region
+
+v2.2.0: Nov 25, 2017
+--------------------
+- Add support for attribute.attributes() and attribute.buckets() (to be used for internal properties not exposed)
+- Various bug fixes to make the oauth flows work
+
 v2.1.2: Nov 12, 2017
------------
+--------------------
 - Split out actingweb module as a separate pypi library and repository
 - Python2 support, not python3
 - Support AWS DynamoDB and Google Datastore in sub-modules
@@ -11,7 +20,7 @@ v2.1.2: Nov 12, 2017
 - actingwebdemo as a full-functioning demo app to show how the library is used
 
 Jul 9, 2017
------------
+--------------------
 - Fix bug with unique actor setting and actor already exists
 - Improve handling of enforce use of email property as creator
 - Fix auth bug for callbacks (401 when no auth is expected)
@@ -21,14 +30,14 @@ Jul 9, 2017
 - Improve logging when actor cannot be created
 
 Apr 2, 2017
------------
+--------------------
 - Changed license to BSD after approval from Cisco Systems
 - Fix bug in deletion of trust relationship that would not delete subscription
 - Add support for GET param ?refresh=true for web-based sessions to ignore set cookie and do oauth
 - Fix bug in oauth.oauthDELETE() returning success when >299 is returned from upstream
 
 Mar 11, 2017
-------------
+--------------------
 - Fix bug in aw_actor_callbacks.py on does exist test after db refactoring
 - Fix bug in handling of www/init form to set properties
 - Add support to enforce that creator (in actor) is unique (Config.unique_creator bool)
@@ -40,7 +49,7 @@ Mar 11, 2017
 
 
 Feb 25, 2016
-------------
+--------------------
 - Major refactoring of all database code 
   - All db entities are now accessible only from the actingweb/* libraries
   - Each entity can be accessed one by one (e.g. trust.py exposes trust class)
@@ -63,7 +72,7 @@ Feb 25, 2016
   easily be adapted to new databases
 
 Nov 19, 2016
--------------
+--------------------
 - Create a better README in rst
 - Add readthedocs.org support with conf.py and index.rst files
 - Add the actingweb spec as an rst file
@@ -80,14 +89,14 @@ and passphrase has bitstrength > 80
 - Add /devtest testing of all aw_proxy functionality
 
 Nov 17, 2016
--------------
+--------------------
 - Renaming of getPeer() and deletePeer() to getPeerTrustee() and deletePeerTrustee() to avoid confusion
 - Support for oauthPUT() (and corresponding putRequest()) and fix to accept 404 without refreshing token
 - aw_proxy support for getResource(), changeResource(), and deleteResource()
 - Support PUT on /resources
 
 Nov 5, 2016
-------------
+--------------------
 - Add support for getResources in aw_proxy.py
 - Renamed peer to peerTrustee in peer.py to better reflect that it is created by actor as trustee
 

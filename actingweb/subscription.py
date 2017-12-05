@@ -26,7 +26,7 @@ class subscription():
             logging.debug("Attempted creation of subscription without actorId or peerid set")
             return False
         if not self.subid:
-            now = datetime.datetime.now()
+            now = datetime.datetime.utcnow()
             seed = self.config.root + now.strftime("%Y%m%dT%H%M%S%f")
             self.subid = self.config.newUUID(seed)
         if not self.handle.create(actorId=self.actorId,

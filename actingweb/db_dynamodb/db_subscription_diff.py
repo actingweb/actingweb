@@ -24,7 +24,7 @@ class SubscriptionDiff(Model):
     id = UnicodeAttribute(hash_key=True)
     subid_seqnr = UnicodeAttribute(range_key=True)
     subid = UnicodeAttribute()
-    timestamp = UTCDateTimeAttribute(default=datetime.datetime.now())
+    timestamp = UTCDateTimeAttribute(default=datetime.datetime.utcnow())
     diff = UnicodeAttribute()
     seqnr = NumberAttribute(default=1)
 

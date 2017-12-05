@@ -93,7 +93,7 @@ class actor():
             will be chosen (if any)
         """
         seed = url
-        now = datetime.datetime.now()
+        now = datetime.datetime.utcnow()
         seed += now.strftime("%Y%m%dT%H%M%S%f")
         if len(creator) > 0:
             self.creator = creator

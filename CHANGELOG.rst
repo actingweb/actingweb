@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.2.2: Dec 3, 2017
+-------------------
+- Fix bug in region for properties and attributes resulting in using us-east-1 for these (and not us-west-1 as default)
+
 v2.2.1: Dec 3, 2017
 -------------------
 - Add support for environment variable AWS_DB_PREFIX to support multiple actingweb tables in same DynamoDB region

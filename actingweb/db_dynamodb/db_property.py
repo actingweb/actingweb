@@ -16,7 +16,6 @@ class PropertyIndex(GlobalSecondaryIndex):
         index_name = 'property-index'
         read_capacity_units = 2
         write_capacity_units = 1
-        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
         projection = AllProjection()
 
     value = UnicodeAttribute(default=0, hash_key=True)
@@ -29,6 +28,7 @@ class Property(Model):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_properties"
         read_capacity_units = 26
         write_capacity_units = 2
+        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
         host = os.getenv('AWS_DB_HOST', None)
 
     id = UnicodeAttribute(hash_key=True)

@@ -204,6 +204,31 @@ class oauth():
                 self.prev = link['url']
         return json.loads(response.content)
 
+    def headRequest(self, url, params=None):
+        if not self.token:
+            logging.debug("No token set in headRequest()")
+            return None
+        if params:
+            url = url + '?' + urllib.urlencode(params)
+        logging.info('Oauth HEAD request: ' + url)
+        try:
+            response = self.config.module["urlfetch"].head(
+                    url=url,
+                    headers={'Authorization': 'Bearer ' + self.token}
+                    )
+            self.last_response_code = response.status_code
+            self.last_response_message = response.content
+        except:
+            self.last_response_code = 0
+            self.last_response_message = 'No response'
+            logging.warn("Oauth HEAD failed with exception")
+            return None
+        if response.status_code < 200 or response.status_code > 299:
+            logging.warn('Error when sending HEAD request to Oauth: ' +
+                         str(response.status_code) + response.content)
+            return None
+        return response.headers
+
     def deleteRequest(self, url):
         if not self.token:
             return None

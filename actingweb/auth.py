@@ -244,6 +244,33 @@ class auth():
                     return ret2
         return None
 
+    def oauthHEAD(self, url=None, params=None):
+        """Used to call HEAD from the attached oauth service.
+
+           Uses oauth.headRequest(), but refreshes token if necessary.
+           The function fails if token is invalid and no refresh is
+           possible. For web-based flows, validateOAuthToken() needs
+           to be used to validate token and get redirect URI for new
+           authorization flow.
+        """
+        if not url:
+            return None
+        ret = self.oauth.headRequest(url=url, params=params)
+        code1 = self.oauth.last_response_code
+        if (ret and any(ret)) or code1 == 204 or code1 == 201 or code1 == 404:
+            return ret
+        if self.actor and self.actor.id and (not ret or code1 == 401 or code1 == 403):
+            refresh = self.oauth.oauthRefreshToken(refresh_token=self.refresh_token)
+            if not refresh:
+                logging.warn('Tried to refresh token and failed for actor(' + self.actor.id + ')')
+            else:
+                self.__processOAuthAccept(refresh)
+                ret2 = self.oauth.headRequest(url=url, params=params)
+                code2 = self.oauth.last_response_code
+                if ret2 and any(ret2) or code2 == 204 or code2 == 201:
+                    return ret2
+        return None
+
     def oauthDELETE(self, url=None):
         """Used to call DELETE from the attached oauth service.
 

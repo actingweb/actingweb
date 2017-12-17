@@ -2,6 +2,11 @@
 CHANGELOG
 =========
 
+v2.3.0: ??
+----------
+- Add support for headRequest() in oauth and oauthHEAD() in auth
+- Change all uses of now() to utcnow()
+
 v2.2.2: Dec 3, 2017
 -------------------
 - Fix bug in region for properties and attributes resulting in using us-east-1 for these (and not us-west-1 as default)

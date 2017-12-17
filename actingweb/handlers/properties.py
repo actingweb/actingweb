@@ -1,6 +1,6 @@
 import json
 import logging
-from actingweb import auth, aw_web_request
+from actingweb import auth
 from actingweb.handlers import base_handler
 
 def merge_dict(d1, d2):

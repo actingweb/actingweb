@@ -41,7 +41,7 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if len(paths) > 2:
-                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 bucket.set_attr(paths[2], params, timestamp=datetime.datetime.utcnow())
                 self.response.set_status(204)
                 return
@@ -73,12 +73,12 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if len(paths) > 2:
-                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 bucket.delete_attr(paths[2])
                 self.response.set_status(204)
                 return
             else:
-                buckets = attribute.buckets(actorId=myself.id, config=self.config)
+                buckets = attribute.buckets(actor_id=myself.id, config=self.config)
                 buckets.delete()
                 self.response.set_status(204)
                 return
@@ -116,7 +116,7 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if len(paths) > 1:
-                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 params = bucket.get_bucket()
                 for k,v in params.iteritems():
                     params[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
@@ -126,7 +126,7 @@ class devtest_handler(base_handler.base_handler):
                 self.response.set_status(200)
                 return
             else:
-                buckets = attribute.buckets(actorId=myself.id, config=self.config)
+                buckets = attribute.buckets(actor_id=myself.id, config=self.config)
                 params = buckets.fetch()
                 if len(params) == 0:
                     self.response.set_status(404)
@@ -177,7 +177,7 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if paths[1] and len(paths[1]) > 0:
-                bucket = attribute.attributes(actorId=myself.id, bucket=paths[1], config=self.config)
+                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 for k,v in params.iteritems():
                     bucket.set_attr(k, v, timestamp=datetime.datetime.utcnow())
                 out = json.dumps(params)

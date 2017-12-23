@@ -7,13 +7,13 @@ class trust():
         if self.trust and len(self.trust) > 0:
             return self.trust
         if not self.peerid and self.token:
-            self.trust = self.handle.get(actorId=self.actorId,
+            self.trust = self.handle.get(actor_id=self.actor_id,
                                          token=self.token)
         elif self.peerid and not self.token:
-            self.trust = self.handle.get(actorId=self.actorId,
+            self.trust = self.handle.get(actor_id=self.actor_id,
                                          peerid=self.peerid)
         else:
-            self.trust = self.handle.get(actorId=self.actorId,
+            self.trust = self.handle.get(actor_id=self.actor_id,
                                          peerid=self.peerid,
                                          token=self.token)
         return self.trust
@@ -26,7 +26,7 @@ class trust():
         return self.handle.delete()
 
     def modify(self, baseuri=None, secret=None, desc=None, approved=None,
-               verified=None, verificationToken=None, peer_approved=None):
+               verified=None, verification_token=None, peer_approved=None):
         if not self.handle:
             logging.debug("Attempted modifcation of trust without handle")
             return False
@@ -40,21 +40,21 @@ class trust():
             self.trust["approved"] = approved
         if verified is not None:
             self.trust["verified"] = verified
-        if verificationToken:
-            self.trust["verificationToken"] = verificationToken
+        if verification_token:
+            self.trust["verification_token"] = verification_token
         if peer_approved is not None:
             self.trust["peer_approved"] = peer_approved
         return self.handle.modify(baseuri=baseuri, secret=secret, desc=desc, approved=approved,
-                                  verified=verified, verificationToken=verificationToken,
+                                  verified=verified, verification_token=verification_token,
                                   peer_approved=peer_approved)
 
-    def create(self, baseuri='', type='', relationship='', secret='',
-               approved=False, verified=False, verificationToken='',
+    def create(self, baseuri='', peer_type='', relationship='', secret='',
+               approved=False, verified=False, verification_token='',
                desc='', peer_approved=False):
         """ Create a new trust relationship """
         self.trust = {}
         self.trust["baseuri"] = baseuri
-        self.trust["type"] = type
+        self.trust["type"] = peer_type
         if not relationship or len(relationship) == 0:
             self.trust["relationship"] = self.config.default_relationship
         else:
@@ -64,35 +64,35 @@ class trust():
         else:
             self.trust["secret"] = secret
         # Be absolutely sure that the secret is not already used
-        testhandle = self.config.db_trust.db_trust()
-        if testhandle.isTokenInDB(actorId=self.actorId, token=self.trust["secret"]):
+        testhandle = self.config.DbTrust.DbTrust()
+        if testhandle.is_token_in_db(actor_id=self.actor_id, token=self.trust["secret"]):
             logging.warn("Found a non-unique token where it should be unique")
             return False
         self.trust["approved"] = approved
         self.trust["peer_approved"] = peer_approved
         self.trust["verified"] = verified
-        if not verificationToken or len(verificationToken) == 0:
-            self.trust["verificationToken"] = self.config.newToken()
+        if not verification_token or len(verification_token) == 0:
+            self.trust["verification_token"] = self.config.newToken()
         self.trust["desc"] = desc
-        self.trust["id"] = self.actorId
+        self.trust["id"] = self.actor_id
         self.trust["peerid"] = self.peerid
-        return self.handle.create(actorId=self.actorId,
+        return self.handle.create(actor_id=self.actor_id,
                                   peerid=self.peerid,
                                   baseuri=self.trust["baseuri"],
-                                  type=self.trust["type"],
+                                  peer_type=self.trust["type"],
                                   relationship=self.trust["relationship"],
                                   secret=self.trust["secret"],
                                   approved=self.trust["approved"],
                                   verified=self.trust["verified"],
                                   peer_approved=self.trust["peer_approved"],
-                                  verificationToken=self.trust["verificationToken"],
+                                  verification_token=self.trust["verification_token"],
                                   desc=self.trust["desc"])
 
-    def __init__(self, actorId=None, peerid=None, token=None, config=None):
+    def __init__(self, actor_id=None, peerid=None, token=None, config=None):
         self.config = config
-        self.handle = self.config.db_trust.db_trust()
+        self.handle = self.config.DbTrust.DbTrust()
         self.trust = {}
-        if not actorId or len(actorId) == 0:
+        if not actor_id or len(actor_id) == 0:
             logging.debug("No actorid set in initialisation of trust")
             return
         if not peerid and not token:
@@ -101,7 +101,7 @@ class trust():
         if not token and (not peerid or len(peerid) == 0):
             logging.debug("No peerid set in initialisation of trust")
             return
-        self.actorId = actorId
+        self.actor_id = actor_id
         self.peerid = peerid
         self.token = token
         self.get()
@@ -118,9 +118,9 @@ class trusts():
         if self.trusts is not None:
             return self.trusts
         if not self.list:
-            self.config.db_trust.db_trust_list()
+            self.config.DbTrust.DbTrustList()
         if not self.trusts:
-            self.trusts = self.list.fetch(actorId=self.actorId)
+            self.trusts = self.list.fetch(actor_id=self.actor_id)
         return self.trusts
 
     def delete(self):
@@ -130,15 +130,15 @@ class trusts():
         self.list.delete()
         return True
 
-    def __init__(self,  actorId=None, config=None):
-        """ Properties must always be initialised with an actorId """
+    def __init__(self,  actor_id=None, config=None):
+        """ Properties must always be initialised with an actor_id """
         self.config = config
-        if not actorId:
+        if not actor_id:
             self.list = None
-            logging.debug("No actorId in initialisation of trusts")
+            logging.debug("No actor_id in initialisation of trusts")
             return
-        self.list = self.config.db_trust.db_trust_list()
-        self.actorId = actorId
+        self.list = self.config.DbTrust.DbTrustList()
+        self.actor_id = actor_id
         self.trusts = None
         self.fetch()
 

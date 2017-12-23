@@ -10,25 +10,25 @@ class property():
         """ Retrieves the property from the database """
         if not self.dbprop:
             # New property after a delete()
-            self.dbprop = self.config.db_property.db_property()
+            self.dbprop = self.config.DbProperty.DbProperty()
             self.value=None
-        self.value = self.dbprop.get(actorId=self.actorId, name=self.name)
+        self.value = self.dbprop.get(actor_id=self.actor_id, name=self.name)
         return self.value
 
     def set(self, value):
         """ Sets a new value for this property """
         if not self.dbprop:
             # New property after a delete()
-            self.dbprop = self.config.db_property.db_property()
-        if not self.actorId or not self.name:
+            self.dbprop = self.config.DbProperty.DbProperty()
+        if not self.actor_id or not self.name:
             return False
         # Make sure we have made a dip in db to avoid two properties
         # with same name
-        db_value = self.dbprop.get(actorId=self.actorId, name=self.name)
+        db_value = self.dbprop.get(actor_id=self.actor_id, name=self.name)
         if db_value == value:
             return True
         self.value = value
-        return self.dbprop.set(actorId=self.actorId, name=self.name, value=value)
+        return self.dbprop.set(actor_id=self.actor_id, name=self.name, value=value)
 
     def delete(self):
         """ Deletes the property in the database """
@@ -42,23 +42,23 @@ class property():
             return False
 
     def getActorId(self):
-        return self.actorId
+        return self.actor_id
 
-    def __init__(self,  actorId=None, name=None, value=None, config=None):
-        """ A property must be initialised with actorId and name or
+    def __init__(self,  actor_id=None, name=None, value=None, config=None):
+        """ A property must be initialised with actor_id and name or
             name and value (to find an actor's property of a certain value)
         """
         self.config = config
-        self.dbprop = self.config.db_property.db_property()
+        self.dbprop = self.config.DbProperty.DbProperty()
         self.name = name
-        if not actorId and name and len(name) > 0 and value and len(value) > 0:
-            self.actorId = self.dbprop.get_actorId_from_property(name=name,
+        if not actor_id and name and len(name) > 0 and value and len(value) > 0:
+            self.actor_id = self.dbprop.get_actor_id_from_property(name=name,
                                                                  value=value)
-            if not self.actorId:
+            if not self.actor_id:
                 return
             self.value = value
         else:
-            self.actorId = actorId
+            self.actor_id = actor_id
             self.value = None
             if name and len(name) > 0:
                 self.get()
@@ -72,13 +72,13 @@ class properties():
     """
 
     def fetch(self):
-        if not self.actorId:
+        if not self.actor_id:
             return False
         if not self.list:
             return False
         if self.props is not None:
             return self.props
-        self.props = self.list.fetch(actorId=self.actorId)
+        self.props = self.list.fetch(actor_id=self.actor_id)
         return self.props
 
     def delete(self):
@@ -89,14 +89,14 @@ class properties():
         self.list.delete()
         return True
 
-    def __init__(self,  actorId=None, config=None):
-        """ Properties must always be initialised with an actorId """
+    def __init__(self,  actor_id=None, config=None):
+        """ Properties must always be initialised with an actor_id """
         self.config = config
-        if not actorId:
+        if not actor_id:
             self.list = None
             return False
-        self.list = self.config.db_property.db_property_list()
-        self.actorId = actorId
+        self.list = self.config.DbProperty.DbPropertyList()
+        self.actor_id = actor_id
         self.props = None
         self.fetch()
 

@@ -6,7 +6,7 @@ def readme():
 
 
 setup(name='actingweb',
-      version='2.2.2',
+      version='2.3.0',
       description='The official ActingWeb library',
       long_description=readme(),
       classifiers=[
@@ -30,8 +30,7 @@ setup(name='actingweb',
       install_requires=[
             'pynamodb',
             'boto3',
-            'urlfetch',
-            'logging'
+            'urlfetch'
       ],
       include_package_data=True,
       zip_safe=False)

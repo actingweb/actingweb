@@ -22,7 +22,7 @@ class actor():
         self.passphrase = None
         self.creator = None
         self.id = id
-        self.handle = self.config.db_actor.db_actor()
+        self.handle = self.config.DbActor.DbActor()
         self.get(id=id)
 
     def getPeerInfo(self,  url):
@@ -53,7 +53,7 @@ class actor():
             id = self.id
         if self.handle and self.actor and len(self.actor) > 0:
             return self.actor
-        self.actor = self.handle.get(actorId=id)
+        self.actor = self.handle.get(actor_id=id)
         if self.actor and len(self.actor) > 0:
             self.id = self.actor["id"]
             self.creator = self.actor["creator"]
@@ -77,13 +77,13 @@ class actor():
         Also note that this is a costly operation as all properties
         of this type will be retrieved and proceessed.
         """
-        actorId = property.property(name=name, value=value, config=self.config).getActorId()
-        if not actorId:
+        actor_id = property.property(name=name, value=value, config=self.config).getActorId()
+        if not actor_id:
             self.id = None
             self.creator = None
             self.passphrase = None
             return
-        self.get(id=actorId)
+        self.get(id=actor_id)
 
     def create(self, url, creator, passphrase, delete=False):
         """"Creates a new actor and persists it.
@@ -100,8 +100,8 @@ class actor():
         else:
             self.creator = "creator"
         if self.config.unique_creator:
-            in_db = self.config.db_actor.db_actor()
-            exists = in_db.getByCreator(creator=self.creator)
+            in_db = self.config.DbActor.DbActor()
+            exists = in_db.get_by_creator(creator=self.creator)
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
                 # with creator as "creator". Check if we have a property "email" and then
@@ -131,10 +131,10 @@ class actor():
             self.passphrase = self.config.newToken()
         self.id = self.config.newUUID(seed)
         if not self.handle:
-            self.handle = self.config.db_actor.db_actor()
+            self.handle = self.config.DbActor.DbActor()
         self.handle.create(creator=self.creator,
                            passphrase=self.passphrase,
-                           actorId=self.id)
+                           actor_id=self.id)
         return True
 
     def modify(self, creator=None):
@@ -154,17 +154,17 @@ class actor():
             return False
         self.deletePeerTrustee(shorttype='*')
         if not self.property_list:
-            self.property_list = property.properties(actorId=self.id, config=self.config)
+            self.property_list = property.properties(actor_id=self.id, config=self.config)
         self.property_list.delete()
-        subs = subscription.subscriptions(actorId=self.id, config=self.config)
+        subs = subscription.subscriptions(actor_id=self.id, config=self.config)
         subs.fetch()
         subs.delete()
-        trusts = trust.trusts(actorId=self.id, config=self.config)
+        trusts = trust.trusts(actor_id=self.id, config=self.config)
         relationships = trusts.fetch()
         for rel in relationships:
             self.deleteReciprocalTrust(peerid=rel["peerid"], deletePeer=True)
         trusts.delete()
-        buckets = attribute.buckets(actorId=self.id, config=self.config)
+        buckets = attribute.buckets(actor_id=self.id, config=self.config)
         buckets.delete()
         self.handle.delete()
 
@@ -190,12 +190,12 @@ class actor():
     def deleteProperties(self):
         """Deletes all properties."""
         if not self.property_list:
-            self.property_list = property.properties(actorId=self.id, config=self.config)
+            self.property_list = property.properties(actor_id=self.id, config=self.config)
         return self.property_list.delete()
 
     def getProperties(self):
         """Retrieves properties from db and returns a dict."""
-        self.property_list = property.properties(actorId=self.id, config=self.config)
+        self.property_list = property.properties(actor_id=self.id, config=self.config)
         return self.property_list.fetch()
 
     def deletePeerTrustee(self, shorttype=None, peerid=None):
@@ -209,12 +209,12 @@ class actor():
             logging.error('Got a request to delete an unknown actor type(' + shorttype + ')')
             return False
         if peerid:
-            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=peerid, config=self.config)
+            new_peer = peertrustee.PeerTrustee(actor_id=self.id, peerid=peerid, config=self.config)
             peerData = new_peer.get()
             if not peerData or len(peerData) == 0:
                 return False
         elif shorttype:
-            new_peer = peertrustee.peertrustee(actorId=self.id, shorttype=shorttype, config=self.config)
+            new_peer = peertrustee.PeerTrustee(actor_id=self.id, short_type=shorttype, config=self.config)
             peerData = new_peer.get()
             if not peerData or len(peerData) == 0:
                 return False
@@ -263,14 +263,14 @@ class actor():
             logging.error('Got a request to create an unknown actor type(' + shorttype + ')')
             return None
         if peerid:
-            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=peerid, config=self.config)
+            new_peer = peertrustee.PeerTrustee(actor_id=self.id, peerid=peerid, config=self.config)
         else:
-            new_peer = peertrustee.peertrustee(actorId=self.id, shorttype=shorttype, config=self.config)
+            new_peer = peertrustee.PeerTrustee(actor_id=self.id, short_type=shorttype, config=self.config)
         peerData = new_peer.get()
         if peerData and len(peerData) > 0:
             logging.debug('Found peer in getPeer, now checking existing trust...')
-            db_trust = trust.trust(actorId=self.id, peerid=peerData["peerid"], config=self.config)
-            new_trust = db_trust.get()
+            DbTrust = trust.trust(actor_id=self.id, peerid=peerData["peerid"], config=self.config)
+            new_trust = DbTrust.get()
             if new_trust and len(new_trust) > 0:
                 return peerData
             logging.debug('Did not find existing trust, will create a new one')
@@ -332,7 +332,8 @@ class actor():
                 logging.info(
                     "Received invalid peer info when trying to create peer actor at: " + factory)
                 return None
-            new_peer = peertrustee.peertrustee(actorId=self.id, peerid=info["id"], type=info["type"], config=self.config)
+            new_peer = peertrustee.PeerTrustee(actor_id=self.id, peerid=info["id"], peer_type=info["type"],
+                                               config=self.config)
             if not new_peer.create(baseuri=baseuri, passphrase=data["passphrase"]):
                 logging.error('Failed to create in db new peer actor(' + 
                             peer["id"] + ') at ' + baseuri)
@@ -385,11 +386,11 @@ class actor():
     def getTrustRelationship(self, peerid=None):
         if not peerid:
             return None
-        return trust.trust(actorId=self.id, peerid=peerid, config=self.config).get()
+        return trust.trust(actor_id=self.id, peerid=peerid, config=self.config).get()
 
     def getTrustRelationships(self, relationship='', peerid='', type=''):
         """Retrieves all trust relationships or filtered."""
-        list = trust.trusts(actorId=self.id, config=self.config)
+        list = trust.trusts(actor_id=self.id, config=self.config)
         relationships = list.fetch()
         rels = []
         for rel in relationships:
@@ -402,7 +403,7 @@ class actor():
             rels.append(rel)
         return rels
 
-    def modifyTrustAndNotify(self, relationship=None, peerid=None, baseuri='', secret='', desc='', approved=None, verified=None, verificationToken=None, peer_approved=None):
+    def modifyTrustAndNotify(self, relationship=None, peerid=None, baseuri='', secret='', desc='', approved=None, verified=None, verification_token=None, peer_approved=None):
         """Changes a trust relationship and noties the peer if approval is changed."""
         if not relationship or not peerid:
             return False
@@ -446,13 +447,13 @@ class actor():
             except:
                 logging.debug('Not able to notify peer at url(' + requrl + ')')
                 self.last_response_code = 500
-        db_trust = trust.trust(actorId=self.id, peerid=peerid, config=self.config)
-        return db_trust.modify(baseuri=baseuri,
+        DbTrust = trust.trust(actor_id=self.id, peerid=peerid, config=self.config)
+        return DbTrust.modify(baseuri=baseuri,
                                        secret=secret,
                                        desc=desc,
                                        approved=approved,
                                        verified=verified,
-                                       verificationToken=verificationToken,
+                                       verification_token=verification_token,
                                        peer_approved=peer_approved)
 
     def createReciprocalTrust(self, url, secret=None, desc='', relationship='', type=''):
@@ -477,23 +478,23 @@ class actor():
         if not relationship or len(relationship) == 0:
             relationship = self.config.default_relationship
         # Create trust, so that peer can do a verify on the relationship (using
-        # verificationToken) when we request the relationship
-        db_trust = trust.trust(actorId=self.id, peerid=peer["id"], config=self.config)
-        if not db_trust.create(baseuri=url, secret=secret, type=peer["type"],
-                         relationship=relationship, approved=True,
-                         verified=False, desc=desc):
+        # verification_token) when we request the relationship
+        DbTrust = trust.trust(actor_id=self.id, peerid=peer["id"], config=self.config)
+        if not DbTrust.create(baseuri=url, secret=secret, peer_type=peer["type"],
+                              relationship=relationship, approved=True,
+                              verified=False, desc=desc):
             logging.warn("Trying to establish a new Reciprocal trust when peer relationship already exists (" + peer["id"] + ")")
             return False
         # Since we are initiating the relationship, we implicitly approve it
         # It is not verified until the peer has verified us
-        new_trust = db_trust.get()
+        new_trust = DbTrust.get()
         params = {
             'baseuri': self.config.root + self.id,
             'id': self.id,
             'type': self.config.type,
             'secret': secret,
             'desc': desc,
-            'verify': new_trust["verificationToken"],
+            'verify': new_trust["verification_token"],
         }
         requrl = url + '/trust/' + relationship
         data = json.dumps(params)
@@ -520,11 +521,11 @@ class actor():
         except:
             logging.debug(
                 "Not able to create trust with peer, deleting my trust.")
-            db_trust.delete()
+            DbTrust.delete()
             return False
         if self.last_response_code == 201 or self.last_response_code == 202:
             # Reload the trust to check if approval was done
-            mod_trust = trust.trust(actorId=self.id, peerid=peer["id"], config=self.config)
+            mod_trust = trust.trust(actor_id=self.id, peerid=peer["id"], config=self.config)
             mod_trust_data = mod_trust.get()
             if not mod_trust_data or len(mod_trust_data) == 0:
                 logging.error(
@@ -539,11 +540,11 @@ class actor():
         else:
             logging.debug(
                 "Not able to create trust with peer, deleting my trust.")
-            db_trust.delete()
+            DbTrust.delete()
             return False
 
     def createVerifiedTrust(self, baseuri='', peerid=None, approved=False,
-                            secret=None, verificationToken=None, type=None,
+                            secret=None, verification_token=None, type=None,
                             peer_approved=None, relationship=None, desc=''):
         """Creates a new trust when requested and call backs to initiating actor to verify relationship."""
         if not peerid or len(baseuri) == 0 or not relationship:
@@ -573,7 +574,7 @@ class actor():
                     logging.debug(
                         'Verifying trust response JSON:' + response.content)
                     data = json.loads(response.content)
-                    if data["verificationToken"] == verificationToken:
+                    if data["verification_token"] == verification_token:
                         verified = True
                     else:
                         verified = False
@@ -585,8 +586,8 @@ class actor():
                 logging.debug(
                     'No response when verifying trust at url' + requrl + ')')
                 verified = False
-        new_trust = trust.trust(actorId=self.id, peerid=peerid, config=self.config)
-        if not new_trust.create(baseuri=baseuri, secret=secret, type=type, approved=approved, peer_approved=peer_approved,
+        new_trust = trust.trust(actor_id=self.id, peerid=peerid, config=self.config)
+        if not new_trust.create(baseuri=baseuri, secret=secret, peer_type=type, approved=approved, peer_approved=peer_approved,
                                 relationship=relationship, verified=verified, desc=desc):
             return False
         else:
@@ -630,22 +631,22 @@ class actor():
                 else:
                     successOnce = True
             if not self.subs_list:
-                self.subs_list = subscription.subscriptions(actorId=self.id, config=self.config).fetch()
+                self.subs_list = subscription.subscriptions(actor_id=self.id, config=self.config).fetch()
             # Delete this peer's subscriptions
             for sub in self.subs_list:
                 if sub["peerid"] == rel["peerid"]:
                     logging.debug("Deleting subscription(" + sub["subscriptionid"] + ") as part of trust deletion.")
                     subObj = self.getSubscriptionObj(peerid=sub["peerid"], subid=sub["subscriptionid"], callback=sub["callback"])
                     subObj.delete()
-            db_trust = trust.trust(actorId=self.id, peerid=rel["peerid"], config=self.config)
-            db_trust.delete()
+            DbTrust = trust.trust(actor_id=self.id, peerid=rel["peerid"], config=self.config)
+            DbTrust.delete()
         if deletePeer and (not successOnce or failedOnce):
             return False
         return True
 
     def createSubscription(self, peerid=None, target=None, subtarget=None, resource=None, granularity=None, subid=None, callback=False):
         new_sub = subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
+            actor_id=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
         new_sub.create(target=target, subtarget=subtarget, resource=resource,
                        granularity=granularity)
         return new_sub.get()
@@ -714,7 +715,7 @@ class actor():
         if not self.id:
             return None
         if not self.subs_list:
-            self.subs_list = subscription.subscriptions(actorId=self.id, config=self.config).fetch()
+            self.subs_list = subscription.subscriptions(actor_id=self.id, config=self.config).fetch()
         ret = []
         for sub in self.subs_list:
             if not peerid or (peerid and sub["peerid"] == peerid):
@@ -730,14 +731,14 @@ class actor():
         if not subid:
             return False
         return subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config).get()
+            actor_id=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config).get()
 
     def getSubscriptionObj(self, peerid=None, subid=None, callback=False):
         """Retrieves a single subscription identified by peerid and subid."""
         if not subid:
             return False
         return subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
+            actor_id=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
 
     def deleteRemoteSubscription(self, peerid=None, subid=None):
         if not subid or not peerid:
@@ -779,7 +780,7 @@ class actor():
         if not subid:
             return False
         sub = subscription.subscription(
-            actorId=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
+            actor_id=self.id, peerid=peerid, subid=subid, callback=callback, config=self.config)
         return sub.delete()
 
     def callbackSubscription(self, peerid=None, subObj=None, sub=None, diff=None, blob=None):
@@ -967,13 +968,14 @@ class actor():
                              sub["subscriptionid"] + "). Will not send callback.")
             else:
                 if self.config.module["deferred"]:
-                    deferred.defer(self.callbackSubscription, peerid=sub["peerid"], subObj=subObj,
-                               sub=subObjData, diff=diff, blob=finblob)
+                    self.callbackSubscription(peerid=sub["peerid"], subObj=subObj,
+                                              sub=subObjData, diff=diff, blob=finblob)
                 else:
                     self.callbackSubscription(peerid = sub["peerid"], subObj = subObj,
                     sub = subObjData, diff = diff, blob = finblob)
 
-class actors():
+
+class actors:
     """ Handles all actors
     """
 
@@ -987,6 +989,6 @@ class actors():
 
     def __init__(self, filter=None, config=None):
         self.config = config
-        self.list = self.config.db_actor.db_actor_list()
+        self.list = self.config.DbActor.DbActorList()
         self.actors = None
         self.fetch()

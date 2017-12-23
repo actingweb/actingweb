@@ -24,7 +24,7 @@ class aw_proxy():
             self.trust = None
             if peer_target["peerid"]:
                 self.trust = trust.trust(
-                    actorId=self.actorid,
+                    actor_id=self.actorid,
                     peerid=peer_target["peerid"],
                     config=self.config).get()
                 if not self.trust or len(self.trust) == 0:

@@ -2,15 +2,15 @@ from google.appengine.ext import ndb
 import logging
 
 """
-    db_subscription_diff handles all db operations for a subscription diff
+    DbSubscriptionDiff handles all db operations for a subscription diff
 
-    db_subscription_diff_list handles list of subscriptions diffs
+    DbSubscriptionDiffList handles list of subscriptions diffs
     Google datastore for google is used as a backend.
 """
 
 __all__ = [
-    'db_subscription_diff',
-    'db_subscription_diff_list',
+    'DbSubscriptionDiff',
+    'DbSubscriptionDiffList',
 ]
 
 
@@ -22,27 +22,27 @@ class SubscriptionDiff(ndb.Model):
     seqnr = ndb.IntegerProperty()
 
 
-class db_subscription_diff():
+class DbSubscriptionDiff():
     """
-        db_subscription_diff does all the db operations for subscription diff objects
+        DbSubscriptionDiff does all the db operations for subscription diff objects
 
-        The  actorId must always be set.
+        The  actor_id must always be set.
     """
 
-    def get(self,  actorId=None, subid=None, seqnr=None):
+    def get(self,  actor_id=None, subid=None, seqnr=None):
         """ Retrieves the subscriptiondiff from the database """
-        if not actorId and not self.handle:
+        if not actor_id and not self.handle:
             return None
         if not subid and not self.handle:
             logging.debug("Attempt to get subscriptiondiff without subid")
             return None
         if not self.handle:
             if not seqnr:
-                self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId,
+                self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actor_id,
                                                      SubscriptionDiff.subid == subid
                                                      ).get(use_cache=False)
             else:
-                self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId,
+                self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actor_id,
                                                      SubscriptionDiff.subid == subid,
                                                      SubscriptionDiff.seqnr == seqnr
                                                      ).get(use_cache=False)
@@ -58,19 +58,19 @@ class db_subscription_diff():
         else:
             return None
 
-    def create(self, actorId=None,
+    def create(self, actor_id=None,
                subid=None,
                diff=None,
                seqnr=None):
         """ Create a new subscription diff """
-        if not actorId or not subid:
+        if not actor_id or not subid:
             logging.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
         if not seqnr:
             seqnr = 1
         if not diff:
             diff = ''
-        self.handle = SubscriptionDiff(id=actorId,
+        self.handle = SubscriptionDiff(id=actor_id,
                                        subid=subid,
                                        diff=diff,
                                        seqnr=seqnr)
@@ -89,21 +89,21 @@ class db_subscription_diff():
         self.handle = None
 
 
-class db_subscription_diff_list():
+class DbSubscriptionDiffList():
     """
-        db_subscription_diff_list does all the db operations for list of diff objects
+        DbSubscriptionDiffList does all the db operations for list of diff objects
 
-        The actorId must always be set. 
+        The actor_id must always be set. 
     """
 
-    def fetch(self, actorId=None, subid=None):
-        """ Retrieves the subscription diffs of an actorId from the database as an array"""
-        if not actorId:
+    def fetch(self, actor_id=None, subid=None):
+        """ Retrieves the subscription diffs of an actor_id from the database as an array"""
+        if not actor_id:
             return None
         if not subid:
-            self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId).order(SubscriptionDiff.seqnr).fetch(use_cache=False)
+            self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actor_id).order(SubscriptionDiff.seqnr).fetch(use_cache=False)
         else:
-            self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actorId,
+            self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actor_id,
                                                  SubscriptionDiff.subid == subid).order(SubscriptionDiff.seqnr).fetch(use_cache=False)
         self.diffs = []
         if self.handle:

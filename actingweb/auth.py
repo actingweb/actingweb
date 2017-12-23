@@ -1,11 +1,12 @@
-import actor
-import trust
 import logging
 import time
 
 import oauth
 import base64
 import math
+import actor
+import trust
+import config as config_class
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Fairly simple: /oauth is always oauth, /www can be either basic+trust or
@@ -15,7 +16,8 @@ import math
 def select_auth_type(path, subpath, config=None):
     """Selects authentication type based on path and subpath.
 
-    Currently are only basic and oauth supported. Peer auth is automatic if an Authorization Bearer <token> header is included in the http request.
+    Currently are only basic and oauth supported. Peer auth is automatic if an Authorization Bearer <token> header is
+    included in the http request.
     """
     if path == 'oauth':
         return 'oauth'
@@ -43,9 +45,11 @@ def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True,
     """Initialises actingweb by loading a config object, an actor object, and authentication object.
     
 
-            More details about the authentication can be found in the auth object. If add_response is True, appreq.response
+            More details about the authentication can be found in the auth object. If add_response is True,
+            appreq.response
             will be changed according to authentication result. If False, appreq will not be touched.
-            authn_done (bool), response['code'], response['text'], and response['headers'] will indicate results of the authentication process
+            authn_done (bool), response['code'], response['text'], and response['headers'] will indicate results of
+            the authentication process
             and need to be acted upon.
             200 is access approved
             302 is redirect and auth_obj.redirect contains redirect location where response must be redirected
@@ -59,31 +63,37 @@ def init_actingweb(appreq=None, id=None, path='', subpath='', add_response=True,
     if not auth_obj.actor:
         if add_response:
             appreq.response.set_status(404, 'Actor not found')
-        return (None, None)
+        return None, None
     auth_obj.checkAuthentication(appreq=appreq, path=fullpath)
     if add_response:
         add_auth_response(appreq.response, auth_obj)
     # Initialize the on_aw object with auth (.actor) and webobj (.config) for functions in on_aw
     appreq.on_aw.aw_init(auth=auth_obj, webobj=appreq)
-    return (auth_obj.actor, auth_obj)
+    return auth_obj.actor, auth_obj
 
 
 class auth():
     """ The auth class handles authentication and authorisation for the various schemes supported.
 
-    The helper function init_actingweb() can be used to give you an auth object and do authentication (or can be called directly).
-    The check_authentication() function checks the various authentication schemes against the path and does proper authentication.
-    There are three types supported: basic (using creator credentials), token (received when trust is created), or oauth (used to bind
-    an actor to an oauth-enabled external service, as well as to log into /www path where interactive web functionality of the actor
+    The helper function init_actingweb() can be used to give you an auth object and do authentication (or can be called
+    directly).
+    The check_authentication() function checks the various authentication schemes against the path and does proper
+    authentication.
+    There are three types supported: basic (using creator credentials), token (received when trust is created), or
+    oauth (used to bind
+    an actor to an oauth-enabled external service, as well as to log into /www path where interactive web functionality
+    of the actor
     is available).
     The check_authorisation() function validates the authenticated user against the config.py access list.
     checkTokenAuth() can be called from outside the class to do a simple peer/bearer token verification.
     The OAuth helper functions are used to:
     processOAuthCallback() - process an OAuth callback as part of an OAuth flow and exchange code with a valid token
     validateOAuthToken() - validate and, if necessary, refresh a token
-    setCookieOnCookieRedirect() - set a session cookie in the browser to the token value (called AFTER OAuth has been done!)
+    setCookieOnCookieRedirect() - set a session cookie in the browser to the token value (called AFTER OAuth has been
+    done!)
 
-    The response[], acl[], and authn_done variables are useful outside auth(). authn_done is set when authentication has been done and
+    The response[], acl[], and authn_done variables are useful outside auth(). authn_done is set when authentication has
+    been done and
     a final authentication status can be found in response[].
 
          self.response = {
@@ -103,7 +113,10 @@ class auth():
     """
 
     def __init__(self, id, type='basic', config=None):
-        self.config = config
+        if not config:
+            self.config = config_class.config()
+        else:
+            self.config = config
         self.token = None
         self.cookie_redirect = None
         self.cookie = None
@@ -158,7 +171,7 @@ class auth():
             else:
                 self.type = 'none'
 
-    def __processOAuthAccept(self, result):
+    def __process_oauth_accept(self, result):
         if not result:
             return None
         if not result['access_token']:
@@ -189,7 +202,7 @@ class auth():
         if not result or (result and 'access_token' not in result):
             logging.warn('No token in response')
             return False
-        self.__processOAuthAccept(result)
+        self.__process_oauth_accept(result)
         return True
 
     def validateOAuthToken(self, lazy=False):
@@ -214,7 +227,7 @@ class auth():
         result = self.oauth.oauthRefreshToken(self.refresh_token)
         if not result:
             return self.oauth.oauthRedirectURI(state=self.actor.id)
-        self.__processOAuthAccept(result)
+        self.__process_oauth_accept(result)
         return ""
 
     def oauthGET(self, url=None, params=None):
@@ -237,7 +250,7 @@ class auth():
             if not refresh:
                 logging.warn('Tried to refresh token and failed for actor(' + self.actor.id + ')')
             else:
-                self.__processOAuthAccept(refresh)
+                self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.getRequest(url=url, params=params)
                 code2 = self.oauth.last_response_code
                 if ret2 and any(ret2) or code2 == 204 or code2 == 201:
@@ -264,7 +277,7 @@ class auth():
             if not refresh:
                 logging.warn('Tried to refresh token and failed for actor(' + self.actor.id + ')')
             else:
-                self.__processOAuthAccept(refresh)
+                self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.headRequest(url=url, params=params)
                 code2 = self.oauth.last_response_code
                 if ret2 and any(ret2) or code2 == 204 or code2 == 201:
@@ -291,7 +304,7 @@ class auth():
             if not refresh:
                 logging.warn('Tried to refresh token and failed for actor(' + self.actor.id + ')')
             else:
-                self.__processOAuthAccept(refresh)
+                self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.deleteRequest(url=url)
                 code2 = self.oauth.last_response_code
                 if ret2 and any(ret2) or code2 == 204:
@@ -318,7 +331,7 @@ class auth():
             if not refresh:
                 logging.warn('Tried to refresh token and failed for actor(' + self.actor.id + ')')
             else:
-                self.__processOAuthAccept(refresh)
+                self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.postRequest(url=url, params=params, urlencode=urlencode)
                 code2 = self.oauth.last_response_code
                 if ret2 and any(ret2) or code2 == 204 or code2 == 201:
@@ -345,7 +358,7 @@ class auth():
             if not refresh:
                 logging.warn('Tried to refresh token and failed for actor(' + self.actor.id + ')')
             else:
-                self.__processOAuthAccept(refresh)
+                self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.putRequest(url=url, params=params, urlencode=urlencode)
                 code2 = self.oauth.last_response_code
                 if ret2 and any(ret2) or code2 == 204 or code2 == 201:
@@ -362,20 +375,20 @@ class auth():
         if self.token:
             now = time.time()
             if appreq.request.cookies and self.cookie in appreq.request.cookies:
-                auth = appreq.request.cookies[self.cookie]
+                authz = appreq.request.cookies[self.cookie]
             else:
-                auth = ''
+                authz = ''
             if appreq.request.get('refresh') and appreq.request.get('refresh').lower() == 'true':
                 # Clear cookie and do a refresh if refresh=True is in GET param
-                auth = ''
-            if auth == self.token and now < (float(self.expiry) - 20.0):
+                authz = ''
+            if authz == self.token and now < (float(self.expiry) - 20.0):
                 logging.debug('Authorization cookie header matches a valid token')
                 self.acl["relationship"] = "creator"
                 self.acl["authenticated"] = True
                 self.response['code'] = 200
                 self.authn_done = True
                 return True
-            elif auth != self.token:
+            elif authz != self.token:
                 self.actor.deleteProperty(self.property)
                 logging.debug('Authorization cookie header does not match a valid token')
                 self.response['code'] = 403
@@ -414,23 +427,23 @@ class auth():
             self.response['code'] = 403
             self.response['text'] = "Forbidden"
             return False
-        if not 'Authorization' in appreq.request.headers:
+        if 'Authorization' not in appreq.request.headers:
             self.response['headers'].append({
-                                        'header': 'WWW-Authenticate',
-                                        'value': 'Basic realm="' + self.realm + '"',
+                'header': 'WWW-Authenticate',
+                'value': 'Basic realm="' + self.realm + '"',
             })
             self.response['code'] = 401
             self.response['text'] = "Authentication required"
             return False
-        auth = appreq.request.headers['Authorization']
-        (basic, token) = auth.split(' ')
+        authz = appreq.request.headers['Authorization']
+        (basic, token) = authz.split(' ')
         if basic.lower() != "basic":
             self.response['code'] = 403
             self.response['text'] = "No basic auth in Authorization header"
             logging.debug("No basic auth in Authorization header")
             return False
         self.authn_done = True
-        (username, password) = base64.b64decode(auth.split(' ')[1]).split(':')
+        (username, password) = base64.b64decode(authz.split(' ')[1]).split(':')
         if username != self.actor.creator:
             self.response['code'] = 403
             self.response['text'] = "Invalid username or password"
@@ -474,7 +487,7 @@ class auth():
                     return True
             else:
                 logging.warn('Attempted trustee bearer token auth with <80 bit strength token.')
-        tru = trust.trust(actorId=self.actor.id, token=token, config=self.config)
+        tru = trust.trust(actor_id=self.actor.id, token=token, config=self.config)
         new_trust = tru.get()
         if new_trust:
             logging.debug('Found trust with token: (' + str(new_trust) + ')')

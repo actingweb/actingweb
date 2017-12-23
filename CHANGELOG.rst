@@ -6,6 +6,8 @@ v2.3.0: ??
 ----------
 - Add support for headRequest() in oauth and oauthHEAD() in auth
 - Change all uses of now() to utcnow()
+- db_gae for Google AppEngine is not kept updated, so folder just kept for later reference
+- Full linting/PEP8 review with some of the external API methods changing name
 
 v2.2.2: Dec 3, 2017
 -------------------
@@ -54,7 +56,7 @@ Mar 11, 2017
   (Config.force_email_prop_as_creator bool, default True). Note that username for basic login then changes from
   creator to the value of email property. 
   This functionality can be useful if actor is created by trustee and email is set later
-- Add new db_actor.py function getByCreator() to allow retrieving an actor based on the creator value
+- Add new DbActor.py function get_by_creator() to allow retrieving an actor based on the creator value
 
 
 Feb 25, 2016
@@ -63,7 +65,7 @@ Feb 25, 2016
   - All db entities are now accessible only from the actingweb/* libraries
   - Each entity can be accessed one by one (e.g. trust.py exposes trust class)
     and as a list (e.g. trust.py exposes trusts class)
-  - actorId and any parameters that identify the entity must be set when the class is
+  - actor_id and any parameters that identify the entity must be set when the class is
     instantiated  
   - get() must be called on the object to retrieve it from the database and the object
     is returned as a dictionary

@@ -2,13 +2,13 @@ from google.appengine.ext import ndb
 import logging
 
 """
-    db_trust handles all db operations for a trust
+    DbTrust handles all db operations for a trust
     Google datastore for google is used as a backend.
 """
 
 __all__ = [
-    'db_trust',
-    'db_trust_list',
+    'DbTrust',
+    'DbTrustList',
 ]
 
 
@@ -24,29 +24,29 @@ class Trust(ndb.Model):
     approved = ndb.BooleanProperty()
     peer_approved = ndb.BooleanProperty()
     verified = ndb.BooleanProperty()
-    verificationToken = ndb.StringProperty()
+    verification_token = ndb.StringProperty()
 
 
-class db_trust():
+class DbTrust():
     """
-        db_trust does all the db operations for trust objects
+        DbTrust does all the db operations for trust objects
 
-        The  actorId must always be set.
+        The  actor_id must always be set.
     """
 
-    def get(self,  actorId=None, peerid=None, token=None):
+    def get(self,  actor_id=None, peerid=None, token=None):
         """ Retrieves the property from the database
 
             Either peerid or token must be set.
             If peerid is set, token will be ignored.
         """
-        if not actorId:
+        if not actor_id:
             return None
         if not self.handle and peerid:
-            self.handle = Trust.query(Trust.id == actorId,
+            self.handle = Trust.query(Trust.id == actor_id,
                                       Trust.peerid == peerid).get(use_cache=False)
         elif not self.handle and token:
-            self.handle = Trust.query(Trust.id == actorId,
+            self.handle = Trust.query(Trust.id == actor_id,
                                       Trust.secret == token).get(use_cache=False)
         if self.handle:
             t = self.handle
@@ -61,7 +61,7 @@ class db_trust():
                 "approved": t.approved,
                 "peer_approved": t.peer_approved,
                 "verified": t.verified,
-                "verificationToken": t.verificationToken,
+                "verification_token": t.verification_token,
             }
         else:
             return None
@@ -71,14 +71,14 @@ class db_trust():
                desc=None,
                approved=None,
                verified=None,
-               verificationToken=None,
+               verification_token=None,
                peer_approved=None):
         """ Modify a trust 
         
             If bools are none, they will not be changed.
         """
         if not self.handle:
-            logging.debug("Attempted modification of db_trust without db handle")
+            logging.debug("Attempted modification of DbTrust without db handle")
             return False
         if baseuri and len(baseuri) > 0:
             self.handle.baseuri = baseuri
@@ -90,31 +90,31 @@ class db_trust():
             self.handle.approved = approved
         if verified is not None:
             self.handle.verified = verified
-        if verificationToken and len(verificationToken) > 0:
-            self.handle.verificationToken = verificationToken
+        if verification_token and len(verification_token) > 0:
+            self.handle.verification_token = verification_token
         if peer_approved is not None:
             self.handle.peer_approved = peer_approved
         self.handle.put(use_cache=False)
         return True
 
-    def create(self, actorId=None, peerid=None,
-               baseuri='', type='', relationship='',
+    def create(self, actor_id=None, peerid=None,
+               baseuri='', peer_type='', relationship='',
                secret='', approved='', verified=False,
-               peer_approved=False, verificationToken='',
+               peer_approved=False, verification_token='',
                desc=''):
         """ Create a new trust """
-        if not actorId or not peerid:
+        if not actor_id or not peerid:
             return False
-        self.handle = Trust(id=actorId,
+        self.handle = Trust(id=actor_id,
                             peerid=peerid,
                             baseuri=baseuri,
-                            type=type,
+                            type=peer_type,
                             relationship=relationship,
                             secret=secret,
                             approved=approved,
                             verified=verified,
                             peer_approved=peer_approved,
-                            verificationToken=verificationToken,
+                            verification_token=verification_token,
                             desc=desc)
         self.handle.put(use_cache=False)
         return True
@@ -127,13 +127,13 @@ class db_trust():
         self.handle = None
         return True
 
-    def isTokenInDB(self, actorId=None, token=None):
+    def is_token_in_db(self, actor_id=None, token=None):
         """ Returns True if token is found in db """
-        if not actorId or len(actorId) == 0:
+        if not actor_id or len(actor_id) == 0:
             return False
         if not token or len(token) == 0:
             return False
-        res = Trust.query(Trust.id == actorId, 
+        res = Trust.query(Trust.id == actor_id, 
                           Trust.secret == token).get(use_cache=False)
         if res:
             return True
@@ -143,18 +143,18 @@ class db_trust():
         self.handle = None
 
 
-class db_trust_list():
+class DbTrustList():
     """
-        db_trust_list does all the db operations for list of trust objects
+        DbTrustList does all the db operations for list of trust objects
 
-        The  actorId must always be set. 
+        The  actor_id must always be set. 
     """
 
-    def fetch(self,  actorId):
-        """ Retrieves the trusts of an actorId from the database as an array"""
-        if not actorId:
+    def fetch(self,  actor_id):
+        """ Retrieves the trusts of an actor_id from the database as an array"""
+        if not actor_id:
             return None
-        self.handle = Trust.query(Trust.id == actorId).fetch(use_cache=False)
+        self.handle = Trust.query(Trust.id == actor_id).fetch(use_cache=False)
         self.trusts = []
         if self.handle:
             for t in self.handle:
@@ -170,7 +170,7 @@ class db_trust_list():
                     "approved": t.approved,
                     "peer_approved": t.peer_approved,
                     "verified": t.verified,
-                    "verificationToken": t.verificationToken,
+                    "verification_token": t.verification_token,
                 })
             return self.trusts
         else:

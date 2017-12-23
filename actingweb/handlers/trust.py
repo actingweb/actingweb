@@ -206,9 +206,9 @@ class trust_relationships_handler(base_handler.base_handler):
             else:
                 desc = ''
             if 'verify' in params:
-                verificationToken = params['verify']
+                verification_token = params['verify']
             else:
-                verificationToken = None
+                verification_token = None
         except ValueError:
             self.response.set_status(400, 'No json content')
             return
@@ -224,7 +224,7 @@ class trust_relationships_handler(base_handler.base_handler):
         # Since we received a request for a relationship, assume that peer has approved
         new_trust = myself.createVerifiedTrust(
             baseuri=baseuri, peerid=peerid, approved=approved, secret=secret,
-            verificationToken=verificationToken, type=type, peer_approved=True,
+            verification_token=verification_token, type=type, peer_approved=True,
             relationship=relationship, desc=desc)
         if not new_trust:
             self.response.set_status(403, 'Forbidden')
@@ -271,11 +271,11 @@ class trust_peer_handler(base_handler.base_handler):
         my_trust = relationships[0]
         # If the peer did a GET to verify
         if check.trust and check.trust["peerid"] == peerid and not my_trust["verified"]:
-            db_trust = trust.trust(actorId=id, peerid=peerid, config=self.config)
-            db_trust.modify(verified=True)
-            verificationToken = my_trust["verificationToken"]
+            DbTrust = trust.trust(actor_id=id, peerid=peerid, config=self.config)
+            DbTrust.modify(verified=True)
+            verification_token = my_trust["verification_token"]
         else:
-            verificationToken = ''
+            verification_token = ''
         out = json.dumps(my_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"

@@ -2,8 +2,8 @@
 CHANGELOG
 =========
 
-v2.3.0: ??
-----------
+v2.3.0: Dec 27, 2017
+--------------------
 - Entire API for handlers and Actor() as well as other objects changed to be PEP8 compliant
 - Add support for head_request(() in oauth and oauth_head() in auth
 - Change all uses of now() to utcnow()

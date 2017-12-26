@@ -6,10 +6,10 @@ from actingweb import auth
 from actingweb.handlers import base_handler
 
 
-
 # /trust aw_handlers
 #
-# GET /trust with query parameters (relationship, type, and peerid) to retrieve trust relationships (auth: only creator and admins allowed)
+# GET /trust with query parameters (relationship, type, and peerid) to retrieve trust relationships (auth: only creator
+# and admins allowed)
 # POST /trust with json body to initiate a trust relationship between this
 #   actor and another (reciprocal relationship) (auth: only creator and admins allowed)
 # POST /trust/{relationship} with json body to create new trust
@@ -17,34 +17,35 @@ from actingweb.handlers import base_handler
 #   auth required)
 # GET /trust/{relationship}}/{actorid} to get details on a specific relationship (auth: creator, admin, or peer secret)
 # POST /trust/{relationship}}/{actorid} to send information to a peer about changes in the relationship
-# PUT /trust/{relationship}}/{actorid} with a json body to change details on a relationship (baseuri, secret, desc) (auth: creator,
+# PUT /trust/{relationship}}/{actorid} with a json body to change details on a relationship (baseuri, secret, desc)
+# (auth: creator,
 #   admin, or peer secret)
 # DELETE /trust/{relationship}}/{actorid} to delete a relationship (with
 #   ?peer=true if the delete is from the peer) (auth: creator, admin, or
 #   peer secret)
 
 # Handling requests to trust/
-class trust_handler(base_handler.base_handler):
+class TrustHandler(base_handler.BaseHandler):
 
-    def get(self, id):
+    def get(self, actor_id):
         if self.request.get('_method') == 'POST':
-            self.post(id)
+            self.post(actor_id)
             return
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id, path='trust',
+            actor_id=actor_id, path='trust',
             config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='trust', method='GET'):
+        if not check.check_authorisation(path='trust', method='GET'):
             self.response.set_status(403)
             return
         relationship = self.request.get('relationship')
-        type = self.request.get('type')
-        peerid = self.request.get('peerid')
+        peer_type = self.request.get('type')
+        peerid = self.request.get('peerid', )
 
-        pairs = myself.getTrustRelationships(
-            relationship=relationship, peerid=peerid, type=type)
+        pairs = myself.get_trust_relationships(
+            relationship=relationship, peerid=peerid, trust_type=peer_type)
         if not pairs or len(pairs) == 0:
             self.response.set_status(404, 'Not found')
             return
@@ -53,19 +54,19 @@ class trust_handler(base_handler.base_handler):
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(200, 'Ok')
 
-    def post(self, id):
+    def post(self, actor_id):
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id, path='trust',
+            actor_id=actor_id, path='trust',
             config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='trust', method='POST'):
+        if not check.check_authorisation(path='trust', method='POST'):
             self.response.set_status(403)
             return
         desc = ''
         relationship = self.config.default_relationship
-        type = ''
+        peer_type = ''
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
             if 'url' in params:
@@ -75,28 +76,27 @@ class trust_handler(base_handler.base_handler):
             if 'relationship' in params:
                 relationship = params['relationship']
             if 'type' in params:
-                type = params['type']
+                peer_type = params['type']
             if 'desc' in params:
                 desc = params['desc']
         except ValueError:
             url = self.request.get('url')
             relationship = self.request.get('relationship')
-            type = self.request.get('type')
+            peer_type = self.request.get('type')
         if len(url) == 0:
             self.response.set_status(400, 'Missing peer URL')
             return
-        secret = self.config.newToken()
-
-        new_trust = myself.createReciprocalTrust(
+        secret = self.config.new_token()
+        new_trust = myself.create_reciprocal_trust(
             url=url, secret=secret, desc=desc, relationship=relationship,
-            type=type)
+            trust_type=peer_type)
         if not new_trust:
             self.response.set_status(408, 'Unable to create trust relationship')
             return
-        self.response.headers["Location"] = str(self.config.root + myself.id +
-                                             '/trust/' +
-                                             new_trust["relationship"] +
-                                             '/' + new_trust["peerid"])
+        self.response.headers["Location"] = str(self.config.root +
+                                                myself.id + '/trust/' +
+                                                new_trust["relationship"] +
+                                                '/' + new_trust["peerid"])
         out = json.dumps(new_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
@@ -104,18 +104,18 @@ class trust_handler(base_handler.base_handler):
 
 
 # Handling requests to /trust/*, e.g. /trust/friend
-class trust_relationships_handler(base_handler.base_handler):
+class TrustRelationshipHandler(base_handler.BaseHandler):
 
-    def get(self, id, relationship):
+    def get(self, actor_id, relationship):
         if self.request.get('_method') == 'POST':
-            self.post(id, relationship)
+            self.post(actor_id, relationship)
             return
         self.response.set_status(404, "Not found")
 
-    def put(self, id, relationship):
+    def put(self, actor_id, relationship):
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='trust',
             subpath=relationship,
             add_response=False,
@@ -126,7 +126,7 @@ class trust_relationships_handler(base_handler.base_handler):
             self.response.set_status(404, "Not found")
             return
         # Access is the same as /trust
-        if not check.checkAuthorisation(path='trust', method='POST'):
+        if not check.check_authorisation(path='trust', method='POST'):
             self.response.set_status(403)
             return
         try:
@@ -143,15 +143,15 @@ class trust_relationships_handler(base_handler.base_handler):
             self.response.set_status(400, 'No json content')
             return
         if len(trustee_root) > 0:
-            myself.setProperty('trustee_root', trustee_root)
+            myself.set_property('trustee_root', trustee_root)
         if creator:
             myself.modify(creator=creator)
         self.response.set_status(204, 'No content')
 
-    def delete(self, id, relationship):
+    def delete(self, actor_id, relationship):
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='trust',
             subpath=relationship,
             add_response=False,
@@ -162,25 +162,25 @@ class trust_relationships_handler(base_handler.base_handler):
             self.response.set_status(404, "Not found")
             return
         # Access is the same as /trust
-        if not check.checkAuthorisation(path='trust', method='DELETE'):
+        if not check.check_authorisation(path='trust', method='DELETE'):
             self.response.set_status(403)
             return
-        myself.deleteProperty('trustee_root')
+        myself.delete_property('trustee_root')
         self.response.set_status(204, 'No content')
 
-    def post(self, id, relationship):
+    def post(self, actor_id, relationship):
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='trust',
             subpath=relationship,
             add_response=False,
             config=self.config)
         if not myself:
             self.response.set_status(404)
-            logging.debug("Got trust creation request for unknown actor(" + id + ")")
+            logging.debug("Got trust creation request for unknown Actor(" + str(id) + ")")
             return
-        if not check.checkAuthorisation(path='trust', subpath='<type>', method='POST'):
+        if not check.check_authorisation(path='trust', subpath='<type>', method='POST'):
             self.response.set_status(403)
             return
         try:
@@ -194,9 +194,9 @@ class trust_relationships_handler(base_handler.base_handler):
             else:
                 peerid = ''
             if 'type' in params:
-                type = params['type']
+                peer_type = params['type']
             else:
-                type = ''
+                peer_type = ''
             if 'secret' in params:
                 secret = params['secret']
             else:
@@ -213,18 +213,17 @@ class trust_relationships_handler(base_handler.base_handler):
             self.response.set_status(400, 'No json content')
             return
 
-        if len(baseuri) == 0 or len(peerid) == 0 or len(type) == 0:
+        if len(baseuri) == 0 or len(peerid) == 0 or len(peer_type) == 0:
             self.response.set_status(400, 'Missing mandatory attributes')
             return
-        if self.config.auto_accept_default_relationship and \
-                        self.config.default_relationship == relationship:
+        if self.config.auto_accept_default_relationship and self.config.default_relationship == relationship:
             approved = True
         else:
             approved = False
         # Since we received a request for a relationship, assume that peer has approved
-        new_trust = myself.createVerifiedTrust(
+        new_trust = myself.create_verified_trust(
             baseuri=baseuri, peerid=peerid, approved=approved, secret=secret,
-            verification_token=verification_token, type=type, peer_approved=True,
+            verification_token=verification_token, trust_type=peer_type, peer_approved=True,
             relationship=relationship, desc=desc)
         if not new_trust:
             self.response.set_status(403, 'Forbidden')
@@ -242,28 +241,28 @@ class trust_relationships_handler(base_handler.base_handler):
 
 
 # Handling requests to specific relationships, e.g. /trust/friend/12f2ae53bd
-class trust_peer_handler(base_handler.base_handler):
+class TrustPeerHandler(base_handler.BaseHandler):
 
-    def get(self, id, relationship, peerid):
+    def get(self, actor_id, relationship, peerid):
         if self.request.get('_method') == 'PUT':
-            self.put(id, relationship, peerid)
+            self.put(actor_id, relationship, peerid)
             return
         if self.request.get('_method') == 'DELETE':
-            self.delete(id, relationship, peerid)
+            self.delete(actor_id, relationship, peerid)
             return
         logging.debug('GET trust headers: ' + str(self.request.headers))
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='trust',
             subpath=relationship,
             config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='trust', subpath='<type>/<id>', method='GET', peerid=peerid):
+        if not check.check_authorisation(path='trust', subpath='<type>/<id>', method='GET', peerid=peerid):
             self.response.set_status(403)
             return
-        relationships = myself.getTrustRelationships(
+        relationships = myself.get_trust_relationships(
             relationship=relationship, peerid=peerid)
         if not relationships or len(relationships) == 0:
             self.response.set_status(404, 'Not found')
@@ -271,11 +270,9 @@ class trust_peer_handler(base_handler.base_handler):
         my_trust = relationships[0]
         # If the peer did a GET to verify
         if check.trust and check.trust["peerid"] == peerid and not my_trust["verified"]:
-            DbTrust = trust.trust(actor_id=id, peerid=peerid, config=self.config)
-            DbTrust.modify(verified=True)
-            verification_token = my_trust["verification_token"]
-        else:
-            verification_token = ''
+            dbtrust = trust.Trust(actor_id=actor_id, peerid=peerid, config=self.config)
+            dbtrust.modify(verified=True)
+            # verification_token = my_trust["verification_token"]
         out = json.dumps(my_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
@@ -284,10 +281,10 @@ class trust_peer_handler(base_handler.base_handler):
         else:
             self.response.set_status(202, 'Accepted')
 
-    def post(self, id, relationship, peerid):
+    def post(self, actor_id, relationship, peerid):
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='trust',
             subpath=relationship,
             config=self.config)
@@ -297,37 +294,39 @@ class trust_peer_handler(base_handler.base_handler):
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
             peer_approved = None
             if 'approved' in params:
-                if params['approved'] and params['approved'] == True:
+                if params['approved'] and params['approved'] is True:
                     peer_approved = True
         except ValueError:
             self.response.set_status(400, 'No json content')
             return
         if peer_approved:
             # If this is a notification from a peer about approval, we cannot check if the relationship is approved!
-            if not check.checkAuthorisation(path='trust', subpath='<type>/<id>', method='POST', peerid=peerid, approved=False):
+            if not check.check_authorisation(path='trust', subpath='<type>/<id>', method='POST', peerid=peerid,
+                                             approved=False):
                 self.response.set_status(403)
                 return
         else:
-            if not check.checkAuthorisation(path='trust', subpath='<type>/<id>', method='POST', peerid=peerid):
+            if not check.check_authorisation(path='trust', subpath='<type>/<id>', method='POST', peerid=peerid):
                 self.response.set_status(403)
                 return
-        if myself.modifyTrustAndNotify(relationship=relationship, peerid=peerid, peer_approved=peer_approved):
+        if myself.modify_trust_and_notify(relationship=relationship, peerid=peerid, peer_approved=peer_approved):
             self.response.set_status(204, 'Ok')
         else:
             self.response.set_status(405, 'Not modified')
 
-    def put(self, id, relationship, peerid):
+    def put(self, actor_id, relationship, peerid):
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='trust',
             subpath=relationship,
             config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='trust', subpath='<type>/<id>', method='PUT', peerid=peerid):
+        if not check.check_authorisation(path='trust', subpath='<type>/<id>', method='PUT', peerid=peerid):
             self.response.set_status(403)
             return
+        approved = None
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
             if 'baseuri' in params:
@@ -339,10 +338,8 @@ class trust_peer_handler(base_handler.base_handler):
             else:
                 desc = ''
             if 'approved' in params:
-                if params['approved'] == True or params['approved'].lower() == "true":
+                if params['approved'] is True or params['approved'].lower() == "true":
                     approved = True
-            else:
-                approved = None
         except ValueError:
             if not self.request.get('_method') or self.request.get('_method') != "PUT":
                 self.response.set_status(400, 'No json content')
@@ -350,8 +347,6 @@ class trust_peer_handler(base_handler.base_handler):
             if self.request.get('approved') and len(self.request.get('approved')) > 0:
                 if self.request.get('approved').lower() == "true":
                     approved = True
-                else:
-                    approved = None
             if self.request.get('baseuri') and len(self.request.get('baseuri')) > 0:
                 baseuri = self.request.get('baseuri')
             else:
@@ -360,16 +355,17 @@ class trust_peer_handler(base_handler.base_handler):
                 desc = self.request.get('desc')
             else:
                 desc = ''
-        if myself.modifyTrustAndNotify(relationship=relationship, peerid=peerid, baseuri=baseuri, approved=approved, desc=desc):
+        if myself.modify_trust_and_notify(relationship=relationship, peerid=peerid, baseuri=baseuri, approved=approved,
+                                          desc=desc):
             self.response.set_status(204, 'Ok')
         else:
             self.response.set_status(405, 'Not modified')
 
-    def delete(self, id, relationship, peerid):
+    def delete(self, actor_id, relationship, peerid):
         peerid = peerid.decode("utf-8")
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='trust',
             subpath=relationship,
             add_response=False,
@@ -378,30 +374,29 @@ class trust_peer_handler(base_handler.base_handler):
             auth.add_auth_response(appreq=self, auth_obj=check)
             return
         # We allow non-approved peers to delete even if we haven't approved the relationship yet
-        if not check.checkAuthorisation(path='trust', subpath='<type>/<id>', method='DELETE', peerid=peerid, approved=False):
+        if not check.check_authorisation(path='trust', subpath='<type>/<id>', method='DELETE', peerid=peerid,
+                                         approved=False):
             self.response.set_status(403)
             return
-        isPeer = False
+        is_peer = False
         if check.trust and check.trust["peerid"] == peerid:
-            isPeer = True
+            is_peer = True
         else:
             # Use of GET param peer=true is a way of forcing no deletion of a peer
             # relationship even when requestor is not a peer (primarily for testing purposes)
-            peerGet = self.request.get('peer').lower()
-            if peerGet.lower() == "true":
-                isPeer = True
-        relationships = myself.getTrustRelationships(
+            peer_get = self.request.get('peer').lower()
+            if peer_get.lower() == "true":
+                is_peer = True
+        relationships = myself.get_trust_relationships(
             relationship=relationship, peerid=peerid)
         if not relationships or len(relationships) == 0:
             self.response.set_status(404, 'Not found')
             return
-        my_trust = relationships[0]
-        if isPeer:
-            deleted = myself.deleteReciprocalTrust(peerid=peerid, deletePeer=False)
+        if is_peer:
+            deleted = myself.delete_reciprocal_trust(peerid=peerid, delete_peer=False)
         else:
-            deleted = myself.deleteReciprocalTrust(peerid=peerid, deletePeer=True)
+            deleted = myself.delete_reciprocal_trust(peerid=peerid, delete_peer=True)
         if not deleted:
             self.response.set_status(502, 'Not able to delete relationship with peer.')
             return
         self.response.set_status(204, 'Ok')
-

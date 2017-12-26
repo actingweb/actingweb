@@ -1,5 +1,6 @@
 from setuptools import setup
 
+
 def readme():
     with open('README.rst') as f:
         return f.read()
@@ -23,7 +24,6 @@ setup(name='actingweb',
       packages=[
             'actingweb',
             'actingweb.handlers',
-            'actingweb.db_gae',
             'actingweb.db_dynamodb'
       ],
       python_requires='<3',

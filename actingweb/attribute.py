@@ -1,6 +1,6 @@
-class attributes():
+class Attributes:
     """
-        attribute is the main entity keeping an attribute.
+        Attributes is the main entity keeping an attribute.
 
         It needs to be initalized at object creation time.
 
@@ -16,7 +16,7 @@ class attributes():
         """ Retrieves a single attribute """
         if not name:
             return None
-        if not name in self.data:
+        if name not in self.data:
             self.data[name] = self.dbprop.get_attr(actor_id=self.actor_id, bucket=self.bucket, name=name)
         return self.data[name]
 
@@ -24,7 +24,7 @@ class attributes():
         """ Sets new data for this attribute """
         if not self.actor_id or not self.bucket:
             return False
-        if not name in data:
+        if name not in data:
             self.data[name] = {}
         self.data[name]["data"] = data
         self.data[name]["timestamp"] = timestamp
@@ -66,7 +66,7 @@ class attributes():
             self.get_bucket()
 
 
-class buckets():
+class Buckets:
     """ Handles all attribute buckets of a specific actor_id
 
         Access the attributes
@@ -98,5 +98,3 @@ class buckets():
             return
         self.list = self.config.DbAttribute.DbAttributeBucketList()
         self.actor_id = actor_id
-
-

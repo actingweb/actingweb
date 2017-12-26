@@ -4,7 +4,7 @@ CHANGELOG
 
 v2.3.0: ??
 ----------
-- Add support for headRequest() in oauth and oauthHEAD() in auth
+- Add support for head_request(() in oauth and oauth_head() in auth
 - Change all uses of now() to utcnow()
 - db_gae for Google AppEngine is not kept updated, so folder just kept for later reference
 - Full linting/PEP8 review with some of the external API methods changing name
@@ -19,7 +19,7 @@ v2.2.1: Dec 3, 2017
 
 v2.2.0: Nov 25, 2017
 --------------------
-- Add support for attribute.attributes() and attribute.buckets() (to be used for internal properties not exposed)
+- Add support for attribute.Attributes() and attribute.Buckets() (to be used for internal properties not exposed)
 - Various bug fixes to make the oauth flows work
 
 v2.1.2: Nov 12, 2017
@@ -36,7 +36,7 @@ Jul 9, 2017
 - Improve handling of enforce use of email property as creator
 - Fix auth bug for callbacks (401 when no auth is expected)
 - Add support for "lazy refresh" of oauth token, i.e. refresh if expired or refresh token has <24h to expiry
-- Add support for actors() class in actor.py to get a list of all actors with id and creator (ONLY for admin usage)
+- Add support for Actors() class in actor.py to get a list of all actors with id and creator (ONLY for admin usage)
 - Fix various bugs when subscriptions don't exist
 - Improve logging when actor cannot be created
 
@@ -45,7 +45,7 @@ Apr 2, 2017
 - Changed license to BSD after approval from Cisco Systems
 - Fix bug in deletion of trust relationship that would not delete subscription
 - Add support for GET param ?refresh=true for web-based sessions to ignore set cookie and do oauth
-- Fix bug in oauth.oauthDELETE() returning success when >299 is returned from upstream
+- Fix bug in oauth.oauth_delete() returning success when >299 is returned from upstream
 
 Mar 11, 2017
 --------------------
@@ -101,9 +101,9 @@ and passphrase has bitstrength > 80
 
 Nov 17, 2016
 --------------------
-- Renaming of getPeer() and deletePeer() to getPeerTrustee() and deletePeerTrustee() to avoid confusion
-- Support for oauthPUT() (and corresponding putRequest()) and fix to accept 404 without refreshing token
-- aw_proxy support for getResource(), changeResource(), and deleteResource()
+- Renaming of getPeer() and deletePeer() to get_peer_trustee() and delete_peer_trustee() to avoid confusion
+- Support for oauth_put() (and corresponding put_request()) and fix to accept 404 without refreshing token
+- aw_proxy support for get_resource(), change_resource((), and delete_resource(()
 - Support PUT on /resources
 
 Nov 5, 2016
@@ -113,7 +113,7 @@ Nov 5, 2016
 
 Nov 1, 2016
 --------------
-- Add support for changeResource() and deleteResource() in aw_proxy.py
+- Add support for change_resource(() and delete_resource(() in aw_proxy.py
 - Add support for PUT to /resources and on_put_resources() in on_aw_resources.py
 
 Oct 28, 2016
@@ -122,10 +122,10 @@ Oct 28, 2016
   - Add new db storage for peers created as trustee
   - Add new config.actor section in config.py to define known possible peers
 - Add new actor support function: getTrustRelationshipByType()
-- Add new aw_proxy() class with helper functions to do RPCish peer operations on trust relationships
+- Add new AwProxy() class with helper functions to do RPCish peer operations on trust relationships
   - Either use trust_target or peer_target to send commands to a specific trust or to the trust
     associated with a peer (i.e. peer created by this app as a trustee)
-  - Support for createResource() (POST on remote actor path like /resources or /properties)
+  - Support for create_resource() (POST on remote actor path like /resources or /properties)
 - Fix bug where clean up of actor did not delete remote subscription (actor.delete())
   - Add remoteSubscription deletion in aw-actor-subscription.py
   - Fix auth issue in aw-actor-callbacks.py revealed by ths bug
@@ -163,8 +163,8 @@ Oct 6, 2016
 --------------
 - Added support for /resources with on_aw_resources.py in on_aw/ to hook into GET, DELETE, and POST requests to /resources
 - Added fixes for box.com specific OAUTH implementation
-- Added new function oauthGET(), oauthPOST(), and oauthDELETE() to auth() class. These will refresh a token if necessary and
-can be used insted of oauth.getRequest(), postRequest(), and deleteRequest()
+- Added new function oauth_get(), oauth_post(), and oauth_delete() to Auth() class. These will refresh a token if necessary and
+can be used insted of oauth.get_request(), post_request(), and delete_request(()
 - Minor refactoring of inner workings of auth.py and oauth.py wrt return values and error codes
 
 Sep 25, 2016
@@ -193,7 +193,7 @@ Aug 15, 2016: Bug fixes
 - Changed default relationship to the lowest level (associate) and turned off default approval of the default relationship
 - Added a new authorisation check to subscriptions to make sure that only peers with access to a path are allowed to subscribe to those paths
 - Added a new approval in trust to allow non-approved peers to delete their relationship (in case they want to "withdraw" their relationship request)
-- Fixed uncaught json exception in createRemoteSubscription()
+- Fixed uncaught json exception in create_remote_subscription()
 - Fixed possibility of subpath being None instead of '' in auth.py
 - Fixed handling of both bool json type and string bool value for approved parameter for trust relationships
 
@@ -201,7 +201,7 @@ Aug 15, 2016: Bug fixes
 Aug 6, 2016: New features
 ----------------------------
 - Support for deleting remote subscription (i.e. callback and subscription, dependent on direction) when an actor is deleted
-  - New deleteRemoteSubscription() in actor.py
+  - New delete_remote_subscription() in actor.py
   - Added deletion to actor.delete()
   - New handler for DELETE of /callbacks in aw-actor-callbacks.py
   - New on_delete_callbacks() in on_aw_callbacks.py
@@ -213,11 +213,11 @@ Aug 6, 2016: Bug fixes
 Aug 3, 2016: New features
 ----------------------------
 - Support for doing callbacks when registering diffs
-  - New function in actor.py: callbackSubscription()
+  - New function in actor.py: callback_subscription()
   - Added defer of callbacks to avoid stalling responses when adding diffs
-  - Added new function getTrustRelationship() to get one specific relationship based on peerid (instead of searching using getTrustRelationships())
+  - Added new function get_trust_relationship() to get one specific relationship based on peerid (instead of searching using get_trust_relationships())
 - Improved diff registration
-  - Totally rewrote registerDiffs() to register diffs for subscriptions that are not exact matches (i.e. broader/higher-level and more specific)
+  - Totally rewrote register_diffs() to register diffs for subscriptions that are not exact matches (i.e. broader/higher-level and more specific)
   - Added debug logging to trace how diffs are registered
 - Owner-based access only to /callbacks/subscriptions
 - Support for handling callbacks for subscriptions

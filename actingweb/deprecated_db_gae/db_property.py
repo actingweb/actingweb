@@ -37,7 +37,7 @@ class db_property():
         if self.handle and self.handle.value:
             return self.handle.value
         self.handle = Property.query(Property.id == actor_id,
-                                     Property.name == name).get(use_cache=False)
+                                     Property.name == name).get()
         if self.handle:
             return self.handle.value
         else:
@@ -87,7 +87,7 @@ class db_property():
         """ Deletes the property in the database after a get() """
         if not self.handle:
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -120,8 +120,8 @@ class db_property_list():
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
-        self.handle = None
+            p.key.delete()
+            self.handle = None
         return True
 
     def __init__(self):

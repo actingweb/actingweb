@@ -6,9 +6,9 @@ from actingweb import attribute
 from actingweb.handlers import base_handler
 
 
-class devtest_handler(base_handler.base_handler):
+class DevtestHandler(base_handler.BaseHandler):
 
-    def put(self, id, path):
+    def put(self, actor_id, path):
         """Handles PUT for devtest"""
 
         if not self.config.devtest:
@@ -16,7 +16,7 @@ class devtest_handler(base_handler.base_handler):
             return
         (myself, check) = auth.init_actingweb(
             appreq=self,
-            id=id,
+            actor_id=actor_id,
             path='devtest',
             subpath=path,
             config=self.config)
@@ -24,16 +24,16 @@ class devtest_handler(base_handler.base_handler):
             return
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
-        except:
+        except (TypeError, ValueError, KeyError):
             params = self.request.body.decode('utf-8', 'ignore')
         paths = path.split('/')
         if paths[0] == 'proxy':
-            mytwin = myself.getPeerTrustee(shorttype='myself')
+            mytwin = myself.get_peer_trustee(shorttype='myself')
             if mytwin and len(mytwin) > 0:
                 if paths[1] == 'properties' and paths[2] and len(paths[2]) > 0:
-                        proxy = aw_proxy.aw_proxy(peer_target=mytwin, config=self.config)
+                        proxy = aw_proxy.AwProxy(peer_target=mytwin, config=self.config)
                         if params:
-                            proxy.changeResource('/properties/' + paths[2], params = params)
+                            proxy.change_resource('/properties/' + paths[2], params=params)
                         self.response.set_status(proxy.last_response_code)
                         return
         elif paths[0] == 'ping':
@@ -41,31 +41,31 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if len(paths) > 2:
-                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
+                bucket = attribute.Attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 bucket.set_attr(paths[2], params, timestamp=datetime.datetime.utcnow())
                 self.response.set_status(204)
                 return
         self.response.set_status(404)
 
-    def delete(self, id, path):
+    def delete(self, actor_id, path):
         """Handles DELETE for devtest"""
 
         if not self.config.devtest:
             self.response.set_status(404)
             return
         (myself, check) = auth.init_actingweb(appreq=self,
-                                                      id=id, path='devtest', 
-                                                      subpath=path,
-                                                      config=self.config)
+                                              actor_id=actor_id, path='devtest',
+                                              subpath=path,
+                                              config=self.config)
         if not myself or check.response["code"] != 200:
             return
         paths = path.split('/')
         if paths[0] == 'proxy':
-            mytwin = myself.getPeerTrustee(shorttype='myself')
+            mytwin = myself.get_peer_trustee(shorttype='myself')
             if mytwin and len(mytwin) > 0:
                 if paths[1] == 'properties':
-                    proxy = aw_proxy.aw_proxy(peer_target=mytwin, config=self.config)
-                    proxy.deleteResource(path='/properties')
+                    proxy = aw_proxy.AwProxy(peer_target=mytwin, config=self.config)
+                    proxy.delete_resource(path='/properties')
                     self.response.set_status(proxy.last_response_code)
                     return
         elif paths[0] == 'ping':
@@ -73,36 +73,36 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if len(paths) > 2:
-                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
+                bucket = attribute.Attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 bucket.delete_attr(paths[2])
                 self.response.set_status(204)
                 return
             else:
-                buckets = attribute.buckets(actor_id=myself.id, config=self.config)
+                buckets = attribute.Buckets(actor_id=myself.id, config=self.config)
                 buckets.delete()
                 self.response.set_status(204)
                 return
         self.response.set_status(404)
 
-    def get(self, id, path):
+    def get(self, actor_id, path):
         """Handles GET for devtest"""
 
         if not self.config.devtest:
             self.response.set_status(404)
             return
         (myself, check) = auth.init_actingweb(appreq=self,
-                                              id=id, path='devtest',
+                                              actor_id=actor_id, path='devtest',
                                               subpath=path,
                                               config=self.config)
         if not myself or check.response["code"] != 200:
             return
         paths = path.split('/')
         if paths[0] == 'proxy':
-            mytwin = myself.getPeerTrustee(shorttype='myself')
+            mytwin = myself.get_peer_trustee(shorttype='myself')
             if mytwin and len(mytwin) > 0:
                 if paths[1] == 'properties':
-                    proxy = aw_proxy.aw_proxy(peer_target=mytwin, config=self.config)
-                    prop = proxy.getResource(path='/properties')
+                    proxy = aw_proxy.AwProxy(peer_target=mytwin, config=self.config)
+                    prop = proxy.get_resource(path='/properties')
                     if proxy.last_response_code != 200:
                         self.response.set_status(proxy.last_response_code)
                         return
@@ -116,9 +116,9 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if len(paths) > 1:
-                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
+                bucket = attribute.Attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 params = bucket.get_bucket()
-                for k,v in params.iteritems():
+                for k, v in params.iteritems():
                     params[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
                 out = json.dumps(params)
                 self.response.write(out.encode('utf-8'))
@@ -126,13 +126,13 @@ class devtest_handler(base_handler.base_handler):
                 self.response.set_status(200)
                 return
             else:
-                buckets = attribute.buckets(actor_id=myself.id, config=self.config)
+                buckets = attribute.Buckets(actor_id=myself.id, config=self.config)
                 params = buckets.fetch()
                 if len(params) == 0:
                     self.response.set_status(404)
                     return
-                for b,d in params.iteritems():
-                    for k,v  in d.iteritems():
+                for b, d in params.iteritems():
+                    for k, v in d.iteritems():
                         d[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
                 out = json.dumps(params)
                 self.response.write(out.encode('utf-8'))
@@ -141,31 +141,31 @@ class devtest_handler(base_handler.base_handler):
                 return
         self.response.set_status(404)
 
-    def post(self, id, path):
+    def post(self, actor_id, path):
         """Handles POST for devtest"""
 
         if not self.config.devtest:
             self.response.set_status(404)
             return
         (myself, check) = auth.init_actingweb(appreq=self,
-                                              id=id, path='devtest',
+                                              actor_id=actor_id, path='devtest',
                                               subpath=path,
                                               config=self.config)
         if not myself or check.response["code"] != 200:
             return
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
-        except:
+        except (TypeError, ValueError, KeyError):
             params = None
         paths = path.split('/')
         if paths[0] == 'proxy':
-            mytwin = myself.getPeerTrustee(shorttype='myself')
+            mytwin = myself.get_peer_trustee(shorttype='myself')
             if mytwin and len(mytwin) > 0:
                 if paths[1] == 'create':
-                        proxy = aw_proxy.aw_proxy(peer_target=mytwin, config=self.config)
-                        meta = proxy.getResource(path='/meta')
+                        proxy = aw_proxy.AwProxy(peer_target=mytwin, config=self.config)
+                        meta = proxy.get_resource(path='/meta')
                         if params:
-                            proxy.createResource('/properties', params = params)
+                            proxy.create_resource('/properties', params=params)
                         out = json.dumps(meta)
                         self.response.write(out.encode('utf-8'))
                         self.response.headers["Content-Type"] = "application/json"
@@ -177,8 +177,8 @@ class devtest_handler(base_handler.base_handler):
             return
         elif paths[0] == 'attribute':
             if paths[1] and len(paths[1]) > 0:
-                bucket = attribute.attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
-                for k,v in params.iteritems():
+                bucket = attribute.Attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
+                for k, v in params.iteritems():
                     bucket.set_attr(k, v, timestamp=datetime.datetime.utcnow())
                 out = json.dumps(params)
                 self.response.write(out.encode('utf-8'))

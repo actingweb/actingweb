@@ -6,31 +6,30 @@ import json
 # Appengine version of urlfetch does not include links()
 
 
-def PaginationLinks(self):
+def pagination_links(self):
     """Links parsed from HTTP Link header"""
-    ret = []
+    rets = []
     if 'link' in self.headers:
         linkheader = self.headers['link']
     else:
-        return ret
+        return rets
     for i in linkheader.split(','):
         try:
             url, params = i.split(';', 1)
         except ValueError:
             url, params = i, ''
-        link = {}
-        link['url'] = url.strip('''<> '"''')
+        link = {'url': url.strip('''<> '"''')}
         for param in params.split(';'):
             try:
                 k, v = param.split('=')
             except ValueError:
                 break
             link[k.strip(''' '"''')] = v.strip(''' '"''')
-        ret.append(link)
-    return ret
+        rets.append(link)
+    return rets
 
 
-class oauth():
+class OAuth:
 
     def __init__(self, token=None, config=None):
         self.config = config
@@ -47,11 +46,11 @@ class oauth():
         else:
             return True
 
-    def setToken(self, token):
+    def set_token(self, token):
         if token:
             self.token = token
 
-    def postRequest(self, url, params=None, urlencode=False):
+    def post_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
                 data = urllib.urlencode(params)
@@ -89,7 +88,10 @@ class oauth():
                 response = self.config.module["urlfetch"].post(url=url, data=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
             logging.warn("Oauth POST failed with exception")
@@ -103,7 +105,7 @@ class oauth():
         logging.debug('Oauth POST response JSON:' + response.content)
         return json.loads(response.content)
 
-    def putRequest(self, url, params=None, urlencode=False):
+    def put_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
                 data = urllib.urlencode(params)
@@ -141,7 +143,10 @@ class oauth():
                 response = self.config.module["urlfetch"].post(url=url, data=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
             logging.warn("Oauth PUT failed with exception")
@@ -155,16 +160,16 @@ class oauth():
         logging.debug('Oauth PUT response JSON:' + response.content)
         return json.loads(response.content)
 
-    def getRequest(self, url, params=None):
+    def get_request(self, url, params=None):
         if not self.token:
-            logging.debug("No token set in getRequest()")
+            logging.debug("No token set in get_request()")
             return None
         if params:
             url = url + '?' + urllib.urlencode(params)
         logging.info('Oauth GET request: ' + url)
         try:
             if self.config.env == 'appengine':
-                urlfetch.self.config.module["urlfetch"].set_default_fetch_deadline(60)
+                self.config.module["urlfetch"].set_default_fetch_deadline(60)
                 response = self.config.module["urlfetch"].fetch(
                     url=url,
                     method=self.config.module["urlfetch"].GET,
@@ -181,7 +186,10 @@ class oauth():
                     )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
             logging.warn("Oauth GET failed with exception")
@@ -190,7 +198,7 @@ class oauth():
             logging.info('Error when sending GET request to Oauth: ' +
                          str(response.status_code) + response.content)
             return None
-        links = PaginationLinks(response)
+        links = pagination_links(response)
         self.next = None
         self.first = None
         self.prev = None
@@ -204,9 +212,9 @@ class oauth():
                 self.prev = link['url']
         return json.loads(response.content)
 
-    def headRequest(self, url, params=None):
+    def head_request(self, url, params=None):
         if not self.token:
-            logging.debug("No token set in headRequest()")
+            logging.debug("No token set in head_request(()")
             return None
         if params:
             url = url + '?' + urllib.urlencode(params)
@@ -218,7 +226,10 @@ class oauth():
                     )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
             logging.warn("Oauth HEAD failed with exception")
@@ -229,16 +240,16 @@ class oauth():
             return None
         return response.headers
 
-    def deleteRequest(self, url):
+    def delete_request(self, url):
         if not self.token:
             return None
         logging.info('Oauth DELETE request: ' + url)
         try:
             if self.config.env == 'appengine':
                 response = self.config.module["urlfetch"].fetch(url=url,
-                                          method=self.config.module["urlfetch"].DELETE,
-                                          headers={'Authorization': 'Bearer ' + self.token}
-                                          )
+                                                                method=self.config.module["urlfetch"].DELETE,
+                                                                headers={'Authorization': 'Bearer ' + self.token}
+                                                                )
             else:
                 response = self.config.module["urlfetch"].delete(
                     url=url,
@@ -246,7 +257,10 @@ class oauth():
                     )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             logging.warn("Spark DELETE failed.")
             self.last_response_code = 0
             self.last_response_message = 'No response'
@@ -259,11 +273,14 @@ class oauth():
             return {}
         try:
             ret = json.loads(response.content)
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             return {}
         return ret
 
-    def oauthRedirectURI(self, state=''):
+    def oauth_redirect_uri(self, state=''):
         params = {
             'response_type': self.config.oauth['response_type'],
             'client_id': self.config.oauth['client_id'],
@@ -275,7 +292,7 @@ class oauth():
         logging.info('OAuth redirect with url: ' + uri + ' and state:' + state)
         return uri
 
-    def oauthRequestToken(self, code=None):
+    def oauth_request_token(self, code=None):
         if not code:
             return None
         params = {
@@ -286,13 +303,13 @@ class oauth():
             'redirect_uri': self.config.oauth['redirect_uri'],
         }
         self.token = None
-        result = self.postRequest(url=self.config.oauth[
+        result = self.post_request(url=self.config.oauth[
                                   'token_uri'], params=params, urlencode=True)
         if result and 'access_token' in result:
             self.token = result['access_token']
         return result
 
-    def oauthRefreshToken(self, refresh_token):
+    def oauth_refresh_token(self, refresh_token):
         if not refresh_token:
             return None
         params = {
@@ -302,7 +319,7 @@ class oauth():
             'refresh_token': refresh_token,
         }
         self.token = None
-        result = self.postRequest(url=self.config.oauth[
+        result = self.post_request(url=self.config.oauth[
                                   'token_uri'], params=params, urlencode=True)
         if not result:
             self.token = None

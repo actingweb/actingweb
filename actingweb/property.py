@@ -1,4 +1,4 @@
-class property():
+class Property:
     """
         property is the main entity keeping a property.
 
@@ -11,7 +11,7 @@ class property():
         if not self.dbprop:
             # New property after a delete()
             self.dbprop = self.config.DbProperty.DbProperty()
-            self.value=None
+            self.value = None
         self.value = self.dbprop.get(actor_id=self.actor_id, name=self.name)
         return self.value
 
@@ -41,7 +41,7 @@ class property():
         else:
             return False
 
-    def getActorId(self):
+    def get_actor_id(self):
         return self.actor_id
 
     def __init__(self,  actor_id=None, name=None, value=None, config=None):
@@ -53,7 +53,7 @@ class property():
         self.name = name
         if not actor_id and name and len(name) > 0 and value and len(value) > 0:
             self.actor_id = self.dbprop.get_actor_id_from_property(name=name,
-                                                                 value=value)
+                                                                   value=value)
             if not self.actor_id:
                 return
             self.value = value
@@ -64,7 +64,7 @@ class property():
                 self.get()
 
 
-class properties():
+class Properties:
     """ Handles all properties of a specific actor_id
 
         Access the properties
@@ -94,10 +94,8 @@ class properties():
         self.config = config
         if not actor_id:
             self.list = None
-            return False
+            return
         self.list = self.config.DbProperty.DbPropertyList()
         self.actor_id = actor_id
         self.props = None
         self.fetch()
-
-

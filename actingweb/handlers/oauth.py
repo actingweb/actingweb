@@ -4,17 +4,17 @@ from actingweb import auth
 from actingweb.handlers import base_handler
 
 
-class oauth_handler(base_handler.base_handler):
+class OauthHandler(base_handler.BaseHandler):
 
-    def get(self, id, path):
+    def get(self, actor_id, path):
         (myself, check) = auth.init_actingweb(appreq=self,
-                                              id=id,
+                                              actor_id=actor_id,
                                               path='oauth',
                                               subpath=path,
                                               config=self.config)
         if not myself or not check:
             return
-        if not check.checkAuthorisation(path='oauth', subpath=path, method='GET'):
+        if not check.check_authorisation(path='oauth', subpath=path, method='GET'):
             self.response.set_status(403)
             return
         if check.type != 'oauth':
@@ -22,7 +22,7 @@ class oauth_handler(base_handler.base_handler):
             return
         # Handle callback from oauth granter
         if self.request.get('code'):
-            if not check.processOAuthCallback(self.request.get('code')):
+            if not check.process_oauth_callback(self.request.get('code')):
                 self.response.set_status(502, "OAuth Token Request Failed")
                 return
             else:
@@ -35,17 +35,16 @@ class oauth_handler(base_handler.base_handler):
                     self.response.set_status(403, "Forbidden to this identity")
                     return
 
-        redirect_uri = check.validateOAuthToken()
+        redirect_uri = check.validate_oauth_token()
         if len(redirect_uri) > 0:
             self.response.set_redirect(redirect_uri)
             return
         if len(redirect_uri) == 0:
             self.on_aw.aw_init(auth=check, webobj=self)
             self.on_aw.actions_on_oauth_success()
-            if check.setCookieOnCookieRedirect(self):
+            if check.set_cookie_on_cookie_redirect(self):
                 return
             self.response.set_status(204, "OAuthorization Done")
             return
         logging.info("OAuth token refresh failed")
         return
-

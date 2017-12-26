@@ -40,12 +40,12 @@ class DbSubscriptionDiff():
             if not seqnr:
                 self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actor_id,
                                                      SubscriptionDiff.subid == subid
-                                                     ).get(use_cache=False)
+                                                     ).get()
             else:
                 self.handle = SubscriptionDiff.query(SubscriptionDiff.id == actor_id,
                                                      SubscriptionDiff.subid == subid,
                                                      SubscriptionDiff.seqnr == seqnr
-                                                     ).get(use_cache=False)
+                                                     ).get()
         if self.handle:
             t = self.handle
             return {
@@ -81,7 +81,7 @@ class DbSubscriptionDiff():
         """ Deletes the subscription diff in the database """
         if not self.handle:
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -131,8 +131,8 @@ class DbSubscriptionDiffList():
             seqnr = 0
         for p in self.handle:
             if seqnr == 0 or p.seqnr <= seqnr:
-                p.key.delete(use_cache=False)
-        self.handle = None
+                p.key.delete()
+                self.handle = None
         return True
 
     def __init__(self):

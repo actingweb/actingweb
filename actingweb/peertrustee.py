@@ -44,7 +44,7 @@ class PeerTrustee:
             self.peer_type = peer_type
         elif not peer_type and short_type:
             if not self.config.actors[short_type]:
-                logging.error('Got request to initialise peer trustee with unknown shortpeer_type(' + shortpeer_type +
+                logging.error('Got request to initialise peer trustee with unknown shortpeer_type(' + peer_type +
                               ')')
                 return
             self.peer_type = self.config.actors[short_type]["type"]

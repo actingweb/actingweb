@@ -43,7 +43,7 @@ class DbSubscription():
         if not self.handle:
             self.handle = Subscription.query(Subscription.id == actor_id,
                                              Subscription.peerid == peerid,
-                                             Subscription.subid == subid).get(use_cache=False)
+                                             Subscription.subid == subid).get()
         if self.handle:
             t = self.handle
             return {
@@ -92,7 +92,7 @@ class DbSubscription():
             self.handle.resource = resource
         if seqnr:
             self.handle.seqnr = seqnr
-        self.handle.put(use_cache=False)
+        self.handle.put()
         return True
 
     def create(self, actor_id=None,
@@ -136,7 +136,7 @@ class DbSubscription():
         if not self.handle:
             logging.debug("Attempted delete of DbSubscription with no handle set.")
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -180,8 +180,8 @@ class DbSubscriptionList():
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
-        self.handle = None
+            p.key.delete()
+            self.handle = None
         return True
 
     def __init__(self):

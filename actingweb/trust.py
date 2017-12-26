@@ -1,6 +1,7 @@
 import logging
 
-class trust():
+
+class Trust:
 
     def get(self):
         """ Retrieve a trust relationship with either peerid or token """
@@ -52,15 +53,13 @@ class trust():
                approved=False, verified=False, verification_token='',
                desc='', peer_approved=False):
         """ Create a new trust relationship """
-        self.trust = {}
-        self.trust["baseuri"] = baseuri
-        self.trust["type"] = peer_type
+        self.trust = {"baseuri": baseuri, "type": peer_type}
         if not relationship or len(relationship) == 0:
             self.trust["relationship"] = self.config.default_relationship
         else:
             self.trust["relationship"] = relationship
         if not secret or len(secret) == 0:
-            self.trust["secret"] = self.config.newToken()
+            self.trust["secret"] = self.config.new_token()
         else:
             self.trust["secret"] = secret
         # Be absolutely sure that the secret is not already used
@@ -72,7 +71,7 @@ class trust():
         self.trust["peer_approved"] = peer_approved
         self.trust["verified"] = verified
         if not verification_token or len(verification_token) == 0:
-            self.trust["verification_token"] = self.config.newToken()
+            self.trust["verification_token"] = self.config.new_token()
         self.trust["desc"] = desc
         self.trust["id"] = self.actor_id
         self.trust["peerid"] = self.peerid
@@ -107,7 +106,7 @@ class trust():
         self.get()
 
 
-class trusts():
+class Trusts:
     """ Handles all trusts of a specific actor_id
 
         Access the indvidual trusts in .dbtrusts and the trust data
@@ -141,5 +140,3 @@ class trusts():
         self.actor_id = actor_id
         self.trusts = None
         self.fetch()
-
-

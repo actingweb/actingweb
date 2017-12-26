@@ -44,10 +44,10 @@ class DbTrust():
             return None
         if not self.handle and peerid:
             self.handle = Trust.query(Trust.id == actor_id,
-                                      Trust.peerid == peerid).get(use_cache=False)
+                                      Trust.peerid == peerid).get()
         elif not self.handle and token:
             self.handle = Trust.query(Trust.id == actor_id,
-                                      Trust.secret == token).get(use_cache=False)
+                                      Trust.secret == token).get()
         if self.handle:
             t = self.handle
             return {
@@ -94,7 +94,7 @@ class DbTrust():
             self.handle.verification_token = verification_token
         if peer_approved is not None:
             self.handle.peer_approved = peer_approved
-        self.handle.put(use_cache=False)
+        self.handle.put()
         return True
 
     def create(self, actor_id=None, peerid=None,
@@ -123,7 +123,7 @@ class DbTrust():
         """ Deletes the property in the database """
         if not self.handle:
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -133,8 +133,8 @@ class DbTrust():
             return False
         if not token or len(token) == 0:
             return False
-        res = Trust.query(Trust.id == actor_id, 
-                          Trust.secret == token).get(use_cache=False)
+        res = Trust.query(Trust.id == actor_id,
+                          Trust.secret == token).get()
         if res:
             return True
         return False
@@ -181,8 +181,8 @@ class DbTrustList():
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
-        self.handle = None
+            p.key.delete()
+            self.handle = None
         return True
 
     def __init__(self):

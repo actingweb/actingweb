@@ -1,7 +1,8 @@
 import datetime
 import logging
 
-class subscription():
+
+class Subscription:
     """Base class with core subscription methods (storage-related)"""
 
     def get(self):
@@ -28,7 +29,7 @@ class subscription():
         if not self.subid:
             now = datetime.datetime.utcnow()
             seed = self.config.root + now.strftime("%Y%m%dT%H%M%S%f")
-            self.subid = self.config.newUUID(seed)
+            self.subid = self.config.new_uuid(seed)
         if not self.handle.create(actor_id=self.actor_id,
                                   peerid=self.peerid,
                                   subid=self.subid,
@@ -55,21 +56,21 @@ class subscription():
         if not self.handle:
             logging.debug("Attempted delete of subscription without storage handle")
             return False
-        self.clearDiffs()
+        self.clear_diffs()
         self.handle.delete()
         return True
 
-    def increaseSeq(self):
+    def increase_seq(self):
         if not self.handle:
-            logging.debug("Attempted increaseSeq without subscription retrieved from storage")
+            logging.debug("Attempted increase_seq without subscription retrieved from storage")
             return False
         self.subscription["sequence"] += 1
         return self.handle.modify(seqnr=self.subscription["sequence"])
 
-    def addDiff(self, blob=None):
+    def add_diff(self, blob=None):
         """Add a new diff for this subscription"""
         if not self.actor_id or not self.subid or not blob:
-            logging.debug("Attempted addDiff without actorid, subid, or blob")
+            logging.debug("Attempted add_diff without actorid, subid, or blob")
             return False
         diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
         diff.create(actor_id=self.actor_id,
@@ -77,12 +78,12 @@ class subscription():
                     diff=blob,
                     seqnr=self.subscription["sequence"]
                     )
-        if not self.increaseSeq():
+        if not self.increase_seq():
             logging.error("Failed increasing sequence number for subscription " +
                           self.subid + " for peer " + self.peerid)
         return diff.get()
 
-    def getDiff(self, seqnr=0):
+    def get_diff(self, seqnr=0):
         """Get one specific diff"""
         if seqnr == 0:
             return None
@@ -91,18 +92,18 @@ class subscription():
         diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
         return diff.get(actor_id=self.actor_id, subid=self.subid, seqnr=seqnr)
 
-    def getDiffs(self):
+    def get_diffs(self):
         """Get all the diffs available for this subscription ordered by the timestamp, oldest first"""
         diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
         return diff_list.fetch(actor_id=self.actor_id, subid=self.subid)
 
-    def clearDiff(self, seqnr):
+    def clear_diff(self, seqnr):
         """Clears one specific diff"""
         diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
         diff.get(actor_id=self.actor_id, subid=self.subid, seqnr=seqnr)
         return diff.delete()
 
-    def clearDiffs(self, seqnr=0):
+    def clear_diffs(self, seqnr=0):
         """Clear all diffs up to and including a seqnr"""
         diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
         diff_list.fetch(actor_id=self.actor_id, subid=self.subid)
@@ -113,7 +114,7 @@ class subscription():
         self.handle = self.config.DbSubscription.DbSubscription()
         self.subscription = {}
         if not actor_id:
-            return False
+            return
         self.actor_id = actor_id
         self.peerid = peerid
         self.subid = subid
@@ -122,7 +123,7 @@ class subscription():
             self.get()
 
 
-class subscriptions():
+class Subscriptions:
     """ Handles all subscriptions of a specific actor_id
 
         Access the indvidual subscriptions in .dbsubscriptions and the subscription data
@@ -162,4 +163,3 @@ class subscriptions():
         self.actor_id = actor_id
         self.subscriptions = None
         self.fetch()
-

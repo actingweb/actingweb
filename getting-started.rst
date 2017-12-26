@@ -43,12 +43,12 @@ Handle the request like Webapp2 requires
     class actor_properties(webapp2.RequestHandler):
 
         def init(self):
-            self.obj=aw_web_request.aw_webobj(
+            self.obj=aw_web_request.AWWebObj(
                 url=self.request.url,
                 params=self.request.params,
                 body=self.request.body,
                 headers=self.request.headers)
-            self.handler = properties.properties_handler(self.obj, self.app.registry.get('config'))
+            self.handler = properties.PropertiesHandler(self.obj, self.app.registry.get('config'))
 
         def get(self, id, name):
             self.init()
@@ -82,7 +82,7 @@ Here's how to instantiate it:`
 
 ::
 
-    config = config.config(
+    config = config.Config(
         database='dynamodb',
         fqdn="actingwebdemo.greger.io",
         proto="http://")
@@ -167,7 +167,7 @@ To make your own bot handler, make you own instance inheriting the on_aw_base cl
 
     from actingweb import on_aw
 
-    class my_aw(on_aw.on_aw_base()):
+    class my_aw(on_aw.OnAWBase()):
 
         def bot_post(self, path):
             # Do stuff with posts to the bot

@@ -5,7 +5,7 @@ import importlib
 import os
 
 
-class config():
+class Config:
 
     def __init__(self, **kwargs):
         #########
@@ -16,12 +16,18 @@ class config():
         self.proto = "https://"  # http or https
         self.env = ''
         self.database = 'dynamodb'
-        self.ui = True                                      # Turn on the /www path
-        self.devtest = True                                 # Enable /devtest path for test purposes, MUST be False in production
-        self.unique_creator = False                          # Will enforce unique creator field across all actors
-        self.force_email_prop_as_creator = True             # Use "email" property to set creator value (after creation and property set)
-        self.www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
-        self.logLevel = logging.DEBUG                       # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
+        # Turn on the /www path
+        self.ui = True
+        # Enable /devtest path for test purposes, MUST be False in production
+        self.devtest = True
+        # Will enforce unique creator field across all actors
+        self.unique_creator = False
+        # Use "email" property to set creator value (after creation and property set)
+        self.force_email_prop_as_creator = True
+        # basic or oauth: basic for creator + bearer tokens
+        self.www_auth = "basic"
+        self.logLevel = logging.DEBUG
+        # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
         #########
         # Configurable ActingWeb settings for this app
         #########
@@ -36,7 +42,7 @@ class config():
         self.default_relationship = "associate"  # Default relationship if not specified
         self.auto_accept_default_relationship = False  # True if auto-approval
         # Pick up the config variables
-        for k,v in kwargs.iteritems():
+        for k, v in kwargs.iteritems():
             if k == 'database':
                 self.database = v
                 if v == 'gae':
@@ -145,7 +151,7 @@ class config():
             ('admin', '/', '', 'a'),
         ]
         # Pick up the more complex config variables
-        for k,v in kwargs.iteritems():
+        for k, v in kwargs.iteritems():
             if k == 'actors':
                 self.actors = v
             elif k == 'oauth':
@@ -202,9 +208,10 @@ class config():
         self.root = self.proto + self.fqdn + "/"            # root URI used to identity actor externally
         self.auth_realm = self.fqdn                         # Authentication realm used in Basic auth
 
-    def newUUID(self, seed):
+    @staticmethod
+    def new_uuid(seed):
         return uuid.uuid5(uuid.NAMESPACE_URL, seed).get_hex()
 
-    def newToken(self, length=40):
+    @staticmethod
+    def new_token(length=40):
         return binascii.hexlify(os.urandom(int(length // 2)))
-

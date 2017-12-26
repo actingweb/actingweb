@@ -31,7 +31,7 @@ class DbActor():
         """ Retrieves the actor from the database """
         if not actor_id:
             return None
-        self.handle = Actor.query(Actor.id == actor_id).get(use_cache=False)
+        self.handle = Actor.query(Actor.id == actor_id).get()
         if self.handle:
             t = self.handle
             return {
@@ -55,12 +55,12 @@ class DbActor():
             return None
         ret = []
         if len(self.handle) == 1:
-            ret.append(self.get(actor_id=self.handle[0].id))
+            ret.append(self.get())
             return ret
         logging.warn("Found multiple actors with creator(" + creator + "):")
         for c in self.handle:
             logging.warn("    id (" + c.id + ")")
-            ret.append(self.get(actor_id=c.id))
+            ret.append(self.get())
         return ret
 
     def modify(self, creator=None, passphrase=None):
@@ -72,7 +72,7 @@ class DbActor():
             self.handle.creator = creator
         if passphrase and len(passphrase) > 0:
             self.handle.passphrase = passphrase
-        self.handle.put(use_cache=False)
+        self.handle.put()
         return True
 
     def create(self, actor_id=None, creator=None,
@@ -95,7 +95,7 @@ class DbActor():
         if not self.handle:
             logging.debug("Attempted delete of DbActor without db handle")
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 

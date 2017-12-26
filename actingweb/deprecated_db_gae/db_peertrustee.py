@@ -35,7 +35,7 @@ class DbPeerTrustee():
             return None
         if not self.handle and peerid:
             self.handle = PeerTrustee.query(PeerTrustee.id == actor_id,
-                                            PeerTrustee.peerid == peerid).get(use_cache=False)
+                                            PeerTrustee.peerid == peerid).get()
         elif not self.handle and type:
             self.handle = PeerTrustee.query(PeerTrustee.id == actor_id,
                                             PeerTrustee.type == type).fetch(use_cache=False)
@@ -95,14 +95,14 @@ class DbPeerTrustee():
             self.handle.passphrase = passphrase
         if type and len(type) > 0:
             self.handle.type = type
-        self.handle.put(use_cache=False)
+        self.handle.put()
         return True
 
     def delete(self):
         """ Deletes the peertrustee in the database after a get() """
         if not self.handle:
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -142,8 +142,8 @@ class DbPeerTrusteeList():
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
-        self.handle = None
+            p.key.delete()
+            self.handle = None
         return True
 
     def __init__(self):

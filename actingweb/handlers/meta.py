@@ -24,7 +24,7 @@ class MetaHandler(base_handler.BaseHandler):
         if not path:
             values = {
                 'id': actor_id,
-                'type': self.config.type,
+                'type': self.config.aw_type,
                 'version': self.config.version,
                 'desc': self.config.desc,
                 'info': self.config.info,

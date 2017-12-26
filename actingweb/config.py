@@ -31,7 +31,7 @@ class Config:
         #########
         # Configurable ActingWeb settings for this app
         #########
-        self.type = "urn:actingweb:actingweb.org:gae-demo"  # The app type this actor implements
+        self.aw_type = "urn:actingweb:actingweb.org:gae-demo"  # The app type this actor implements
         self.desc = "GAE Demo actor: "                      # A human-readable description for this specific actor
         self.specification = ""                             # URL to a RAML/Swagger etc definition if available
         self.version = "1.0"                                # A version number for this app
@@ -70,8 +70,8 @@ class Config:
                     self.logLevel = logging.WARN
                 elif v == "INFO":
                     self.logLevel = logging.INFO
-            elif k == "type":
-                self.type = v
+            elif k == "aw_type":
+                self.aw_type = v
             elif k == "desc":
                 self.desc = v
             elif k == "specification":

@@ -163,7 +163,7 @@ class Config:
         if 'myself' not in self.actors:
             # Add myself as a known type
             self.actors['myself'] = {
-                'type': self.type,
+                'type': self.aw_type,
                 'factory': self.proto + self.fqdn + '/',
                 'relationship': 'friend',  # associate, friend, partner, admin
             }

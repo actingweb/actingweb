@@ -5,7 +5,7 @@ import importlib
 import os
 
 
-class config():
+class Config:
 
     def __init__(self, **kwargs):
         #########
@@ -16,16 +16,22 @@ class config():
         self.proto = "https://"  # http or https
         self.env = ''
         self.database = 'dynamodb'
-        self.ui = True                                      # Turn on the /www path
-        self.devtest = True                                 # Enable /devtest path for test purposes, MUST be False in production
-        self.unique_creator = False                          # Will enforce unique creator field across all actors
-        self.force_email_prop_as_creator = True             # Use "email" property to set creator value (after creation and property set)
-        self.www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
-        self.logLevel = logging.DEBUG                       # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
+        # Turn on the /www path
+        self.ui = True
+        # Enable /devtest path for test purposes, MUST be False in production
+        self.devtest = True
+        # Will enforce unique creator field across all actors
+        self.unique_creator = False
+        # Use "email" property to set creator value (after creation and property set)
+        self.force_email_prop_as_creator = True
+        # basic or oauth: basic for creator + bearer tokens
+        self.www_auth = "basic"
+        self.logLevel = logging.DEBUG
+        # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
         #########
         # Configurable ActingWeb settings for this app
         #########
-        self.type = "urn:actingweb:actingweb.org:gae-demo"  # The app type this actor implements
+        self.aw_type = "urn:actingweb:actingweb.org:gae-demo"  # The app type this actor implements
         self.desc = "GAE Demo actor: "                      # A human-readable description for this specific actor
         self.specification = ""                             # URL to a RAML/Swagger etc definition if available
         self.version = "1.0"                                # A version number for this app
@@ -36,7 +42,7 @@ class config():
         self.default_relationship = "associate"  # Default relationship if not specified
         self.auto_accept_default_relationship = False  # True if auto-approval
         # Pick up the config variables
-        for k,v in kwargs.iteritems():
+        for k, v in kwargs.iteritems():
             if k == 'database':
                 self.database = v
                 if v == 'gae':
@@ -64,8 +70,8 @@ class config():
                     self.logLevel = logging.WARN
                 elif v == "INFO":
                     self.logLevel = logging.INFO
-            elif k == "type":
-                self.type = v
+            elif k == "aw_type":
+                self.aw_type = v
             elif k == "desc":
                 self.desc = v
             elif k == "specification":
@@ -145,7 +151,7 @@ class config():
             ('admin', '/', '', 'a'),
         ]
         # Pick up the more complex config variables
-        for k,v in kwargs.iteritems():
+        for k, v in kwargs.iteritems():
             if k == 'actors':
                 self.actors = v
             elif k == 'oauth':
@@ -157,18 +163,18 @@ class config():
         if 'myself' not in self.actors:
             # Add myself as a known type
             self.actors['myself'] = {
-                'type': self.type,
+                'type': self.aw_type,
                 'factory': self.proto + self.fqdn + '/',
                 'relationship': 'friend',  # associate, friend, partner, admin
             }
         # Dynamically load all the database modules
-        self.db_actor = importlib.import_module(".db_actor", "actingweb" + ".db_" + self.database)
-        self.db_peertrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + self.database)
-        self.db_property = importlib.import_module(".db_property", "actingweb" + ".db_" + self.database)
-        self.db_attribute = importlib.import_module(".db_attribute", "actingweb" + ".db_" + self.database)
-        self.db_subscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + self.database)
-        self.db_subscription_diff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + self.database)
-        self.db_trust = importlib.import_module(".db_trust", "actingweb" + ".db_" + self.database)
+        self.DbActor = importlib.import_module(".db_actor", "actingweb" + ".db_" + self.database)
+        self.DbPeerTrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + self.database)
+        self.DbProperty = importlib.import_module(".db_property", "actingweb" + ".db_" + self.database)
+        self.DbAttribute = importlib.import_module(".db_attribute", "actingweb" + ".db_" + self.database)
+        self.DbSubscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + self.database)
+        self.DbSubscriptionDiff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + self.database)
+        self.DbTrust = importlib.import_module(".db_trust", "actingweb" + ".db_" + self.database)
         self.module = {}
         if self.env == 'appengine':
             self.module["deferred"] = importlib.import_module(".deferred", "google.appengine.api")
@@ -202,9 +208,10 @@ class config():
         self.root = self.proto + self.fqdn + "/"            # root URI used to identity actor externally
         self.auth_realm = self.fqdn                         # Authentication realm used in Basic auth
 
-    def newUUID(self, seed):
+    @staticmethod
+    def new_uuid(seed):
         return uuid.uuid5(uuid.NAMESPACE_URL, seed).get_hex()
 
-    def newToken(self, length=40):
+    @staticmethod
+    def new_token(length=40):
         return binascii.hexlify(os.urandom(int(length // 2)))
-

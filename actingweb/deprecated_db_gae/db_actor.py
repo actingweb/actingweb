@@ -2,13 +2,13 @@ from google.appengine.ext import ndb
 import logging
 
 """
-    db_actor handles all db operations for an actor
+    DbActor handles all db operations for an actor
     Google datastore for google is used as a backend.
 """
 
 __all__ = [
-    'db_actor',
-    'db_actor_list',
+    'DbActor',
+    'DbActorList',
 ]
 
 
@@ -21,17 +21,17 @@ class Actor(ndb.Model):
     passphrase = ndb.StringProperty()
 
 
-class db_actor():
+class DbActor():
     """
-        db_actor does all the db operations for actor objects
+        DbActor does all the db operations for actor objects
 
     """
 
-    def get(self,  actorId=None):
+    def get(self,  actor_id=None):
         """ Retrieves the actor from the database """
-        if not actorId:
+        if not actor_id:
             return None
-        self.handle = Actor.query(Actor.id == actorId).get(use_cache=False)
+        self.handle = Actor.query(Actor.id == actor_id).get()
         if self.handle:
             t = self.handle
             return {
@@ -42,7 +42,7 @@ class db_actor():
         else:
             return None
 
-    def getByCreator(self, creator=None):
+    def get_by_creator(self, creator=None):
         """ Retrieves the actor from db based on creator field
 
             Returns None if none was found. If one is found, that one is
@@ -55,36 +55,36 @@ class db_actor():
             return None
         ret = []
         if len(self.handle) == 1:
-            ret.append(self.get(actorId=self.handle[0].id))
+            ret.append(self.get())
             return ret
         logging.warn("Found multiple actors with creator(" + creator + "):")
         for c in self.handle:
             logging.warn("    id (" + c.id + ")")
-            ret.append(self.get(actorId=c.id))
+            ret.append(self.get())
         return ret
 
     def modify(self, creator=None, passphrase=None):
         """ Modify an actor """
         if not self.handle:
-            logging.debug("Attempted modification of db_actor without db handle")
+            logging.debug("Attempted modification of DbActor without db handle")
             return False
         if creator and len(creator) > 0:
             self.handle.creator = creator
         if passphrase and len(passphrase) > 0:
             self.handle.passphrase = passphrase
-        self.handle.put(use_cache=False)
+        self.handle.put()
         return True
 
-    def create(self, actorId=None, creator=None,
+    def create(self, actor_id=None, creator=None,
                passphrase=None):
         """ Create a new actor """
-        if not actorId:
+        if not actor_id:
             return False
         if not creator:
             creator = ''
         if not passphrase:
             passphrase = ''
-        self.handle = Actor(id=actorId,
+        self.handle = Actor(id=actor_id,
                             creator=creator,
                             passphrase=passphrase)
         self.handle.put(use_cache=False)
@@ -93,9 +93,9 @@ class db_actor():
     def delete(self):
         """ Deletes the actor in the database """
         if not self.handle:
-            logging.debug("Attempted delete of db_actor without db handle")
+            logging.debug("Attempted delete of DbActor without db handle")
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -103,9 +103,9 @@ class db_actor():
         self.handle = None
 
 
-class db_actor_list():
+class DbActorList():
     """
-        db_actor_list does all the db operations for list of actor objects
+        DbActorList does all the db operations for list of actor objects
     """
 
     def fetch(self):

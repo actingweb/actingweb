@@ -3,7 +3,8 @@ import json
 from actingweb import actor
 from actingweb.handlers import base_handler
 
-class root_factory_handler(base_handler.base_handler):
+
+class RootFactoryHandler(base_handler.BaseHandler):
 
     def get(self):
         if self.request.get('_method') == 'POST':
@@ -16,7 +17,7 @@ class root_factory_handler(base_handler.base_handler):
             self.response.set_status(404)
 
     def post(self):
-        myself = actor.actor(config=self.config)
+        myself = actor.Actor(config=self.config)
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
             is_json = True
@@ -39,11 +40,11 @@ class root_factory_handler(base_handler.base_handler):
             passphrase = self.request.get('passphrase')
         if not myself.create(url=self.request.url, creator=creator, passphrase=passphrase):
             self.response.set_status(400, 'Not created')
-            logging.warn("Was not able to create new actor("+str(self.request.url) + " " +
+            logging.warn("Was not able to create new Actor("+str(self.request.url) + " " +
                          str(creator) + ")")
             return
         if len(trustee_root) > 0:
-            myself.setProperty('trustee_root', trustee_root)
+            myself.set_property('trustee_root', trustee_root)
         self.response.headers["Location"] = str(self.config.root + myself.id)
         if self.config.www_auth == 'oauth' and not is_json:
             self.response.set_redirect(self.config.root + myself.id + '/www')
@@ -62,4 +63,3 @@ class root_factory_handler(base_handler.base_handler):
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(201, 'Created')
-

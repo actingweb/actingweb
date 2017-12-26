@@ -5,7 +5,7 @@ from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
 import logging
 
 """
-    db_actor handles all db operations for an actor
+    DbActor handles all db operations for an actor
     Google datastore for google is used as a backend.
 """
 
@@ -40,18 +40,18 @@ class Actor(Model):
     creator_index = CreatorIndex()
 
 
-class db_actor():
+class DbActor:
     """
-        db_actor does all the db operations for actor objects
+        DbActor does all the db operations for actor objects
 
     """
 
-    def get(self,  actorId=None):
+    def get(self,  actor_id=None):
         """ Retrieves the actor from the database """
-        if not actorId:
+        if not actor_id:
             return None
         try:
-            self.handle = Actor.get(actorId, consistent_read=True)
+            self.handle = Actor.get(actor_id, consistent_read=True)
         except Actor.DoesNotExist:
             return None
         if self.handle:
@@ -64,7 +64,7 @@ class db_actor():
         else:
             return None
 
-    def getByCreator(self, creator=None):
+    def get_by_creator(self, creator=None):
         """ Retrieves the actor from db based on creator field
 
             Returns None if none was found. If one is found, that one is
@@ -76,13 +76,13 @@ class db_actor():
         ret = []
         for c in self.handle:
             logging.warn("    id (" + c.id + ")")
-            ret.append(self.get(actorId=c.id))
+            ret.append(self.get(actor_id=c.id))
         return ret
 
     def modify(self, creator=None, passphrase=None):
         """ Modify an actor """
         if not self.handle:
-            logging.debug("Attempted modification of db_actor without db handle")
+            logging.debug("Attempted modification of DbActor without db handle")
             return False
         if creator and len(creator) > 0:
             self.handle.creator = creator
@@ -91,19 +91,19 @@ class db_actor():
         self.handle.save()
         return True
 
-    def create(self, actorId=None, creator=None,
+    def create(self, actor_id=None, creator=None,
                passphrase=None):
         """ Create a new actor """
-        if not actorId:
+        if not actor_id:
             return False
         if not creator:
             creator = ''
         if not passphrase:
             passphrase = ''
-        if self.get(actorId=actorId):
-            logging.warn("Trying to create actor that exists(" + actorId + ")")
+        if self.get(actor_id=actor_id):
+            logging.warn("Trying to create actor that exists(" + actor_id + ")")
             return False
-        self.handle = Actor(id=actorId,
+        self.handle = Actor(id=actor_id,
                             creator=creator,
                             passphrase=passphrase)
         self.handle.save()
@@ -112,7 +112,7 @@ class db_actor():
     def delete(self):
         """ Deletes the actor in the database """
         if not self.handle:
-            logging.debug("Attempted delete of db_actor without db handle")
+            logging.debug("Attempted delete of DbActor without db handle")
             return False
         self.handle.delete()
         self.handle = None
@@ -124,9 +124,9 @@ class db_actor():
             Actor.create_table(wait=True)
 
 
-class db_actor_list():
+class DbActorList:
     """
-        db_actor_list does all the db operations for list of actor objects
+        DbActorList does all the db operations for list of actor objects
     """
 
     def fetch(self):

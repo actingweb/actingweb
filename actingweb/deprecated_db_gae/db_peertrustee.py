@@ -1,13 +1,13 @@
 from google.appengine.ext import ndb
 
 """
-    db_peertrustee handles all db operations for a peer we are a trustee for.
+    DbPeerTrustee handles all db operations for a peer we are a trustee for.
     Google datastore for google is used as a backend.
 """
 
 __all__ = [
-    'db_peertrustee',
-    'db_peertrustee_list',
+    'DbPeerTrustee',
+    'DbPeerTrusteeList',
 ]
 
 
@@ -19,25 +19,25 @@ class PeerTrustee(ndb.Model):
     passphrase = ndb.StringProperty(required=True)
 
 
-class db_peertrustee():
+class DbPeerTrustee():
     """
-        db_peertrustee does all the db operations for property objects
+        DbPeerTrustee does all the db operations for property objects
 
-        The actorId must always be set.
+        The actor_id must always be set.
     """
 
-    def get(self,  actorId=None, type=None, peerid=None):
+    def get(self,  actor_id=None, type=None, peerid=None):
         """ Retrieves the peertrustee from the database """
-        if not actorId:
+        if not actor_id:
             return None
         if not peerid and not type:
-            logging.debug("Attempt to get db_peertrustee without peerid or type")
+            logging.debug("Attempt to get DbPeerTrustee without peerid or type")
             return None
         if not self.handle and peerid:
-            self.handle = PeerTrustee.query(PeerTrustee.id == actorId,
-                                            PeerTrustee.peerid == peerid).get(use_cache=False)
+            self.handle = PeerTrustee.query(PeerTrustee.id == actor_id,
+                                            PeerTrustee.peerid == peerid).get()
         elif not self.handle and type:
-            self.handle = PeerTrustee.query(PeerTrustee.id == actorId,
+            self.handle = PeerTrustee.query(PeerTrustee.id == actor_id,
                                             PeerTrustee.type == type).fetch(use_cache=False)
             if len(self.handle) > 1:
                 logging.error('Found more than one peer of this peer trustee type(' + 
@@ -57,20 +57,20 @@ class db_peertrustee():
         else:
             return None
 
-    def create(self, actorId=None,
+    def create(self, actor_id=None,
                peerid=None,
                type=None,
                baseuri=None,
                passphrase=None):
         """ Create a new peertrustee """
-        if not actorId or not peerid or not type:
-            logging.debug("actorId, peerid, and type are mandatory when creating peertrustee in db")
+        if not actor_id or not peerid or not type:
+            logging.debug("actor_id, peerid, and type are mandatory when creating peertrustee in db")
             return False
         if not baseuri:
             baseuri = ''
         if not passphrase:
             passphrase = ''
-        self.handle = PeerTrustee(id=actorId,
+        self.handle = PeerTrustee(id=actor_id,
                                   peerid=peerid,
                                   type=type,
                                   baseuri=baseuri,
@@ -87,7 +87,7 @@ class db_peertrustee():
             If bools are none, they will not be changed.
         """
         if not self.handle:
-            logging.debug("Attempted modification of db_peertrustee without db handle")
+            logging.debug("Attempted modification of DbPeerTrustee without db handle")
             return False
         if baseuri and len(baseuri) > 0:
             self.handle.baseuri = baseuri
@@ -95,14 +95,14 @@ class db_peertrustee():
             self.handle.passphrase = passphrase
         if type and len(type) > 0:
             self.handle.type = type
-        self.handle.put(use_cache=False)
+        self.handle.put()
         return True
 
     def delete(self):
         """ Deletes the peertrustee in the database after a get() """
         if not self.handle:
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -110,18 +110,18 @@ class db_peertrustee():
         self.handle = None
 
 
-class db_peertrustee_list():
+class DbPeerTrusteeList():
     """
-        db_peertrustee_list does all the db operations for list of peertrustee objects
+        DbPeerTrusteeList does all the db operations for list of peertrustee objects
 
-        The  actorId must always be set.
+        The  actor_id must always be set.
     """
 
-    def fetch(self,  actorId=None):
-        """ Retrieves the peer trustees of an actorId from the database """
-        if not actorId:
+    def fetch(self,  actor_id=None):
+        """ Retrieves the peer trustees of an actor_id from the database """
+        if not actor_id:
             return None
-        self.handle = PeerTrustee.query(PeerTrustee.id == actorId).fetch(use_cache=False)
+        self.handle = PeerTrustee.query(PeerTrustee.id == actor_id).fetch(use_cache=False)
         self.peertrustees = []
         if self.handle:
             for t in self.handle:
@@ -142,8 +142,8 @@ class db_peertrustee_list():
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
-        self.handle = None
+            p.key.delete()
+            self.handle = None
         return True
 
     def __init__(self):

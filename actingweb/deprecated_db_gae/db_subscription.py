@@ -2,15 +2,15 @@ from google.appengine.ext import ndb
 import logging
 
 """
-    db_subscription handles all db operations for a subscription
+    DbSubscription handles all db operations for a subscription
 
-    db_subscription_list handles list of subscriptions
+    DbSubscriptionList handles list of subscriptions
     Google datastore for google is used as a backend.
 """
 
 __all__ = [
-    'db_subscription',
-    'db_subscription_list',
+    'DbSubscription',
+    'DbSubscriptionList',
 ]
 
 
@@ -26,24 +26,24 @@ class Subscription(ndb.Model):
     callback = ndb.BooleanProperty()
 
 
-class db_subscription():
+class DbSubscription():
     """
-        db_subscription does all the db operations for subscription objects
+        DbSubscription does all the db operations for subscription objects
 
-        The  actorId must always be set.
+        The  actor_id must always be set.
     """
 
-    def get(self,  actorId=None, peerid=None, subid=None):
+    def get(self,  actor_id=None, peerid=None, subid=None):
         """ Retrieves the subscription from the database """
-        if not actorId:
+        if not actor_id:
             return None
         if not peerid or not subid:
             logging.debug("Attempt to get subscription without peerid or subid")
             return None
         if not self.handle:
-            self.handle = Subscription.query(Subscription.id == actorId,
+            self.handle = Subscription.query(Subscription.id == actor_id,
                                              Subscription.peerid == peerid,
-                                             Subscription.subid == subid).get(use_cache=False)
+                                             Subscription.subid == subid).get()
         if self.handle:
             t = self.handle
             return {
@@ -60,7 +60,7 @@ class db_subscription():
         else:
             return None
 
-    def modify(self, actorId=None,
+    def modify(self, actor_id=None,
                peerid=None,
                subid=None,
                granularity=None,
@@ -74,7 +74,7 @@ class db_subscription():
             If bools are none, they will not be changed.
         """
         if not self.handle:
-            logging.debug("Attempted modification of db_subscription without db handle")
+            logging.debug("Attempted modification of DbSubscription without db handle")
             return False
         if peerid and len(peerid) > 0:
             self.handle.peerid = peerid
@@ -92,10 +92,10 @@ class db_subscription():
             self.handle.resource = resource
         if seqnr:
             self.handle.seqnr = seqnr
-        self.handle.put(use_cache=False)
+        self.handle.put()
         return True
 
-    def create(self, actorId=None,
+    def create(self, actor_id=None,
                peerid=None,
                subid=None,
                granularity=None,
@@ -105,7 +105,7 @@ class db_subscription():
                seqnr=None,
                callback=None):
         """ Create a new subscription """
-        if not actorId or not peerid or not subid:
+        if not actor_id or not peerid or not subid:
             return False
         if not granularity:
             granularity = ''
@@ -119,7 +119,7 @@ class db_subscription():
             seqnr = 1
         if not callback:
             callback = False
-        self.handle = Subscription(id=actorId,
+        self.handle = Subscription(id=actor_id,
                                    peerid=peerid,
                                    subid=subid,
                                    granularity=granularity,
@@ -134,9 +134,9 @@ class db_subscription():
     def delete(self):
         """ Deletes the subscription in the database """
         if not self.handle:
-            logging.debug("Attempted delete of db_subscription with no handle set.")
+            logging.debug("Attempted delete of DbSubscription with no handle set.")
             return False
-        self.handle.key.delete(use_cache=False)
+        self.handle.key.delete()
         self.handle = None
         return True
 
@@ -144,18 +144,18 @@ class db_subscription():
         self.handle = None
 
 
-class db_subscription_list():
+class DbSubscriptionList():
     """
-        db_trust_list does all the db operations for list of trust objects
+        DbTrustList does all the db operations for list of trust objects
 
-        The  actorId must always be set.
+        The  actor_id must always be set.
     """
 
-    def fetch(self, actorId):
-        """ Retrieves the subscriptions of an actorId from the database as an array"""
-        if not actorId:
+    def fetch(self, actor_id):
+        """ Retrieves the subscriptions of an actor_id from the database as an array"""
+        if not actor_id:
             return None
-        self.handle = Subscription.query(Subscription.id == actorId).fetch(use_cache=False)
+        self.handle = Subscription.query(Subscription.id == actor_id).fetch(use_cache=False)
         self.subscriptions = []
         if self.handle:
             for t in self.handle:
@@ -180,8 +180,8 @@ class db_subscription_list():
         if not self.handle:
             return False
         for p in self.handle:
-            p.key.delete(use_cache=False)
-        self.handle = None
+            p.key.delete()
+            self.handle = None
         return True
 
     def __init__(self):

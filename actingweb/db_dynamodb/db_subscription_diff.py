@@ -6,9 +6,9 @@ from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute, NumberAttribute, UTCDateTimeAttribute
 
 """
-    db_subscription_diff handles all db operations for a subscription diff
+    DbSubscriptionDiff handles all db operations for a subscription diff
 
-    db_subscription_diff_list handles list of subscriptions diffs
+    DbSubscriptionDiffList handles list of subscriptions diffs
     Google datastore for google is used as a backend.
 """
 
@@ -24,21 +24,21 @@ class SubscriptionDiff(Model):
     id = UnicodeAttribute(hash_key=True)
     subid_seqnr = UnicodeAttribute(range_key=True)
     subid = UnicodeAttribute()
-    timestamp = UTCDateTimeAttribute(default=datetime.datetime.now())
+    timestamp = UTCDateTimeAttribute(default=datetime.datetime.utcnow())
     diff = UnicodeAttribute()
     seqnr = NumberAttribute(default=1)
 
 
-class db_subscription_diff():
+class DbSubscriptionDiff:
     """
-        db_subscription_diff does all the db operations for subscription diff objects
+        DbSubscriptionDiff does all the db operations for subscription diff objects
 
-        The  actorId must always be set.
+        The  actor_id must always be set.
     """
 
-    def get(self,  actorId=None, subid=None, seqnr=None):
+    def get(self,  actor_id=None, subid=None, seqnr=None):
         """ Retrieves the subscriptiondiff from the database """
-        if not actorId and not self.handle:
+        if not actor_id and not self.handle:
             return None
         if not subid and not self.handle:
             logging.debug("Attempt to get subscriptiondiff without subid")
@@ -46,7 +46,7 @@ class db_subscription_diff():
         if not self.handle:
             if not seqnr:
                 query = SubscriptionDiff.query(
-                    actorId,
+                    actor_id,
                     SubscriptionDiff.subid_seqnr.startswith(subid),
                     consistent_read=True)
                 # Find the record with lowest seqnr
@@ -58,7 +58,7 @@ class db_subscription_diff():
                         self.handle = t
             else:
                 self.handle = SubscriptionDiff.get(
-                    actorId,
+                    actor_id,
                     subid + ":" + unicode(str(seqnr), encoding='UTF-8'),
                     consistent_read=True)
         if self.handle:
@@ -73,15 +73,15 @@ class db_subscription_diff():
         else:
             return None
 
-    def create(self, actorId=None,
+    def create(self, actor_id=None,
                subid=None,
                diff='',
                seqnr=1):
         """ Create a new subscription diff """
-        if not actorId or not subid:
+        if not actor_id or not subid:
             logging.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
-        self.handle = SubscriptionDiff(id=actorId,
+        self.handle = SubscriptionDiff(id=actor_id,
                                        subid_seqnr=subid + ":" + unicode(str(seqnr), encoding='UTF-8'),
                                        subid=subid,
                                        diff=diff,
@@ -103,33 +103,32 @@ class db_subscription_diff():
             SubscriptionDiff.create_table(wait=True)
 
 
-class db_subscription_diff_list():
+class DbSubscriptionDiffList:
     """
-        db_subscription_diff_list does all the db operations for list of diff objects
+        DbSubscriptionDiffList does all the db operations for list of diff objects
 
-        The actorId must always be set. 
+        The actor_id must always be set. 
     """
 
-    def fetch(self, actorId=None, subid=None):
-        """ Retrieves the subscription diffs of an actorId from the database as an array"""
-        if not actorId:
+    def fetch(self, actor_id=None, subid=None):
+        """ Retrieves the subscription diffs of an actor_id from the database as an array"""
+        if not actor_id:
             return None
-        self.actorId = actorId
+        self.actor_id = actor_id
         self.subid = subid
         if not subid:
             self.handle = SubscriptionDiff.query(
-                actorId,
+                actor_id,
                 consistent_read=True)
         else:
             self.handle = SubscriptionDiff.query(
-                actorId,
+                actor_id,
                 SubscriptionDiff.subid.startswith(subid),
                 consistent_read=True)
         self.diffs = []
         if self.handle:
             for t in self.handle:
-                self.diffs.append(
-                {
+                self.diffs.append({
                     "id": t.id,
                     "subscriptionid": t.subid,
                     "timestamp": t.timestamp,
@@ -152,11 +151,11 @@ class db_subscription_diff_list():
             seqnr = 0
         if not self.subid:
             self.handle = SubscriptionDiff.query(
-                self.actorId,
+                self.actor_id,
                 consistent_read=True)
         else:
             self.handle = SubscriptionDiff.query(
-                self.actorId,
+                self.actor_id,
                 SubscriptionDiff.subid.startswith(self.subid),
                 consistent_read=True)
         for p in self.handle:
@@ -168,7 +167,7 @@ class db_subscription_diff_list():
     def __init__(self):
         self.handle = None
         self.diffs = []
-        self.actorId = None
+        self.actor_id = None
         self.subid = None
         if not SubscriptionDiff.exists():
             SubscriptionDiff.create_table(wait=True)

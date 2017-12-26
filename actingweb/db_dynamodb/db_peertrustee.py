@@ -1,11 +1,13 @@
 import os
+import logging
 from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute
 
 """
-    db_peertrustee handles all db operations for a peer we are a trustee for.
+    DbPeerTrustee handles all db operations for a peer we are a trustee for.
     Google datastore for google is used as a backend.
 """
+
 
 class PeerTrustee(Model):
 
@@ -23,29 +25,29 @@ class PeerTrustee(Model):
     passphrase = UnicodeAttribute()
 
 
-class db_peertrustee():
+class DbPeerTrustee:
     """
-        db_peertrustee does all the db operations for property objects
+        DbPeerTrustee does all the db operations for property objects
 
-        The actorId must always be set.
+        The actor_id must always be set.
     """
 
-    def get(self,  actorId=None, type=None, peerid=None):
+    def get(self,  actor_id=None, peer_type=None, peerid=None):
         """ Retrieves the peertrustee from the database """
-        if not actorId:
+        if not actor_id:
             return None
-        if not peerid and not type:
-            logging.debug("Attempt to get db_peertrustee without peerid or type")
+        if not peerid and not peer_type:
+            logging.debug("Attempt to get DbPeerTrustee without peerid or type")
             return None
         try:
             if not self.handle and peerid:
-                self.handle = PeerTrustee.get(actorId, peerid, consistent_read=True)
-            elif not self.handle and type:
-                if PeerTrustee.count(actorId, PeerTrustee.type == type) > 1:
+                self.handle = PeerTrustee.get(actor_id, peerid, consistent_read=True)
+            elif not self.handle and peer_type:
+                if PeerTrustee.count(actor_id, PeerTrustee.type == peer_type) > 1:
                     logging.error('Found more than one peer of this peer trustee type(' +
-                                  shorttype + '). Unable to determine which, need peerid lookup.')
+                                  peer_type + '). Unable to determine which, need peerid lookup.')
                     return False
-                for h in PeerTrustee.query(actorId, PeerTrustee.type == type):
+                for h in PeerTrustee.query(actor_id, PeerTrustee.type == peer_type):
                     self.handle = h
         except PeerTrustee.DoesNotExist:
             self.handle = None
@@ -61,29 +63,29 @@ class db_peertrustee():
         else:
             return None
 
-    def create(self, actorId=None,
+    def create(self, actor_id=None,
                peerid=None,
-               type=None,
+               peer_type=None,
                baseuri=None,
                passphrase=None):
         """ Create a new peertrustee """
-        if not actorId or not peerid or not type:
-            logging.debug("actorId, peerid, and type are mandatory when creating peertrustee in db")
+        if not actor_id or not peerid or not peer_type:
+            logging.debug("actor_id, peerid, and type are mandatory when creating peertrustee in db")
             return False
         if not baseuri:
             baseuri = ''
         if not passphrase:
             passphrase = ''
-        self.handle = PeerTrustee(id=actorId,
+        self.handle = PeerTrustee(id=actor_id,
                                   peerid=peerid,
-                                  type=type,
+                                  type=peer_type,
                                   baseuri=baseuri,
                                   passphrase=passphrase)
         self.handle.save()
         return True
 
     def modify(self,
-               type=None,
+               peer_type=None,
                baseuri=None,
                passphrase=None):
         """ Modify a peertrustee
@@ -91,14 +93,14 @@ class db_peertrustee():
             If bools are none, they will not be changed.
         """
         if not self.handle:
-            logging.debug("Attempted modification of db_peertrustee without db handle")
+            logging.debug("Attempted modification of DbPeerTrustee without db handle")
             return False
         if baseuri and len(baseuri) > 0:
             self.handle.baseuri = baseuri
         if passphrase and len(passphrase) > 0:
             self.handle.passphrase = passphrase
-        if type and len(type) > 0:
-            self.handle.type = type
+        if type and len(peer_type) > 0:
+            self.handle.type = peer_type
         self.handle.save()
         return True
 
@@ -116,24 +118,23 @@ class db_peertrustee():
             PeerTrustee.create_table(wait=True)
 
 
-class db_peertrustee_list():
+class DbPeerTrusteeList:
     """
-        db_peertrustee_list does all the db operations for list of peertrustee objects
+        DbPeerTrusteeList does all the db operations for list of peertrustee objects
 
-        The  actorId must always be set.
+        The  actor_id must always be set.
     """
 
-    def fetch(self,  actorId=None):
-        """ Retrieves the peer trustees of an actorId from the database """
-        if not actorId:
+    def fetch(self,  actor_id=None):
+        """ Retrieves the peer trustees of an actor_id from the database """
+        if not actor_id:
             return None
-        self.actorId = actorId
+        self.actor_id = actor_id
         self.peertrustees = []
-        self.handle = PeerTrustee.scan(PeerTrustee.actorId == self.actorId)
+        self.handle = PeerTrustee.scan(PeerTrustee.actor_id == self.actor_id)
         if self.handle:
             for t in self.handle:
-                self.peertrustees.append(
-                {
+                self.peertrustees.append({
                   "id": t.id,
                   "peerid": t.peerid,
                   "baseuri": t.baseuri,
@@ -146,7 +147,7 @@ class db_peertrustee_list():
 
     def delete(self):
         """ Deletes all the peertrustees in the database """
-        self.handle = PeerTrustee.scan(PeerTrustee.actorId == self.actorId)
+        self.handle = PeerTrustee.scan(PeerTrustee.actor_id == self.actor_id)
         if not self.handle:
             return False
         for p in self.handle:
@@ -156,4 +157,5 @@ class db_peertrustee_list():
 
     def __init__(self):
         self.handle = None
-        self.actorId = None
+        self.actor_id = None
+        self.peertrustees = None

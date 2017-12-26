@@ -3,17 +3,18 @@ import json
 from actingweb import auth
 from actingweb.handlers import base_handler
 
-class resources_handler(base_handler.base_handler):
 
-    def get(self, id, name):
+class ResourcesHandler(base_handler.BaseHandler):
+
+    def get(self, actor_id, name):
         (myself, check) = auth.init_actingweb(appreq=self,
-                                              id=id,
+                                              actor_id=actor_id,
                                               path='resources',
                                               subpath=name,
                                               config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='resources', subpath=name, method='GET'):
+        if not check.check_authorisation(path='resources', subpath=name, method='GET'):
             self.response.set_status(403)
             return
         pair = self.on_aw.get_resources(name=name)
@@ -25,20 +26,20 @@ class resources_handler(base_handler.base_handler):
         else:
             self.response.set_status(404)
 
-    def delete(self, id, name):
+    def delete(self, actor_id, name):
         (myself, check) = auth.init_actingweb(appreq=self,
-                                              id=id,
+                                              actor_id=actor_id,
                                               path='resources',
                                               subpath=name,
                                               config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='resources', subpath=name, method='DELETE'):
+        if not check.check_authorisation(path='resources', subpath=name, method='DELETE'):
             self.response.set_status(403)
             return
         pair = self.on_aw.delete_resources(name=name)
         if pair:
-            if pair >= 100 and pair <= 999:
+            if 100 <= pair <= 999:
                 return
             if any(pair): 
                 out = json.dumps(pair)
@@ -48,25 +49,25 @@ class resources_handler(base_handler.base_handler):
         else:
             self.response.set_status(404)
 
-    def put(self, id, name):
+    def put(self, actor_id, name):
         (myself, check) = auth.init_actingweb(appreq=self,
-                                              id=id,
+                                              actor_id=actor_id,
                                               path='resources',
                                               subpath=name,
                                               config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='resources', subpath=name, method='PUT'):
+        if not check.check_authorisation(path='resources', subpath=name, method='PUT'):
             self.response.set_status(403)
             return
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
-        except:
+        except (TypeError, ValueError, KeyError):
             self.response.set_status(405, "Error in json body")
             return
         pair = self.on_aw.put_resources(name=name, params=params)
         if pair:
-            if pair >= 100 and pair <= 999:
+            if 100 <= pair <= 999:
                 return
             if any(pair):
                 out = json.dumps(pair)
@@ -76,25 +77,25 @@ class resources_handler(base_handler.base_handler):
         else:
             self.response.set_status(404)
 
-    def post(self, id, name):
+    def post(self, actor_id, name):
         (myself, check) = auth.init_actingweb(appreq=self,
-                                              id=id,
+                                              actor_id=actor_id,
                                               path='resources',
                                               subpath=name,
                                               config=self.config)
         if not myself or check.response["code"] != 200:
             return
-        if not check.checkAuthorisation(path='resources', subpath=name, method='POST'):
+        if not check.check_authorisation(path='resources', subpath=name, method='POST'):
             self.response.set_status(403)
             return
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
-        except:
+        except (TypeError, ValueError, KeyError):
             self.response.set_status(405, "Error in json body")
             return
         pair = self.on_aw.post_resources(name=name, params=params)
         if pair:
-            if pair >= 100 and pair <= 999:
+            if 100 <= pair <= 999:
                 return
             if any(pair):
                 out = json.dumps(pair)
@@ -103,4 +104,3 @@ class resources_handler(base_handler.base_handler):
                 self.response.set_status(201, 'Created')
         else:
             self.response.set_status(404)
-

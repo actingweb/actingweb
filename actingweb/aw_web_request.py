@@ -1,22 +1,22 @@
-class aw_request():
+class AWRequest:
 
     def get_header(self, header=''):
         header = header.lower()
-        for k,v in self.headers.iteritems():
+        for k, v in self.headers.iteritems():
             if header == k.lower():
                 return v
         return ''
 
     def get(self, var=''):
         var = var.lower()
-        for k,v in self.params.iteritems():
+        for k, v in self.params.iteritems():
             if var == k.lower():
                 return v
         return ''
 
     def arguments(self):
         ret = []
-        for k,v in self.params.iteritems():
+        for k, v in self.params.iteritems():
             ret.append(k)
         return ret
 
@@ -28,7 +28,7 @@ class aw_request():
         self.cookies = cookies
 
 
-class aw_response():
+class AWResponse:
 
     def set_status(self, code=200, message='Ok'):
         if not code or code < 100 or code > 599:
@@ -42,7 +42,7 @@ class aw_response():
         if not body:
             return False
         if encode:
-            self.body = out.encode('utf-8')
+            self.body = body.encode('utf-8')
         else:
             self.body = body
 
@@ -55,7 +55,6 @@ class aw_response():
             'secure': secure
         })
 
-
     def set_redirect(self, url):
         self.redirect = url
 
@@ -65,12 +64,12 @@ class aw_response():
         self.headers = {}
         self.body = ''
         self.redirect = None
-        self.cookies=[]
+        self.cookies = []
         self.template_values = {}
 
 
-class aw_webobj():
+class AWWebObj:
 
     def __init__(self, url=None, params=None, body=None, headers=None, cookies=None):
-        self.request = aw_request(url=url, params=params, body=body, headers=headers, cookies=cookies)
-        self.response = aw_response()
+        self.request = AWRequest(url=url, params=params, body=body, headers=headers, cookies=cookies)
+        self.response = AWResponse()

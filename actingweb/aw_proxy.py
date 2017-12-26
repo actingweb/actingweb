@@ -3,7 +3,8 @@ import json
 import trust
 import logging
 
-class aw_proxy():
+
+class AwProxy:
     """ Proxy to other trust peers to execute RPC style calls
 
     Initialise with either trust_target to target a specific
@@ -23,14 +24,14 @@ class aw_proxy():
             self.actorid = peer_target["id"]
             self.trust = None
             if peer_target["peerid"]:
-                self.trust = trust.trust(
-                    actorId=self.actorid,
+                self.trust = trust.Trust(
+                    actor_id=self.actorid,
                     peerid=peer_target["peerid"],
                     config=self.config).get()
                 if not self.trust or len(self.trust) == 0:
                     self.trust = None
 
-    def getResource(self, path=None, params=None):
+    def get_resource(self, path=None, params=None):
         if not path or len(path) == 0:
             return None
         if not params:
@@ -58,7 +59,10 @@ class aw_proxy():
                     )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             logging.debug('Not able to get peer resource')
             self.last_response_code = 408
             return {
@@ -73,12 +77,12 @@ class aw_proxy():
             logging.info('Not able to get trust peer resource.')
         try:
             result = json.loads(response.content)
-        except:
+        except (TypeError, ValueError, KeyError):
             logging.debug("Not able to parse response when getting resource at(" + url + ")")
             result = {}
         return result
 
-    def createResource(self, path=None, params=None):
+    def create_resource(self, path=None, params=None):
         if not path or len(path) == 0:
             return None
         if not params:
@@ -109,7 +113,10 @@ class aw_proxy():
                     )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             logging.debug('Not able to create new peer resource')
             self.last_response_code = 408
             return {
@@ -128,12 +135,12 @@ class aw_proxy():
             logging.warn('Not able to create new trust peer resource.')
         try:
             result = json.loads(response.content)
-        except:
+        except (TypeError, ValueError, KeyError):
             logging.debug("Not able to parse response when creating resource at(" + url + ")")
             result = {}
         return result
 
-    def changeResource(self, path=None, params=None):
+    def change_resource(self, path=None, params=None):
         if not path or len(path) == 0:
             return None
         if not params:
@@ -164,7 +171,10 @@ class aw_proxy():
                 )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             logging.debug('Not able to change peer resource')
             self.last_response_code = 408
             return {
@@ -179,12 +189,12 @@ class aw_proxy():
             logging.warn('Not able to change trust peer resource.')
         try:
             result = json.loads(response.content)
-        except:
+        except (TypeError, ValueError, KeyError):
             logging.debug("Not able to parse response when changing resource at(" + url + ")")
             result = {}
         return result
 
-    def deleteResource(self, path=None):
+    def delete_resource(self, path=None):
         if not path or len(path) == 0:
             return None
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
@@ -208,7 +218,10 @@ class aw_proxy():
                     )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except:
+        except (self.config.module["urlfetch"].UrlfetchException,
+                self.config.module["urlfetch"].URLError,
+                self.config.module["urlfetch"].Timeout,
+                self.config.module["urlfetch"].TooManyRedirects):
             logging.debug('Not able to delete peer resource')
             self.last_response_code = 408
             return {

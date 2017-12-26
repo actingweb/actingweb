@@ -1,27 +1,28 @@
 import logging
 
-class peertrustee():
+
+class PeerTrustee:
 
     def get(self):
         if self.peertrustee and len(self.peertrustee) > 0:
             return self.peertrustee
-        self.peertrustee = self.handle.get(actorId=self.actorId,
+        self.peertrustee = self.handle.get(actor_id=self.actor_id,
                                            peerid=self.peerid,
-                                           type=self.type)
+                                           peer_type=self.peer_type)
         return self.peertrustee
 
     def create(self, baseuri=None, passphrase=None):
         if not self.handle:
-            self.handle = self.config.db_peertrustee.db_peertrustee()
-        if not self.actorId or not self.peerid:
-            logging.debug("Attempt to create new peer trustee without actorId or peerid set")
+            self.handle = self.config.DbPeerTrustee.DbPeerTrustee()
+        if not self.actor_id or not self.peerid:
+            logging.debug("Attempt to create new peer trustee without actor_id or peerid set")
             return False
-        if not self.type or len(self.type) == 0:
-            logging.debug("Attempt to create peer trustee without type set.")
+        if not self.peer_type or len(self.peer_type) == 0:
+            logging.debug("Attempt to create peer trustee without peer_type set.")
             return False
-        return self.handle.create(actorId=self.actorId,
+        return self.handle.create(actor_id=self.actor_id,
                                   peerid=self.peerid,
-                                  type=self.type,
+                                  peer_type=self.peer_type,
                                   baseuri=baseuri,
                                   passphrase=passphrase)
 
@@ -31,24 +32,25 @@ class peertrustee():
             return False
         return self.handle.delete()
 
-    def __init__(self, actorId=None, peerid=None, shorttype=None, type=None, config=None):
+    def __init__(self, actor_id=None, peerid=None, short_type=None, peer_type=None, config=None):
         self.config = config
-        self.handle = self.config.db_peertrustee.db_peertrustee()
+        self.handle = self.config.DbPeerTrustee.DbPeerTrustee()
         self.peertrustee = {}
-        self.type = None
-        if not actorId or len(actorId) == 0:
+        self.peer_type = None
+        if not actor_id or len(actor_id) == 0:
             logging.debug("No actorid set in initialisation of peertrust")
             return
-        if type:
-            self.type = type
-        elif not type and shorttype:
-            if not self.config.actors[shorttype]:
-                logging.error('Got request to initialise peer trustee with unknown shorttype(' + shorttype + ')')
+        if peer_type:
+            self.peer_type = peer_type
+        elif not peer_type and short_type:
+            if not self.config.actors[short_type]:
+                logging.error('Got request to initialise peer trustee with unknown shortpeer_type(' + peer_type +
+                              ')')
                 return
-            self.type = self.config.actors[shorttype]["type"]
+            self.peer_type = self.config.actors[short_type]["type"]
         elif not peerid:
-            logging.debug("Peerid and shorttype are not set in initialisation of peertrustee. One is required")
+            logging.debug("Peerid and short_type are not set in initialisation of peertrustee. One is required")
             return
-        self.actorId = actorId
+        self.actor_id = actor_id
         self.peerid = peerid
         self.get()

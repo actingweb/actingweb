@@ -42,7 +42,7 @@ class MetaHandler(base_handler.BaseHandler):
         elif path == 'id':
             out = actor_id
         elif path == 'type':
-            out = self.config.type
+            out = self.config.aw_type
         elif path == 'version':
             out = self.config.version
         elif path == 'desc':

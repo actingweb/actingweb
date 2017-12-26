@@ -89,7 +89,7 @@ class Actor:
             return
         self.get(actor_id=actor_id)
 
-    def create(self, url, creator, passphrase, delete=False):
+    def create(self, url, creator, passphrase, actor_id=None, delete=False):
         """"Creates a new actor and persists it.
 
             If delete is True, any existing actors with same creator value
@@ -133,7 +133,10 @@ class Actor:
             self.passphrase = passphrase
         else:
             self.passphrase = self.config.new_token()
-        self.id = self.config.new_uuid(seed)
+        if actor_id:
+            self.id = actor_id
+        else:
+            self.id = self.config.new_uuid(seed)
         if not self.handle:
             self.handle = self.config.DbActor.DbActor()
         self.handle.create(creator=self.creator,
@@ -523,7 +526,7 @@ class Actor:
         params = {
             'baseuri': self.config.root + self.id,
             'id': self.id,
-            'type': self.config.type,
+            'type': self.config.aw_type,
             'secret': secret,
             'desc': desc,
             'verify': new_trust["verification_token"],

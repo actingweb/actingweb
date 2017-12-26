@@ -4,10 +4,12 @@ CHANGELOG
 
 v2.3.0: ??
 ----------
+- Entire API for handlers and Actor() as well as other objects changed to be PEP8 compliant
 - Add support for head_request(() in oauth and oauth_head() in auth
 - Change all uses of now() to utcnow()
-- db_gae for Google AppEngine is not kept updated, so folder just kept for later reference
-- Full linting/PEP8 review with some of the external API methods changing name
+- db_gae for Google AppEngine is not kept updated, so folder deprecated and just kept for later reference
+- Full linting/PEP8 review
+- Add support for actor_id (set id) on Actor.create()
 
 v2.2.2: Dec 3, 2017
 -------------------

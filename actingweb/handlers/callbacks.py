@@ -102,4 +102,4 @@ class CallbacksHandler(base_handler.BaseHandler):
             self.response.set_status(403, 'Forbidden')
             return
         if not self.on_aw.post_callbacks(name=name):
-            self.response.set_status(403, 'Forbidden')
+            self.response.set_status(410, 'Gone')

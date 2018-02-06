@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v TBD: Feb 6, 2017
+---------------------
+- Replace 403 Forbidden response on False response from on_aw.post_callbacks() with 410 Gone
+
 v2.3.0: Dec 27, 2017
 --------------------
 - Entire API for handlers and Actor() as well as other objects changed to be PEP8 compliant

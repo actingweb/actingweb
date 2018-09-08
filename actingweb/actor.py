@@ -1,15 +1,18 @@
+from __future__ import absolute_import
+from builtins import str
+from builtins import object
 import datetime
 import base64
-import property
+from . import property
 import json
-import trust
-import subscription
+from . import trust
+from . import subscription
 import logging
-import peertrustee
-import attribute
+from . import peertrustee
+from . import attribute
 
 
-class Actor:
+class Actor(object):
 
     ###################
     # Basic operations
@@ -330,15 +333,15 @@ class Actor:
             try:
                 data = json.loads(response.content)
             except (TypeError, ValueError, KeyError):
-                logging.warn("Not able to parse response when creating peer at factory(" + 
-                             factory + ")")
+                logging.warning("Not able to parse response when creating peer at factory(" +
+                                factory + ")")
                 return None
             if 'Location' in response.headers:
                 baseuri = response.headers['Location']
             elif 'location' in response.headers:
                 baseuri = response.headers['location']
             else:
-                logging.warn("No location uri found in response when creating a peer as trustee")
+                logging.warning("No location uri found in response when creating a peer as trustee")
                 baseuri = ""
             res = self.get_peer_info(baseuri)
             if not res or res["last_response_code"] < 200 or res["last_response_code"] >= 300:
@@ -364,8 +367,8 @@ class Actor:
                         relationship=self.config.actors[shorttype]['relationship']
                         )
         if not new_trust or len(new_trust) == 0:
-            logging.warn("Not able to establish trust relationship with peer at factory(" +
-                         factory + ")")
+            logging.warning("Not able to establish trust relationship with peer at factory(" +
+                            factory + ")")
         else:
             # Approve the relationship
             params = {
@@ -517,8 +520,8 @@ class Actor:
         if not dbtrust.create(baseuri=url, secret=secret, peer_type=peer["type"],
                               relationship=relationship, approved=True,
                               verified=False, desc=desc):
-            logging.warn("Trying to establish a new Reciprocal trust when peer relationship already exists (" + 
-                         peer["id"] + ")")
+            logging.warning("Trying to establish a new Reciprocal trust when peer relationship already exists (" +
+                            peer["id"] + ")")
             return False
         # Since we are initiating the relationship, we implicitly approve it
         # It is not verified until the peer has verified us
@@ -838,7 +841,7 @@ class Actor:
 
     def callback_subscription(self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None):
         if not peerid or not diff or not sub or not blob:
-            logging.warn("Missing parameters in callbackSubscription")
+            logging.warning("Missing parameters in callbackSubscription")
             return
         if "granularity" in sub and sub["granularity"] == "none":
             return
@@ -899,7 +902,7 @@ class Actor:
         self.last_response_message = response.content
         if response.status_code == 204 and sub["granularity"] == "high":
             if not sub_obj:
-                logging.warn("About to clear diff without having subobj set")
+                logging.warning("About to clear diff without having subobj set")
             else:
                 sub_obj.clear_diff(diff["sequence"])
 
@@ -1018,8 +1021,8 @@ class Actor:
                 finblob = blob
             diff = sub_obj.add_diff(blob=finblob)
             if not diff:
-                logging.warn("Failed when registering a diff to subscription (" +
-                             sub["subscriptionid"] + "). Will not send callback.")
+                logging.warning("Failed when registering a diff to subscription (" +
+                                sub["subscriptionid"] + "). Will not send callback.")
             else:
                 if self.config.module["deferred"]:
                     self.config.module["deferred"].defer(self.callback_subscription, peerid=sub["peerid"],
@@ -1030,7 +1033,7 @@ class Actor:
                                                sub=sub_obj_data, diff=diff, blob=finblob)
 
 
-class Actors:
+class Actors(object):
     """ Handles all actors
     """
 

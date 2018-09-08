@@ -1,3 +1,4 @@
+from builtins import object
 import uuid
 import binascii
 import logging
@@ -5,7 +6,7 @@ import importlib
 import os
 
 
-class Config:
+class Config(object):
 
     def __init__(self, **kwargs):
         #########
@@ -42,7 +43,7 @@ class Config:
         self.default_relationship = "associate"  # Default relationship if not specified
         self.auto_accept_default_relationship = False  # True if auto-approval
         # Pick up the config variables
-        for k, v in kwargs.iteritems():
+        for k, v in kwargs.items():
             if k == 'database':
                 self.database = v
                 if v == 'gae':
@@ -151,7 +152,7 @@ class Config:
             ('admin', '/', '', 'a'),
         ]
         # Pick up the more complex config variables
-        for k, v in kwargs.iteritems():
+        for k, v in kwargs.items():
             if k == 'actors':
                 self.actors = v
             elif k == 'oauth':

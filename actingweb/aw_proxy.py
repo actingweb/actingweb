@@ -1,10 +1,17 @@
-import urllib
+from __future__ import absolute_import
+from builtins import str
+from builtins import object
+import urllib.request
+import urllib.parse
+import urllib.error
 import json
-import trust
+from . import trust
 import logging
+from future import standard_library
+standard_library.install_aliases()
 
 
-class AwProxy:
+class AwProxy(object):
     """ Proxy to other trust peers to execute RPC style calls
 
     Initialise with either trust_target to target a specific
@@ -40,7 +47,7 @@ class AwProxy:
             return None
         url = self.trust["baseuri"].strip('/') + '/' + path.strip('/')
         if params:
-            url = url + '?' + urllib.urlencode(params)
+            url = url + '?' + urllib.parse.urlencode(params)
         headers = {'Authorization': 'Bearer ' + self.trust["secret"],
                    }
         logging.debug(
@@ -132,7 +139,7 @@ class AwProxy:
         logging.debug('Create trust peer resource POST response:(' +
                       str(response.status_code) + ') ' + response.content)
         if response.status_code < 200 or response.status_code > 299:
-            logging.warn('Not able to create new trust peer resource.')
+            logging.warning('Not able to create new trust peer resource.')
         try:
             result = json.loads(response.content)
         except (TypeError, ValueError, KeyError):
@@ -186,7 +193,7 @@ class AwProxy:
         logging.debug('Change trust peer resource PUT response:(' +
                       str(response.status_code) + ') ' + response.content)
         if response.status_code < 200 or response.status_code > 299:
-            logging.warn('Not able to change trust peer resource.')
+            logging.warning('Not able to change trust peer resource.')
         try:
             result = json.loads(response.content)
         except (TypeError, ValueError, KeyError):
@@ -233,6 +240,6 @@ class AwProxy:
         logging.debug('Delete trust peer resource POST response:(' +
                       str(response.status_code) + ') ' + response.content)
         if response.status_code < 200 or response.status_code > 299:
-            logging.warn('Not able to delete trust peer resource.')
+            logging.warning('Not able to delete trust peer resource.')
             return False
         return True

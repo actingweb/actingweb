@@ -1,3 +1,4 @@
+from builtins import object
 from google.appengine.ext import ndb
 import logging
 
@@ -21,7 +22,7 @@ class Actor(ndb.Model):
     passphrase = ndb.StringProperty()
 
 
-class DbActor():
+class DbActor(object):
     """
         DbActor does all the db operations for actor objects
 
@@ -57,9 +58,9 @@ class DbActor():
         if len(self.handle) == 1:
             ret.append(self.get())
             return ret
-        logging.warn("Found multiple actors with creator(" + creator + "):")
+        logging.warning("Found multiple actors with creator(" + creator + "):")
         for c in self.handle:
-            logging.warn("    id (" + c.id + ")")
+            logging.warning("    id (" + c.id + ")")
             ret.append(self.get())
         return ret
 
@@ -103,7 +104,7 @@ class DbActor():
         self.handle = None
 
 
-class DbActorList():
+class DbActorList(object):
     """
         DbActorList does all the db operations for list of actor objects
     """

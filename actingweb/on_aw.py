@@ -1,9 +1,10 @@
+from builtins import object
 import logging
 import json
 
 
 # noinspection PyMethodMayBeStatic,PyUnusedLocal
-class OnAWBase:
+class OnAWBase(object):
 
     def __init__(self):
         self.config = None

@@ -1,3 +1,4 @@
+from builtins import str
 import json
 import logging
 from actingweb import auth
@@ -160,7 +161,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(400, 'No json body')
             return
         if peerid != check.acl["peerid"]:
-            logging.warn("Peer " + peerid +
+            logging.warning("Peer " + peerid +
                          " tried to create a subscription for peer " + check.acl["peerid"])
             self.response.set_status(403, 'Forbidden. Wrong peer id in request')
             return

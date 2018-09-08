@@ -1,3 +1,5 @@
+from builtins import str
+from builtins import object
 import logging
 import datetime
 import os
@@ -14,7 +16,7 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, UTCDateTimeAt
 
 
 class SubscriptionDiff(Model):
-    class Meta:
+    class Meta(object):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_subscriptiondiffs"
         read_capacity_units = 2
         write_capacity_units = 3
@@ -29,7 +31,7 @@ class SubscriptionDiff(Model):
     seqnr = NumberAttribute(default=1)
 
 
-class DbSubscriptionDiff:
+class DbSubscriptionDiff(object):
     """
         DbSubscriptionDiff does all the db operations for subscription diff objects
 
@@ -59,7 +61,7 @@ class DbSubscriptionDiff:
             else:
                 self.handle = SubscriptionDiff.get(
                     actor_id,
-                    subid + ":" + unicode(str(seqnr), encoding='UTF-8'),
+                    subid + ":" + str(str(seqnr), encoding='UTF-8'),
                     consistent_read=True)
         if self.handle:
             t = self.handle
@@ -82,7 +84,7 @@ class DbSubscriptionDiff:
             logging.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
         self.handle = SubscriptionDiff(id=actor_id,
-                                       subid_seqnr=subid + ":" + unicode(str(seqnr), encoding='UTF-8'),
+                                       subid_seqnr=subid + ":" + str(str(seqnr), encoding='UTF-8'),
                                        subid=subid,
                                        diff=diff,
                                        seqnr=seqnr)
@@ -103,7 +105,7 @@ class DbSubscriptionDiff:
             SubscriptionDiff.create_table(wait=True)
 
 
-class DbSubscriptionDiffList:
+class DbSubscriptionDiffList(object):
     """
         DbSubscriptionDiffList does all the db operations for list of diff objects
 

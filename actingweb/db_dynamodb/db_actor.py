@@ -88,7 +88,7 @@ class DbActor(object):
         if creator and len(creator) > 0:
             self.handle.creator = creator
         if passphrase and len(passphrase) > 0:
-            self.handle.passphrase = passphrase
+            self.handle.passphrase = passphrase.decode('utf-8')
         self.handle.save()
         return True
 
@@ -106,7 +106,7 @@ class DbActor(object):
             return False
         self.handle = Actor(id=actor_id,
                             creator=creator,
-                            passphrase=passphrase)
+                            passphrase=passphrase.decode('utf-8'))
         self.handle.save()
         return True
 

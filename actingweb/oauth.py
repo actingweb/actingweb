@@ -109,7 +109,7 @@ class OAuth(object):
             logging.info('Error when sending POST request: ' +
                          str(response.status_code) + response.content)
             return None
-        logging.debug('Oauth POST response JSON:' + response.content)
+        logging.debug('Oauth POST response JSON:' + str(response.content))
         return json.loads(response.content)
 
     def put_request(self, url, params=None, urlencode=False):
@@ -186,7 +186,7 @@ class OAuth(object):
                     )
             else:
                 response = self.config.module["urlfetch"].get(
-                    url=url,
+                    url,
                     headers={
                         'Authorization': 'Bearer ' + self.token,
                     }

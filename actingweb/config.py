@@ -211,7 +211,7 @@ class Config(object):
 
     @staticmethod
     def new_uuid(seed):
-        return uuid.uuid5(uuid.NAMESPACE_URL, seed).get_hex()
+        return uuid.uuid5(uuid.NAMESPACE_URL, str(seed)).hex
 
     @staticmethod
     def new_token(length=40):

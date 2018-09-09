@@ -42,7 +42,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
         if not myself.create(url=self.request.url, creator=creator, passphrase=passphrase):
             self.response.set_status(400, 'Not created')
             logging.warning("Was not able to create new Actor("+str(self.request.url) + " " +
-                         str(creator) + ")")
+                            str(creator) + ")")
             return
         if len(trustee_root) > 0:
             myself.set_property('trustee_root', trustee_root)

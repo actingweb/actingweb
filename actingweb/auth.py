@@ -450,7 +450,7 @@ class Auth(object):
             self.response['text'] = "Invalid username or password"
             logging.debug("Wrong creator username")
             return False
-        if password != self.actor.passphrase:
+        if password.decode('utf-8') != self.actor.passphrase:
             self.response['code'] = 403
             self.response['text'] = "Invalid username or password"
             logging.debug("Wrong creator passphrase(" +

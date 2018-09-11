@@ -53,7 +53,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
         pair = {
             'id': myself.id,
             'creator': myself.creator,
-            'passphrase': myself.passphrase,
+            'passphrase': str(myself.passphrase),
         }
         if len(trustee_root) > 0:
             pair['trustee_root'] = trustee_root

@@ -442,7 +442,9 @@ class Auth(object):
             logging.debug("No basic auth in Authorization header")
             return False
         self.authn_done = True
-        (username, password) = base64.b64decode(authz.split(' ')[1]).split(':')
+        au = authz.split(' ')[1]
+        au = base64.b64decode(au.encode('utf-8')).decode("utf-8")
+        (username, password) = au.split(':')
         if username != self.actor.creator:
             self.response['code'] = 403
             self.response['text'] = "Invalid username or password"

@@ -106,7 +106,7 @@ class DbActor(object):
             return False
         self.handle = Actor(id=actor_id,
                             creator=creator,
-                            passphrase=passphrase.decode('utf-8'))
+                            passphrase=passphrase)
         self.handle.save()
         return True
 

@@ -215,4 +215,5 @@ class Config(object):
 
     @staticmethod
     def new_token(length=40):
-        return binascii.hexlify(os.urandom(int(length // 2)))
+        tok = binascii.hexlify(os.urandom(int(length // 2)))
+        return tok.decode('utf-8')

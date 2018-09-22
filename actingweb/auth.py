@@ -443,14 +443,17 @@ class Auth(object):
             return False
         self.authn_done = True
         au = authz.split(' ')[1]
-        au = base64.b64decode(au.encode('utf-8')).decode("utf-8")
-        (username, password) = au.split(':')
+        au = au.encode('utf-8')
+        au = base64.b64decode(au)
+        (username, password) = au.split(b':')
+        password = password.decode('utf-8')
+        username = username.decode('utf-8')
         if username != self.actor.creator:
             self.response['code'] = 403
             self.response['text'] = "Invalid username or password"
             logging.debug("Wrong creator username")
             return False
-        if password.decode('utf-8') != self.actor.passphrase:
+        if password != self.actor.passphrase:
             self.response['code'] = 403
             self.response['text'] = "Invalid username or password"
             logging.debug("Wrong creator passphrase(" +

@@ -187,9 +187,8 @@ class Config(object):
         # ActingWeb settings for this app
         #########
         self.aw_version = "1.0"                             # This app follows the actingweb specification specified
-        self.aw_supported = "www,oauth,callbacks,trust,\
-            onewaytrust,subscriptions,actions,resources,\
-            methods,sessions,nestedproperties"              # This app supports the following options
+        self.aw_supported = "www,oauth,callbacks,trust,onewaytrust,subscriptions," \
+                            "actions,resources,methods,sessions,nestedproperties" # This app supports these options
         self.aw_formats = "json"                            # These are the supported formats
         #########
         # Only touch the below if you know what you are doing

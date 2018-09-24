@@ -107,10 +107,10 @@ class OAuth(object):
             return {}
         if response.status_code != 200 and response.status_code != 201:
             logging.info('Error when sending POST request: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
         logging.debug('Oauth POST response JSON:' + str(response.content))
-        return json.loads(response.content)
+        return json.loads(response.content.decode('utf-8', 'ignore'))
 
     def put_request(self, url, params=None, urlencode=False):
         if params:
@@ -162,10 +162,10 @@ class OAuth(object):
             return {}
         if response.status_code != 200 and response.status_code != 201:
             logging.info('Error when sending PUT request: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
-        logging.debug('Oauth PUT response JSON:' + response.content)
-        return json.loads(response.content)
+        logging.debug('Oauth PUT response JSON:' + str(response.content))
+        return json.loads(response.content.decode('utf-8', 'ignore'))
 
     def get_request(self, url, params=None):
         if not self.token:
@@ -203,7 +203,7 @@ class OAuth(object):
             return None
         if response.status_code < 200 or response.status_code > 299:
             logging.info('Error when sending GET request to Oauth: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
         links = pagination_links(response)
         self.next = None
@@ -217,7 +217,7 @@ class OAuth(object):
                 self.first = link['url']
             elif link['rel'] == 'prev':
                 self.prev = link['url']
-        return json.loads(response.content)
+        return json.loads(response.content.decode('utf-8', 'ignore'))
 
     def head_request(self, url, params=None):
         if not self.token:
@@ -243,7 +243,7 @@ class OAuth(object):
             return None
         if response.status_code < 200 or response.status_code > 299:
             logging.warning('Error when sending HEAD request to Oauth: ' +
-                            str(response.status_code) + response.content)
+                            str(response.status_code) + str(response.content))
             return None
         return response.headers
 
@@ -274,12 +274,12 @@ class OAuth(object):
             return None
         if response.status_code < 200 or response.status_code > 299:
             logging.info('Error when sending DELETE request to Oauth: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
         if response.status_code == 204:
             return {}
         try:
-            ret = json.loads(response.content)
+            ret = json.loads(response.content.decode('utf-8', 'ignore'))
         except (self.config.module["urlfetch"].UrlfetchException,
                 self.config.module["urlfetch"].URLError,
                 self.config.module["urlfetch"].Timeout,

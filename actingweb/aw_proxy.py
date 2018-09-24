@@ -79,11 +79,11 @@ class AwProxy(object):
                 },
             }
         logging.debug('Get trust peer resource POST response:(' +
-                      str(response.status_code) + ') ' + response.content)
+                      str(response.status_code) + ') ' + str(response.content))
         if response.status_code < 200 or response.status_code > 299:
             logging.info('Not able to get trust peer resource.')
         try:
-            result = json.loads(response.content)
+            result = json.loads(response.content.decode('utf-8', 'ignore'))
         except (TypeError, ValueError, KeyError):
             logging.debug("Not able to parse response when getting resource at(" + url + ")")
             result = {}
@@ -137,11 +137,11 @@ class AwProxy(object):
         else:
             self.last_location = None
         logging.debug('Create trust peer resource POST response:(' +
-                      str(response.status_code) + ') ' + response.content)
+                      str(response.status_code) + ') ' + str(response.content))
         if response.status_code < 200 or response.status_code > 299:
             logging.warning('Not able to create new trust peer resource.')
         try:
-            result = json.loads(response.content)
+            result = json.loads(response.content.decode('utf-8', 'ignore'))
         except (TypeError, ValueError, KeyError):
             logging.debug("Not able to parse response when creating resource at(" + url + ")")
             result = {}
@@ -191,11 +191,11 @@ class AwProxy(object):
                 },
             }
         logging.debug('Change trust peer resource PUT response:(' +
-                      str(response.status_code) + ') ' + response.content)
+                      str(response.status_code) + ') ' + str(response.content))
         if response.status_code < 200 or response.status_code > 299:
             logging.warning('Not able to change trust peer resource.')
         try:
-            result = json.loads(response.content)
+            result = json.loads(response.content.decode('utf-8', 'ignore'))
         except (TypeError, ValueError, KeyError):
             logging.debug("Not able to parse response when changing resource at(" + url + ")")
             result = {}
@@ -238,7 +238,7 @@ class AwProxy(object):
                 },
             }
         logging.debug('Delete trust peer resource POST response:(' +
-                      str(response.status_code) + ') ' + response.content)
+                      str(response.status_code) + ') ' + str(response.content))
         if response.status_code < 200 or response.status_code > 299:
             logging.warning('Not able to delete trust peer resource.')
             return False

@@ -42,10 +42,10 @@ class Actor(object):
             res = {
                 "last_response_code": response.status_code,
                 "last_response_message": response.content,
-                "data": json.loads(response.content),
+                "data": json.loads(response.content.decode('utf-8', 'ignore')),
             }
             logging.debug('Got peer info from url(' + url +
-                          ') with body(' + response.content + ')')
+                          ') with body(' + str(response.content) + ')')
         except (TypeError, ValueError, KeyError):
             res = {
                 "last_response_code": 500,
@@ -232,8 +232,9 @@ class Actor(object):
                 return False
         logging.debug(
             'Deleting peer actor at baseuri(' + peer_data["baseuri"] + ')')
+        u_p = b'trustee:' + peer_data["passphrase"].encode('utf-8')
         headers = {'Authorization': 'Basic ' +
-                   base64.b64encode('trustee:' + peer_data["passphrase"]),
+                   base64.b64encode(u_p).decode('utf-8'),
                    }
         try:
             if self.config.env == 'appengine':
@@ -331,7 +332,7 @@ class Actor(object):
             if self.last_response_code < 200 or self.last_response_code > 299:
                 return None
             try:
-                data = json.loads(response.content)
+                data = json.loads(response.content.decode('utf-8', 'ignore'))
             except (TypeError, ValueError, KeyError):
                 logging.warning("Not able to parse response when creating peer at factory(" +
                                 factory + ")")
@@ -374,8 +375,9 @@ class Actor(object):
             params = {
                 'approved': True,
             }
+            u_p = b'trustee:' + new_peer_data["passphrase"].encode('utf-8')
             headers = {'Authorization': 'Basic ' +
-                       base64.b64encode('trustee:' + new_peer_data["passphrase"]),
+                       base64.b64encode(u_p).decode('utf-8'),
                        'Content-Type': 'application/json',
                        }
             data = json.dumps(params)
@@ -612,8 +614,8 @@ class Actor(object):
                 self.last_response_message = response.content
                 try:
                     logging.debug(
-                        'Verifying trust response JSON:' + response.content)
-                    data = json.loads(response.content)
+                        'Verifying trust response JSON:' + str(response.content))
+                    data = json.loads(response.content.decode('utf-8', 'ignore'))
                     if data["verification_token"] == verification_token:
                         verified = True
                     else:
@@ -744,8 +746,8 @@ class Actor(object):
             return None
         try:
             logging.debug('Created remote subscription at url(' + requrl +
-                          ') and got JSON response (' + response.content + ')')
-            data = json.loads(response.content)
+                          ') and got JSON response (' + str(response.content) + ')')
+            data = json.loads(response.content.decode('utf-8', 'ignore'))
         except ValueError:
             return None
         if 'subscriptionid' in data:

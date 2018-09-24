@@ -61,7 +61,7 @@ class DbSubscriptionDiff(object):
             else:
                 self.handle = SubscriptionDiff.get(
                     actor_id,
-                    subid + ":" + str(str(seqnr), encoding='UTF-8'),
+                    subid + ":" + str(seqnr),
                     consistent_read=True)
         if self.handle:
             t = self.handle
@@ -84,7 +84,7 @@ class DbSubscriptionDiff(object):
             logging.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
         self.handle = SubscriptionDiff(id=actor_id,
-                                       subid_seqnr=subid + ":" + str(str(seqnr), encoding='UTF-8'),
+                                       subid_seqnr=subid + ":" + str(seqnr),
                                        subid=subid,
                                        diff=diff,
                                        seqnr=seqnr)

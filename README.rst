@@ -3,27 +3,9 @@ README - actingweb - an ActingWeb Library
 ======================================================
 This is a python library implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
 distributed micro-services model. A typical use case is bot to bot communication on a peer to peer level.
-It serves as the reference implementation for the ActingWeb REST protocol
+It serves as the reference implementation for the `ActingWeb REST protocol
 specification <http://actingweb.readthedocs.io/en/release/actingweb-spec.html>`_ for
 how such micro-services interact.
-
-Building and installing
-------------------------
-
-::
-
-    # Build source distribution
-    python setup.py sdist
-
-    # Build a binary distribution for python2:
-    python setup.py bdist_wheel
-
-    # Upload to test server:
-    python setup.py sdist upload -r pypitest
-
-    # Upload to production server:
-    twine upload dist/*
-
 
 Repository and documentation
 ----------------------------
@@ -154,4 +136,16 @@ programatically through the REST interface.
 
 See `http://actingweb.org/ <http://actingweb.org/>`_ for more information.
 
+Building and installing
+------------------------
 
+::
+
+    # Build source and binary distributions:
+    python setup.py sdist bdist_wheel
+
+    # Upload to test server:
+    python setup.py sdist upload -r pypitest
+
+    # Upload to production server:
+    twine upload dist/*

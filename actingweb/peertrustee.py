@@ -1,7 +1,8 @@
+from builtins import object
 import logging
 
 
-class PeerTrustee:
+class PeerTrustee(object):
 
     def get(self):
         if self.peertrustee and len(self.peertrustee) > 0:

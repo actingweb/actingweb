@@ -1,6 +1,14 @@
-import urllib
+from future import standard_library
+from builtins import str
+from builtins import object
+try:
+    from urllib.parse import urlencode
+except ImportError:
+    from urllib import urlencode
 import logging
 import json
+standard_library.install_aliases()
+
 
 # This function code is from latest urlfetch. For some reason the
 # Appengine version of urlfetch does not include links()
@@ -29,7 +37,7 @@ def pagination_links(self):
     return rets
 
 
-class OAuth:
+class OAuth(object):
 
     def __init__(self, token=None, config=None):
         self.config = config
@@ -53,7 +61,7 @@ class OAuth:
     def post_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
-                data = urllib.urlencode(params)
+                data = urlencode(params)
                 logging.info('Oauth POST request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
@@ -94,21 +102,21 @@ class OAuth:
                 self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
-            logging.warn("Oauth POST failed with exception")
+            logging.warning("Oauth POST failed with exception")
             return None
         if response.status_code == 204:
             return {}
         if response.status_code != 200 and response.status_code != 201:
             logging.info('Error when sending POST request: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
-        logging.debug('Oauth POST response JSON:' + response.content)
-        return json.loads(response.content)
+        logging.debug('Oauth POST response JSON:' + str(response.content))
+        return json.loads(response.content.decode('utf-8', 'ignore'))
 
     def put_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
-                data = urllib.urlencode(params)
+                data = urlencode(params)
                 logging.info('Oauth PUT request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
@@ -149,23 +157,23 @@ class OAuth:
                 self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
-            logging.warn("Oauth PUT failed with exception")
+            logging.warning("Oauth PUT failed with exception")
             return None
         if response.status_code == 204:
             return {}
         if response.status_code != 200 and response.status_code != 201:
             logging.info('Error when sending PUT request: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
-        logging.debug('Oauth PUT response JSON:' + response.content)
-        return json.loads(response.content)
+        logging.debug('Oauth PUT response JSON:' + str(response.content))
+        return json.loads(response.content.decode('utf-8', 'ignore'))
 
     def get_request(self, url, params=None):
         if not self.token:
             logging.debug("No token set in get_request()")
             return None
         if params:
-            url = url + '?' + urllib.urlencode(params)
+            url = url + '?' + urlencode(params)
         logging.info('Oauth GET request: ' + url)
         try:
             if self.config.env == 'appengine':
@@ -179,7 +187,7 @@ class OAuth:
                     )
             else:
                 response = self.config.module["urlfetch"].get(
-                    url=url,
+                    url,
                     headers={
                         'Authorization': 'Bearer ' + self.token,
                     }
@@ -192,11 +200,11 @@ class OAuth:
                 self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
-            logging.warn("Oauth GET failed with exception")
+            logging.warning("Oauth GET failed with exception")
             return None
         if response.status_code < 200 or response.status_code > 299:
             logging.info('Error when sending GET request to Oauth: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
         links = pagination_links(response)
         self.next = None
@@ -210,14 +218,14 @@ class OAuth:
                 self.first = link['url']
             elif link['rel'] == 'prev':
                 self.prev = link['url']
-        return json.loads(response.content)
+        return json.loads(response.content.decode('utf-8', 'ignore'))
 
     def head_request(self, url, params=None):
         if not self.token:
             logging.debug("No token set in head_request(()")
             return None
         if params:
-            url = url + '?' + urllib.urlencode(params)
+            url = url + '?' + urlencode(params)
         logging.info('Oauth HEAD request: ' + url)
         try:
             response = self.config.module["urlfetch"].head(
@@ -232,11 +240,11 @@ class OAuth:
                 self.config.module["urlfetch"].TooManyRedirects):
             self.last_response_code = 0
             self.last_response_message = 'No response'
-            logging.warn("Oauth HEAD failed with exception")
+            logging.warning("Oauth HEAD failed with exception")
             return None
         if response.status_code < 200 or response.status_code > 299:
-            logging.warn('Error when sending HEAD request to Oauth: ' +
-                         str(response.status_code) + response.content)
+            logging.warning('Error when sending HEAD request to Oauth: ' +
+                            str(response.status_code) + str(response.content))
             return None
         return response.headers
 
@@ -261,18 +269,18 @@ class OAuth:
                 self.config.module["urlfetch"].URLError,
                 self.config.module["urlfetch"].Timeout,
                 self.config.module["urlfetch"].TooManyRedirects):
-            logging.warn("Spark DELETE failed.")
+            logging.warning("Spark DELETE failed.")
             self.last_response_code = 0
             self.last_response_message = 'No response'
             return None
         if response.status_code < 200 or response.status_code > 299:
             logging.info('Error when sending DELETE request to Oauth: ' +
-                         str(response.status_code) + response.content)
+                         str(response.status_code) + str(response.content))
             return None
         if response.status_code == 204:
             return {}
         try:
-            ret = json.loads(response.content)
+            ret = json.loads(response.content.decode('utf-8', 'ignore'))
         except (self.config.module["urlfetch"].UrlfetchException,
                 self.config.module["urlfetch"].URLError,
                 self.config.module["urlfetch"].Timeout,
@@ -288,7 +296,7 @@ class OAuth:
             'scope': self.config.oauth['scope'],
             'state': state,
         }
-        uri = self.config.oauth['auth_uri'] + "?" + urllib.urlencode(params)
+        uri = self.config.oauth['auth_uri'] + "?" + urlencode(params)
         logging.info('OAuth redirect with url: ' + uri + ' and state:' + state)
         return uri
 

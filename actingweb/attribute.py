@@ -1,4 +1,7 @@
-class Attributes:
+from builtins import object
+
+
+class Attributes(object):
     """
         Attributes is the main entity keeping an attribute.
 
@@ -66,7 +69,7 @@ class Attributes:
             self.get_bucket()
 
 
-class Buckets:
+class Buckets(object):
     """ Handles all attribute buckets of a specific actor_id
 
         Access the attributes

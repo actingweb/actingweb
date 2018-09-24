@@ -1,3 +1,4 @@
+from builtins import object
 from google.appengine.ext import ndb
 import logging
 
@@ -22,7 +23,7 @@ class SubscriptionDiff(ndb.Model):
     seqnr = ndb.IntegerProperty()
 
 
-class DbSubscriptionDiff():
+class DbSubscriptionDiff(object):
     """
         DbSubscriptionDiff does all the db operations for subscription diff objects
 
@@ -89,7 +90,7 @@ class DbSubscriptionDiff():
         self.handle = None
 
 
-class DbSubscriptionDiffList():
+class DbSubscriptionDiffList(object):
     """
         DbSubscriptionDiffList does all the db operations for list of diff objects
 

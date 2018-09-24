@@ -1,3 +1,4 @@
+from builtins import object
 import uuid
 import binascii
 import logging
@@ -5,7 +6,7 @@ import importlib
 import os
 
 
-class Config:
+class Config(object):
 
     def __init__(self, **kwargs):
         #########
@@ -42,7 +43,7 @@ class Config:
         self.default_relationship = "associate"  # Default relationship if not specified
         self.auto_accept_default_relationship = False  # True if auto-approval
         # Pick up the config variables
-        for k, v in kwargs.iteritems():
+        for k, v in kwargs.items():
             if k == 'database':
                 self.database = v
                 if v == 'gae':
@@ -151,7 +152,7 @@ class Config:
             ('admin', '/', '', 'a'),
         ]
         # Pick up the more complex config variables
-        for k, v in kwargs.iteritems():
+        for k, v in kwargs.items():
             if k == 'actors':
                 self.actors = v
             elif k == 'oauth':
@@ -186,9 +187,8 @@ class Config:
         # ActingWeb settings for this app
         #########
         self.aw_version = "1.0"                             # This app follows the actingweb specification specified
-        self.aw_supported = "www,oauth,callbacks,trust,\
-            onewaytrust,subscriptions,actions,resources,\
-            methods,sessions,nestedproperties"              # This app supports the following options
+        self.aw_supported = "www,oauth,callbacks,trust,onewaytrust,subscriptions," \
+                            "actions,resources,methods,sessions,nestedproperties" # This app supports these options
         self.aw_formats = "json"                            # These are the supported formats
         #########
         # Only touch the below if you know what you are doing
@@ -210,8 +210,9 @@ class Config:
 
     @staticmethod
     def new_uuid(seed):
-        return uuid.uuid5(uuid.NAMESPACE_URL, seed).get_hex()
+        return uuid.uuid5(uuid.NAMESPACE_URL, str(seed)).hex
 
     @staticmethod
     def new_token(length=40):
-        return binascii.hexlify(os.urandom(int(length // 2)))
+        tok = binascii.hexlify(os.urandom(int(length // 2)))
+        return tok.decode('utf-8')

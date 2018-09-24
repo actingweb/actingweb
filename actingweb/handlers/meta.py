@@ -14,7 +14,7 @@ class MetaHandler(base_handler.BaseHandler):
         # We accept no auth here, so don't check response code
         if not myself:
             return
-        if not check.check_authorisation(path='meta', subpath=path, method='GET'):
+        if not check.check_authorisation(path='meta', subpath=path, method='GET', approved=False):
             self.response.set_status(403)
             return
 

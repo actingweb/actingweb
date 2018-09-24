@@ -1,15 +1,18 @@
+from __future__ import absolute_import
+from builtins import str
+from builtins import object
 import datetime
 import base64
-import property
+from . import property
 import json
-import trust
-import subscription
+from . import trust
+from . import subscription
 import logging
-import peertrustee
-import attribute
+from . import peertrustee
+from . import attribute
 
 
-class Actor:
+class Actor(object):
 
     ###################
     # Basic operations
@@ -39,10 +42,10 @@ class Actor:
             res = {
                 "last_response_code": response.status_code,
                 "last_response_message": response.content,
-                "data": json.loads(response.content),
+                "data": json.loads(response.content.decode('utf-8', 'ignore')),
             }
             logging.debug('Got peer info from url(' + url +
-                          ') with body(' + response.content + ')')
+                          ') with body(' + str(response.content) + ')')
         except (TypeError, ValueError, KeyError):
             res = {
                 "last_response_code": 500,
@@ -229,8 +232,9 @@ class Actor:
                 return False
         logging.debug(
             'Deleting peer actor at baseuri(' + peer_data["baseuri"] + ')')
+        u_p = b'trustee:' + peer_data["passphrase"].encode('utf-8')
         headers = {'Authorization': 'Basic ' +
-                   base64.b64encode('trustee:' + peer_data["passphrase"]),
+                   base64.b64encode(u_p).decode('utf-8'),
                    }
         try:
             if self.config.env == 'appengine':
@@ -328,17 +332,17 @@ class Actor:
             if self.last_response_code < 200 or self.last_response_code > 299:
                 return None
             try:
-                data = json.loads(response.content)
+                data = json.loads(response.content.decode('utf-8', 'ignore'))
             except (TypeError, ValueError, KeyError):
-                logging.warn("Not able to parse response when creating peer at factory(" + 
-                             factory + ")")
+                logging.warning("Not able to parse response when creating peer at factory(" +
+                                factory + ")")
                 return None
             if 'Location' in response.headers:
                 baseuri = response.headers['Location']
             elif 'location' in response.headers:
                 baseuri = response.headers['location']
             else:
-                logging.warn("No location uri found in response when creating a peer as trustee")
+                logging.warning("No location uri found in response when creating a peer as trustee")
                 baseuri = ""
             res = self.get_peer_info(baseuri)
             if not res or res["last_response_code"] < 200 or res["last_response_code"] >= 300:
@@ -364,15 +368,16 @@ class Actor:
                         relationship=self.config.actors[shorttype]['relationship']
                         )
         if not new_trust or len(new_trust) == 0:
-            logging.warn("Not able to establish trust relationship with peer at factory(" +
-                         factory + ")")
+            logging.warning("Not able to establish trust relationship with peer at factory(" +
+                            factory + ")")
         else:
             # Approve the relationship
             params = {
                 'approved': True,
             }
+            u_p = b'trustee:' + new_peer_data["passphrase"].encode('utf-8')
             headers = {'Authorization': 'Basic ' +
-                       base64.b64encode('trustee:' + new_peer_data["passphrase"]),
+                       base64.b64encode(u_p).decode('utf-8'),
                        'Content-Type': 'application/json',
                        }
             data = json.dumps(params)
@@ -517,8 +522,8 @@ class Actor:
         if not dbtrust.create(baseuri=url, secret=secret, peer_type=peer["type"],
                               relationship=relationship, approved=True,
                               verified=False, desc=desc):
-            logging.warn("Trying to establish a new Reciprocal trust when peer relationship already exists (" + 
-                         peer["id"] + ")")
+            logging.warning("Trying to establish a new Reciprocal trust when peer relationship already exists (" +
+                            peer["id"] + ")")
             return False
         # Since we are initiating the relationship, we implicitly approve it
         # It is not verified until the peer has verified us
@@ -609,8 +614,8 @@ class Actor:
                 self.last_response_message = response.content
                 try:
                     logging.debug(
-                        'Verifying trust response JSON:' + response.content)
-                    data = json.loads(response.content)
+                        'Verifying trust response JSON:' + str(response.content))
+                    data = json.loads(response.content.decode('utf-8', 'ignore'))
                     if data["verification_token"] == verification_token:
                         verified = True
                     else:
@@ -741,8 +746,8 @@ class Actor:
             return None
         try:
             logging.debug('Created remote subscription at url(' + requrl +
-                          ') and got JSON response (' + response.content + ')')
-            data = json.loads(response.content)
+                          ') and got JSON response (' + str(response.content) + ')')
+            data = json.loads(response.content.decode('utf-8', 'ignore'))
         except ValueError:
             return None
         if 'subscriptionid' in data:
@@ -838,7 +843,7 @@ class Actor:
 
     def callback_subscription(self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None):
         if not peerid or not diff or not sub or not blob:
-            logging.warn("Missing parameters in callbackSubscription")
+            logging.warning("Missing parameters in callbackSubscription")
             return
         if "granularity" in sub and sub["granularity"] == "none":
             return
@@ -899,7 +904,7 @@ class Actor:
         self.last_response_message = response.content
         if response.status_code == 204 and sub["granularity"] == "high":
             if not sub_obj:
-                logging.warn("About to clear diff without having subobj set")
+                logging.warning("About to clear diff without having subobj set")
             else:
                 sub_obj.clear_diff(diff["sequence"])
 
@@ -1018,8 +1023,8 @@ class Actor:
                 finblob = blob
             diff = sub_obj.add_diff(blob=finblob)
             if not diff:
-                logging.warn("Failed when registering a diff to subscription (" +
-                             sub["subscriptionid"] + "). Will not send callback.")
+                logging.warning("Failed when registering a diff to subscription (" +
+                                sub["subscriptionid"] + "). Will not send callback.")
             else:
                 if self.config.module["deferred"]:
                     self.config.module["deferred"].defer(self.callback_subscription, peerid=sub["peerid"],
@@ -1030,7 +1035,7 @@ class Actor:
                                                sub=sub_obj_data, diff=diff, blob=finblob)
 
 
-class Actors:
+class Actors(object):
     """ Handles all actors
     """
 

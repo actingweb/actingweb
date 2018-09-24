@@ -1,3 +1,4 @@
+from builtins import object
 from google.appengine.ext import ndb
 
 """
@@ -19,7 +20,7 @@ class PeerTrustee(ndb.Model):
     passphrase = ndb.StringProperty(required=True)
 
 
-class DbPeerTrustee():
+class DbPeerTrustee(object):
     """
         DbPeerTrustee does all the db operations for property objects
 
@@ -110,7 +111,7 @@ class DbPeerTrustee():
         self.handle = None
 
 
-class DbPeerTrusteeList():
+class DbPeerTrusteeList(object):
     """
         DbPeerTrusteeList does all the db operations for list of peertrustee objects
 

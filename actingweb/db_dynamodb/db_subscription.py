@@ -1,3 +1,4 @@
+from builtins import object
 import logging
 import os
 from pynamodb.models import Model
@@ -12,7 +13,7 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, BooleanAttrib
 
 
 class Subscription(Model):
-    class Meta:
+    class Meta(object):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_subscriptions"
         read_capacity_units = 2
         write_capacity_units = 1
@@ -31,7 +32,7 @@ class Subscription(Model):
     callback = BooleanAttribute()
 
 
-class DbSubscription:
+class DbSubscription(object):
     """
         DbSubscription does all the db operations for subscription objects
 
@@ -146,7 +147,7 @@ class DbSubscription:
             Subscription.create_table(wait=True)
 
 
-class DbSubscriptionList:
+class DbSubscriptionList(object):
     """
         DbTrustList does all the db operations for list of trust objects
 

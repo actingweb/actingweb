@@ -1,3 +1,4 @@
+from builtins import object
 import logging
 import os
 from pynamodb.models import Model
@@ -14,7 +15,7 @@ class SecretIndex(GlobalSecondaryIndex):
     """
     Secondary index on trust
     """
-    class Meta:
+    class Meta(object):
         index_name = 'secret-index'
         read_capacity_units = 2
         write_capacity_units = 1
@@ -25,7 +26,7 @@ class SecretIndex(GlobalSecondaryIndex):
 
 class Trust(Model):
     """ Data model for a trust relationship """
-    class Meta:
+    class Meta(object):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_trusts"
         read_capacity_units = 5
         write_capacity_units = 2
@@ -46,7 +47,7 @@ class Trust(Model):
     secret_index = SecretIndex()
 
 
-class DbTrust:
+class DbTrust(object):
     """
         DbTrust does all the db operations for trust objects
 
@@ -172,7 +173,7 @@ class DbTrust:
             Trust.create_table(wait=True)
 
 
-class DbTrustList:
+class DbTrustList(object):
     """
         DbTrustList does all the db operations for list of trust objects
 

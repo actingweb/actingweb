@@ -1,3 +1,4 @@
+from builtins import str
 import json
 import datetime
 from actingweb import auth
@@ -118,7 +119,7 @@ class DevtestHandler(base_handler.BaseHandler):
             if len(paths) > 1:
                 bucket = attribute.Attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
                 params = bucket.get_bucket()
-                for k, v in params.iteritems():
+                for k, v in params.items():
                     params[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
                 out = json.dumps(params)
                 self.response.write(out.encode('utf-8'))
@@ -131,8 +132,8 @@ class DevtestHandler(base_handler.BaseHandler):
                 if len(params) == 0:
                     self.response.set_status(404)
                     return
-                for b, d in params.iteritems():
-                    for k, v in d.iteritems():
+                for b, d in params.items():
+                    for k, v in d.items():
                         d[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
                 out = json.dumps(params)
                 self.response.write(out.encode('utf-8'))
@@ -178,7 +179,7 @@ class DevtestHandler(base_handler.BaseHandler):
         elif paths[0] == 'attribute':
             if paths[1] and len(paths[1]) > 0:
                 bucket = attribute.Attributes(actor_id=myself.id, bucket=paths[1], config=self.config)
-                for k, v in params.iteritems():
+                for k, v in params.items():
                     bucket.set_attr(k, v, timestamp=datetime.datetime.utcnow())
                 out = json.dumps(params)
                 self.response.write(out.encode('utf-8'))

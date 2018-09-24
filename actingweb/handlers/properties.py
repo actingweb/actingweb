@@ -1,3 +1,4 @@
+from builtins import str
 import json
 import logging
 import copy
@@ -12,7 +13,7 @@ def merge_dict(d1, d2):
     value in d2 is also a dictionary, then merge them in-place.
     Thanks to Edward Loper on stackoverflow.com
     """
-    for k, v2 in d2.items():
+    for k, v2 in list(d2.items()):
         v1 = d1.get(k)  # returns None if v1 has no value for this key
         if isinstance(v1, dict) and isinstance(v2, dict):
             merge_dict(v1, v2)
@@ -85,11 +86,12 @@ class PropertiesHandler(base_handler.BaseHandler):
             except (TypeError, ValueError, KeyError):
                 self.response.set_status(404)
                 return
+            out = out.encode('utf-8')
         except (TypeError, ValueError, KeyError):
-            out = str(lookup.value)
+                out = lookup.value
         self.response.set_status(200, "Ok")
         self.response.headers["Content-Type"] = "application/json"
-        self.response.write(out.encode('utf-8'))
+        self.response.write(out)
 
     def listall(self, myself):
         properties = myself.get_properties()
@@ -97,7 +99,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(404, "No properties")
             return
         pair = dict()
-        for name, value in properties.items():
+        for name, value in list(properties.items()):
             try:
                 js = json.loads(value)
                 pair[name] = js

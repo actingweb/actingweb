@@ -1,3 +1,4 @@
+from builtins import str
 import json
 import logging
 
@@ -362,7 +363,6 @@ class TrustPeerHandler(base_handler.BaseHandler):
             self.response.set_status(405, 'Not modified')
 
     def delete(self, actor_id, relationship, peerid):
-        peerid = peerid.decode("utf-8")
         (myself, check) = auth.init_actingweb(
             appreq=self,
             actor_id=actor_id,

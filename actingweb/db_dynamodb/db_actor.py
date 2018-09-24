@@ -1,3 +1,4 @@
+from builtins import object
 import os
 from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute
@@ -14,7 +15,7 @@ class CreatorIndex(GlobalSecondaryIndex):
     """
     Secondary index on actor
     """
-    class Meta:
+    class Meta(object):
         index_name = 'creator-index'
         read_capacity_units = 2
         write_capacity_units = 1
@@ -27,7 +28,7 @@ class Actor(Model):
     """
        DynamoDB data model for an actor
     """
-    class Meta:
+    class Meta(object):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_actors"
         read_capacity_units = 6
         write_capacity_units = 2
@@ -40,7 +41,7 @@ class Actor(Model):
     creator_index = CreatorIndex()
 
 
-class DbActor:
+class DbActor(object):
     """
         DbActor does all the db operations for actor objects
 
@@ -75,7 +76,7 @@ class DbActor:
         self.handle = Actor.creator_index.query(creator)
         ret = []
         for c in self.handle:
-            logging.warn("    id (" + c.id + ")")
+            logging.warning("    id (" + c.id + ")")
             ret.append(self.get(actor_id=c.id))
         return ret
 
@@ -87,7 +88,7 @@ class DbActor:
         if creator and len(creator) > 0:
             self.handle.creator = creator
         if passphrase and len(passphrase) > 0:
-            self.handle.passphrase = passphrase
+            self.handle.passphrase = passphrase.decode('utf-8')
         self.handle.save()
         return True
 
@@ -101,7 +102,7 @@ class DbActor:
         if not passphrase:
             passphrase = ''
         if self.get(actor_id=actor_id):
-            logging.warn("Trying to create actor that exists(" + actor_id + ")")
+            logging.warning("Trying to create actor that exists(" + actor_id + ")")
             return False
         self.handle = Actor(id=actor_id,
                             creator=creator,
@@ -124,7 +125,7 @@ class DbActor:
             Actor.create_table(wait=True)
 
 
-class DbActorList:
+class DbActorList(object):
     """
         DbActorList does all the db operations for list of actor objects
     """

@@ -1,3 +1,4 @@
+from builtins import object
 from google.appengine.ext import ndb
 import logging
 
@@ -26,7 +27,7 @@ class Subscription(ndb.Model):
     callback = ndb.BooleanProperty()
 
 
-class DbSubscription():
+class DbSubscription(object):
     """
         DbSubscription does all the db operations for subscription objects
 
@@ -144,7 +145,7 @@ class DbSubscription():
         self.handle = None
 
 
-class DbSubscriptionList():
+class DbSubscriptionList(object):
     """
         DbTrustList does all the db operations for list of trust objects
 

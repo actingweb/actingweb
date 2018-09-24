@@ -1,3 +1,4 @@
+from builtins import object
 from google.appengine.ext import ndb
 
 """
@@ -20,7 +21,7 @@ class Property(ndb.Model):
     value = ndb.TextProperty()
 
 
-class db_property():
+class db_property(object):
     """
         db_property does all the db operations for property objects
 
@@ -95,7 +96,7 @@ class db_property():
         self.handle = None
 
 
-class db_property_list():
+class db_property_list(object):
     """
         db_property does all the db operations for list of property objects
 

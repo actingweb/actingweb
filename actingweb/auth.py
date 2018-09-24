@@ -1,12 +1,15 @@
+from __future__ import absolute_import
+from builtins import str
+from builtins import object
 import logging
 import time
 
-import oauth
+from . import oauth
 import base64
 import math
-import actor
-import trust
-import config as config_class
+from . import actor
+from . import trust
+from . import config as config_class
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Fairly simple: /oauth is always oauth, /www can be either basic+trust or
@@ -38,7 +41,7 @@ def add_auth_response(appreq=None, auth_obj=None):
         appreq.set_redirect(url=auth_obj.redirect)
     elif auth_obj.response['code'] == 401:
         appreq.write("Authentication required")
-    for h, v in auth_obj.response['headers'].items():
+    for h, v in list(auth_obj.response['headers'].items()):
         appreq.headers[h] = v
     return True
 
@@ -74,7 +77,7 @@ def init_actingweb(appreq=None, actor_id=None, path='', subpath='', add_response
     return auth_obj.actor, auth_obj
 
 
-class Auth:
+class Auth(object):
     """ The auth class handles authentication and authorisation for the various schemes supported.
 
     The helper function init_actingweb() can be used to give you an auth object and do authentication (or can be called
@@ -195,11 +198,11 @@ class Auth:
         if not code:
             return False
         if not self.oauth:
-            logging.warn('Call to processOauthCallback() with oauth disabled.')
+            logging.warning('Call to processOauthCallback() with oauth disabled.')
             return False
         result = self.oauth.oauth_request_token(code)
         if not result or (result and 'access_token' not in result):
-            logging.warn('No token in response')
+            logging.warning('No token in response')
             return False
         self.__process_oauth_accept(result)
         return True
@@ -247,7 +250,7 @@ class Auth:
         if self.actor and self.actor.id and (not ret or code1 == 401 or code1 == 403):
             refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
             if not refresh:
-                logging.warn('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.get_request(url=url, params=params)
@@ -274,7 +277,7 @@ class Auth:
         if self.actor and self.actor.id and (not ret or code1 == 401 or code1 == 403):
             refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
             if not refresh:
-                logging.warn('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.head_request(url=url, params=params)
@@ -301,7 +304,7 @@ class Auth:
         if self.actor and self.actor.id and (code1 == 401 or code1 == 403):
             refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
             if not refresh:
-                logging.warn('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.delete_request(url=url)
@@ -328,7 +331,7 @@ class Auth:
         if self.actor and self.actor.id and (code1 == 401 or code1 == 403):
             refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
             if not refresh:
-                logging.warn('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.post_request(url=url, params=params, urlencode=urlencode)
@@ -355,7 +358,7 @@ class Auth:
         if self.actor and self.actor.id and (code1 == 401 or code1 == 403):
             refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
             if not refresh:
-                logging.warn('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.put_request(url=url, params=params, urlencode=urlencode)
@@ -406,7 +409,7 @@ class Auth:
         if not self.cookie_redirect:
             return False
         if not self.token:
-            logging.warn("Trying to set cookie when no token value can be found.")
+            logging.warning("Trying to set cookie when no token value can be found.")
             return False
         logging.debug('Setting Authorization cookie: ' + str(self.token))
         appreq.response.set_cookie(self.cookie, str(self.token),
@@ -417,12 +420,12 @@ class Auth:
 
     def __check_basic_auth_creator(self, appreq):
         if self.type != 'basic':
-            logging.warn("Trying to do basic auth when auth type is not basic")
+            logging.warning("Trying to do basic auth when auth type is not basic")
             self.response['code'] = 403
             self.response['text'] = "Forbidden"
             return False
         if not self.actor.passphrase:
-            logging.warn("Trying to do basic auth when no passphrase value can be found.")
+            logging.warning("Trying to do basic auth when no passphrase value can be found.")
             self.response['code'] = 403
             self.response['text'] = "Forbidden"
             return False
@@ -439,7 +442,12 @@ class Auth:
             logging.debug("No basic auth in Authorization header")
             return False
         self.authn_done = True
-        (username, password) = base64.b64decode(authz.split(' ')[1]).split(':')
+        au = authz.split(' ')[1]
+        au = au.encode('utf-8')
+        au = base64.b64decode(au)
+        (username, password) = au.split(b':')
+        password = password.decode('utf-8')
+        username = username.decode('utf-8')
         if username != self.actor.creator:
             self.response['code'] = 403
             self.response['text'] = "Invalid username or password"
@@ -483,7 +491,7 @@ class Auth:
                     self.token = self.actor.passphrase
                     return True
             else:
-                logging.warn('Attempted trustee bearer token auth with <80 bit strength token.')
+                logging.warning('Attempted trustee bearer token auth with <80 bit strength token.')
         tru = trust.Trust(actor_id=self.actor.id, token=token, config=self.config)
         new_trust = tru.get()
         if new_trust:

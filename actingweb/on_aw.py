@@ -1,9 +1,10 @@
+from builtins import object
 import logging
 import json
 
 
 # noinspection PyMethodMayBeStatic,PyUnusedLocal
-class OnAWBase:
+class OnAWBase(object):
 
     def __init__(self):
         self.config = None
@@ -11,12 +12,11 @@ class OnAWBase:
         self.webobj = None
         self.auth = None
 
-    @classmethod
-    def aw_init(cls, auth=None, webobj=None):
-        cls.config = auth.config
-        cls.myself = auth.actor
-        cls.webobj = webobj
-        cls.auth = auth
+    def aw_init(self, auth=None, webobj=None):
+        self.config = auth.config
+        self.myself = auth.actor
+        self.webobj = webobj
+        self.auth = auth
 
     def bot_post(self, path):
         """Called on POSTs to /bot.

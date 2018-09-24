@@ -1,3 +1,4 @@
+from builtins import object
 import os
 from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute
@@ -13,7 +14,7 @@ class PropertyIndex(GlobalSecondaryIndex):
     """
     Secondary index on property
     """
-    class Meta:
+    class Meta(object):
         index_name = 'property-index'
         read_capacity_units = 2
         write_capacity_units = 1
@@ -26,7 +27,7 @@ class Property(Model):
     """
        DynamoDB data model for a property
     """
-    class Meta:
+    class Meta(object):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_properties"
         read_capacity_units = 26
         write_capacity_units = 2
@@ -39,7 +40,7 @@ class Property(Model):
     property_index = PropertyIndex()
 
 
-class DbProperty:
+class DbProperty(object):
     """
         DbProperty does all the db operations for property objects
 
@@ -112,7 +113,7 @@ class DbProperty:
             Property.create_table(wait=True)
 
 
-class DbPropertyList:
+class DbPropertyList(object):
     """
         DbPropertyList does all the db operations for list of property objects
 

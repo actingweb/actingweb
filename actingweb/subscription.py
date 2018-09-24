@@ -1,8 +1,9 @@
+from builtins import object
 import datetime
 import logging
 
 
-class Subscription:
+class Subscription(object):
     """Base class with core subscription methods (storage-related)"""
 
     def get(self):
@@ -123,7 +124,7 @@ class Subscription:
             self.get()
 
 
-class Subscriptions:
+class Subscriptions(object):
     """ Handles all subscriptions of a specific actor_id
 
         Access the indvidual subscriptions in .dbsubscriptions and the subscription data

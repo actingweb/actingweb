@@ -1,22 +1,25 @@
-class AWRequest:
+from builtins import object
+
+
+class AWRequest(object):
 
     def get_header(self, header=''):
         header = header.lower()
-        for k, v in self.headers.iteritems():
+        for k, v in self.headers.items():
             if header == k.lower():
                 return v
         return ''
 
     def get(self, var=''):
         var = var.lower()
-        for k, v in self.params.iteritems():
+        for k, v in self.params.items():
             if var == k.lower():
                 return v
         return ''
 
     def arguments(self):
         ret = []
-        for k, v in self.params.iteritems():
+        for k, v in self.params.items():
             ret.append(k)
         return ret
 
@@ -28,7 +31,7 @@ class AWRequest:
         self.cookies = cookies
 
 
-class AWResponse:
+class AWResponse(object):
 
     def set_status(self, code=200, message='Ok'):
         if not code or code < 100 or code > 599:
@@ -68,7 +71,7 @@ class AWResponse:
         self.template_values = {}
 
 
-class AWWebObj:
+class AWWebObj(object):
 
     def __init__(self, url=None, params=None, body=None, headers=None, cookies=None):
         self.request = AWRequest(url=url, params=params, body=body, headers=headers, cookies=cookies)

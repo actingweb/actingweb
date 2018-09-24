@@ -3,27 +3,9 @@ README - actingweb - an ActingWeb Library
 ======================================================
 This is a python library implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
 distributed micro-services model. A typical use case is bot to bot communication on a peer to peer level.
-It serves as the reference implementation for the ActingWeb REST protocol
+It serves as the reference implementation for the `ActingWeb REST protocol
 specification <http://actingweb.readthedocs.io/en/release/actingweb-spec.html>`_ for
 how such micro-services interact.
-
-Building and installing
-------------------------
-
-::
-
-    # Build source distribution
-    python setup.py sdist
-
-    # Build a binary distribution for python2:
-    python setup.py bdist_wheel
-
-    # Upload to test server:
-    python setup.py sdist upload -r pypitest
-
-    # Upload to production server:
-    twine upload dist/*
-
 
 Repository and documentation
 ----------------------------
@@ -96,11 +78,11 @@ verification as part of the OAuth flow, but it is not enabled in the actingwebde
 
 Other applications using the actingweb library
 ---------------------------------------------------
-There is also another demo application available for `Cisco Spark <http://www.ciscospark.com>`_
-. It uses the actingweb library to implement a Cisco Spark bot and integration. If you have signed up as a
-Cisco Spark user, you can try it out by sending a message to armyknife@sparkbot.io.
+There is also another demo application available for `Cisco Webex Teams <http://https://www.webex.com/products/teams>`_
+. It uses the actingweb library to implement a Webex Teams bot and integration. If you have signed up as a
+Cisco Webex Teams user, you can try it out by sending a message to armyknife@webex.bot.
 
-More details about the Spark Army Knife can be found on `this blog <http://stuff.ttwedel.no/tag/spark>`_
+More details about the Army Knife can be found on `this blog <http://stuff.ttwedel.no/tag/spark>`_
 .
 
 The ActingWeb Model
@@ -154,4 +136,16 @@ programatically through the REST interface.
 
 See `http://actingweb.org/ <http://actingweb.org/>`_ for more information.
 
+Building and installing
+------------------------
 
+::
+
+    # Build source and binary distributions:
+    python setup.py sdist bdist_wheel
+
+    # Upload to test server:
+    python setup.py sdist upload -r pypitest
+
+    # Upload to production server:
+    twine upload dist/*

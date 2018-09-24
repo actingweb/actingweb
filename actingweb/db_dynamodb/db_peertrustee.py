@@ -1,3 +1,4 @@
+from builtins import object
 import os
 import logging
 from pynamodb.models import Model
@@ -11,7 +12,7 @@ from pynamodb.attributes import UnicodeAttribute
 
 class PeerTrustee(Model):
 
-    class Meta:
+    class Meta(object):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_peertrustees"
         read_capacity_units = 1
         write_capacity_units = 1
@@ -25,7 +26,7 @@ class PeerTrustee(Model):
     passphrase = UnicodeAttribute()
 
 
-class DbPeerTrustee:
+class DbPeerTrustee(object):
     """
         DbPeerTrustee does all the db operations for property objects
 
@@ -118,7 +119,7 @@ class DbPeerTrustee:
             PeerTrustee.create_table(wait=True)
 
 
-class DbPeerTrusteeList:
+class DbPeerTrusteeList(object):
     """
         DbPeerTrusteeList does all the db operations for list of peertrustee objects
 

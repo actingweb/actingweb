@@ -1,3 +1,4 @@
+from builtins import str
 import json
 import logging
 from actingweb import auth
@@ -95,7 +96,6 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
 class SubscriptionRelationshipHandler(base_handler.BaseHandler):
 
     def get(self, actor_id, peerid):
-        peerid = peerid.decode("utf-8")
         if self.request.get('_method') == 'POST':
             self.post(actor_id, peerid)
             return
@@ -127,7 +127,6 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         self.response.set_status(200, 'Ok')
 
     def post(self, actor_id, peerid):
-        peerid = peerid.decode("utf-8")
         (myself, check) = auth.init_actingweb(appreq=self,
                                               actor_id=actor_id,
                                               path='subscriptions',
@@ -160,7 +159,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(400, 'No json body')
             return
         if peerid != check.acl["peerid"]:
-            logging.warn("Peer " + peerid +
+            logging.warning("Peer " + peerid +
                          " tried to create a subscription for peer " + check.acl["peerid"])
             self.response.set_status(403, 'Forbidden. Wrong peer id in request')
             return
@@ -194,8 +193,6 @@ class SubscriptionHandler(base_handler.BaseHandler):
     """ Handling requests to specific subscriptions, e.g. /subscriptions/<peerid>/12f2ae53bd"""
 
     def get(self, actor_id, peerid, subid):
-        peerid = peerid.decode("utf-8")
-        subid = subid.decode("utf-8")
         if self.request.get('_method') == 'PUT':
             self.put(actor_id, peerid, subid)
             return
@@ -247,8 +244,6 @@ class SubscriptionHandler(base_handler.BaseHandler):
         self.response.set_status(200, 'Ok')
 
     def put(self, actor_id, peerid, subid):
-        peerid = peerid.decode("utf-8")
-        subid = subid.decode("utf-8")
         (myself, check) = auth.init_actingweb(appreq=self,
                                               actor_id=actor_id,
                                               path='subscriptions',
@@ -288,8 +283,6 @@ class SubscriptionHandler(base_handler.BaseHandler):
         return
 
     def delete(self, actor_id, peerid, subid):
-        peerid = peerid.decode("utf-8")
-        subid = subid.decode("utf-8")
         (myself, check) = auth.init_actingweb(appreq=self,
                                               actor_id=actor_id,
                                               path='subscriptions',
@@ -315,13 +308,10 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
     /subscriptions/<peerid>/<subid>/112"""
 
     def get(self, actor_id, peerid, subid, seqnr):
-        peerid = peerid.decode("utf-8")
-        subid = subid.decode("utf-8")
-        seqnr = seqnr.decode("utf-8")
         (myself, check) = auth.init_actingweb(appreq=self,
                                               actor_id=actor_id,
                                               path='subscriptions',
-                                              subpath=peerid + '/' + subid + '/' + seqnr,
+                                              subpath=peerid + '/' + subid + '/' + str(seqnr),
                                               config=self.config)
         if not myself or check.response["code"] != 200:
             return

@@ -1,7 +1,8 @@
+from builtins import object
 import logging
 
 
-class Trust:
+class Trust(object):
 
     def get(self):
         """ Retrieve a trust relationship with either peerid or token """
@@ -65,7 +66,7 @@ class Trust:
         # Be absolutely sure that the secret is not already used
         testhandle = self.config.DbTrust.DbTrust()
         if testhandle.is_token_in_db(actor_id=self.actor_id, token=self.trust["secret"]):
-            logging.warn("Found a non-unique token where it should be unique")
+            logging.warning("Found a non-unique token where it should be unique")
             return False
         self.trust["approved"] = approved
         self.trust["peer_approved"] = peer_approved
@@ -106,7 +107,7 @@ class Trust:
         self.get()
 
 
-class Trusts:
+class Trusts(object):
     """ Handles all trusts of a specific actor_id
 
         Access the indvidual trusts in .dbtrusts and the trust data

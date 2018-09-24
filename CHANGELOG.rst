@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.4.0: Sep 22 2018
+--------------------
+- Support python3
+
 v2.3.0: Dec 27, 2017
 --------------------
 - Entire API for handlers and Actor() as well as other objects changed to be PEP8 compliant

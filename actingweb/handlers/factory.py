@@ -1,3 +1,4 @@
+from builtins import str
 import logging
 import json
 from actingweb import actor
@@ -40,8 +41,8 @@ class RootFactoryHandler(base_handler.BaseHandler):
             passphrase = self.request.get('passphrase')
         if not myself.create(url=self.request.url, creator=creator, passphrase=passphrase):
             self.response.set_status(400, 'Not created')
-            logging.warn("Was not able to create new Actor("+str(self.request.url) + " " +
-                         str(creator) + ")")
+            logging.warning("Was not able to create new Actor("+str(self.request.url) + " " +
+                            str(creator) + ")")
             return
         if len(trustee_root) > 0:
             myself.set_property('trustee_root', trustee_root)
@@ -52,7 +53,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
         pair = {
             'id': myself.id,
             'creator': myself.creator,
-            'passphrase': myself.passphrase,
+            'passphrase': str(myself.passphrase),
         }
         if len(trustee_root) > 0:
             pair['trustee_root'] = trustee_root

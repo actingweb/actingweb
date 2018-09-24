@@ -1,4 +1,7 @@
-class Property:
+from builtins import object
+
+
+class Property(object):
     """
         property is the main entity keeping a property.
 
@@ -64,7 +67,7 @@ class Property:
                 self.get()
 
 
-class Properties:
+class Properties(object):
     """ Handles all properties of a specific actor_id
 
         Access the properties

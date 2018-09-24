@@ -1,3 +1,4 @@
+from builtins import object
 import os
 from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute, JSONAttribute, UTCDateTimeAttribute
@@ -12,7 +13,7 @@ class Attribute(Model):
     """
        DynamoDB data model for a property
     """
-    class Meta:
+    class Meta(object):
         table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_attributes"
         read_capacity_units = 26
         write_capacity_units = 2
@@ -27,7 +28,7 @@ class Attribute(Model):
     timestamp = UTCDateTimeAttribute(null=True)
 
 
-class DbAttribute:
+class DbAttribute(object):
     """
         DbProperty does all the db operations for property objects
 
@@ -121,7 +122,7 @@ class DbAttribute:
             Attribute.create_table(wait=True)
 
 
-class DbAttributeBucketList:
+class DbAttributeBucketList(object):
     """
         DbAttributeBucketList handles multiple buckets
 

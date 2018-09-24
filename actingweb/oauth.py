@@ -1,9 +1,10 @@
 from future import standard_library
 from builtins import str
 from builtins import object
-import urllib.request
-import urllib.parse
-import urllib.error
+try:
+    from urllib.parse import urlencode
+except ImportError:
+    from urllib import urlencode
 import logging
 import json
 standard_library.install_aliases()
@@ -60,7 +61,7 @@ class OAuth(object):
     def post_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
-                data = urllib.parse.urlencode(params)
+                data = urlencode(params)
                 logging.info('Oauth POST request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
@@ -115,7 +116,7 @@ class OAuth(object):
     def put_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
-                data = urllib.parse.urlencode(params)
+                data = urlencode(params)
                 logging.info('Oauth PUT request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
@@ -172,7 +173,7 @@ class OAuth(object):
             logging.debug("No token set in get_request()")
             return None
         if params:
-            url = url + '?' + urllib.parse.urlencode(params)
+            url = url + '?' + urlencode(params)
         logging.info('Oauth GET request: ' + url)
         try:
             if self.config.env == 'appengine':
@@ -224,7 +225,7 @@ class OAuth(object):
             logging.debug("No token set in head_request(()")
             return None
         if params:
-            url = url + '?' + urllib.parse.urlencode(params)
+            url = url + '?' + urlencode(params)
         logging.info('Oauth HEAD request: ' + url)
         try:
             response = self.config.module["urlfetch"].head(
@@ -295,7 +296,7 @@ class OAuth(object):
             'scope': self.config.oauth['scope'],
             'state': state,
         }
-        uri = self.config.oauth['auth_uri'] + "?" + urllib.parse.urlencode(params)
+        uri = self.config.oauth['auth_uri'] + "?" + urlencode(params)
         logging.info('OAuth redirect with url: ' + uri + ' and state:' + state)
         return uri
 

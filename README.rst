@@ -96,11 +96,11 @@ verification as part of the OAuth flow, but it is not enabled in the actingwebde
 
 Other applications using the actingweb library
 ---------------------------------------------------
-There is also another demo application available for `Cisco Spark <http://www.ciscospark.com>`_
-. It uses the actingweb library to implement a Cisco Spark bot and integration. If you have signed up as a
-Cisco Spark user, you can try it out by sending a message to armyknife@sparkbot.io.
+There is also another demo application available for `Cisco Webex Teams <http://https://www.webex.com/products/teams>`_
+. It uses the actingweb library to implement a Webex Teams bot and integration. If you have signed up as a
+Cisco Webex Teams user, you can try it out by sending a message to armyknife@webex.bot.
 
-More details about the Spark Army Knife can be found on `this blog <http://stuff.ttwedel.no/tag/spark>`_
+More details about the Army Knife can be found on `this blog <http://stuff.ttwedel.no/tag/spark>`_
 .
 
 The ActingWeb Model

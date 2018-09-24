@@ -21,7 +21,7 @@ setup(
     ],
     url='http://actingweb.org',
     author='Greger Wedel',
-    author_email='greger@support.io',
+    author_email='support@greger.io',
     license='BSD',
     packages=[
         'actingweb',

@@ -28,7 +28,7 @@ setup(
         'actingweb.handlers',
         'actingweb.db_dynamodb'
     ],
-    python_requires='>=2.7,>=3.6',
+    python_requires='>=2.7',
     install_requires=[
         'pynamodb',
         'boto3',

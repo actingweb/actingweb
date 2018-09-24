@@ -86,11 +86,12 @@ class PropertiesHandler(base_handler.BaseHandler):
             except (TypeError, ValueError, KeyError):
                 self.response.set_status(404)
                 return
+            out = out.encode('utf-8')
         except (TypeError, ValueError, KeyError):
-            out = str(lookup.value)
+                out = lookup.value
         self.response.set_status(200, "Ok")
         self.response.headers["Content-Type"] = "application/json"
-        self.response.write(out.encode('utf-8'))
+        self.response.write(out)
 
     def listall(self, myself):
         properties = myself.get_properties()

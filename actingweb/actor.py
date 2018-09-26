@@ -3,13 +3,13 @@ from builtins import str
 from builtins import object
 import datetime
 import base64
-from . import property
+from actingweb import property
 import json
-from . import trust
-from . import subscription
+from actingweb import trust
+from actingweb import subscription
 import logging
-from . import peertrustee
-from . import attribute
+from actingweb import peertrustee
+from actingweb import attribute
 
 
 class Actor(object):

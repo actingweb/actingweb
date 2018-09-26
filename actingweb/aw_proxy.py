@@ -5,7 +5,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import json
-from . import trust
+from actingweb import trust
 import logging
 from future import standard_library
 standard_library.install_aliases()

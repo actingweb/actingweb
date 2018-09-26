@@ -29,11 +29,11 @@ setup(
         'actingweb.db_dynamodb'
     ],
     python_requires='>=2.7',
+    extras_require={":python_version<'3.0'": ['future']},
     install_requires=[
         'pynamodb',
         'boto3',
-        'urlfetch',
-        'future'
+        'urlfetch'
     ],
     include_package_data=True,
     zip_safe=False)

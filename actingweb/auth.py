@@ -4,12 +4,12 @@ from builtins import object
 import logging
 import time
 
-from . import oauth
+from actingweb import oauth
 import base64
 import math
-from . import actor
-from . import trust
-from . import config as config_class
+from actingweb import actor
+from actingweb import trust
+from actingweb import config as config_class
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Fairly simple: /oauth is always oauth, /www can be either basic+trust or

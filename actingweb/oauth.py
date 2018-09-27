@@ -1,13 +1,11 @@
-from future import standard_library
 from builtins import str
 from builtins import object
 try:
-    from urllib.parse import urlencode
+    from urllib.parse import urlencode as urllib_urlencode
 except ImportError:
-    from urllib import urlencode
+    from urllib import urlencode as urllib_urlencode
 import logging
 import json
-standard_library.install_aliases()
 
 
 # This function code is from latest urlfetch. For some reason the
@@ -61,7 +59,7 @@ class OAuth(object):
     def post_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
-                data = urlencode(params)
+                data = urllib_urlencode(params)
                 logging.info('Oauth POST request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
@@ -116,7 +114,7 @@ class OAuth(object):
     def put_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
-                data = urlencode(params)
+                data = urllib_urlencode(params)
                 logging.info('Oauth PUT request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
@@ -173,7 +171,7 @@ class OAuth(object):
             logging.debug("No token set in get_request()")
             return None
         if params:
-            url = url + '?' + urlencode(params)
+            url = url + '?' + urllib_urlencode(params)
         logging.info('Oauth GET request: ' + url)
         try:
             if self.config.env == 'appengine':
@@ -225,7 +223,7 @@ class OAuth(object):
             logging.debug("No token set in head_request(()")
             return None
         if params:
-            url = url + '?' + urlencode(params)
+            url = url + '?' + urllib_urlencode(params)
         logging.info('Oauth HEAD request: ' + url)
         try:
             response = self.config.module["urlfetch"].head(
@@ -296,7 +294,7 @@ class OAuth(object):
             'scope': self.config.oauth['scope'],
             'state': state,
         }
-        uri = self.config.oauth['auth_uri'] + "?" + urlencode(params)
+        uri = self.config.oauth['auth_uri'] + "?" + urllib_urlencode(params)
         logging.info('OAuth redirect with url: ' + uri + ' and state:' + state)
         return uri
 

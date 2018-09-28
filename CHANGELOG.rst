@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.4.3: Sep 27, 2018
+--------------------
+- Don't do relative import with import_module, AWS Lambda gets a hiccup
+
 v2.4.2: Sep 27, 2018
 --------------------
 - Get rid of future requirement, just a pain

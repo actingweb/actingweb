@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.4.2: Sep 27, 2018
+--------------------
+- Get rid of future requirement, just a pain
+
 v2.4.1: Sep 26, 2018
 --------------------
 - Fix bad relative imports

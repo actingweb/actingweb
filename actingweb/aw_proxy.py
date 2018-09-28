@@ -1,14 +1,13 @@
 from __future__ import absolute_import
 from builtins import str
 from builtins import object
-import urllib.request
-import urllib.parse
-import urllib.error
 import json
 from actingweb import trust
 import logging
-from future import standard_library
-standard_library.install_aliases()
+try:
+    from urllib.parse import urlencode as urllib_urlencode
+except ImportError:
+    from urllib import urlencode as urllib_urlencode
 
 
 class AwProxy(object):
@@ -47,7 +46,7 @@ class AwProxy(object):
             return None
         url = self.trust["baseuri"].strip('/') + '/' + path.strip('/')
         if params:
-            url = url + '?' + urllib.parse.urlencode(params)
+            url = url + '?' + urllib_urlencode(params)
         headers = {'Authorization': 'Bearer ' + self.trust["secret"],
                    }
         logging.debug(

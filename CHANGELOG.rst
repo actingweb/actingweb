@@ -2,6 +2,11 @@
 CHANGELOG
 =========
 
+v2.4.1: Sep 26, 2018
+--------------------
+- Fix bad relative imports
+- Use extras_require for future (python2 support)
+
 v2.4.0: Sep 22 2018
 --------------------
 - Support python3

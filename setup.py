@@ -8,7 +8,7 @@ def readme():
 
 setup(
     name='actingweb',
-    version='2.4.0',
+    version='2.4.1',
     description='The official ActingWeb library',
     long_description=readme(),
     classifiers=[
@@ -29,11 +29,11 @@ setup(
         'actingweb.db_dynamodb'
     ],
     python_requires='>=2.7',
+    extras_require={":python_version<'3.0'": ['future']},
     install_requires=[
         'pynamodb',
         'boto3',
-        'urlfetch',
-        'future'
+        'urlfetch'
     ],
     include_package_data=True,
     zip_safe=False)

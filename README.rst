@@ -142,10 +142,11 @@ Building and installing
 ::
 
     # Build source and binary distributions:
-    python setup.py sdist bdist_wheel
+    python setup.py sdist bdist_wheel --universal
 
     # Upload to test server:
     python setup.py sdist upload -r pypitest
+    twine upload --repository pypitest dist/*
 
     # Upload to production server:
     twine upload dist/*

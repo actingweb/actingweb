@@ -169,13 +169,14 @@ class Config(object):
                 'relationship': 'friend',  # associate, friend, partner, admin
             }
         # Dynamically load all the database modules
-        self.DbActor = importlib.import_module(".db_actor", "actingweb" + ".db_" + self.database)
-        self.DbPeerTrustee = importlib.import_module(".db_peertrustee", "actingweb" + ".db_" + self.database)
-        self.DbProperty = importlib.import_module(".db_property", "actingweb" + ".db_" + self.database)
-        self.DbAttribute = importlib.import_module(".db_attribute", "actingweb" + ".db_" + self.database)
-        self.DbSubscription = importlib.import_module(".db_subscription", "actingweb" + ".db_" + self.database)
-        self.DbSubscriptionDiff = importlib.import_module(".db_subscription_diff", "actingweb" + ".db_" + self.database)
-        self.DbTrust = importlib.import_module(".db_trust", "actingweb" + ".db_" + self.database)
+        self.DbActor = importlib.import_module("actingweb" + ".db_" + self.database + ".db_actor")
+        self.DbPeerTrustee = importlib.import_module("actingweb" + ".db_" + self.database + ".db_peertrustee")
+        self.DbProperty = importlib.import_module("actingweb" + ".db_" + self.database + ".db_property")
+        self.DbAttribute = importlib.import_module("actingweb" + ".db_" + self.database + ".db_attribute")
+        self.DbSubscription = importlib.import_module("actingweb" + ".db_" + self.database + ".db_subscription")
+        self.DbSubscriptionDiff = importlib.import_module("actingweb" + ".db_" + self.database +
+                                                          ".db_subscription_diff")
+        self.DbTrust = importlib.import_module("actingweb" + ".db_" + self.database + ".db_trust")
         self.module = {}
         if self.env == 'appengine':
             self.module["deferred"] = importlib.import_module(".deferred", "google.appengine.api")

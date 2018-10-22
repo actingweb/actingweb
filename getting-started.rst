@@ -1,91 +1,60 @@
 Getting Started
 ===============
 
-The easiest way to get started is to start out with the actingwebdemo application
-`http://actingwebdemo.readthedocs.io/ <http://actingwebdemo.readthedocs.io/>`_.
+The easiest way to get started is to start out with the actingwebdemo mini-application
+`http://acting-web-demo.readthedocs.io/ <http://acting-web-demo.readthedocs.io/>`_.
 
-It uses the webapp2 framework to set up the REST endpoints that the ActingWeb library uses to expose
-the bot functionality.
+It uses the Flask framework to set up all the REST endpoints that the ActingWeb library exposes, and pretty much
+the entire specification.
 
-If you want to use flask or any other framework, that is also easy, you just need to set up the routing between the
-endpoints and call the right request handlers in the library.
+If you want to use  another framework, that is  easy, the application.py shows how this is done for Flask.
 
-For each endpoint, you need to:
 
-- map the incoming route to your own handler and catch the necessary variables
-- in your handler, set up an aw_web_request object and copy in the request's data using the chosen web framework
-- call the right ActingWeb handler
-- copy over the results to your chosen web framework
-
-Webapp2 Example
+How it works
 ----------------
+An ActingWeb mini-application exposes an endpoint to create a new actor representing one instance on behalf of one
+person or entity. This could for example be the location of a mobile phone, and the app is thus a location app.
+The ActingWeb actor representing one mobile phones location can be reached on https://app-url.a-domain.io/actor-id and
+all the ActingWeb endpoints to get the location, subscribe to location updates and so on can be found below this
+actor root URL.
 
-With Webapp2, this is done the following way using the /<actor-id>/properties endpoint as an example:
+Below is an example of how the trust endpoint is exposed in the demo app.
+The same code here handles all the three different ways the trust endpoint can be invoked (to create a new trust
+relationship between two actors or change it). The Flask code maps these URL patterns and invokes the app_trust()
+function. In Handler, the Flask request is parsed and simplified into a dictionary that can be easily passed to the
+ActingWeb framework. The process() function is then invoked with the right parameters and finally get_response()
+is used to map the ActingWeb response into a Flask response.
 
-Set up route
-+++++++++++++
+Some endpoints can return template variables to be used in a rendered web output. The variables can be found in
+h.webobj.response.template_values and can easily be rendered with Jinja2 (Flask's template renderer) this way:
+return render_template('aw-actor-www-root.html', **h.webobj.response.template_values)
 
-
-``webapp2.Route(r'/<id>/properties<:/?><name:(.*)>', actor_properties.actor_properties)``
-
-Here, id and name are captured as variables.
-
-Handle the request like Webapp2 requires
-+++++++++++++++++++++++++++++++++++++++++
 
 ::
-
-    from actingweb import aw_web_request
-    from actingweb.handlers import properties
-
-    import webapp2
-
-    class actor_properties(webapp2.RequestHandler):
-
-        def init(self):
-            self.obj=aw_web_request.AWWebObj(
-                url=self.request.url,
-                params=self.request.params,
-                body=self.request.body,
-                headers=self.request.headers)
-            self.handler = properties.PropertiesHandler(self.obj, self.app.registry.get('config'))
-
-        def get(self, id, name):
-            self.init()
-            # Process the request
-            self.handler.get(id, name)
-            # Pass results back to webapp2
-            self.response.set_status(self.obj.response.status_code, self.obj.response.status_message)
-            self.response.headers = self.obj.response.headers
-            self.response.write(self.obj.response.body)
-
-       ...
-
-
-Here, the actor_properties is the handler as specified by Webapp2 where the get method is called by the framework.
-First thing it does is to initialize the request using the init() method. This method basically does two things:
-Instantiates an aw_web_request object with the Webapp2 request data, and then it creates an actingweb handler using
-the new object and an instance of the actingweb config object.
-
-Once that is done, the self.handler.get() method can be called, passing in the two variables from the URL.
-
-Finally, Webapp2 response is set using the output data from the aw_web_request object.
-
-For /properties, other methods must also be set up (put, post, and delete).
+    @app.route('/<actor_id>/trust', methods=['GET', 'POST', 'DELETE', 'PUT'], strict_slashes=False)
+    @app.route('/<actor_id>/trust/<relationship>', methods=['GET', 'POST', 'DELETE', 'PUT'], strict_slashes=False)
+    @app.route('/<actor_id>/trust/<relationship>/<peerid>', methods=['GET', 'POST', 'DELETE', 'PUT'], strict_slashes=False)
+    def app_trust(actor_id, relationship=None, peerid=None):
+        h = Handler(request)
+        if peerid:
+            if not h.process(actor_id=actor_id, relationship=relationship, peerid=peerid):
+                return Response(status=404)
+        elif relationship:
+            if not h.process(actor_id=actor_id, relationship=relationship):
+                return Response(status=404)
+        else:
+            if not h.process(actor_id=actor_id):
+                return Response(status=404)
+        return h.get_response()
 
 Config Object
 -------------
 
-In order to set the configuration, an instance of the config object should be passed into the actingweb handler.
+In order to set the configuration, the config function is used to return a config object that is
+passed into the actingweb framework.
 
-Here's how to instantiate it:`
-
-::
-
-    config = config.Config(
-        database='dynamodb',
-        fqdn="actingwebdemo.greger.io",
-        proto="http://")
+The ActingWebDemo app shows mostly empty values as placeholders where APP_HOST_FQDN is the only you must make sure
+matches the domain where the app is hosted.
 
 
 
@@ -97,10 +66,10 @@ All Configuration Variables and Their Defaults
     # Basic settings for this app
     fqdn = "actingwebdemo-dev.appspot.com"  # The host and domain, i.e. FQDN, of the URL
     proto = "https://"  # http or https
-    database = 'dynamodb'                          # 'dynamodb' or 'gae' for Google Datastore
+    database = 'dynamodb'                          # 'dynamodb', for future other databases supported
     ui = True                                      # Turn on the /www path
     devtest = True                                 # Enable /devtest path for test purposes, MUST be False in production
-    unique_creator = False                          # Will enforce unique creator field across all actors
+    unique_creator = False                         # Will enforce unique creator field across all actors
     force_email_prop_as_creator = True             # Use "email" property to set creator value (after creation and property set)
     www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
     logLevel = "DEBUG"                             # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
@@ -142,7 +111,7 @@ All Configuration Variables and Their Defaults
         'email': '',
     }
 
-    # If myself is not found in actors, the myself actor is added:
+    # myself should be an actor if we want actors to have relationships with other actors of the same type
     actors['myself'] = {
         'type': type,
         'factory': proto + fqdn + '/',

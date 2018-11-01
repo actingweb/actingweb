@@ -10,4 +10,8 @@ class CallbackOauthHandler(base_handler.BaseHandler):
             return
         code = self.request.get('code')
         actor_id = self.request.get('state')
-        self.response.set_redirect(self.config.root + str(actor_id) + '/oauth?code=' + str(code))
+        scope = self.request.get('scope')
+        url = self.config.root + str(actor_id) + '/oauth?code=' + str(code)
+        if scope:
+            url += '&scope=' + scope
+        self.response.set_redirect(url)

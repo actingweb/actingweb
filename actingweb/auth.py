@@ -214,7 +214,7 @@ class Auth(object):
             If lazy is true, refresh_token is used only if < 24h until expiry.
         """
         if not self.token or not self.expiry:
-            return self.oauth.oauth_redirect_uri(state=self.actor.id)
+            return self.oauth.oauth_redirect_uri(state=self.actor.id, creator=self.actor.creator)
         now = time.time()
         # Is the token still valid?
         if now < (float(self.expiry) - 20.0):
@@ -388,6 +388,7 @@ class Auth(object):
                 self.acl["relationship"] = "creator"
                 self.acl["authenticated"] = True
                 self.response['code'] = 200
+                self.response['text'] = "Ok"
                 self.authn_done = True
                 return True
             elif authz != self.token:

@@ -2,6 +2,13 @@
 CHANGELOG
 =========
 
+v2.4.4: Oct 31, 2018
+--------------------
+- Add support for scope GET parameter in callback from OAUTH2 provider
+- Add support for oauth_extras dict in oauth config to set additional config paramters
+- Add support for dynamic:creator in oauth_extras to preset login hint etc when forwarding to OAuth2 auth endpoints
+- Fix bug in oauth.put_request() where post was used instead of put
+
 v2.4.3: Sep 27, 2018
 --------------------
 - Don't do relative import with import_module, AWS Lambda gets a hiccup

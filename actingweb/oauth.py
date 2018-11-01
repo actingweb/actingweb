@@ -146,7 +146,7 @@ class OAuth(object):
                     method=self.config.module["urlfetch"].PUT,
                     headers=headers)
             else:
-                response = self.config.module["urlfetch"].post(url=url, data=data, headers=headers)
+                response = self.config.module["urlfetch"].put(url=url, data=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except (self.config.module["urlfetch"].UrlfetchException,
@@ -286,7 +286,7 @@ class OAuth(object):
             return {}
         return ret
 
-    def oauth_redirect_uri(self, state=''):
+    def oauth_redirect_uri(self, state='', creator=None):
         params = {
             'response_type': self.config.oauth['response_type'],
             'client_id': self.config.oauth['client_id'],
@@ -294,6 +294,12 @@ class OAuth(object):
             'scope': self.config.oauth['scope'],
             'state': state,
         }
+        if 'oauth_extras' in self.config.oauth:
+            for k, v in self.config.oauth['oauth_extras'].items():
+                if isinstance(v, str) and 'dynamic:' in v:
+                    if v[8:] == 'creator' and creator:
+                        v = creator
+                params[k] = v
         uri = self.config.oauth['auth_uri'] + "?" + urllib_urlencode(params)
         logging.info('OAuth redirect with url: ' + uri + ' and state:' + state)
         return uri

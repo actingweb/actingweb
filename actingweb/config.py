@@ -118,7 +118,7 @@ class Config(object):
         # If no match is found on path with the correct role, access is rejected
         # <type> and <id> are used as templates for trust types and ids
         self.access = [
-            # (role, path, method, access), e.g. ('friend', '/properties', '', 'rw')
+            # (role, path, method, access), e.g. ('friend', '/properties', '', 'a')
             # Roles: creator, trustee, associate, friend, partner, admin, any (i.e. authenticated),
             #        owner (i.e. trust peer owning the entity)
             #        + any other new role for this app

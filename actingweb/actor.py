@@ -92,6 +92,24 @@ class Actor(object):
             return
         self.get(actor_id=actor_id)
 
+    def get_from_creator(self, creator=None):
+        """ Initialise an actor by matching on creator.
+
+        If unique_creator config is False, then no actor will be initialised.
+        Likewise, if multiple properties are found with the same value (due to earlier
+        uniqueness off).
+        """
+        self.id = None
+        self.creator = None
+        self.passphrase = None
+        if not self.config.unique_creator:
+            return False
+        exists = self.config.DbActor.DbActor().get_by_creator(creator=creator)
+        if len(exists) != 1:
+            return False
+        self.get(actor_id=exists[0]["id"])
+        return True
+
     def create(self, url, creator, passphrase, actor_id=None, delete=False):
         """"Creates a new actor and persists it.
 

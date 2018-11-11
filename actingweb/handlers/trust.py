@@ -313,7 +313,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
         if myself.modify_trust_and_notify(relationship=relationship, peerid=peerid, peer_approved=peer_approved):
             self.response.set_status(204, 'Ok')
         else:
-            self.response.set_status(405, 'Not modified')
+            self.response.set_status(500, 'Not modified')
 
     def put(self, actor_id, relationship, peerid):
         (myself, check) = auth.init_actingweb(
@@ -360,7 +360,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                                           desc=desc):
             self.response.set_status(204, 'Ok')
         else:
-            self.response.set_status(405, 'Not modified')
+            self.response.set_status(500, 'Not modified')
 
     def delete(self, actor_id, relationship, peerid):
         (myself, check) = auth.init_actingweb(

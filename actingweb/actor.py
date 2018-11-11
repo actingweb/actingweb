@@ -31,9 +31,20 @@ class Actor(object):
         self.handle = self.config.DbActor.DbActor()
         self.get(actor_id=actor_id)
 
-    def get_peer_info(self,  url):
-        # type: (res) -> dict()
-        """Contacts an another actor over http/s to retrieve meta information."""
+    def get_peer_info(self, url: str) -> dict:
+        """ Contacts an another actor over http/s to retrieve meta information
+        :param url: Root URI of a remote actor
+        :rtype: dict
+        :return: The json response from the /meta path in the data element and last_response_code/last_response_message
+        set to the results of the https request
+        :Example:
+
+        >>>{
+        >>>    "last_response_code": 200,
+        >>>    "last_response_message": "OK",
+        >>>    "data":{}
+        >>>}
+        """
         try:
             logging.debug('Getting peer info at url(' + url + ')')
             if self.config.env == "appengine":
@@ -52,8 +63,8 @@ class Actor(object):
             }
         return res
 
-    def get(self, actor_id=None):
-        """Retrieves an actor from storage or initialises if it does not exist."""
+    def get(self, actor_id: str = None) -> dict or None:
+        """Retrieves an actor from storage or initialises if it does not exist"""
         if not actor_id and not self.id:
             return None
         elif not actor_id:

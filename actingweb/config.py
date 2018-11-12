@@ -21,9 +21,12 @@ class Config(object):
         self.ui = True
         # Enable /devtest path for test purposes, MUST be False in production
         self.devtest = True
+        # Enable migrate if you want to turn on code that enables migration from one version to another
+        # 2.4.4 : migrate oauth properties and email to internal attributes (myself.store)
+        self.migrate_2_4_4 = True
         # Will enforce unique creator field across all actors
         self.unique_creator = False
-        # Use "email" property to set creator value (after creation and property set)
+        # Use "email" internal value to set creator value (after creation and property set)
         self.force_email_prop_as_creator = True
         # basic or oauth: basic for creator + bearer tokens
         self.www_auth = "basic"
@@ -58,6 +61,8 @@ class Config(object):
                 self.ui = v
             elif k == 'devtest':
                 self.devtest = v
+            elif k == 'migrate_2_4_4':
+                self.migrate_2_4_4 = v
             elif k == 'unique_creator':
                 self.unique_creator = v
             elif k == 'force_email_prop_as_creator':

@@ -1,6 +1,33 @@
 from builtins import object
 
 
+class InternalStore(object):
+
+    def __init__(self, actor_id=None, config=None):
+        self._db = Attributes(actor_id=actor_id, bucket='_internal', config=config)
+        d = self._db.get_bucket()
+        if d:
+            for k, v in d.items():
+                self.__setattr__(k, v['data'])
+        self.__initialised = True
+
+    def __setattr__(self, k, v):
+        if '_InternalStore__initialised' not in self.__dict__:
+            return dict.__setattr__(self, k, v)
+        if v is None:
+            self.__dict__['_db'].delete_attr(name=k)
+            self.__delattr__(k)
+        else:
+            self.__dict__[k] = v
+            self.__dict__['_db'].set_attr(name=k, data=v)
+
+    def __getattr__(self, k):
+        try:
+            return self.__dict__[k]
+        except KeyError:
+            return None
+
+
 class Attributes(object):
     """
         Attributes is the main entity keeping an attribute.

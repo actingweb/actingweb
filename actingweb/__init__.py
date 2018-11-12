@@ -1,5 +1,6 @@
 __all__ = [
     "actor",
+    "attribute",
     "oauth",
     "auth",
     "aw_proxy",

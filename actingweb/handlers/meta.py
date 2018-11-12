@@ -18,7 +18,12 @@ class MetaHandler(base_handler.BaseHandler):
             self.response.set_status(403)
             return
 
-        trustee_root = myself.get_property('trustee_root').value
+        trustee_root = myself.store.trustee_root
+        if self.config.migrate_2_4_4 and not trustee_root:
+            trustee_root = myself.get_property('trustee_root').value
+            if trustee_root:
+                myself.store.trustee_root = trustee_root
+                myself.delete_property('trustee_root')
         if not trustee_root:
             trustee_root = ''
         if not path:

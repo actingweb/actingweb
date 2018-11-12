@@ -144,7 +144,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(400, 'No json content')
             return
         if len(trustee_root) > 0:
-            myself.set_property('trustee_root', trustee_root)
+            myself.store.trustee_root = trustee_root
         if creator:
             myself.modify(creator=creator)
         self.response.set_status(204, 'No content')

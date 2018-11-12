@@ -70,7 +70,7 @@ All Configuration Variables and Their Defaults
     ui = True                                      # Turn on the /www path
     devtest = True                                 # Enable /devtest path for test purposes, MUST be False in production
     unique_creator = False                         # Will enforce unique creator field across all actors
-    force_email_prop_as_creator = True             # Use "email" property to set creator value (after creation and property set)
+    force_email_prop_as_creator = True             # Use "email" internal property to set creator value (after creation and property set)
     www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
     logLevel = "DEBUG"                             # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
 

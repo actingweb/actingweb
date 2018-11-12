@@ -3,13 +3,9 @@ from builtins import str
 from builtins import object
 import datetime
 import base64
-from actingweb import property
-import json
-from actingweb import trust
-from actingweb import subscription
 import logging
-from actingweb import peertrustee
-from actingweb import attribute
+import json
+from actingweb import (property, trust, subscription, peertrustee, attribute)
 
 
 class Actor(object):
@@ -30,6 +26,7 @@ class Actor(object):
         self.id = actor_id
         self.handle = self.config.DbActor.DbActor()
         self.get(actor_id=actor_id)
+        self.store = attribute.InternalStore(actor_id=actor_id, config=config)
 
     def get_peer_info(self, url: str) -> dict:
         """ Contacts an another actor over http/s to retrieve meta information
@@ -77,7 +74,12 @@ class Actor(object):
             self.creator = self.actor["creator"]
             self.passphrase = self.actor["passphrase"]
             if self.config.force_email_prop_as_creator:
-                em = self.get_property("email").value
+                em = self.store.email
+                if self.config.migrate_2_4_4 and not em:
+                    em = self.get_property("email").value
+                    if em:
+                        self.store.email = em
+                        self.delete_property('email')
                 if em and len(em) > 0:
                     self.modify(creator=em)
         else:
@@ -140,7 +142,7 @@ class Actor(object):
             exists = in_db.get_by_creator(creator=self.creator)
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
-                # with creator as "creator". Check if we have a property "email" and then
+                # with creator as "creator". Check if we have an internal value "email" and then
                 # set creator to the email address.
                 if delete:
                     for c in exists:
@@ -150,7 +152,12 @@ class Actor(object):
                     if self.config.force_email_prop_as_creator and self.creator == "creator":
                         for c in exists:
                             anactor = Actor(actor_id=c["id"])
-                            em = anactor.get_property("email").value
+                            em = anactor.store.email
+                            if self.config.migrate_2_4_4 and not em:
+                                em = anactor.get_property("email").value
+                                if em:
+                                    anactor.store.email = em
+                                    anactor.delete_property('email')
                             if em and len(em) > 0:
                                 anactor.modify(creator=em)
                     for c in exists:

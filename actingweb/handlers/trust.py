@@ -166,7 +166,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if not check.check_authorisation(path='trust', method='DELETE'):
             self.response.set_status(403)
             return
-        myself.delete_property('trustee_root')
+        myself.store.trustee_root = None
         self.response.set_status(204, 'No content')
 
     def post(self, actor_id, relationship):

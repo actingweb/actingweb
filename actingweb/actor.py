@@ -8,6 +8,13 @@ import json
 from actingweb import (property, trust, subscription, peertrustee, attribute)
 
 
+class DummyPropertyClass:
+    """ Only used to deprecate get_property() in 2.4.4 """
+
+    def __init__(self, v=None):
+        self.value = v
+
+
 class Actor(object):
 
     ###################
@@ -27,6 +34,7 @@ class Actor(object):
         self.handle = self.config.DbActor.DbActor()
         self.get(actor_id=actor_id)
         self.store = attribute.InternalStore(actor_id=actor_id, config=config)
+        self.property = property.PropertyStore(actor_id=actor_id, config=config)
 
     def get_peer_info(self, url: str) -> dict:
         """ Contacts an another actor over http/s to retrieve meta information
@@ -76,10 +84,10 @@ class Actor(object):
             if self.config.force_email_prop_as_creator:
                 em = self.store.email
                 if self.config.migrate_2_4_4 and not em:
-                    em = self.get_property("email").value
+                    em = self.property.email
                     if em:
                         self.store.email = em
-                        self.delete_property('email')
+                        self.property.email = None
                 if em and len(em) > 0:
                     self.modify(creator=em)
         else:
@@ -154,11 +162,11 @@ class Actor(object):
                             anactor = Actor(actor_id=c["id"])
                             em = anactor.store.email
                             if self.config.migrate_2_4_4 and not em:
-                                em = anactor.get_property("email").value
+                                em = anactor.property.email
                                 if em:
                                     anactor.store.email = em
-                                    anactor.delete_property('email')
-                            if em and len(em) > 0:
+                                    anactor.property.email = None
+                            if em:
                                 anactor.modify(creator=em)
                     for c in exists:
                         if c['passphrase'] == passphrase:
@@ -181,6 +189,8 @@ class Actor(object):
         self.handle.create(creator=self.creator,
                            passphrase=self.passphrase,
                            actor_id=self.id)
+        self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+        self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         return True
 
     def modify(self, creator=None):
@@ -219,19 +229,16 @@ class Actor(object):
     ######################
 
     def set_property(self, name, value):
-        """Sets an actor's property name to value."""
-        prop = property.Property(self.id, name, config=self.config)
-        prop.set(value)
+        """Sets an actor's property name to value. (DEPRECATED, use actor's property store!) """
+        self.property[name] = value
 
     def get_property(self, name):
-        """Retrieves a property object named name."""
-        prop = property.Property(self.id, name, config=self.config)
-        return prop
+        """Retrieves a property object named name. (DEPRECATED, use actor's property store!) """
+        return DummyPropertyClass(self.property[name])
 
     def delete_property(self, name):
-        """Deletes a property name."""
-        prop = property.Property(self.id, name, config=self.config)
-        prop.delete()
+        """Deletes a property name. (DEPRECATED, use actor's property store!)"""
+        self.property[name] = None
 
     def delete_properties(self):
         """Deletes all properties."""

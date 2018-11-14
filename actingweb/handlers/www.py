@@ -40,12 +40,12 @@ class WwwHandler(base_handler.BaseHandler):
             }
             return
         if path == 'property':
-            lookup = myself.get_property(self.request.get('name'))
-            if lookup.value:
+            lookup = myself.property[self.request.get('name')]
+            if lookup:
                 self.response.template_values = {
                     'id': myself.id,
                     'property': lookup.name,
-                    'value': lookup.value,
+                    'value': lookup,
                     'qual': '',
                 }
             else:

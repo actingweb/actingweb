@@ -149,33 +149,33 @@ class Auth(object):
             self.refresh_token = None
             return
         # We need to initialise oauth for use towards the external oauth service
-        self.property = 'oauth_token'  # Property name used to set self.token
+        self.oauth_token_property = 'oauth_token'  # Property name used to set self.token
         self.token = self.actor.store.oauth_token
         if self.config.migrate_2_4_4 and not self.token:
-            self.token = self.actor.get_property('oauth_token').value
+            self.token = self.actor.property.oauth_token
             if self.token:
                 self.actor.store.oauth_token = self.token
-                self.actor.delete_property('oauth_token')
+                self.actor.property.oauth_token = None
         self.oauth = oauth.OAuth(token=self.token, config=self.config)
         self.expiry = self.actor.store.oauth_token_expiry
         self.refresh_expiry = self.actor.store.oauth_refresh_token_expiry
         self.refresh_token = self.actor.store.oauth_refresh_token
         if self.config.migrate_2_4_4:
             if not self.expiry:
-                self.expiry = self.actor.get_property('oauth_token_expiry').value
+                self.expiry = self.actor.property.oauth_token_expiry
                 if self.expiry:
                     self.actor.store.oauth_token_expiry = self.expiry
-                    self.actor.delete_property('oauth_token_expiry')
+                    self.actor.property.oauth_token_expiry = None
             if not self.refresh_expiry:
-                self.refresh_expiry = self.actor.get_property('oauth_refresh_token_expiry').value
+                self.refresh_expiry = self.actor.property.oauth_refresh_token_expiry
                 if self.refresh_expiry:
                     self.actor.store.oauth_refresh_token_expiry = self.refresh_expiry
-                    self.actor.delete_property('oauth_refresh_token_expiry')
+                    self.actor.property.oauth_refresh_token_expiry = None
             if not self.refresh_token:
-                self.refresh_token = self.actor.get_property('oauth_refresh_token').value
+                self.refresh_token = self.actor.property.oauth_refresh_token
                 if self.refresh_token:
                     self.actor.store.oauth_refresh_token = self.refresh_token
-                    self.actor.delete_property('oauth_refresh_token')
+                    self.actor.property.oauth_refresh_token = None
         if self.type == 'basic':
             self.realm = self.config.auth_realm
         elif self.type == 'oauth':
@@ -183,10 +183,10 @@ class Auth(object):
                 self.cookie = 'oauth_token'
                 redir = self.actor.store.cookie_redirect
                 if self.config.migrate_2_4_4 and not redir:
-                    redir = self.actor.get_property('cookie_redirect').value
+                    redir = self.actor.property.cookie_redirect
                     if redir:
                         self.actor.store.cookie_redirect = redir
-                        self.actor.delete_property('cookie_redirect')
+                        self.actor.property.cookie_redirect = None
                 if redir:
                     self.cookie_redirect = self.config.root + redir
                 else:
@@ -414,7 +414,7 @@ class Auth(object):
                 self.authn_done = True
                 return True
             elif authz != self.token:
-                self.actor.delete_property(self.property)
+                self.actor.property[self.oauth_token_property] = None
                 logging.debug('Authorization cookie header does not match a valid token')
                 self.response['code'] = 403
                 self.response['text'] = "Forbidden"
@@ -500,10 +500,10 @@ class Auth(object):
         self.authn_done = True
         trustee = self.actor.store.trustee_root
         if self.config.migrate_2_4_4 and not trustee:
-            trustee = self.actor.get_property('trustee_root').value
+            trustee = self.actor.property.trustee_root
             if trustee:
+                self.actor.property.trustee_root = None
                 self.actor.store.trustee_root = trustee
-                self.actor.delete_property('trustee_root')
         # If trustee_root is set, creator name is 'trustee' and
         # bit strength of passphrase is > 80, use passphrase as
         # token

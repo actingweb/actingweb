@@ -28,12 +28,16 @@ class Actor(object):
         self.actor = None
         self.passphrase = None
         self.creator = None
+        if self.config.encrypt:
+            self.key = b'SIhIvdRbnzb6iMqmhd-jzs_YB5ZOGgnrYFZfG4Dl_80='
+        else:
+            self.key = None
         self.last_response_code = 0
         self.last_response_message = ''
         self.id = actor_id
         self.handle = self.config.DbActor.DbActor()
         self.get(actor_id=actor_id)
-        self.store = attribute.InternalStore(actor_id=actor_id, config=config)
+        self.store = attribute.InternalStore(actor_id=actor_id, config=config, key=self.key)
         self.property = property.PropertyStore(actor_id=actor_id, config=config)
 
     def get_peer_info(self, url: str) -> dict:

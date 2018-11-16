@@ -1,18 +1,36 @@
 from builtins import object
+from cryptography.fernet import Fernet
+import logging
 
 
 class InternalStore(object):
     """ Access to internal attributes using .prop notation
     """
 
-    def __init__(self, actor_id=None, config=None, bucket=None):
+    def __init__(self, actor_id=None, config=None, bucket=None, key=None):
         if not bucket:
             bucket = '_internal'
+        self._key = key
         self._db = Attributes(actor_id=actor_id, bucket=bucket, config=config)
         d = self._db.get_bucket()
         if d:
             for k, v in d.items():
-                self.__setattr__(k, v['data'])
+                for k2, v2 in v.get('data', {}).items():
+                    if self._key and '_$' in v2.get('data', '...')[0:2]:
+                        s = v2.get('data')[2:].encode('utf-8')
+                        decrypted = Fernet(self._key).decrypt(s).decode('utf-8')
+                        self.__setattr__(k2, decrypted)
+                    else:
+                        self.__setattr__(k2, v2.get('data'))
+                        # If value was not encrypted, but we have a key, encryption was just turned on
+                        if self._key:
+                            self._db.set_attr(name=k2, data={
+                                k2: {
+                                    'data': (b'_$' + Fernet(self._key).encrypt(v2.get('data', '').
+                                                                               encode('utf-8'))).decode('utf-8'),
+                                    'timestamp': None
+                                }
+                            })
         self.__initialised = True
 
     def __getitem__(self, k):
@@ -32,7 +50,20 @@ class InternalStore(object):
                 self.__delattr__(k)
         else:
             self.__dict__[k] = v
-            self.__dict__['_db'].set_attr(name=k, data=v)
+            if self.__dict__['_key']:
+                self.__dict__['_db'].set_attr(name=k, data={
+                    k: {
+                        'data': (b'_$' + Fernet(self._key).encrypt(v.encode('utf-8'))).decode('utf-8'),
+                        'timestamp': None
+                    }
+                })
+            else:
+                self.__dict__['_db'].set_attr(name=k, data={
+                    k: {
+                        'data': v,
+                        'timestamp': None
+                    }
+                })
 
     def __getattr__(self, k):
         try:
@@ -67,7 +98,7 @@ class Attributes(object):
         """ Sets new data for this attribute """
         if not self.actor_id or not self.bucket:
             return False
-        if name not in data:
+        if name not in self.data:
             self.data[name] = {}
         self.data[name]["data"] = data
         self.data[name]["timestamp"] = timestamp

@@ -16,21 +16,28 @@ class InternalStore(object):
         if d:
             for k, v in d.items():
                 for k2, v2 in v.get('data', {}).items():
-                    if self._key and '_$' in v2.get('data', '...')[0:2]:
-                        s = v2.get('data')[2:].encode('utf-8')
-                        decrypted = Fernet(self._key).decrypt(s).decode('utf-8')
-                        self.__setattr__(k2, decrypted)
-                    else:
-                        self.__setattr__(k2, v2.get('data'))
-                        # If value was not encrypted, but we have a key, encryption was just turned on
-                        if self._key:
-                            self._db.set_attr(name=k2, data={
-                                k2: {
-                                    'data': (b'_$' + Fernet(self._key).encrypt(v2.get('data', '').
-                                                                               encode('utf-8'))).decode('utf-8'),
-                                    'timestamp': None
-                                }
-                            })
+                    if self._key:
+                        if '_$' in v2.get('data', '...')[0:2]:
+                            s = v2.get('data')[2:].encode('utf-8')
+                            decrypted = Fernet(self._key).decrypt(s).decode('utf-8')
+                            self.__setattr__(k2, decrypted)
+                        else:
+                            self.__setattr__(k2, v2.get('data'))
+                            # If value was not encrypted, but we have a key, encryption was just turned on
+                            if self._key:
+                                self._db.set_attr(name=k2, data={
+                                    k2: {
+                                        'data': (b'_$' + Fernet(self._key).encrypt(v2.get('data', '').
+                                                                                   encode('utf-8'))).decode('utf-8'),
+                                        'timestamp': None
+                                    }
+                                })
+                    else:  # No key
+                        if '_$' in v2.get('data', '...')[0:2]:
+                            raise ValueError('Have no key, but data is encrypted')
+                        else:
+                            self.__setattr__(k2, v2.get('data'))
+
         self.__initialised = True
 
     def __getitem__(self, k):

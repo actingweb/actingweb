@@ -151,7 +151,7 @@ class Auth(object):
         # We need to initialise oauth for use towards the external oauth service
         self.oauth_token_property = 'oauth_token'  # Property name used to set self.token
         self.token = self.actor.store.oauth_token
-        if self.config.migrate_2_4_4 and not self.token:
+        if self.config.migrate_2_5_0 and not self.token:
             self.token = self.actor.property.oauth_token
             if self.token:
                 self.actor.store.oauth_token = self.token
@@ -160,7 +160,7 @@ class Auth(object):
         self.expiry = self.actor.store.oauth_token_expiry
         self.refresh_expiry = self.actor.store.oauth_refresh_token_expiry
         self.refresh_token = self.actor.store.oauth_refresh_token
-        if self.config.migrate_2_4_4:
+        if self.config.migrate_2_5_0:
             if not self.expiry:
                 self.expiry = self.actor.property.oauth_token_expiry
                 if self.expiry:
@@ -182,7 +182,7 @@ class Auth(object):
             if self.oauth.enabled():
                 self.cookie = 'oauth_token'
                 redir = self.actor.store.cookie_redirect
-                if self.config.migrate_2_4_4 and not redir:
+                if self.config.migrate_2_5_0 and not redir:
                     redir = self.actor.property.cookie_redirect
                     if redir:
                         self.actor.store.cookie_redirect = redir
@@ -499,7 +499,7 @@ class Auth(object):
             return False
         self.authn_done = True
         trustee = self.actor.store.trustee_root
-        if self.config.migrate_2_4_4 and not trustee:
+        if self.config.migrate_2_5_0 and not trustee:
             trustee = self.actor.property.trustee_root
             if trustee:
                 self.actor.property.trustee_root = None

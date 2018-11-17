@@ -19,7 +19,7 @@ class MetaHandler(base_handler.BaseHandler):
             return
 
         trustee_root = myself.store.trustee_root
-        if self.config.migrate_2_4_4 and not trustee_root:
+        if self.config.migrate_2_5_0 and not trustee_root:
             trustee_root = myself.property.trustee_root
             if trustee_root:
                 myself.property.trustee_root = None

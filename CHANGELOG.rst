@@ -2,12 +2,36 @@
 CHANGELOG
 =========
 
-v2.4.4: Oct 31, 2018
+v2.5.0: Nov 17, 2018
 --------------------
-- Add support for scope GET parameter in callback from OAUTH2 provider
-- Add support for oauth_extras dict in oauth config to set additional config paramters
+- Add support for scope GET parameter in callback from OAUTH2 provider (useful for e.g. Google)
+- Add support for oauth_extras dict in oauth config to set additional oauth paramters forwarded to OAUTH2 provider
+  (Google uses this)
 - Add support for dynamic:creator in oauth_extras to preset login hint etc when forwarding to OAuth2 auth endpoints
+  (if creator==email, this allows you to send Google hint on which account to use with 'login_hint': 'dynamic:creator'
+  in oauth_extras in config
+- Add support for actor get_from_creator() to initialise an actor from a creator (only usable together with config
+variable unique_creator)
+- Add support for get_properties(), delete_properties(), put_properties(), and post_properties in the on_aw() class.
+  These allows on_aw overriding functions to process any old and new properties and return the resulting properties
+  to be stored, deleted, or returned
+- Move all internal (oauth_token, oauth_token_expiry, oauth_refresh_token, oauth_token_refresh_token_expiry,
+  cookie_redirect, and trustee_root) data from properties (where they are exposed on GET /<actor_id>/properties) to internal
+  variable store (attributes). Introduce config variable migrate_2_5_0 (default True) that will look for properties
+  with oauth variable names if not found in internal store and move them over to internal store (should be turned
+  off when all actors have migrated their oauth properties over to store)
+- Add new interface InternalStore() (attribute.py) for storing and retrieving internal variables on an actor (i.e.
+  attributes). All actors now have .store that can be used either as a dict or dot-notation. actor.store.var = 'this'
+  or actor.store['var'] = 'this'. Set the variable to None to delete it. All variables are immediately stored to the
+  database. Note that variable values must be json serializable
+- Add new interface PropertyStore() (property.py) for storing and retrieving properties. Used just like InternalStore()
+  and access through actor.property.my_var or actor.property['my_var']
+- InternaStore(actor_id=None, config=None, bucket=None) can be used independently and the optional bucket parameter
+  allows you to create an internal store that stores a set of variables in a specific bucket. A bucket is retrieved
+  all at once and variables are written to database immediately
+- Fix issue where downstream (trusts) server processing errors resulted in 405 instead of 500 error code
 - Fix bug in oauth.put_request() where post was used instead of put
+- Fix issue where 200 had Forbidden text
 
 v2.4.3: Sep 27, 2018
 --------------------

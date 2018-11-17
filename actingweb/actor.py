@@ -83,7 +83,7 @@ class Actor(object):
             self.passphrase = self.actor["passphrase"]
             if self.config.force_email_prop_as_creator:
                 em = self.store.email
-                if self.config.migrate_2_4_4 and not em:
+                if self.config.migrate_2_5_0 and not em:
                     em = self.property.email
                     if em:
                         self.store.email = em
@@ -161,7 +161,7 @@ class Actor(object):
                         for c in exists:
                             anactor = Actor(actor_id=c["id"])
                             em = anactor.store.email
-                            if self.config.migrate_2_4_4 and not em:
+                            if self.config.migrate_2_5_0 and not em:
                                 em = anactor.property.email
                                 if em:
                                     anactor.store.email = em

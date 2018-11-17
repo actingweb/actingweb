@@ -1,6 +1,5 @@
 from builtins import object
 from cryptography.fernet import Fernet
-import logging
 
 
 class InternalStore(object):
@@ -25,13 +24,11 @@ class InternalStore(object):
                             self.__setattr__(k2, v2.get('data'))
                             # If value was not encrypted, but we have a key, encryption was just turned on
                             if self._key:
-                                self._db.set_attr(name=k2, data={
-                                    k2: {
-                                        'data': (b'_$' + Fernet(self._key).encrypt(v2.get('data', '').
-                                                                                   encode('utf-8'))).decode('utf-8'),
-                                        'timestamp': None
-                                    }
-                                })
+                                self._db.set_attr(
+                                    name=k2,
+                                    data=(b'_$' + Fernet(self._key).encrypt(v2.get('data', '').
+                                                                            encode('utf-8'))).decode('utf-8')
+                                )
                     else:  # No key
                         if '_$' in v2.get('data', '...')[0:2]:
                             raise ValueError('Have no key, but data is encrypted')
@@ -58,19 +55,10 @@ class InternalStore(object):
         else:
             self.__dict__[k] = v
             if self.__dict__['_key']:
-                self.__dict__['_db'].set_attr(name=k, data={
-                    k: {
-                        'data': (b'_$' + Fernet(self._key).encrypt(v.encode('utf-8'))).decode('utf-8'),
-                        'timestamp': None
-                    }
-                })
+                self.__dict__['_db'].set_attr(
+                    name=k, data=(b'_$' + Fernet(self._key).encrypt(v.encode('utf-8'))).decode('utf-8'))
             else:
-                self.__dict__['_db'].set_attr(name=k, data={
-                    k: {
-                        'data': v,
-                        'timestamp': None
-                    }
-                })
+                self.__dict__['_db'].set_attr(name=k, data=v)
 
     def __getattr__(self, k):
         try:

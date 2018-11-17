@@ -12,7 +12,7 @@ class InternalStore(object):
         d = self._db.get_bucket()
         if d:
             for k, v in d.items():
-                self.__setattr__(k, v['data'])
+                self.__setattr__(k, v.get('data'))
         self.__initialised = True
 
     def __getitem__(self, k):
@@ -67,7 +67,7 @@ class Attributes(object):
         """ Sets new data for this attribute """
         if not self.actor_id or not self.bucket:
             return False
-        if name not in data:
+        if name not in self.data:
             self.data[name] = {}
         self.data[name]["data"] = data
         self.data[name]["timestamp"] = timestamp

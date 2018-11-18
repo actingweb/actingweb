@@ -32,9 +32,9 @@ class Actor(object):
         self.last_response_message = ''
         self.id = actor_id
         self.handle = self.config.DbActor.DbActor()
-        self.get(actor_id=actor_id)
         self.store = attribute.InternalStore(actor_id=actor_id, config=config)
         self.property = property.PropertyStore(actor_id=actor_id, config=config)
+        self.get(actor_id=actor_id)
 
     def get_peer_info(self, url: str) -> dict:
         """ Contacts an another actor over http/s to retrieve meta information

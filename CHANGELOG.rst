@@ -4,6 +4,8 @@ CHANGELOG
 
 v2.5.0: Nov 17, 2018
 --------------------
+- BREAKING: /www/properties template_values now return a dict with { 'key': value} instead of list of { 'name': 'key',
+  'value': value}
 - Add support for scope GET parameter in callback from OAUTH2 provider (useful for e.g. Google)
 - Add support for oauth_extras dict in oauth config to set additional oauth paramters forwarded to OAUTH2 provider
   (Google uses this)

@@ -32,8 +32,12 @@ class Actor(object):
         self.last_response_message = ''
         self.id = actor_id
         self.handle = self.config.DbActor.DbActor()
-        self.store = attribute.InternalStore(actor_id=actor_id, config=config)
-        self.property = property.PropertyStore(actor_id=actor_id, config=config)
+        if actor_id and config:
+            self.store = attribute.InternalStore(actor_id=actor_id, config=config)
+            self.property = property.PropertyStore(actor_id=actor_id, config=config)
+        else:
+            self.store = None
+            self.property = None
         self.get(actor_id=actor_id)
 
     def get_peer_info(self, url: str) -> dict:
@@ -81,6 +85,8 @@ class Actor(object):
             self.id = self.actor["id"]
             self.creator = self.actor["creator"]
             self.passphrase = self.actor["passphrase"]
+            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            self.property = property.PropertyStore(actor_id=self.id, config=self.config)
             if self.config.force_email_prop_as_creator:
                 em = self.store.email
                 if self.config.migrate_2_5_0 and not em:

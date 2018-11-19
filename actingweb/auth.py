@@ -405,6 +405,7 @@ class Auth(object):
             if appreq.request.get('refresh') and appreq.request.get('refresh').lower() == 'true':
                 # Clear cookie and do a refresh if refresh=True is in GET param
                 authz = ''
+                self.actor.store.oauth_token = None
             if authz == self.token and now < (float(self.expiry) - 20.0):
                 logging.debug('Authorization cookie header matches a valid token')
                 self.acl["relationship"] = "creator"

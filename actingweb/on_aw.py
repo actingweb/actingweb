@@ -5,6 +5,7 @@ import json
 
 # noinspection PyMethodMayBeStatic,PyUnusedLocal
 class OnAWBase(object):
+    """ Base class to be extended to extend ActingWeb functionality """
 
     def __init__(self):
         self.config = None
@@ -60,6 +61,7 @@ class OnAWBase(object):
 
     def get_properties(self, path: list, data: dict) -> dict or None:
         """ Called on GET to properties for transformations to be done
+
         :param path: Target path requested
         :type path: list[str]
         :param data: Data retrieved from data store to be returned
@@ -71,6 +73,7 @@ class OnAWBase(object):
 
     def delete_properties(self, path: list, old: dict, new: dict) -> bool:
         """ Called on DELETE to properties
+
         :param path: Target path to be deleted
         :type path: list[str]
         :param old: Property value that will be deleted (or changed)
@@ -97,6 +100,7 @@ class OnAWBase(object):
 
     def post_properties(self, prop: str, data: dict) -> dict or None:
         """ Called on POST to properties, once for each property
+
         :param prop: Property to be created
         :type prop: str
         :param data: The data to be stored in prop

@@ -63,7 +63,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
         except (TypeError, ValueError, KeyError):
-            self.response.set_status(405, "Error in json body")
+            self.response.set_status(400, "Error in json body")
             return
         pair = self.on_aw.put_resources(name=name, params=params)
         if pair:
@@ -91,7 +91,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         try:
             params = json.loads(self.request.body.decode('utf-8', 'ignore'))
         except (TypeError, ValueError, KeyError):
-            self.response.set_status(405, "Error in json body")
+            self.response.set_status(400, "Error in json body")
             return
         pair = self.on_aw.post_resources(name=name, params=params)
         if pair:

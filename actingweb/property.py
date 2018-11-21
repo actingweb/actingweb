@@ -1,6 +1,41 @@
 from builtins import object
 
 
+class PropertyStore(object):
+
+    def __init__(self, actor_id=None, config=None):
+        self._actor_id = actor_id
+        self._config = config
+        self.__initialised = True
+
+    def __getitem__(self, k):
+        return self.__getattr__(k)
+
+    def __setitem__(self, k, v):
+        return self.__setattr__(k, v)
+
+    def __setattr__(self, k, v):
+        if '_PropertyStore__initialised' not in self.__dict__:
+            return object.__setattr__(self, k, v)
+        if v is None:
+            if k in self.__dict__:
+                self.__delattr__(k)
+        else:
+            self.__dict__[k] = v
+        # Re-init property to avoid overwrite
+        self.__dict__['_db'] = self.__dict__['_config'].DbProperty.DbProperty()
+        # set() will retrieve an attribute and delete it if value = None
+        self.__dict__['_db'].set(actor_id=self.__dict__['_actor_id'], name=k, value=v)
+
+    def __getattr__(self, k):
+        try:
+            return self.__dict__[k]
+        except KeyError:
+            self.__dict__['_db'] = self.__dict__['_config'].DbProperty.DbProperty()
+            self.__dict__[k] = self.__dict__['_db'].get(actor_id=self.__dict__['_actor_id'], name=k)
+            return self.__dict__[k]
+
+
 class Property(object):
     """
         property is the main entity keeping a property.
@@ -47,7 +82,7 @@ class Property(object):
     def get_actor_id(self):
         return self.actor_id
 
-    def __init__(self,  actor_id=None, name=None, value=None, config=None):
+    def __init__(self, actor_id=None, name=None, value=None, config=None):
         """ A property must be initialised with actor_id and name or
             name and value (to find an actor's property of a certain value)
         """

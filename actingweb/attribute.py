@@ -1,6 +1,46 @@
 from builtins import object
 
 
+class InternalStore(object):
+    """ Access to internal attributes using .prop notation
+    """
+
+    def __init__(self, actor_id=None, config=None, bucket=None):
+        if not bucket:
+            bucket = '_internal'
+        self._db = Attributes(actor_id=actor_id, bucket=bucket, config=config)
+        d = self._db.get_bucket()
+        if d:
+            for k, v in d.items():
+                self.__setattr__(k, v.get('data'))
+        self.__initialised = True
+
+    def __getitem__(self, k):
+        return self.__getattr__(k)
+
+    def __setitem__(self, k, v):
+        return self.__setattr__(k, v)
+
+    def __setattr__(self, k, v):
+        if '_InternalStore__initialised' not in self.__dict__:
+            return object.__setattr__(self, k, v)
+        if k is None:
+            raise ValueError
+        if v is None:
+            self.__dict__['_db'].delete_attr(name=k)
+            if k in self.__dict__:
+                self.__delattr__(k)
+        else:
+            self.__dict__[k] = v
+            self.__dict__['_db'].set_attr(name=k, data=v)
+
+    def __getattr__(self, k):
+        try:
+            return self.__dict__[k]
+        except KeyError:
+            return None
+
+
 class Attributes(object):
     """
         Attributes is the main entity keeping an attribute.

@@ -259,12 +259,12 @@ class SubscriptionHandler(base_handler.BaseHandler):
             if 'sequence' in params:
                 seq = params['sequence']
             else:
-                self.response.set_status(405, "Error in json body and no GET parameters")
+                self.response.set_status(400, "Error in json body and no GET parameters")
                 return
         except (TypeError, ValueError, KeyError):
             seq = self.request.get('sequence')
             if len(seq) == 0:
-                self.response.set_status(405, "Error in json body and no GET parameters")
+                self.response.set_status(400, "Error in json body and no GET parameters")
                 return
         try:
             if not isinstance(seq, int):
@@ -272,7 +272,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
             else:
                 seqnr = seq
         except ValueError:
-            self.response.set_status(405, "Sequence does not contain a number")
+            self.response.set_status(400, "Sequence does not contain a number")
             return
         sub = myself.get_subscription_obj(peerid=peerid, subid=subid)
         if not sub:

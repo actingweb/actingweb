@@ -21,9 +21,12 @@ class Config(object):
         self.ui = True
         # Enable /devtest path for test purposes, MUST be False in production
         self.devtest = True
+        # Enable migrate if you want to turn on code that enables migration from one version to another
+        # 2.4.4 : migrate oauth properties and email to internal attributes (myself.store)
+        self.migrate_2_5_0 = True
         # Will enforce unique creator field across all actors
         self.unique_creator = False
-        # Use "email" property to set creator value (after creation and property set)
+        # Use "email" internal value to set creator value (after creation and property set)
         self.force_email_prop_as_creator = True
         # basic or oauth: basic for creator + bearer tokens
         self.www_auth = "basic"
@@ -42,49 +45,6 @@ class Config(object):
         #########
         self.default_relationship = "associate"  # Default relationship if not specified
         self.auto_accept_default_relationship = False  # True if auto-approval
-        # Pick up the config variables
-        for k, v in kwargs.items():
-            if k == 'database':
-                self.database = v
-                if v == 'gae':
-                    self.env = 'appengine'
-                elif v == 'dynamodb':
-                    self.env = 'aws'
-            elif k == 'fqdn':
-                self.fqdn = v
-            elif k == 'proto':
-                self.proto = v
-            elif k == 'ui':
-                self.ui = v
-            elif k == 'devtest':
-                self.devtest = v
-            elif k == 'unique_creator':
-                self.unique_creator = v
-            elif k == 'force_email_prop_as_creator':
-                self.force_email_prop_as_creator = v
-            elif k == 'www_auth':
-                self.www_auth = v
-            elif k == 'logLevel':
-                if v == "DEBUG":
-                    self.logLevel = logging.DEBUG
-                elif v == "WARN":
-                    self.logLevel = logging.WARN
-                elif v == "INFO":
-                    self.logLevel = logging.INFO
-            elif k == "aw_type":
-                self.aw_type = v
-            elif k == "desc":
-                self.desc = v
-            elif k == "specification":
-                self.specification = v
-            elif k == "version":
-                self.version = v
-            elif k == "info":
-                self.info = v
-            elif k == "default_relationship":
-                self.default_relationship = v
-            elif k == 'auto_accept_default_relationship':
-                self.auto_accept_default_relationship = v
         #########
         # Known and trusted ActingWeb actors
         #########
@@ -118,7 +78,7 @@ class Config(object):
         # If no match is found on path with the correct role, access is rejected
         # <type> and <id> are used as templates for trust types and ids
         self.access = [
-            # (role, path, method, access), e.g. ('friend', '/properties', '', 'rw')
+            # (role, path, method, access), e.g. ('friend', '/properties', '', 'a')
             # Roles: creator, trustee, associate, friend, partner, admin, any (i.e. authenticated),
             #        owner (i.e. trust peer owning the entity)
             #        + any other new role for this app
@@ -151,16 +111,21 @@ class Config(object):
             ('trustee', '/', '', 'a'),
             ('admin', '/', '', 'a'),
         ]
-        # Pick up the more complex config variables
+        # Pick up the config variables
         for k, v in kwargs.items():
-            if k == 'actors':
-                self.actors = v
-            elif k == 'oauth':
-                self.oauth = v
-            elif k == 'bot':
-                self.bot = v
-            elif k == 'access':
-                self.access = v
+            self.__setattr__(k, v)
+        if self.database == 'gae':
+            self.env = 'appengine'
+        elif self.database == 'dynamodb':
+            self.env = 'aws'
+        if self.logLevel == "DEBUG":
+            self.logLevel = logging.DEBUG
+        elif self.logLevel == "WARN":
+            self.logLevel = logging.WARN
+        elif self.logLevel == "INFO":
+            self.logLevel = logging.INFO
+        else:
+            self.logLevel = logging.DEBUG
         if 'myself' not in self.actors:
             # Add myself as a known type
             self.actors['myself'] = {

@@ -87,12 +87,12 @@ class CallbacksHandler(base_handler.BaseHandler):
                 try:
                     params = json.loads(self.request.body.decode('utf-8', 'ignore'))
                 except (TypeError, ValueError, KeyError):
-                    self.response.set_status(405, "Error in json body")
+                    self.response.set_status(400, "Error in json body")
                     return
                 if self.on_aw.post_subscriptions(sub=sub, peerid=peerid, data=params):
                     self.response.set_status(204, 'Found')
                 else:
-                    self.response.set_status(405, 'Processing error')
+                    self.response.set_status(400, 'Processing error')
                 return
             self.response.set_status(404, 'Not found')
             return

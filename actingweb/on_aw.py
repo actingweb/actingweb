@@ -5,6 +5,7 @@ import json
 
 # noinspection PyMethodMayBeStatic,PyUnusedLocal
 class OnAWBase(object):
+    """ Base class to be extended to extend ActingWeb functionality """
 
     def __init__(self):
         self.config = None
@@ -35,7 +36,7 @@ class OnAWBase(object):
         #     body = json.loads(req.request.body.decode('utf-8', 'ignore'))
         #     logging.debug('Bot callback: ' + req.request.body.decode('utf-8', 'ignore'))
         # except:
-        #     return 405
+        #     return 400
         #
         # This is how actor can be initialised if the bot request
         # contains a value that has been stored as an actor property.
@@ -52,17 +53,68 @@ class OnAWBase(object):
         #    myself.create(url=self.config.root, creator= <EMAIL>,
         #                    passphrase=self.config.new_token())
         # Now store the oauthId propery
-        #    myself.set_property('oauthId', <ID-VALUE>)
+        #    myself.store.oauthId = <ID-VALUE>
         # Send confirmation message that actor has been created
         #    return True
         # Do something
         return True
 
+    def get_properties(self, path: list, data: dict) -> dict or None:
+        """ Called on GET to properties for transformations to be done
+
+        :param path: Target path requested
+        :type path: list[str]
+        :param data: Data retrieved from data store to be returned
+        :type data: dict
+        :return: The transformed data to return to requestor or None if 404 should be returned
+        :rtype: dict or None
+        """
+        return data
+
+    def delete_properties(self, path: list, old: dict, new: dict) -> bool:
+        """ Called on DELETE to properties
+
+        :param path: Target path to be deleted
+        :type path: list[str]
+        :param old: Property value that will be deleted (or changed)
+        :type old: dict
+        :param new: Property value after path has been deleted
+        :type new: dict
+        :return: True if DELETE is allowed, False if 403 should be returned
+        :rtype: bool
+        """
+        return True
+
+    def put_properties(self, path: list, old: dict, new: dict) -> dict or None:
+        """ Called on PUT to properties for transformations to be done before save
+        :param path: Target path requested to be updated
+        :type path: list[str]
+        :param old: Old data from database
+        :type old: dict
+        :param new:
+        :type new: New data from PUT request (after merge)
+        :return: The dict that should be stored or None if 400 should be returned and nothing stored
+        :rtype: dict or None
+        """
+        return new
+
+    def post_properties(self, prop: str, data: dict) -> dict or None:
+        """ Called on POST to properties, once for each property
+
+        :param prop: Property to be created
+        :type prop: str
+        :param data: The data to be stored in prop
+        :type data: dict
+        :return: The transformed data to store in prop or None if that property should be skipped and not stored
+        :rtype: dict or None
+        """
+        return data
+
     def get_callbacks(self, name):
         """Customizible function to handle GET /callbacks"""
         # return True if callback has been processed
         # THE BELOW IS SAMPLE CODE
-        # my_oauth=oauth.oauth(token = myself.get_property('oauth_token').value)
+        # my_oauth=oauth.oauth(token = myself.store.oauth_token)
         if name == 'something':
             return
         # END OF SAMPLE CODE

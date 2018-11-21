@@ -45,7 +45,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                             str(creator) + ")")
             return
         if len(trustee_root) > 0:
-            myself.set_property('trustee_root', trustee_root)
+            myself.store.trustee_root = trustee_root
         self.response.headers["Location"] = str(self.config.root + myself.id)
         if self.config.www_auth == 'oauth' and not is_json:
             self.response.set_redirect(self.config.root + myself.id + '/www')

@@ -3,13 +3,16 @@ from builtins import str
 from builtins import object
 import datetime
 import base64
-from actingweb import property
-import json
-from actingweb import trust
-from actingweb import subscription
 import logging
-from actingweb import peertrustee
-from actingweb import attribute
+import json
+from actingweb import (property, trust, subscription, peertrustee, attribute)
+
+
+class DummyPropertyClass:
+    """ Only used to deprecate get_property() in 2.4.4 """
+
+    def __init__(self, v=None):
+        self.value = v
 
 
 class Actor(object):
@@ -29,11 +32,28 @@ class Actor(object):
         self.last_response_message = ''
         self.id = actor_id
         self.handle = self.config.DbActor.DbActor()
+        if actor_id and config:
+            self.store = attribute.InternalStore(actor_id=actor_id, config=config)
+            self.property = property.PropertyStore(actor_id=actor_id, config=config)
+        else:
+            self.store = None
+            self.property = None
         self.get(actor_id=actor_id)
 
-    def get_peer_info(self,  url):
-        # type: (res) -> dict()
-        """Contacts an another actor over http/s to retrieve meta information."""
+    def get_peer_info(self, url: str) -> dict:
+        """ Contacts an another actor over http/s to retrieve meta information
+        :param url: Root URI of a remote actor
+        :rtype: dict
+        :return: The json response from the /meta path in the data element and last_response_code/last_response_message
+        set to the results of the https request
+        :Example:
+
+        >>>{
+        >>>    "last_response_code": 200,
+        >>>    "last_response_message": "OK",
+        >>>    "data":{}
+        >>>}
+        """
         try:
             logging.debug('Getting peer info at url(' + url + ')')
             if self.config.env == "appengine":
@@ -52,8 +72,8 @@ class Actor(object):
             }
         return res
 
-    def get(self, actor_id=None):
-        """Retrieves an actor from storage or initialises if it does not exist."""
+    def get(self, actor_id: str = None) -> dict or None:
+        """Retrieves an actor from storage or initialises if it does not exist"""
         if not actor_id and not self.id:
             return None
         elif not actor_id:
@@ -65,8 +85,15 @@ class Actor(object):
             self.id = self.actor["id"]
             self.creator = self.actor["creator"]
             self.passphrase = self.actor["passphrase"]
+            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            self.property = property.PropertyStore(actor_id=self.id, config=self.config)
             if self.config.force_email_prop_as_creator:
-                em = self.get_property("email").value
+                em = self.store.email
+                if self.config.migrate_2_5_0 and not em:
+                    em = self.property.email
+                    if em:
+                        self.store.email = em
+                        self.property.email = None
                 if em and len(em) > 0:
                     self.modify(creator=em)
         else:
@@ -92,6 +119,24 @@ class Actor(object):
             return
         self.get(actor_id=actor_id)
 
+    def get_from_creator(self, creator=None):
+        """ Initialise an actor by matching on creator.
+
+        If unique_creator config is False, then no actor will be initialised.
+        Likewise, if multiple properties are found with the same value (due to earlier
+        uniqueness off).
+        """
+        self.id = None
+        self.creator = None
+        self.passphrase = None
+        if not self.config.unique_creator:
+            return False
+        exists = self.config.DbActor.DbActor().get_by_creator(creator=creator)
+        if len(exists) != 1:
+            return False
+        self.get(actor_id=exists[0]["id"])
+        return True
+
     def create(self, url, creator, passphrase, actor_id=None, delete=False):
         """"Creates a new actor and persists it.
 
@@ -111,7 +156,7 @@ class Actor(object):
             exists = in_db.get_by_creator(creator=self.creator)
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
-                # with creator as "creator". Check if we have a property "email" and then
+                # with creator as "creator". Check if we have an internal value "email" and then
                 # set creator to the email address.
                 if delete:
                     for c in exists:
@@ -121,8 +166,13 @@ class Actor(object):
                     if self.config.force_email_prop_as_creator and self.creator == "creator":
                         for c in exists:
                             anactor = Actor(actor_id=c["id"])
-                            em = anactor.get_property("email").value
-                            if em and len(em) > 0:
+                            em = anactor.store.email
+                            if self.config.migrate_2_5_0 and not em:
+                                em = anactor.property.email
+                                if em:
+                                    anactor.store.email = em
+                                    anactor.property.email = None
+                            if em:
                                 anactor.modify(creator=em)
                     for c in exists:
                         if c['passphrase'] == passphrase:
@@ -145,6 +195,8 @@ class Actor(object):
         self.handle.create(creator=self.creator,
                            passphrase=self.passphrase,
                            actor_id=self.id)
+        self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+        self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         return True
 
     def modify(self, creator=None):
@@ -183,19 +235,16 @@ class Actor(object):
     ######################
 
     def set_property(self, name, value):
-        """Sets an actor's property name to value."""
-        prop = property.Property(self.id, name, config=self.config)
-        prop.set(value)
+        """Sets an actor's property name to value. (DEPRECATED, use actor's property store!) """
+        self.property[name] = value
 
     def get_property(self, name):
-        """Retrieves a property object named name."""
-        prop = property.Property(self.id, name, config=self.config)
-        return prop
+        """Retrieves a property object named name. (DEPRECATED, use actor's property store!) """
+        return DummyPropertyClass(self.property[name])
 
     def delete_property(self, name):
-        """Deletes a property name."""
-        prop = property.Property(self.id, name, config=self.config)
-        prop.delete()
+        """Deletes a property name. (DEPRECATED, use actor's property store!)"""
+        self.property[name] = None
 
     def delete_properties(self):
         """Deletes all properties."""

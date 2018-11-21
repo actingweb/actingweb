@@ -144,7 +144,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(400, 'No json content')
             return
         if len(trustee_root) > 0:
-            myself.set_property('trustee_root', trustee_root)
+            myself.store.trustee_root = trustee_root
         if creator:
             myself.modify(creator=creator)
         self.response.set_status(204, 'No content')
@@ -166,7 +166,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if not check.check_authorisation(path='trust', method='DELETE'):
             self.response.set_status(403)
             return
-        myself.delete_property('trustee_root')
+        myself.store.trustee_root = None
         self.response.set_status(204, 'No content')
 
     def post(self, actor_id, relationship):
@@ -313,7 +313,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
         if myself.modify_trust_and_notify(relationship=relationship, peerid=peerid, peer_approved=peer_approved):
             self.response.set_status(204, 'Ok')
         else:
-            self.response.set_status(405, 'Not modified')
+            self.response.set_status(500, 'Not modified')
 
     def put(self, actor_id, relationship, peerid):
         (myself, check) = auth.init_actingweb(
@@ -360,7 +360,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                                           desc=desc):
             self.response.set_status(204, 'Ok')
         else:
-            self.response.set_status(405, 'Not modified')
+            self.response.set_status(500, 'Not modified')
 
     def delete(self, actor_id, relationship, peerid):
         (myself, check) = auth.init_actingweb(

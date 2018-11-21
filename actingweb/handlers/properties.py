@@ -1,4 +1,3 @@
-from builtins import str
 import json
 import logging
 import copy
@@ -70,25 +69,29 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not name:
             self.listall(myself)
             return
-        lookup = myself.get_property(name)
-        if not lookup.value:
+        lookup = myself.property[name]
+        if not lookup:
             self.response.set_status(404, "Property not found")
             return
         try:
-            jsonblob = json.loads(lookup.value)
+            jsonblob = json.loads(lookup)
             try:
                 out = jsonblob
                 if len(path) > 1:
                     del path[0]
                     for p in path:
                         out = out[p]
+                out = self.on_aw.get_properties(path=path, data=out)
+                if out is None:
+                    self.response.set_status(404)
+                    return
                 out = json.dumps(out)
             except (TypeError, ValueError, KeyError):
                 self.response.set_status(404)
                 return
             out = out.encode('utf-8')
         except (TypeError, ValueError, KeyError):
-                out = lookup.value
+                out = lookup
         self.response.set_status(200, "Ok")
         self.response.headers["Content-Type"] = "application/json"
         self.response.write(out)
@@ -105,6 +108,10 @@ class PropertiesHandler(base_handler.BaseHandler):
                 pair[name] = js
             except ValueError:
                 pair[name] = value
+        pair = self.on_aw.get_properties(path=None, data=pair)
+        if pair is None:
+            self.response.set_status(404)
+            return
         out = json.dumps(pair)
         self.response.write(out.encode('utf-8'))
         self.response.headers["Content-Type"] = "application/json"
@@ -118,7 +125,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
         resource = None
         if not name:
-            path = {0: None}
+            path = []
         else:
             path = name.split('/')
             name = path[0]
@@ -129,7 +136,25 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
         body = self.request.body.decode('utf-8', 'ignore')
         if len(path) == 1:
-            myself.set_property(name, body)
+            old = myself.property[name]
+            try:
+                old = json.loads(old)
+            except (TypeError, ValueError, KeyError):
+                old = {}
+            try:
+                new = json.loads(body)
+                is_json = True
+            except (TypeError, ValueError, KeyError):
+                new = body
+                is_json = False
+            new = self.on_aw.put_properties(path=path, old=old, new=new)
+            if new is None:
+                self.response.set_status(400, 'Payload is not accepted')
+                return
+            if is_json:
+                myself.property[name] = json.dumps(new)
+            else:
+                myself.property[name] = new
             myself.register_diffs(target='properties', subtarget=name, blob=body)
             self.response.set_status(204)
             return
@@ -150,16 +175,21 @@ class PropertiesHandler(base_handler.BaseHandler):
             # logging.debug('store with i=' + str(i) + ' (' + json.dumps(store) + ')')
             i -= 1
         # logging.debug('Snippet to store(' + json.dumps(store) + ')')
-        orig = myself.get_property(name).value
+        orig = myself.property[name]
         logging.debug('Original value(' + orig + ')')
         try:
             orig = json.loads(orig)
             merge_dict(orig, store)
-            res = json.dumps(orig)
+            res = orig
         except (TypeError, ValueError, KeyError):
-            res = json.dumps(store)
+            res = store
+        res = self.on_aw.put_properties(path=path, old=orig, new=res)
+        if res is None:
+            self.response.set_status(400, 'Payload is not accepted')
+            return
+        res = json.dumps(res)
         logging.debug('Result to store( ' + res + ') in /properties/' + name)
-        myself.set_property(name, res)
+        myself.property[name] = res
         myself.register_diffs(target='properties', subtarget=name, resource=resource, blob=blob)
         self.response.set_status(204)
 
@@ -173,29 +203,42 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(403)
             return
         if len(name) > 0:
-            self.response.set_status(405)
+            self.response.set_status(400)
         pair = dict()
         # Handle the simple form
         if self.request.get("property") and self.request.get("value"):
-            pair[self.request.get("property")] = self.request.get("value")
-            myself.set_property(self.request.get("property"), self.request.get("value"))
+            val = self.on_aw.post_properties(prop=self.request.get("property"), data=self.request.get("value"))
+            if val is None:
+                self.response.set_status(403)
+                return
+            pair[self.request.get("property")] = val
+            myself.property[self.request.get("property")] = self.request.get("value")
         elif len(self.request.arguments()) > 0:
             for name in self.request.arguments():
-                pair[name] = self.request.get(name)
-                myself.set_property(name, self.request.get(name))
+                val = self.on_aw.post_properties(prop=name, data=self.request.get(name))
+                if val is None:
+                    continue
+                pair[name] = val
+                myself.property[name] = val
         else:
             try:
                 params = json.loads(self.request.body.decode('utf-8', 'ignore'))
             except (TypeError, ValueError, KeyError):
-                self.response.set_status(405, "Error in json body")
+                self.response.set_status(400, "Error in json body")
                 return
             for key in params:
-                pair[key] = params[key]
-                if isinstance(params[key], dict):
-                    text = json.dumps(params[key])
+                val = self.on_aw.post_properties(prop=key, data=params[key])
+                if val is None:
+                    continue
+                pair[key] = val
+                if isinstance(val, dict):
+                    text = json.dumps(val)
                 else:
-                    text = params[key]
-                myself.set_property(key, text)
+                    text = val
+                myself.property[key] = text
+        if not pair:
+            self.response.set_status(403, "No attributes accepted")
+            return
         out = json.dumps(pair)
         myself.register_diffs(target='properties', blob=out)
         self.response.write(out.encode('utf-8'))
@@ -210,7 +253,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
         resource = None
         if not name:
-            path = {0: None}
+            path = []
         else:
             path = name.split('/')
             name = path[0]
@@ -220,16 +263,23 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(403)
             return
         if not name:
+            if self.on_aw.delete_properties(path=path, old=myself.get_properties(), new=dict()) is False:
+                self.response.set_status(403)
+                return
             myself.delete_properties()
             myself.register_diffs(target='properties', subtarget=None, blob='')
             self.response.set_status(204)
             return
         if len(path) == 1:
-            myself.delete_property(name)
+            if self.on_aw.delete_properties(path=path, old=myself.property[name], new=dict()) is False:
+                self.response.set_status(403)
+                return
+            myself.property[name] = None
             myself.register_diffs(target='properties', subtarget=name, blob='')
             self.response.set_status(204)
             return
-        orig = myself.get_property(name).value
+        orig = myself.property[name]
+        old = orig
         logging.debug('DELETE /properties original value(' + orig + ')')
         try:
             orig = json.loads(orig)
@@ -241,8 +291,11 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not delete_dict(orig, path[1:]):
             self.response.set_status(404)
             return
+        if self.on_aw.delete_properties(path=path, old=old, new=orig) is False:
+            self.response.set_status(403)
+            return
         res = json.dumps(orig)
         logging.debug('Result to store( ' + res + ') in /properties/' + name)
-        myself.set_property(name, res)
+        myself.property[name] = res
         myself.register_diffs(target='properties', subtarget=name, resource=resource, blob='')
         self.response.set_status(204)

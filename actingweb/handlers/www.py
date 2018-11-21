@@ -34,24 +34,26 @@ class WwwHandler(base_handler.BaseHandler):
             return
         if path == 'properties':
             properties = myself.get_properties()
+            properties = self.on_aw.get_properties(path=None, data=properties)
             self.response.template_values = {
                 'id': myself.id,
                 'properties': properties,
             }
             return
         if path == 'property':
-            lookup = myself.get_property(self.request.get('name'))
-            if lookup.value:
+            lookup = myself.property[self.request.get('name')]
+            lookup = self.on_aw.get_properties(path=self.request.get('name'), data=lookup)
+            if lookup:
                 self.response.template_values = {
                     'id': myself.id,
-                    'property': lookup.name,
-                    'value': lookup.value,
+                    'property': self.request.get('name'),
+                    'value': lookup,
                     'qual': '',
                 }
             else:
                 self.response.template_values = {
                     'id': myself.id,
-                    'property': lookup.name,
+                    'property': self.request.get('name'),
                     'value': 'Not set',
                     'qual': 'no',
                 }

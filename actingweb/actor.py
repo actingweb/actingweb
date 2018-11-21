@@ -28,17 +28,17 @@ class Actor(object):
         self.actor = None
         self.passphrase = None
         self.creator = None
-        if self.config.encrypt:
-            self.key = b'SIhIvdRbnzb6iMqmhd-jzs_YB5ZOGgnrYFZfG4Dl_80='
-        else:
-            self.key = None
         self.last_response_code = 0
         self.last_response_message = ''
         self.id = actor_id
         self.handle = self.config.DbActor.DbActor()
+        if actor_id and config:
+            self.store = attribute.InternalStore(actor_id=actor_id, config=config)
+            self.property = property.PropertyStore(actor_id=actor_id, config=config)
+        else:
+            self.store = None
+            self.property = None
         self.get(actor_id=actor_id)
-        self.store = attribute.InternalStore(actor_id=actor_id, config=config, key=self.key)
-        self.property = property.PropertyStore(actor_id=actor_id, config=config)
 
     def get_peer_info(self, url: str) -> dict:
         """ Contacts an another actor over http/s to retrieve meta information
@@ -85,9 +85,11 @@ class Actor(object):
             self.id = self.actor["id"]
             self.creator = self.actor["creator"]
             self.passphrase = self.actor["passphrase"]
+            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            self.property = property.PropertyStore(actor_id=self.id, config=self.config)
             if self.config.force_email_prop_as_creator:
                 em = self.store.email
-                if self.config.migrate_2_4_4 and not em:
+                if self.config.migrate_2_5_0 and not em:
                     em = self.property.email
                     if em:
                         self.store.email = em
@@ -165,7 +167,7 @@ class Actor(object):
                         for c in exists:
                             anactor = Actor(actor_id=c["id"])
                             em = anactor.store.email
-                            if self.config.migrate_2_4_4 and not em:
+                            if self.config.migrate_2_5_0 and not em:
                                 em = anactor.property.email
                                 if em:
                                     anactor.store.email = em

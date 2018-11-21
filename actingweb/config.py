@@ -19,13 +19,11 @@ class Config(object):
         self.database = 'dynamodb'
         # Turn on the /www path
         self.ui = True
-        # Turn on encryption of secrets, attributes, and properties
-        self.encrypt = True
         # Enable /devtest path for test purposes, MUST be False in production
         self.devtest = True
         # Enable migrate if you want to turn on code that enables migration from one version to another
         # 2.4.4 : migrate oauth properties and email to internal attributes (myself.store)
-        self.migrate_2_4_4 = True
+        self.migrate_2_5_0 = True
         # Will enforce unique creator field across all actors
         self.unique_creator = False
         # Use "email" internal value to set creator value (after creation and property set)

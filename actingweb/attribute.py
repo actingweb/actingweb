@@ -34,7 +34,6 @@ class InternalStore(object):
                             raise ValueError('Have no key, but data is encrypted')
                         else:
                             self.__setattr__(k2, v2.get('data'))
-
         self.__initialised = True
 
     def __getitem__(self, k):
@@ -93,7 +92,7 @@ class Attributes(object):
         """ Sets new data for this attribute """
         if not self.actor_id or not self.bucket:
             return False
-        if name not in self.data:
+        if name not in data:
             self.data[name] = {}
         self.data[name]["data"] = data
         self.data[name]["timestamp"] = timestamp

@@ -28,7 +28,8 @@ def select_auth_type(path, subpath, config=None):
 
 
 def add_auth_response(appreq=None, auth_obj=None):
-    """Called after init_actingweb() if add_response was set to False, and now responses should be added."""
+    """Called after init_actingweb() if add_response was set to False, and now responses should be added.
+    """
     if not appreq or not auth_obj:
         return False
     logging.debug("add_auth_response: " + str(auth_obj.response['code']) + ":" + auth_obj.response['text'])
@@ -83,33 +84,35 @@ class Auth(object):
     There are three types supported: basic (using creator credentials), token (received when trust is created), or
     oauth (used to bind
     an actor to an oauth-enabled external service, as well as to log into /www path where interactive web functionality
-    of the actor
-    is available).
+    of the actor is available).
     The check_authorisation() function validates the authenticated user against the config.py access list.
     check_token_auth() can be called from outside the class to do a simple peer/bearer token verification.
     The OAuth helper functions are used to:
     process_oauth_callback() - process an OAuth callback as part of an OAuth flow and exchange code with a valid token
     validate_oauth_token() - validate and, if necessary, refresh a token
     set_cookie_on_cookie_redirect() - set a session cookie in the browser to the token value (called AFTER OAuth has
-    been
-    done!)
+    been done!)
 
     The response[], acl[], and authn_done variables are useful outside Auth(). authn_done is set when authentication has
-    been done and
-    a final authentication status can be found in response[].
+    been done and a final authentication status can be found in response[].
 
          self.response = {
+
             "code": 403,                # Result code (http)
             "text": "Forbidden",        # Proposed response text
             "headers": [],              # Headers to add to response after authentication has been done
-        }    
+
+        }
+
         self.acl = {
+
             "authenticated": False, # Has authentication been verified and passed?
             "authorised": False,    # Has authorisation been done and appropriate acls set?
             "rights": '',           # "a", "r" (approve or reject)
             "relationship": None,   # E.g. creator, friend, admin, etc
             "peerid": '',           # Peerid if there is a relationship
             "approved": False,      # True if the peer is approved
+
         }
 
     """
@@ -151,7 +154,7 @@ class Auth(object):
         # We need to initialise oauth for use towards the external oauth service
         self.oauth_token_property = 'oauth_token'  # Property name used to set self.token
         self.token = self.actor.store.oauth_token
-        if self.config.migrate_2_4_4 and not self.token:
+        if self.config.migrate_2_5_0 and not self.token:
             self.token = self.actor.property.oauth_token
             if self.token:
                 self.actor.store.oauth_token = self.token
@@ -160,7 +163,7 @@ class Auth(object):
         self.expiry = self.actor.store.oauth_token_expiry
         self.refresh_expiry = self.actor.store.oauth_refresh_token_expiry
         self.refresh_token = self.actor.store.oauth_refresh_token
-        if self.config.migrate_2_4_4:
+        if self.config.migrate_2_5_0:
             if not self.expiry:
                 self.expiry = self.actor.property.oauth_token_expiry
                 if self.expiry:
@@ -182,7 +185,7 @@ class Auth(object):
             if self.oauth.enabled():
                 self.cookie = 'oauth_token'
                 redir = self.actor.store.cookie_redirect
-                if self.config.migrate_2_4_4 and not redir:
+                if self.config.migrate_2_5_0 and not redir:
                     redir = self.actor.property.cookie_redirect
                     if redir:
                         self.actor.store.cookie_redirect = redir
@@ -405,6 +408,7 @@ class Auth(object):
             if appreq.request.get('refresh') and appreq.request.get('refresh').lower() == 'true':
                 # Clear cookie and do a refresh if refresh=True is in GET param
                 authz = ''
+                self.actor.store.oauth_token = None
             if authz == self.token and now < (float(self.expiry) - 20.0):
                 logging.debug('Authorization cookie header matches a valid token')
                 self.acl["relationship"] = "creator"
@@ -499,7 +503,7 @@ class Auth(object):
             return False
         self.authn_done = True
         trustee = self.actor.store.trustee_root
-        if self.config.migrate_2_4_4 and not trustee:
+        if self.config.migrate_2_5_0 and not trustee:
             trustee = self.actor.property.trustee_root
             if trustee:
                 self.actor.property.trustee_root = None

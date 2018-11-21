@@ -28,7 +28,8 @@ def select_auth_type(path, subpath, config=None):
 
 
 def add_auth_response(appreq=None, auth_obj=None):
-    """Called after init_actingweb() if add_response was set to False, and now responses should be added."""
+    """Called after init_actingweb() if add_response was set to False, and now responses should be added.
+    """
     if not appreq or not auth_obj:
         return False
     logging.debug("add_auth_response: " + str(auth_obj.response['code']) + ":" + auth_obj.response['text'])
@@ -83,33 +84,35 @@ class Auth(object):
     There are three types supported: basic (using creator credentials), token (received when trust is created), or
     oauth (used to bind
     an actor to an oauth-enabled external service, as well as to log into /www path where interactive web functionality
-    of the actor
-    is available).
+    of the actor is available).
     The check_authorisation() function validates the authenticated user against the config.py access list.
     check_token_auth() can be called from outside the class to do a simple peer/bearer token verification.
     The OAuth helper functions are used to:
     process_oauth_callback() - process an OAuth callback as part of an OAuth flow and exchange code with a valid token
     validate_oauth_token() - validate and, if necessary, refresh a token
     set_cookie_on_cookie_redirect() - set a session cookie in the browser to the token value (called AFTER OAuth has
-    been
-    done!)
+    been done!)
 
     The response[], acl[], and authn_done variables are useful outside Auth(). authn_done is set when authentication has
-    been done and
-    a final authentication status can be found in response[].
+    been done and a final authentication status can be found in response[].
 
          self.response = {
+
             "code": 403,                # Result code (http)
             "text": "Forbidden",        # Proposed response text
             "headers": [],              # Headers to add to response after authentication has been done
-        }    
+
+        }
+
         self.acl = {
+
             "authenticated": False, # Has authentication been verified and passed?
             "authorised": False,    # Has authorisation been done and appropriate acls set?
             "rights": '',           # "a", "r" (approve or reject)
             "relationship": None,   # E.g. creator, friend, admin, etc
             "peerid": '',           # Peerid if there is a relationship
             "approved": False,      # True if the peer is approved
+
         }
 
     """

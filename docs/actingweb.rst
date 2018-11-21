@@ -1,13 +1,13 @@
-actingweb package
+actingweb code
 =================
 
 Subpackages
 -----------
 
 .. toctree::
+    :maxdepth: 1
 
     actingweb.db_dynamodb
-    actingweb.deprecated_db_gae
     actingweb.handlers
 
 Submodules
@@ -105,15 +105,6 @@ actingweb.trust module
 ----------------------
 
 .. automodule:: actingweb.trust
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-
-Module contents
----------------
-
-.. automodule:: actingweb
     :members:
     :undoc-members:
     :show-inheritance:

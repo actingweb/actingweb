@@ -116,11 +116,3 @@ actingweb.handlers.www module
     :undoc-members:
     :show-inheritance:
 
-
-Module contents
----------------
-
-.. automodule:: actingweb.handlers
-    :members:
-    :undoc-members:
-    :show-inheritance:

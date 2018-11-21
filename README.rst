@@ -146,7 +146,7 @@ Building and installing
 
     # Upload to test server:
     python setup.py sdist upload -r pypitest
-    twine upload --repository pypitest dist/*
+    twine upload --repository pypitest dist/actingweb-a.b.c.*
 
     # Upload to production server:
-    twine upload dist/*
+    twine upload dist/actingweb-a.b.c.*

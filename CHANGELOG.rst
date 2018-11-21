@@ -13,7 +13,7 @@ v2.5.0: Nov 17, 2018
   (if creator==email, this allows you to send Google hint on which account to use with 'login_hint': 'dynamic:creator'
   in oauth_extras in config
 - Add support for actor get_from_creator() to initialise an actor from a creator (only usable together with config
-variable unique_creator)
+  variable unique_creator)
 - Add support for get_properties(), delete_properties(), put_properties(), and post_properties in the on_aw() class.
   These allows on_aw overriding functions to process any old and new properties and return the resulting properties
   to be stored, deleted, or returned
@@ -28,7 +28,7 @@ variable unique_creator)
   database. Note that variable values must be json serializable
 - Add new interface PropertyStore() (property.py) for storing and retrieving properties. Used just like InternalStore()
   and access through actor.property.my_var or actor.property['my_var']
-- InternaStore(actor_id=None, config=None, bucket=None) can be used independently and the optional bucket parameter
+- InternalStore(actor_id=None, config=None, bucket=None) can be used independently and the optional bucket parameter
   allows you to create an internal store that stores a set of variables in a specific bucket. A bucket is retrieved
   all at once and variables are written to database immediately
 - Fix issue where downstream (trusts) server processing errors resulted in 405 instead of 500 error code
@@ -113,12 +113,11 @@ Mar 11, 2017
 
 Feb 25, 2016
 --------------------
-- Major refactoring of all database code 
+- Major refactoring of all database code
+
   - All db entities are now accessible only from the actingweb/* libraries
-  - Each entity can be accessed one by one (e.g. trust.py exposes trust class)
-    and as a list (e.g. trust.py exposes trusts class)
-  - actor_id and any parameters that identify the entity must be set when the class is
-    instantiated  
+  - Each entity can be accessed one by one (e.g. trust.py exposes trust class) and as a list (e.g. trust.py exposes trusts class)
+  - actor_id and any parameters that identify the entity must be set when the class is instantiated
   - get() must be called on the object to retrieve it from the database and the object
     is returned as a dictionary
   - Subsequent calls to get() will return the dictionary without database access, but
@@ -144,7 +143,7 @@ Nov 19, 2016
 - Fix json issue where diff sub-structures are escaped
 - Add 20 sec timeout on all urlfethc (inter-actor) communication
 - Support using creator passphrase as bearer token IF creator username == trustee
-and passphrase has bitstrength > 80
+  and passphrase has bitstrength > 80
 - Added id, peerid, and subscriptionid in subscriptions to align with spec
 - Add modiify() for actor to allow change of creator username
 - Add support for /trust/trustee operations to align with spec
@@ -171,14 +170,16 @@ Nov 1, 2016
 Oct 28, 2016
 --------------
 - Add support for establishment and tear-down of peer actors as trustee, actor.getPeer() and actor.deletePeer()
+
   - Add new db storage for peers created as trustee
   - Add new config.actor section in config.py to define known possible peers
 - Add new actor support function: getTrustRelationshipByType()
 - Add new AwProxy() class with helper functions to do RPCish peer operations on trust relationships
-  - Either use trust_target or peer_target to send commands to a specific trust or to the trust
-    associated with a peer (i.e. peer created by this app as a trustee)
+
+  - Either use trust_target or peer_target to send commands to a specific trust or to the trust associated with a peer (i.e. peer created by this app as a trustee)
   - Support for create_resource() (POST on remote actor path like /resources or /properties)
 - Fix bug where clean up of actor did not delete remote subscription (actor.delete())
+
   - Add remoteSubscription deletion in aw-actor-subscription.py
   - Fix auth issue in aw-actor-callbacks.py revealed by ths bug
 
@@ -191,32 +192,32 @@ Oct 26, 2016
 Oct 15, 2016
 --------------
 - Added support for requests to /bot and a bot (permanent) token in config.py to do API requests
-without going through the /<actorid>/ paths. Used to support scenarios where users can communicate with a bot to
-initiate creation of an actor (or to do commands that don't need personal oauth authorization.
+  without going through the /<actorid>/ paths. Used to support scenarios where users can communicate with a bot to
+  initiate creation of an actor (or to do commands that don't need personal oauth authorization.
 
 Oct 12, 2016
 --------------
 - Support for actor.get_from_property(property-name, value) to initialse an actor from db by looking up a property value
-(it must be unique)
+  (it must be unique)
 
 Oct 9, 2016
 --------------
 - Added support for GET, PUT, and DELETE for any sub-level of /properties, 
-also below resource, i.e. /properties/<subtarget>/<resource>/something/andmore/...
+  also below resource, i.e. /properties/<subtarget>/<resource>/something/andmore/...
 - Fixed bug where blob='', i.e. deletion, would not be registered
 
 Oct 7, 2016
 --------------
 - Added support for resource (in addition to target and subtarget) in subscriptions, thus allowing subscriptions to
-e.g. /resources/files/<fileid> (where <fileid> is the resource to subscribe to. /properties/subtarget/resource subscriptions
-are also allowed. 
+  e.g. /resources/files/<fileid> (where <fileid> is the resource to subscribe to. /properties/subtarget/resource
+  subscriptions are also allowed.
 
 Oct 6, 2016
 --------------
 - Added support for /resources with on_aw_resources.py in on_aw/ to hook into GET, DELETE, and POST requests to /resources
 - Added fixes for box.com specific OAUTH implementation
 - Added new function oauth_get(), oauth_post(), and oauth_delete() to Auth() class. These will refresh a token if necessary and
-can be used insted of oauth.get_request(), post_request(), and delete_request(()
+  can be used insted of oauth.get_request(), post_request(), and delete_request(()
 - Minor refactoring of inner workings of auth.py and oauth.py wrt return values and error codes
 
 Sep 25, 2016
@@ -252,7 +253,9 @@ Aug 15, 2016: Bug fixes
 
 Aug 6, 2016: New features
 ----------------------------
-- Support for deleting remote subscription (i.e. callback and subscription, dependent on direction) when an actor is deleted
+- Support for deleting remote subscription (i.e. callback and subscription, dependent on direction) when an actor is
+  deleted
+
   - New delete_remote_subscription() in actor.py
   - Added deletion to actor.delete()
   - New handler for DELETE of /callbacks in aw-actor-callbacks.py
@@ -265,14 +268,17 @@ Aug 6, 2016: Bug fixes
 Aug 3, 2016: New features
 ----------------------------
 - Support for doing callbacks when registering diffs
+
   - New function in actor.py: callback_subscription()
   - Added defer of callbacks to avoid stalling responses when adding diffs
   - Added new function get_trust_relationship() to get one specific relationship based on peerid (instead of searching using get_trust_relationships())
 - Improved diff registration
+
   - Totally rewrote register_diffs() to register diffs for subscriptions that are not exact matches (i.e. broader/higher-level and more specific)
   - Added debug logging to trace how diffs are registered
 - Owner-based access only to /callbacks/subscriptions
 - Support for handling callbacks for subscriptions
+
   - New function in on_aw_callbacks.py: on_post_subscriptions() for handling callbacks on subscriptions
   - Changed aw-actor-callbacks.py to handle POSTs to /callbacks/subscriptions and forward those to on_post_subscriptions()
 

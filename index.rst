@@ -15,12 +15,12 @@ application needs to implement a set of API endpoints. These can be implemented 
    :maxdepth: 2
    :caption: Contents:
 
-   LICENSE.txt
+   LICENSE
    README
    docs/getting-started
    docs/actingweb-spec
 
-   docs/modules
+   docs/actingweb
    CHANGELOG
 
 Indices and tables

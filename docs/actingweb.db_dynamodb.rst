@@ -60,11 +60,3 @@ actingweb.db\_dynamodb.db\_trust module
     :undoc-members:
     :show-inheritance:
 
-
-Module contents
----------------
-
-.. automodule:: actingweb.db_dynamodb
-    :members:
-    :undoc-members:
-    :show-inheritance:

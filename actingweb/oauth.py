@@ -60,13 +60,13 @@ class OAuth(object):
         if params:
             if urlencode:
                 data = urllib_urlencode(params)
-                logging.info('Oauth POST request with urlencoded payload: ' + url + ' ' + data)
+                logging.debug('Oauth POST request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
-                logging.info('Oauth POST request with JSON payload: ' + url + ' ' + data)
+                logging.debug('Oauth POST request with JSON payload: ' + url + ' ' + data)
         else:
             data = None
-            logging.info('Oauth POST request: ' + url)
+            logging.debug('Oauth POST request: ' + url)
         if urlencode:
             if self.token:
                 headers = {'Content-Type': 'application/x-www-form-urlencoded',
@@ -115,13 +115,13 @@ class OAuth(object):
         if params:
             if urlencode:
                 data = urllib_urlencode(params)
-                logging.info('Oauth PUT request with urlencoded payload: ' + url + ' ' + data)
+                logging.debug('Oauth PUT request with urlencoded payload: ' + url + ' ' + data)
             else:
                 data = json.dumps(params)
-                logging.info('Oauth PUT request with JSON payload: ' + url + ' ' + data)
+                logging.debug('Oauth PUT request with JSON payload: ' + url + ' ' + data)
         else:
             data = None
-            logging.info('Oauth PUT request: ' + url)
+            logging.debug('Oauth PUT request: ' + url)
         if urlencode:
             if self.token:
                 headers = {'Content-Type': 'application/x-www-form-urlencoded',
@@ -172,7 +172,7 @@ class OAuth(object):
             return None
         if params:
             url = url + '?' + urllib_urlencode(params)
-        logging.info('Oauth GET request: ' + url)
+        logging.debug('Oauth GET request: ' + url)
         try:
             if self.config.env == 'appengine':
                 self.config.module["urlfetch"].set_default_fetch_deadline(60)
@@ -224,7 +224,7 @@ class OAuth(object):
             return None
         if params:
             url = url + '?' + urllib_urlencode(params)
-        logging.info('Oauth HEAD request: ' + url)
+        logging.debug('Oauth HEAD request: ' + url)
         try:
             response = self.config.module["urlfetch"].head(
                     url=url,
@@ -249,7 +249,7 @@ class OAuth(object):
     def delete_request(self, url):
         if not self.token:
             return None
-        logging.info('Oauth DELETE request: ' + url)
+        logging.debug('Oauth DELETE request: ' + url)
         try:
             if self.config.env == 'appengine':
                 response = self.config.module["urlfetch"].fetch(url=url,
@@ -301,7 +301,7 @@ class OAuth(object):
                         v = creator
                 params[k] = v
         uri = self.config.oauth['auth_uri'] + "?" + urllib_urlencode(params)
-        logging.info('OAuth redirect with url: ' + uri + ' and state:' + state)
+        logging.debug('OAuth redirect with url: ' + uri + ' and state:' + state)
         return uri
 
     def oauth_request_token(self, code=None):

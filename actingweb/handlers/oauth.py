@@ -46,5 +46,5 @@ class OauthHandler(base_handler.BaseHandler):
                 return
             self.response.set_status(204, "OAuthorization Done")
             return
-        logging.info("OAuth token refresh failed")
+        logging.debug("OAuth token refresh failed")
         return

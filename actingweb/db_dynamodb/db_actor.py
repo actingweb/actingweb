@@ -73,6 +73,8 @@ class DbActor(object):
         """
         if not creator:
             return None
+        if '@' in creator:
+            creator = creator.lower()
         self.handle = Actor.creator_index.query(creator)
         ret = []
         for c in self.handle:
@@ -86,6 +88,9 @@ class DbActor(object):
             logging.debug("Attempted modification of DbActor without db handle")
             return False
         if creator and len(creator) > 0:
+            # Email in creator needs to be lower case
+            if '@' in creator:
+                creator = creator.lower()
             self.handle.creator = creator
         if passphrase and len(passphrase) > 0:
             self.handle.passphrase = passphrase.decode('utf-8')
@@ -99,6 +104,9 @@ class DbActor(object):
             return False
         if not creator:
             creator = ''
+        # Email in creator needs to be lower case
+        if '@' in creator:
+            creator = creator.lower()
         if not passphrase:
             passphrase = ''
         if self.get(actor_id=actor_id):

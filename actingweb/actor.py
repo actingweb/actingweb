@@ -92,10 +92,10 @@ class Actor(object):
                 if self.config.migrate_2_5_0 and not em:
                     em = self.property.email
                     if em:
-                        self.store.email = em
+                        self.store.email = em.lower()
                         self.property.email = None
-                if em and len(em) > 0:
-                    self.modify(creator=em)
+                if em and em.lower() != self.creator:
+                    self.modify(creator=em.lower())
         else:
             self.id = None
             self.creator = None
@@ -170,10 +170,10 @@ class Actor(object):
                             if self.config.migrate_2_5_0 and not em:
                                 em = anactor.property.email
                                 if em:
-                                    anactor.store.email = em
+                                    anactor.store.email = em.lower()
                                     anactor.property.email = None
                             if em:
-                                anactor.modify(creator=em)
+                                anactor.modify(creator=em.lower())
                     for c in exists:
                         if c['passphrase'] == passphrase:
                             self.handle = in_db
@@ -203,6 +203,8 @@ class Actor(object):
         if not self.handle or not creator:
             logging.debug("Attempted modify of actor with no handle or no param changed")
             return False
+        if '@' in creator:
+            creator = creator.lower()
         self.creator = creator
         if self.actor:
             self.actor["creator"] = creator

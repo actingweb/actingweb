@@ -67,7 +67,7 @@ class Attributes(object):
         """ Sets new data for this attribute """
         if not self.actor_id or not self.bucket:
             return False
-        if name not in data:
+        if name not in self.data or self.data[name] is None:
             self.data[name] = {}
         self.data[name]["data"] = data
         self.data[name]["timestamp"] = timestamp

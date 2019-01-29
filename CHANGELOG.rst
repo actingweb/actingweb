@@ -2,6 +2,12 @@
 CHANGELOG
 =========
 
+v2.5.1: Jan 29, 2019
+--------------------
+- Move some annoying info messages to debug in auth/oauth
+- Fix bug in set_attr for store where struct is not initialised (attribute.py:70)
+- Enforce lower case on creator if @ (i.e. email) in value
+
 v2.5.0: Nov 17, 2018
 --------------------
 - BREAKING: /www/properties template_values now return a dict with { 'key': value} instead of list of { 'name': 'key',

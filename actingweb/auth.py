@@ -202,7 +202,7 @@ class Auth(object):
         if not result:
             return None
         if not result['access_token']:
-            logging.info('No token in response')
+            logging.debug('No token in response')
             return None
         now = time.time()
         self.token = result['access_token']

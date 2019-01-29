@@ -2,10 +2,10 @@
 CHANGELOG
 =========
 
-v2.5.1: Dec xx, 2018
+v2.5.1: Jan 29, 2019
 --------------------
-- Move some info messages to debug in auth/oauth
-- Bug in set_attr for store where struct is not initialised (attribute.py:70)
+- Move some annoying info messages to debug in auth/oauth
+- Fix bug in set_attr for store where struct is not initialised (attribute.py:70)
 - Enforce lower case on creator if @ (i.e. email) in value
 
 v2.5.0: Nov 17, 2018

@@ -14,7 +14,7 @@ The library is available as a PYPI library and installed with `pip install actin
 `https://pypi.org/project/actingweb/ <https://pypi.org/project/actingweb/>`_.
 
 The git repository for this library can be found at
-`https://bitbucket.org/gregerw/actingweb <https://bitbucket.org/gregerw/actingweb>`_.
+`https://github.com/gregertw/actingweb <https://github.com/gregertw/actingweb>`_.
 
 The latest documentation for the released version (release branch) of this library can be found at 
 `http://actingweb.readthedocs.io/ <http://actingweb.readthedocs.io/>`_.

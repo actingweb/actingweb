@@ -6,6 +6,7 @@ except ImportError:
     from urllib import urlencode as urllib_urlencode
 import logging
 import json
+import base64
 
 
 # This function code is from latest urlfetch. For some reason the
@@ -56,7 +57,7 @@ class OAuth(object):
         if token:
             self.token = token
 
-    def post_request(self, url, params=None, urlencode=False):
+    def post_request(self, url, params=None, urlencode=False, basic_auth=False):
         if params:
             if urlencode:
                 data = urllib_urlencode(params)
@@ -69,9 +70,14 @@ class OAuth(object):
             logging.debug('Oauth POST request: ' + url)
         if urlencode:
             if self.token:
-                headers = {'Content-Type': 'application/x-www-form-urlencoded',
-                           'Authorization': 'Bearer ' + self.token,
-                           }
+                if basic_auth:
+                    headers = {'Content-Type': 'application/x-www-form-urlencoded',
+                            'Authorization': 'Basic ' + base64.b64encode(self.token.encode("utf-8")).decode("utf-8"),
+                            }
+                else:
+                    headers = {'Content-Type': 'application/x-www-form-urlencoded',
+                            'Authorization': 'Bearer ' + self.token,
+                            }
             else:
                 headers = {'Content-Type': 'application/x-www-form-urlencoded',
                            }
@@ -314,9 +320,10 @@ class OAuth(object):
             'code': code,
             'redirect_uri': self.config.oauth['redirect_uri'],
         }
-        self.token = None
+        # Some OAuth2 implementations require Basic auth with client_id and secret
+        self.token = self.config.oauth['client_id'] + ':' + self.config.oauth['client_secret']
         result = self.post_request(url=self.config.oauth[
-                                  'token_uri'], params=params, urlencode=True)
+                                  'token_uri'], params=params, urlencode=True, basic_auth=True)
         if result and 'access_token' in result:
             self.token = result['access_token']
         return result

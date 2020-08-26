@@ -20,13 +20,13 @@ sys.path.insert(0, os.path.abspath('.'))
 # -- Project information -----------------------------------------------------
 
 project = 'ActingWeb'
-copyright = '2018, Greger Teigre Wedel'
+copyright = '2020, Greger Teigre Wedel'
 author = 'Greger Teigre Wedel'
 
 # The short X.Y version
 version = ''
 # The full version, including alpha/beta/rc tags
-release = '2.4.5'
+release = '2.6.0'
 
 
 # -- General configuration ---------------------------------------------------

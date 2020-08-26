@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.6.0: Aug 23, 2020
+--------------------
+- Add support for optional Basic authorisation in token request (e.g. Fitbit is requiring this)
+
 v2.5.1: Jan 29, 2019
 --------------------
 - Move some annoying info messages to debug in auth/oauth

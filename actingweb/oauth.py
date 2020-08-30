@@ -337,9 +337,10 @@ class OAuth(object):
             'client_secret': self.config.oauth['client_secret'],
             'refresh_token': refresh_token,
         }
-        self.token = None
+        # Some OAuth2 implementations require Basic auth with client_id and secret
+        self.token = self.config.oauth['client_id'] + ':' + self.config.oauth['client_secret']
         result = self.post_request(url=self.config.oauth[
-                                  'token_uri'], params=params, urlencode=True)
+                                  'token_uri'], params=params, urlencode=True, basic_auth=True)
         if not result:
             self.token = None
             return None

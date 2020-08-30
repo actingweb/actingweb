@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.6.1: Aug 30, 2020
+--------------------
+- Fix token refresh to also use Basic authorisation
+
 v2.6.0: Aug 23, 2020
 --------------------
 - Add support for optional Basic authorisation in token request (e.g. Fitbit is requiring this)

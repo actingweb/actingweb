@@ -42,7 +42,8 @@ class WwwHandler(base_handler.BaseHandler):
             return
         if path == 'property':
             lookup = myself.property[self.request.get('name')]
-            lookup = self.on_aw.get_properties(path=self.request.get('name'), data=lookup)
+            lookup = self.on_aw.get_properties(
+                path=self.request.get('name'), data=lookup)
             if lookup:
                 self.response.template_values = {
                     'id': myself.id,
@@ -64,7 +65,8 @@ class WwwHandler(base_handler.BaseHandler):
                 self.response.set_status(404, 'Not found')
                 return
             for t in relationships:
-                t["approveuri"] = self.config.root + myself.id + '/trust/' + t.relationship + '/' + t.peerid
+                t["approveuri"] = self.config.root + myself.id + \
+                    '/trust/' + t.relationship + '/' + t.peerid
                 self.response.template_values = {
                     'id': myself.id,
                     'trusts': relationships,

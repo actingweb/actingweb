@@ -32,7 +32,8 @@ def add_auth_response(appreq=None, auth_obj=None):
     """
     if not appreq or not auth_obj:
         return False
-    logging.debug("add_auth_response: " + str(auth_obj.response['code']) + ":" + auth_obj.response['text'])
+    logging.debug("add_auth_response: " +
+                  str(auth_obj.response['code']) + ":" + auth_obj.response['text'])
     appreq.set_status(auth_obj.response['code'], auth_obj.response['text'])
     if auth_obj.response['code'] == 302:
         appreq.set_redirect(url=auth_obj.redirect)
@@ -45,7 +46,7 @@ def add_auth_response(appreq=None, auth_obj=None):
 
 def init_actingweb(appreq=None, actor_id=None, path='', subpath='', add_response=True, config=None):
     """Initialises actingweb by loading a config object, an actor object, and authentication object.
-    
+
 
             More details about the authentication can be found in the auth object. If add_response is True,
             appreq.response
@@ -152,7 +153,8 @@ class Auth(object):
             self.refresh_token = None
             return
         # We need to initialise oauth for use towards the external oauth service
-        self.oauth_token_property = 'oauth_token'  # Property name used to set self.token
+        # Property name used to set self.token
+        self.oauth_token_property = 'oauth_token'
         self.token = self.actor.store.oauth_token
         if self.config.migrate_2_5_0 and not self.token:
             self.token = self.actor.property.oauth_token
@@ -194,7 +196,8 @@ class Auth(object):
                     self.cookie_redirect = self.config.root + redir
                 else:
                     self.cookie_redirect = None
-                self.redirect = str(self.config.root + self.actor.id + '/oauth')
+                self.redirect = str(self.config.root +
+                                    self.actor.id + '/oauth')
             else:
                 self.type = 'none'
 
@@ -212,9 +215,11 @@ class Auth(object):
         if 'refresh_token' in result:
             self.refresh_token = result['refresh_token']
             if 'refresh_token_expires_in' in result:
-                self.refresh_expiry = str(now + result['refresh_token_expires_in'])
+                self.refresh_expiry = str(
+                    now + result['refresh_token_expires_in'])
             else:
-                self.refresh_expiry = str(now + (365*24*3600))  # Set a default expiry 12 months ahead
+                # Set a default expiry 12 months ahead
+                self.refresh_expiry = str(now + (365*24*3600))
             self.actor.store.oauth_refresh_token = self.refresh_token
             self.actor.store.oauth_refresh_token_expiry = self.refresh_expiry
 
@@ -223,7 +228,8 @@ class Auth(object):
         if not code:
             return False
         if not self.oauth:
-            logging.warning('Call to processOauthCallback() with oauth disabled.')
+            logging.warning(
+                'Call to processOauthCallback() with oauth disabled.')
             return False
         result = self.oauth.oauth_request_token(code)
         if not result or (result and 'access_token' not in result):
@@ -273,9 +279,11 @@ class Auth(object):
         if (ret and any(ret)) or code1 == 204 or code1 == 201 or code1 == 404:
             return ret
         if self.actor and self.actor.id and (not ret or code1 == 401 or code1 == 403):
-            refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
+            refresh = self.oauth.oauth_refresh_token(
+                refresh_token=self.refresh_token)
             if not refresh:
-                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning(
+                    'Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.get_request(url=url, params=params)
@@ -300,9 +308,11 @@ class Auth(object):
         if (ret and any(ret)) or code1 == 204 or code1 == 201 or code1 == 404:
             return ret
         if self.actor and self.actor.id and (not ret or code1 == 401 or code1 == 403):
-            refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
+            refresh = self.oauth.oauth_refresh_token(
+                refresh_token=self.refresh_token)
             if not refresh:
-                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning(
+                    'Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.head_request(url=url, params=params)
@@ -327,9 +337,11 @@ class Auth(object):
         if (ret and any(ret)) or code1 == 204 or code1 == 404:
             return ret
         if self.actor and self.actor.id and (code1 == 401 or code1 == 403):
-            refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
+            refresh = self.oauth.oauth_refresh_token(
+                refresh_token=self.refresh_token)
             if not refresh:
-                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning(
+                    'Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
                 ret2 = self.oauth.delete_request(url=url)
@@ -349,17 +361,21 @@ class Auth(object):
         """
         if not url:
             return None
-        ret = self.oauth.post_request(url=url, params=params, urlencode=urlencode)
+        ret = self.oauth.post_request(
+            url=url, params=params, urlencode=urlencode)
         code1 = self.oauth.last_response_code
         if (ret and any(ret)) or code1 == 204 or code1 == 201 or code1 == 404:
             return ret
         if self.actor and self.actor.id and (code1 == 401 or code1 == 403):
-            refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
+            refresh = self.oauth.oauth_refresh_token(
+                refresh_token=self.refresh_token)
             if not refresh:
-                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning(
+                    'Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
-                ret2 = self.oauth.post_request(url=url, params=params, urlencode=urlencode)
+                ret2 = self.oauth.post_request(
+                    url=url, params=params, urlencode=urlencode)
                 code2 = self.oauth.last_response_code
                 if ret2 and any(ret2) or code2 == 204 or code2 == 201:
                     return ret2
@@ -376,17 +392,21 @@ class Auth(object):
         """
         if not url:
             return None
-        ret = self.oauth.put_request(url=url, params=params, urlencode=urlencode)
+        ret = self.oauth.put_request(
+            url=url, params=params, urlencode=urlencode)
         code1 = self.oauth.last_response_code
         if (ret and any(ret)) or code1 == 204 or code1 == 201 or code1 == 404:
             return ret
         if self.actor and self.actor.id and (code1 == 401 or code1 == 403):
-            refresh = self.oauth.oauth_refresh_token(refresh_token=self.refresh_token)
+            refresh = self.oauth.oauth_refresh_token(
+                refresh_token=self.refresh_token)
             if not refresh:
-                logging.warning('Tried to refresh token and failed for Actor(' + self.actor.id + ')')
+                logging.warning(
+                    'Tried to refresh token and failed for Actor(' + self.actor.id + ')')
             else:
                 self.__process_oauth_accept(refresh)
-                ret2 = self.oauth.put_request(url=url, params=params, urlencode=urlencode)
+                ret2 = self.oauth.put_request(
+                    url=url, params=params, urlencode=urlencode)
                 code2 = self.oauth.last_response_code
                 if ret2 and any(ret2) or code2 == 204 or code2 == 201:
                     return ret2
@@ -409,8 +429,9 @@ class Auth(object):
                 # Clear cookie and do a refresh if refresh=True is in GET param
                 authz = ''
                 self.actor.store.oauth_token = None
-            if authz == self.token and now < (float(self.expiry) - 20.0):
-                logging.debug('Authorization cookie header matches a valid token')
+            elif authz == self.token and now < (float(self.expiry) - 20.0):
+                logging.debug(
+                    'Authorization cookie header matches a valid token')
                 self.acl["relationship"] = "creator"
                 self.acl["authenticated"] = True
                 self.response['code'] = 200
@@ -418,11 +439,12 @@ class Auth(object):
                 self.authn_done = True
                 return True
             elif authz != self.token:
-                self.actor.property[self.oauth_token_property] = None
-                logging.debug('Authorization cookie header does not match a valid token')
+                logging.debug(
+                    'Authorization cookie header does not match a valid token')
                 self.response['code'] = 403
                 self.response['text'] = "Forbidden"
                 self.authn_done = True
+                return False
         if self.cookie_redirect:
             logging.debug('Cookie redirect already set!')
         else:
@@ -436,7 +458,8 @@ class Auth(object):
         if not self.cookie_redirect:
             return False
         if not self.token:
-            logging.warning("Trying to set cookie when no token value can be found.")
+            logging.warning(
+                "Trying to set cookie when no token value can be found.")
             return False
         logging.debug('Setting Authorization cookie: ' + str(self.token))
         appreq.response.set_cookie(self.cookie, str(self.token),
@@ -447,17 +470,20 @@ class Auth(object):
 
     def __check_basic_auth_creator(self, appreq):
         if self.type != 'basic':
-            logging.warning("Trying to do basic auth when auth type is not basic")
+            logging.warning(
+                "Trying to do basic auth when auth type is not basic")
             self.response['code'] = 403
             self.response['text'] = "Forbidden"
             return False
         if not self.actor.passphrase:
-            logging.warning("Trying to do basic auth when no passphrase value can be found.")
+            logging.warning(
+                "Trying to do basic auth when no passphrase value can be found.")
             self.response['code'] = 403
             self.response['text'] = "Forbidden"
             return False
         if 'Authorization' not in appreq.request.headers:
-            self.response['headers']['WWW-Authenticate'] = 'Basic realm="' + self.realm + '"'
+            self.response['headers']['WWW-Authenticate'] = 'Basic realm="' + \
+                self.realm + '"'
             self.response['code'] = 401
             self.response['text'] = "Authentication required"
             return False
@@ -523,8 +549,10 @@ class Auth(object):
                     self.token = self.actor.passphrase
                     return True
             else:
-                logging.warning('Attempted trustee bearer token auth with <80 bit strength token.')
-        tru = trust.Trust(actor_id=self.actor.id, token=token, config=self.config)
+                logging.warning(
+                    'Attempted trustee bearer token auth with <80 bit strength token.')
+        tru = trust.Trust(actor_id=self.actor.id,
+                          token=token, config=self.config)
         new_trust = tru.get()
         if new_trust:
             logging.debug('Found trust with token: (' + str(new_trust) + ')')
@@ -572,7 +600,8 @@ class Auth(object):
         is False, then the trust relationship does not need to be approved for
         access"""
         if len(self.acl["peerid"]) > 0 and approved and self.acl["approved"] is False:
-            logging.debug('Rejected authorization because trust relationship is not approved.')
+            logging.debug(
+                'Rejected authorization because trust relationship is not approved.')
             return False
         if self.acl["relationship"]:
             relationship = self.acl["relationship"].lower()

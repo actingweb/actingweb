@@ -13,7 +13,8 @@ class Config(object):
         # Basic settings for this app
         #########
         # Values that can be changed as part of instantiating config
-        self.fqdn = "actingwebdemo-dev.appspot.com"  # The host and domain, i.e. FQDN, of the URL
+        # The host and domain, i.e. FQDN, of the URL
+        self.fqdn = "actingwebdemo-dev.appspot.com"
         self.proto = "https://"  # http or https
         self.env = ''
         self.database = 'dynamodb'
@@ -35,15 +36,21 @@ class Config(object):
         #########
         # Configurable ActingWeb settings for this app
         #########
-        self.aw_type = "urn:actingweb:actingweb.org:gae-demo"  # The app type this actor implements
-        self.desc = "GAE Demo actor: "                      # A human-readable description for this specific actor
-        self.specification = ""                             # URL to a RAML/Swagger etc definition if available
-        self.version = "1.0"                                # A version number for this app
-        self.info = "http://actingweb.org/"                 # Where can more info be found
+        # The app type this actor implements
+        self.aw_type = "urn:actingweb:actingweb.org:gae-demo"
+        # A human-readable description for this specific actor
+        self.desc = "GAE Demo actor: "
+        # URL to a RAML/Swagger etc definition if available
+        self.specification = ""
+        # A version number for this app
+        self.version = "1.0"
+        # Where can more info be found
+        self.info = "http://actingweb.org/"
         #########
         # Trust settings for this app
         #########
-        self.default_relationship = "associate"  # Default relationship if not specified
+        # Default relationship if not specified
+        self.default_relationship = "associate"
         self.auto_accept_default_relationship = False  # True if auto-approval
         #########
         # Known and trusted ActingWeb actors
@@ -53,13 +60,14 @@ class Config(object):
                 'type': 'urn:<ACTINGWEB_TYPE>',
                 'factory': '<ROOT_URI>',
                 'relationship': 'friend',                   # associate, friend, partner, admin
-                },
+            },
         }
         #########
         # OAuth settings for this app, fill in if OAuth is used
         #########
         self.oauth = {
-            'client_id': "",                                # An empty client_id turns off oauth capabilities
+            # An empty client_id turns off oauth capabilities
+            'client_id': "",
             'client_secret': "",
             'redirect_uri': self.proto + self.fqdn + "/oauth",
             'scope': "",
@@ -84,30 +92,48 @@ class Config(object):
             #        + any other new role for this app
             # Methods: GET, POST, PUT, DELETE
             # Access: a (allow) or r (reject)
-            ('', 'meta', 'GET', 'a'),                       # Allow GET to anybody without auth
-            ('', 'oauth', '', 'a'),                         # Allow any method to anybody without auth
-            ('owner', 'callbacks/subscriptions', 'POST', 'a'),   # Allow owners on subscriptions
-            ('', 'callbacks', '', 'a'),                     # Allow anybody callbacks witout auth
-            ('creator', 'www', '', 'a'),                    # Allow only creator access to /www
-            ('creator', 'properties', '', 'a'),             # Allow creator access to /properties
-            ('associate', 'properties', 'GET', 'a'),        # Allow GET only to associate
-            ('friend', 'properties', '', 'a'),              # Allow friend/partner/admin all
+            # Allow GET to anybody without auth
+            ('', 'meta', 'GET', 'a'),
+            # Allow any method to anybody without auth
+            ('', 'oauth', '', 'a'),
+            # Allow owners on subscriptions
+            ('owner', 'callbacks/subscriptions', 'POST', 'a'),
+            # Allow anybody callbacks witout auth
+            ('', 'callbacks', '', 'a'),
+            # Allow only creator access to /www
+            ('creator', 'www', '', 'a'),
+            # Allow creator access to /properties
+            ('creator', 'properties', '', 'a'),
+            # Allow GET only to associate
+            ('associate', 'properties', 'GET', 'a'),
+            # Allow friend/partner/admin all
+            ('friend', 'properties', '', 'a'),
             ('partner', 'properties', '', 'a'),
             ('admin', 'properties', '', 'a'),
             ('creator', 'resources', '', 'a'),
-            ('friend', 'resources', '', 'a'),               # Allow friend/partner/admin all
+            # Allow friend/partner/admin all
+            ('friend', 'resources', '', 'a'),
             ('partner', 'resources', '', 'a'),
             ('admin', 'resources', '', 'a'),
-            ('', 'trust/<type>', 'POST', 'a'),              # Allow unauthenticated POST
-            ('owner', 'trust/<type>/<id>', '', 'a'),        # Allow trust peer full access
-            ('creator', 'trust', '', 'a'),                  # Allow access to all to
-            ('trustee', 'trust', '', 'a'),                  # creator/trustee/admin
+            # Allow unauthenticated POST
+            ('', 'trust/<type>', 'POST', 'a'),
+            # Allow trust peer full access
+            ('owner', 'trust/<type>/<id>', '', 'a'),
+            # Allow access to all to
+            ('creator', 'trust', '', 'a'),
+            # creator/trustee/admin
+            ('trustee', 'trust', '', 'a'),
             ('admin', 'trust', '', 'a'),
-            ('owner', 'subscriptions', '', 'a'),             # Owner can create++ own subscriptions
-            ('friend', 'subscriptions/<id>', '', 'a'),       # Owner can create subscriptions
-            ('creator', 'subscriptions', '', 'a'),           # Creator can do everything
-            ('trustee', 'subscriptions', '', 'a'),           # Trustee can do everything
-            ('creator', '/', '', 'a'),                       # Root access for actor
+            # Owner can create++ own subscriptions
+            ('owner', 'subscriptions', '', 'a'),
+            # Owner can create subscriptions
+            ('friend', 'subscriptions/<id>', '', 'a'),
+            # Creator can do everything
+            ('creator', 'subscriptions', '', 'a'),
+            # Trustee can do everything
+            ('trustee', 'subscriptions', '', 'a'),
+            # Root access for actor
+            ('creator', '/', '', 'a'),
             ('trustee', '/', '', 'a'),
             ('admin', '/', '', 'a'),
         ]
@@ -134,33 +160,44 @@ class Config(object):
                 'relationship': 'friend',  # associate, friend, partner, admin
             }
         # Dynamically load all the database modules
-        self.DbActor = importlib.import_module("actingweb" + ".db_" + self.database + ".db_actor")
-        self.DbPeerTrustee = importlib.import_module("actingweb" + ".db_" + self.database + ".db_peertrustee")
-        self.DbProperty = importlib.import_module("actingweb" + ".db_" + self.database + ".db_property")
-        self.DbAttribute = importlib.import_module("actingweb" + ".db_" + self.database + ".db_attribute")
-        self.DbSubscription = importlib.import_module("actingweb" + ".db_" + self.database + ".db_subscription")
+        self.DbActor = importlib.import_module(
+            "actingweb" + ".db_" + self.database + ".db_actor")
+        self.DbPeerTrustee = importlib.import_module(
+            "actingweb" + ".db_" + self.database + ".db_peertrustee")
+        self.DbProperty = importlib.import_module(
+            "actingweb" + ".db_" + self.database + ".db_property")
+        self.DbAttribute = importlib.import_module(
+            "actingweb" + ".db_" + self.database + ".db_attribute")
+        self.DbSubscription = importlib.import_module(
+            "actingweb" + ".db_" + self.database + ".db_subscription")
         self.DbSubscriptionDiff = importlib.import_module("actingweb" + ".db_" + self.database +
                                                           ".db_subscription_diff")
-        self.DbTrust = importlib.import_module("actingweb" + ".db_" + self.database + ".db_trust")
+        self.DbTrust = importlib.import_module(
+            "actingweb" + ".db_" + self.database + ".db_trust")
         self.module = {}
         if self.env == 'appengine':
-            self.module["deferred"] = importlib.import_module(".deferred", "google.appengine.api")
-            self.module["urlfetch"] = importlib.import_module(".urlfetch", "google.appengine.ext")
+            self.module["deferred"] = importlib.import_module(
+                ".deferred", "google.appengine.api")
+            self.module["urlfetch"] = importlib.import_module(
+                ".urlfetch", "google.appengine.ext")
         else:
             self.module["deferred"] = None
             self.module["urlfetch"] = importlib.import_module("urlfetch")
         #########
         # ActingWeb settings for this app
         #########
-        self.aw_version = "1.0"                             # This app follows the actingweb specification specified
+        # This app follows the actingweb specification specified
+        self.aw_version = "1.0"
         self.aw_supported = "www,oauth,callbacks,trust,onewaytrust,subscriptions," \
-                            "actions,resources,methods,sessions,nestedproperties" # This app supports these options
-        self.aw_formats = "json"                            # These are the supported formats
+                            "actions,resources,methods,sessions,nestedproperties"  # This app supports these options
+        # These are the supported formats
+        self.aw_formats = "json"
         #########
         # Only touch the below if you know what you are doing
         #########
         if self.env == 'appengine':
-            logging.getLogger().handlers[0].setLevel(self.logLevel)  # Hack to get access to GAE logger
+            logging.getLogger().handlers[0].setLevel(
+                self.logLevel)  # Hack to get access to GAE logger
         else:
             logging.basicConfig(level=self.logLevel)
             # Turn off debugging for pynamodb and botocore, too noisy
@@ -171,8 +208,10 @@ class Config(object):
                 log = logging.getLogger("botocore")
                 log.setLevel(logging.INFO)
                 log.propagate = True
-        self.root = self.proto + self.fqdn + "/"            # root URI used to identity actor externally
-        self.auth_realm = self.fqdn                         # Authentication realm used in Basic auth
+        # root URI used to identity actor externally
+        self.root = self.proto + self.fqdn + "/"
+        # Authentication realm used in Basic auth
+        self.auth_realm = self.fqdn
 
     @staticmethod
     def new_uuid(seed):

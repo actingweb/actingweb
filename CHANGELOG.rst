@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.6.2: Oct 20, 2020
+--------------------
+- Security fix on oauth refresh
+
 v2.6.1: Aug 30, 2020
 --------------------
 - Fix token refresh to also use Basic authorisation

@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.6.4: Apr 11, 2021
+--------------------
+- Messed up release versioning, bump up to avoid confusion
+
 v2.6.3: Apr 11, 2021
 --------------------
 - Fix bug in peertrustee handling by replacing dynamodb count() with scan() as count requires a hash key

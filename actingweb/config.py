@@ -14,7 +14,7 @@ class Config(object):
         #########
         # Values that can be changed as part of instantiating config
         # The host and domain, i.e. FQDN, of the URL
-        self.fqdn = "actingwebdemo-dev.appspot.com"
+        self.fqdn = "demo.actingweb.io"
         self.proto = "https://"  # http or https
         self.env = ''
         self.database = 'dynamodb'

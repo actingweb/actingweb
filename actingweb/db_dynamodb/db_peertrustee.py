@@ -44,12 +44,17 @@ class DbPeerTrustee(object):
             if not self.handle and peerid:
                 self.handle = PeerTrustee.get(actor_id, peerid, consistent_read=True)
             elif not self.handle and peer_type:
-                if PeerTrustee.count(actor_id, PeerTrustee.type == peer_type) > 1:
+                count = 0
+                peer_trustees = PeerTrustee.scan((PeerTrustee.id == actor_id) & (PeerTrustee.type == peer_type))
+                for h in peer_trustees:
+                    self.handle = h
+                    count+=1
+                if count > 1:
                     logging.error('Found more than one peer of this peer trustee type(' +
                                   peer_type + '). Unable to determine which, need peerid lookup.')
                     return False
-                for h in PeerTrustee.query(actor_id, PeerTrustee.type == peer_type):
-                    self.handle = h
+                if count == 0:
+                    self.handle = None
         except PeerTrustee.DoesNotExist:
             self.handle = None
         if self.handle:

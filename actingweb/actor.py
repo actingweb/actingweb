@@ -302,11 +302,11 @@ class Actor(object):
                 self.config.module["urlfetch"].URLError,
                 self.config.module["urlfetch"].Timeout,
                 self.config.module["urlfetch"].TooManyRedirects):
-            logging.debug('Not able to delete peer actor remotely')
+            logging.debug('Not able to delete peer actor remotely due to network issues')
             self.last_response_code = 408
             return False
         if response.status_code < 200 or response.status_code > 299:
-            logging.debug('Not able to delete peer actor remotely')
+            logging.debug('Not able to delete peer actor remotely, peer is unwilling')
             return False
         # Delete trust, peer is already deleted remotely
         if not self.delete_reciprocal_trust(peerid=peer_data["peerid"], delete_peer=False):

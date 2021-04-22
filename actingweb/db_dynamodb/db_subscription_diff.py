@@ -118,18 +118,14 @@ class DbSubscriptionDiffList(object):
             return None
         self.actor_id = actor_id
         self.subid = subid
-        if not subid:
-            self.handle = SubscriptionDiff.query(
-                actor_id,
-                consistent_read=True)
-        else:
-            self.handle = SubscriptionDiff.query(
-                actor_id,
-                SubscriptionDiff.subid.startswith(subid),
-                consistent_read=True)
+        self.handle = SubscriptionDiff.query(
+            actor_id,
+            consistent_read=True)
         self.diffs = []
         if self.handle:
             for t in self.handle:
+                if subid and subid != t.subid:
+                    continue
                 self.diffs.append({
                     "id": t.id,
                     "subscriptionid": t.subid,
@@ -151,16 +147,12 @@ class DbSubscriptionDiffList(object):
             return False
         if not seqnr or not isinstance(seqnr, int):
             seqnr = 0
-        if not self.subid:
-            self.handle = SubscriptionDiff.query(
-                self.actor_id,
-                consistent_read=True)
-        else:
-            self.handle = SubscriptionDiff.query(
-                self.actor_id,
-                SubscriptionDiff.subid.startswith(self.subid),
-                consistent_read=True)
+        self.handle = SubscriptionDiff.query(
+            self.actor_id,
+            consistent_read=True)
         for p in self.handle:
+            if self.subid and self.subid != p.subid:
+                continue
             if seqnr == 0 or p.seqnr <= seqnr:
                 p.delete()
         self.handle = None

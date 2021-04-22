@@ -2,6 +2,10 @@
 CHANGELOG
 =========
 
+v2.6.5: Apr 22, 2021
+--------------------
+- Fix bug in subscription_diff handling by replacing query with scan as query requires hash key
+
 v2.6.4: Apr 11, 2021
 --------------------
 - Messed up release versioning, bump up to avoid confusion

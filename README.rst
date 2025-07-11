@@ -4,7 +4,7 @@ README - actingweb - an ActingWeb Library
 This is a python library implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
 distributed micro-services model. A typical use case is bot to bot communication on a peer to peer level.
 It serves as the reference implementation for the `ActingWeb REST protocol
-specification <http://actingweb.readthedocs.io/en/release/actingweb-spec.html>`_ for
+specification <http://actingweb.readthedocs.io/en/release/>`_ for
 how such micro-services interact.
 
 Repository and documentation

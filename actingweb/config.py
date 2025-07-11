@@ -1,12 +1,12 @@
-from builtins import object
 import uuid
 import binascii
 import logging
 import importlib
 import os
+from typing import Optional, Dict, Any, List
 
 
-class Config(object):
+class Config:
 
     def __init__(self, **kwargs):
         #########

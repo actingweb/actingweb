@@ -1,9 +1,9 @@
-from builtins import object
 import datetime
 import logging
+from typing import Optional, Dict, Any, List
 
 
-class Subscription(object):
+class Subscription:
     """Base class with core subscription methods (storage-related)"""
 
     def get(self):

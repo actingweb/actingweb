@@ -1,8 +1,8 @@
-from builtins import object
 import logging
+from typing import Optional, Dict, Any, List
 
 
-class Trust(object):
+class Trust:
 
     def get(self):
         """ Retrieve a trust relationship with either peerid or token """

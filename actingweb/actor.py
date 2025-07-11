@@ -1,11 +1,43 @@
-from __future__ import absolute_import
-from builtins import str
-from builtins import object
 import datetime
 import base64
 import logging
 import json
+from typing import Optional, Dict, Any, List, Union
 from actingweb import (property, trust, subscription, peertrustee, attribute)
+from actingweb.constants import (
+    DEFAULT_CREATOR, 
+    TRUSTEE_CREATOR, 
+    ResponseCode,
+    AUTHORIZATION_HEADER,
+    CONTENT_TYPE_HEADER,
+    JSON_CONTENT_TYPE,
+    DEFAULT_FETCH_DEADLINE
+)
+
+
+class ActorError(Exception):
+    """Base exception class for Actor-related errors."""
+    pass
+
+
+class ActorNotFoundError(ActorError):
+    """Raised when an actor cannot be found."""
+    pass
+
+
+class InvalidActorDataError(ActorError):
+    """Raised when actor data is invalid or corrupted."""
+    pass
+
+
+class PeerCommunicationError(ActorError):
+    """Raised when communication with peer actors fails."""
+    pass
+
+
+class TrustRelationshipError(ActorError):
+    """Raised when trust relationship operations fail."""
+    pass
 
 
 class DummyPropertyClass:
@@ -15,22 +47,22 @@ class DummyPropertyClass:
         self.value = v
 
 
-class Actor(object):
+class Actor:
 
     ###################
     # Basic operations
     ###################
 
-    def __init__(self, actor_id=None, config=None):
+    def __init__(self, actor_id: Optional[str] = None, config: Optional[Any] = None) -> None:
         self.config = config
-        self.property_list = None
-        self.subs_list = None
-        self.actor = None
-        self.passphrase = None
-        self.creator = None
-        self.last_response_code = 0
-        self.last_response_message = ''
-        self.id = actor_id
+        self.property_list: Optional[Any] = None
+        self.subs_list: Optional[List[Dict[str, Any]]] = None
+        self.actor: Optional[Dict[str, Any]] = None
+        self.passphrase: Optional[str] = None
+        self.creator: Optional[str] = None
+        self.last_response_code: int = 0
+        self.last_response_message: str = ''
+        self.id: Optional[str] = actor_id
         self.handle = self.config.DbActor.DbActor()
         if actor_id and config:
             self.store = attribute.InternalStore(actor_id=actor_id, config=config)
@@ -40,7 +72,7 @@ class Actor(object):
             self.property = None
         self.get(actor_id=actor_id)
 
-    def get_peer_info(self, url: str) -> dict:
+    def get_peer_info(self, url: str) -> Dict[str, Any]:
         """ Contacts an another actor over http/s to retrieve meta information
         :param url: Root URI of a remote actor
         :rtype: dict
@@ -55,7 +87,7 @@ class Actor(object):
         >>>}
         """
         try:
-            logging.debug('Getting peer info at url(' + url + ')')
+            logging.debug(f'Getting peer info at url({url})')
             if self.config.env == "appengine":
                 self.config.module["urlfetch"].set_default_fetch_deadline(20)
             response = self.config.module["urlfetch"].fetch(url=url + '/meta')
@@ -64,15 +96,14 @@ class Actor(object):
                 "last_response_message": response.content,
                 "data": json.loads(response.content.decode('utf-8', 'ignore')),
             }
-            logging.debug('Got peer info from url(' + url +
-                          ') with body(' + str(response.content) + ')')
+            logging.debug(f'Got peer info from url({url}) with body({response.content})')
         except (TypeError, ValueError, KeyError):
             res = {
                 "last_response_code": 500,
             }
         return res
 
-    def get(self, actor_id: str = None) -> dict or None:
+    def get(self, actor_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Retrieves an actor from storage or initialises if it does not exist"""
         if not actor_id and not self.id:
             return None
@@ -102,7 +133,7 @@ class Actor(object):
             self.passphrase = None
         return self.actor
 
-    def get_from_property(self, name='oauthId', value=None):
+    def get_from_property(self, name: str = 'oauthId', value: Optional[str] = None) -> None:
         """ Initialise an actor by matching on a stored property.
 
         Use with caution as the property's value de-facto becomes
@@ -119,7 +150,7 @@ class Actor(object):
             return
         self.get(actor_id=actor_id)
 
-    def get_from_creator(self, creator=None):
+    def get_from_creator(self, creator: Optional[str] = None) -> bool:
         """ Initialise an actor by matching on creator.
 
         If unique_creator config is False, then no actor will be initialised.
@@ -137,7 +168,7 @@ class Actor(object):
         self.get(actor_id=exists[0]["id"])
         return True
 
-    def create(self, url, creator, passphrase, actor_id=None, delete=False):
+    def create(self, url: str, creator: str, passphrase: str, actor_id: Optional[str] = None, delete: bool = False) -> bool:
         """"Creates a new actor and persists it.
 
             If delete is True, any existing actors with same creator value
@@ -150,7 +181,7 @@ class Actor(object):
         if len(creator) > 0:
             self.creator = creator
         else:
-            self.creator = "creator"
+            self.creator = DEFAULT_CREATOR
         if self.config.unique_creator:
             in_db = self.config.DbActor.DbActor()
             exists = in_db.get_by_creator(creator=self.creator)
@@ -163,7 +194,7 @@ class Actor(object):
                         anactor = Actor(actor_id=c["id"], config=self.config)
                         anactor.delete()
                 else:
-                    if self.config.force_email_prop_as_creator and self.creator == "creator":
+                    if self.config.force_email_prop_as_creator and self.creator == DEFAULT_CREATOR:
                         for c in exists:
                             anactor = Actor(actor_id=c["id"])
                             em = anactor.store.email
@@ -199,7 +230,7 @@ class Actor(object):
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         return True
 
-    def modify(self, creator=None):
+    def modify(self, creator: Optional[str] = None) -> bool:
         if not self.handle or not creator:
             logging.debug("Attempted modify of actor with no handle or no param changed")
             return False
@@ -211,7 +242,7 @@ class Actor(object):
         self.handle.modify(creator=creator)
         return True
 
-    def delete(self):
+    def delete(self) -> None:
         """Deletes an actor and cleans up all relevant stored data"""
         if not self.handle:
             logging.debug("Attempted delete of actor with no handle")
@@ -267,7 +298,7 @@ class Actor(object):
                 self.delete_peer_trustee(shorttype=t)
             return True
         if shorttype and not self.config.actors[shorttype]:
-            logging.error('Got a request to delete an unknown actor type(' + shorttype + ')')
+            logging.error(f'Got a request to delete an unknown actor type({shorttype})')
             return False
         peer_data = None
         new_peer = None
@@ -281,8 +312,7 @@ class Actor(object):
             peer_data = new_peer.get()
             if not peer_data or len(peer_data) == 0:
                 return False
-        logging.debug(
-            'Deleting peer actor at baseuri(' + peer_data["baseuri"] + ')')
+        logging.debug(f'Deleting peer actor at baseuri({peer_data["baseuri"]})')
         u_p = b'trustee:' + peer_data["passphrase"].encode('utf-8')
         headers = {'Authorization': 'Basic ' +
                    base64.b64encode(u_p).decode('utf-8'),
@@ -327,7 +357,7 @@ class Actor(object):
         if not peerid and not shorttype:
             return None
         if shorttype and not self.config.actors[shorttype]:
-            logging.error('Got a request to create an unknown actor type(' + shorttype + ')')
+            logging.error(f'Got a request to create an unknown actor type({shorttype})')
             return None
         if peerid:
             new_peer = peertrustee.PeerTrustee(actor_id=self.id, peerid=peerid, config=self.config)
@@ -345,16 +375,13 @@ class Actor(object):
         # If peer did not exist, create it as trustee
         if not peer_data or len(peer_data) == 0:
             if len(factory) == 0:
-                logging.error('Peer actor of shorttype(' + 
-                              shorttype + ') does not have factory set.')
+                logging.error(f'Peer actor of shorttype({shorttype}) does not have factory set.')
             params = {
                 'creator': 'trustee',
                 'trustee_root': self.config.root + self.id
             }
             data = json.dumps(params)
-            logging.debug(
-                'Creating peer actor at factory(' + factory + ') with data(' +
-                str(data) + ')')
+            logging.debug(f'Creating peer actor at factory({factory}) with data({data})')
             response = None
             try:
                 if self.config.env == 'appengine':
@@ -379,14 +406,13 @@ class Actor(object):
                     self.config.module["urlfetch"].TooManyRedirects):
                 logging.debug('Not able to create new peer actor')
                 self.last_response_code = 408
-            logging.debug('Create peer actor POST response:' + str(self.last_response_code))
+            logging.debug(f'Create peer actor POST response: {self.last_response_code}')
             if self.last_response_code < 200 or self.last_response_code > 299:
                 return None
             try:
                 data = json.loads(response.content.decode('utf-8', 'ignore'))
             except (TypeError, ValueError, KeyError):
-                logging.warning("Not able to parse response when creating peer at factory(" +
-                                factory + ")")
+                logging.warning(f"Not able to parse response when creating peer at factory({factory})")
                 return None
             if 'Location' in response.headers:
                 baseuri = response.headers['Location']
@@ -401,14 +427,12 @@ class Actor(object):
             info_peer = res['data']
             if not info_peer or ('id' in info_peer and not info_peer["id"])\
                     or ('type' in info_peer and not info_peer["type"]):
-                logging.info(
-                    'Received invalid peer info when trying to create peer actor at: ' + str(factory))
+                logging.info(f'Received invalid peer info when trying to create peer actor at: {factory}')
                 return None
             new_peer = peertrustee.PeerTrustee(actor_id=self.id, peerid=info_peer["id"], peer_type=info_peer["type"],
                                                config=self.config)
             if not new_peer.create(baseuri=baseuri, passphrase=data["passphrase"]):
-                logging.error('Failed to create in db new peer Actor(' +
-                              self.id + ') at ' + baseuri)
+                logging.error(f'Failed to create in db new peer Actor({self.id}) at {baseuri}')
                 return None
         # Now peer exists, create trust
         new_peer_data = new_peer.get()
@@ -419,8 +443,7 @@ class Actor(object):
                         relationship=self.config.actors[shorttype]['relationship']
                         )
         if not new_trust or len(new_trust) == 0:
-            logging.warning("Not able to establish trust relationship with peer at factory(" +
-                            factory + ")")
+            logging.warning(f"Not able to establish trust relationship with peer at factory({factory})")
         else:
             # Approve the relationship
             params = {
@@ -1086,7 +1109,7 @@ class Actor(object):
                                                sub=sub_obj_data, diff=diff, blob=finblob)
 
 
-class Actors(object):
+class Actors:
     """ Handles all actors
     """
 

@@ -15,8 +15,9 @@ setup(
         'Development Status :: 5 - Production/Stable',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: BSD License',
-        'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
         'Topic :: System :: Distributed Computing',
     ],
     url='http://actingweb.org',
@@ -28,11 +29,12 @@ setup(
         'actingweb.handlers',
         'actingweb.db_dynamodb'
     ],
-    python_requires='>=2.7',
+    python_requires='>=3.11',
     install_requires=[
-        'pynamodb',
-        'boto3',
-        'urlfetch'
+        'pynamodb>=6.0.0',
+        'boto3>=1.26.0',
+        'urlfetch>=1.0.2',
+        'typing-extensions>=4.0.0'
     ],
     include_package_data=True,
     zip_safe=False)

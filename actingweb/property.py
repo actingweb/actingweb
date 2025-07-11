@@ -1,7 +1,8 @@
-from builtins import object
+
+from typing import Optional, Dict, Any, List
 
 
-class PropertyStore(object):
+class PropertyStore:
 
     def __init__(self, actor_id=None, config=None):
         self._actor_id = actor_id

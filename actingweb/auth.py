@@ -1,11 +1,9 @@
-from __future__ import absolute_import
-from builtins import str
-from builtins import object
 import logging
 import time
 import base64
 import math
 from actingweb import (actor, oauth, trust, config as config_class)
+from actingweb.constants import TRUSTEE_CREATOR
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Fairly simple: /oauth is always oauth, /www can be either basic+trust or
@@ -537,10 +535,10 @@ class Auth(object):
         # If trustee_root is set, creator name is 'trustee' and
         # bit strength of passphrase is > 80, use passphrase as
         # token
-        if trustee and self.actor.creator.lower() == 'trustee':
+        if trustee and self.actor.creator.lower() == TRUSTEE_CREATOR:
             if math.floor(len(self.actor.passphrase)*math.log(94, 2)) > 80:
                 if token == self.actor.passphrase:
-                    self.acl["relationship"] = 'trustee'
+                    self.acl["relationship"] = TRUSTEE_CREATOR
                     self.acl["peerid"] = ''
                     self.acl["approved"] = True
                     self.acl["authenticated"] = True

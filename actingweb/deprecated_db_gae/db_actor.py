@@ -1,6 +1,6 @@
-from builtins import object
-from google.appengine.ext import ndb
 import logging
+
+from google.appengine.ext import ndb
 
 """
     DbActor handles all db operations for an actor
@@ -22,7 +22,7 @@ class Actor(ndb.Model):
     passphrase = ndb.StringProperty()
 
 
-class DbActor(object):
+class DbActor:
     """
         DbActor does all the db operations for actor objects
 
@@ -104,7 +104,7 @@ class DbActor(object):
         self.handle = None
 
 
-class DbActorList(object):
+class DbActorList:
     """
         DbActorList does all the db operations for list of actor objects
     """

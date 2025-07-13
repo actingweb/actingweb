@@ -5,6 +5,7 @@ from enum import Enum
 
 class AuthType(Enum):
     """Authentication types supported by ActingWeb."""
+
     BASIC = "basic"
     OAUTH = "oauth"
     NONE = "none"
@@ -12,6 +13,7 @@ class AuthType(Enum):
 
 class HttpMethod(Enum):
     """HTTP methods used in ActingWeb."""
+
     GET = "GET"
     POST = "POST"
     PUT = "PUT"
@@ -22,6 +24,7 @@ class HttpMethod(Enum):
 
 class TrustRelationship(Enum):
     """Trust relationship types in ActingWeb."""
+
     CREATOR = "creator"
     FRIEND = "friend"
     ADMIN = "admin"
@@ -31,6 +34,7 @@ class TrustRelationship(Enum):
 
 class SubscriptionGranularity(Enum):
     """Subscription granularity levels."""
+
     NONE = "none"
     LOW = "low"
     HIGH = "high"
@@ -38,12 +42,14 @@ class SubscriptionGranularity(Enum):
 
 class DatabaseType(Enum):
     """Database backend types."""
+
     DYNAMODB = "dynamodb"
     GAE = "gae"
 
 
 class Environment(Enum):
     """Runtime environment types."""
+
     APPENGINE = "appengine"
     STANDALONE = "standalone"
 
@@ -51,6 +57,7 @@ class Environment(Enum):
 # Response codes
 class ResponseCode(Enum):
     """Common HTTP response codes used in ActingWeb."""
+
     OK = 200
     CREATED = 201
     ACCEPTED = 202

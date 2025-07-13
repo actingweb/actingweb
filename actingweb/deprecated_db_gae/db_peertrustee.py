@@ -1,4 +1,4 @@
-from builtins import object
+
 from google.appengine.ext import ndb
 
 """
@@ -20,7 +20,7 @@ class PeerTrustee(ndb.Model):
     passphrase = ndb.StringProperty(required=True)
 
 
-class DbPeerTrustee(object):
+class DbPeerTrustee:
     """
         DbPeerTrustee does all the db operations for property objects
 
@@ -41,7 +41,7 @@ class DbPeerTrustee(object):
             self.handle = PeerTrustee.query(PeerTrustee.id == actor_id,
                                             PeerTrustee.type == type).fetch(use_cache=False)
             if len(self.handle) > 1:
-                logging.error('Found more than one peer of this peer trustee type(' + 
+                logging.error('Found more than one peer of this peer trustee type(' +
                               shorttype + '). Unable to determine which, need peerid lookup.')
                 return False
             if len(self.handle) == 1:
@@ -111,7 +111,7 @@ class DbPeerTrustee(object):
         self.handle = None
 
 
-class DbPeerTrusteeList(object):
+class DbPeerTrusteeList:
     """
         DbPeerTrusteeList does all the db operations for list of peertrustee objects
 

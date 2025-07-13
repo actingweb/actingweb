@@ -1,6 +1,6 @@
-from builtins import object
-from google.appengine.ext import ndb
 import logging
+
+from google.appengine.ext import ndb
 
 """
     DbTrust handles all db operations for a trust
@@ -28,7 +28,7 @@ class Trust(ndb.Model):
     verification_token = ndb.StringProperty()
 
 
-class DbTrust(object):
+class DbTrust:
     """
         DbTrust does all the db operations for trust objects
 
@@ -144,7 +144,7 @@ class DbTrust(object):
         self.handle = None
 
 
-class DbTrustList(object):
+class DbTrustList:
     """
         DbTrustList does all the db operations for list of trust objects
 

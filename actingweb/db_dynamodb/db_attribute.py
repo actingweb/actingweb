@@ -1,7 +1,7 @@
-from builtins import object
 import os
+
+from pynamodb.attributes import JSONAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.models import Model
-from pynamodb.attributes import UnicodeAttribute, JSONAttribute, UTCDateTimeAttribute
 
 """
     DbAttribute handles all db operations for an attribute (internal)
@@ -11,14 +11,15 @@ from pynamodb.attributes import UnicodeAttribute, JSONAttribute, UTCDateTimeAttr
 
 class Attribute(Model):
     """
-       DynamoDB data model for a property
+    DynamoDB data model for a property
     """
-    class Meta(object):
-        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_attributes"
+
+    class Meta:
+        table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_attributes"
         read_capacity_units = 26
         write_capacity_units = 2
-        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
-        host = os.getenv('AWS_DB_HOST', None)
+        region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
+        host = os.getenv("AWS_DB_HOST", None)
 
     id = UnicodeAttribute(hash_key=True)
     bucket_name = UnicodeAttribute(range_key=True)
@@ -28,25 +29,24 @@ class Attribute(Model):
     timestamp = UTCDateTimeAttribute(null=True)
 
 
-class DbAttribute(object):
+class DbAttribute:
     """
-        DbProperty does all the db operations for property objects
+    DbProperty does all the db operations for property objects
 
-        The actor_id must always be set. get(), set() will set a new internal handle
-        that will be reused by set() (overwrite attribute) and
-        delete().
+    The actor_id must always be set. get(), set() will set a new internal handle
+    that will be reused by set() (overwrite attribute) and
+    delete().
     """
 
     @staticmethod
     def get_bucket(actor_id=None, bucket=None):
-        """ Returns a dict of attributes from a bucket, each with data and timestamp """
+        """Returns a dict of attributes from a bucket, each with data and timestamp"""
         if not actor_id or not bucket:
             return None
         try:
             query = Attribute.query(
-                actor_id,
-                Attribute.bucket_name.startswith(bucket),
-                consistent_read=True)
+                actor_id, Attribute.bucket_name.startswith(bucket), consistent_read=True
+            )
         except Attribute.DoesNotExist:
             return None
         ret = {}
@@ -59,7 +59,7 @@ class DbAttribute(object):
 
     @staticmethod
     def get_attr(actor_id=None, bucket=None, name=None):
-        """ Returns a dict of attributes from a bucket, each with data and timestamp """
+        """Returns a dict of attributes from a bucket, each with data and timestamp"""
         if not actor_id or not bucket or not name:
             return None
         try:
@@ -73,13 +73,14 @@ class DbAttribute(object):
 
     @staticmethod
     def set_attr(actor_id=None, bucket=None, name=None, data=None, timestamp=None):
-        """ Sets a data value for a given attribute in a bucket
-        """
+        """Sets a data value for a given attribute in a bucket"""
         if not actor_id or not name or not bucket:
             return False
         if not data:
             try:
-                item = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
+                item = Attribute.get(
+                    actor_id, bucket + ":" + name, consistent_read=True
+                )
                 item.delete()
             except Attribute.DoesNotExist:
                 pass
@@ -90,27 +91,24 @@ class DbAttribute(object):
             bucket=bucket,
             name=name,
             data=data,
-            timestamp=timestamp
+            timestamp=timestamp,
         )
         new.save()
         return True
 
     def delete_attr(self, actor_id=None, bucket=None, name=None):
-        """ Deletes an attribute in a bucket
-        """
+        """Deletes an attribute in a bucket"""
         return self.set_attr(actor_id=actor_id, bucket=bucket, name=name, data=None)
 
     @staticmethod
     def delete_bucket(actor_id=None, bucket=None):
-        """ Deletes an entire bucket
-        """
+        """Deletes an entire bucket"""
         if not actor_id or not bucket:
             return False
         try:
             query = Attribute.query(
-                actor_id,
-                Attribute.bucket_name.startswith(bucket),
-                consistent_read=True)
+                actor_id, Attribute.bucket_name.startswith(bucket), consistent_read=True
+            )
         except Attribute.DoesNotExist:
             return True
         for t in query:
@@ -122,16 +120,16 @@ class DbAttribute(object):
             Attribute.create_table(wait=True)
 
 
-class DbAttributeBucketList(object):
+class DbAttributeBucketList:
     """
-        DbAttributeBucketList handles multiple buckets
+    DbAttributeBucketList handles multiple buckets
 
-        The  actor_id must always be set.
+    The  actor_id must always be set.
     """
 
     @staticmethod
     def fetch(actor_id=None):
-        """ Retrieves all the attributes of an actor_id from the database """
+        """Retrieves all the attributes of an actor_id from the database"""
         if not actor_id:
             return None
         try:
@@ -150,7 +148,7 @@ class DbAttributeBucketList(object):
 
     @staticmethod
     def delete(actor_id=None):
-        """ Deletes all the attributes in the database """
+        """Deletes all the attributes in the database"""
         if not actor_id:
             return False
         try:

@@ -1,22 +1,21 @@
-
-from typing import Optional, Dict, Any, List
+from typing import Any
 
 
 class PropertyStore:
 
-    def __init__(self, actor_id=None, config=None):
+    def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         self._actor_id = actor_id
         self._config = config
         self.__initialised = True
 
-    def __getitem__(self, k):
+    def __getitem__(self, k: str) -> Any:
         return self.__getattr__(k)
 
-    def __setitem__(self, k, v):
+    def __setitem__(self, k: str, v: Any) -> None:
         return self.__setattr__(k, v)
 
-    def __setattr__(self, k, v):
-        if '_PropertyStore__initialised' not in self.__dict__:
+    def __setattr__(self, k: str, v: Any) -> None:
+        if "_PropertyStore__initialised" not in self.__dict__:
             return object.__setattr__(self, k, v)
         if v is None:
             if k in self.__dict__:
@@ -24,29 +23,31 @@ class PropertyStore:
         else:
             self.__dict__[k] = v
         # Re-init property to avoid overwrite
-        self.__dict__['_db'] = self.__dict__['_config'].DbProperty.DbProperty()
+        self.__dict__["_db"] = self.__dict__["_config"].DbProperty.DbProperty()
         # set() will retrieve an attribute and delete it if value = None
-        self.__dict__['_db'].set(actor_id=self.__dict__['_actor_id'], name=k, value=v)
+        self.__dict__["_db"].set(actor_id=self.__dict__["_actor_id"], name=k, value=v)
 
     def __getattr__(self, k):
         try:
             return self.__dict__[k]
         except KeyError:
-            self.__dict__['_db'] = self.__dict__['_config'].DbProperty.DbProperty()
-            self.__dict__[k] = self.__dict__['_db'].get(actor_id=self.__dict__['_actor_id'], name=k)
+            self.__dict__["_db"] = self.__dict__["_config"].DbProperty.DbProperty()
+            self.__dict__[k] = self.__dict__["_db"].get(
+                actor_id=self.__dict__["_actor_id"], name=k
+            )
             return self.__dict__[k]
 
 
-class Property(object):
+class Property:
     """
-        property is the main entity keeping a property.
+    property is the main entity keeping a property.
 
-        It needs to be initalised at object creation time.
+    It needs to be initalised at object creation time.
 
     """
 
     def get(self):
-        """ Retrieves the property from the database """
+        """Retrieves the property from the database"""
         if not self.dbprop:
             # New property after a delete()
             self.dbprop = self.config.DbProperty.DbProperty()
@@ -55,7 +56,7 @@ class Property(object):
         return self.value
 
     def set(self, value):
-        """ Sets a new value for this property """
+        """Sets a new value for this property"""
         if not self.dbprop:
             # New property after a delete()
             self.dbprop = self.config.DbProperty.DbProperty()
@@ -70,7 +71,7 @@ class Property(object):
         return self.dbprop.set(actor_id=self.actor_id, name=self.name, value=value)
 
     def delete(self):
-        """ Deletes the property in the database """
+        """Deletes the property in the database"""
         if not self.dbprop:
             return
         if self.dbprop.delete():
@@ -84,15 +85,16 @@ class Property(object):
         return self.actor_id
 
     def __init__(self, actor_id=None, name=None, value=None, config=None):
-        """ A property must be initialised with actor_id and name or
-            name and value (to find an actor's property of a certain value)
+        """A property must be initialised with actor_id and name or
+        name and value (to find an actor's property of a certain value)
         """
         self.config = config
         self.dbprop = self.config.DbProperty.DbProperty()
         self.name = name
         if not actor_id and name and len(name) > 0 and value and len(value) > 0:
-            self.actor_id = self.dbprop.get_actor_id_from_property(name=name,
-                                                                   value=value)
+            self.actor_id = self.dbprop.get_actor_id_from_property(
+                name=name, value=value
+            )
             if not self.actor_id:
                 return
             self.value = value
@@ -103,11 +105,11 @@ class Property(object):
                 self.get()
 
 
-class Properties(object):
-    """ Handles all properties of a specific actor_id
+class Properties:
+    """Handles all properties of a specific actor_id
 
-        Access the properties
-        in .props as a dictionary
+    Access the properties
+    in .props as a dictionary
     """
 
     def fetch(self):
@@ -128,8 +130,8 @@ class Properties(object):
         self.list.delete()
         return True
 
-    def __init__(self,  actor_id=None, config=None):
-        """ Properties must always be initialised with an actor_id """
+    def __init__(self, actor_id=None, config=None):
+        """Properties must always be initialised with an actor_id"""
         self.config = config
         if not actor_id:
             self.list = None

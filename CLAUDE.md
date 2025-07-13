@@ -40,13 +40,30 @@ The library follows a micro-services model where each user gets their own "actor
 ### Building and Distribution
 ```bash
 # Build source and binary distributions
-python setup.py sdist bdist_wheel --universal
+poetry build
 
 # Upload to test server
-twine upload --repository pypitest dist/actingweb-a.b.c.*
+poetry publish --repository pypitest
 
 # Upload to production
-twine upload dist/actingweb-a.b.c.*
+poetry publish
+```
+
+### Development Environment
+```bash
+# Install dependencies and create virtual environment
+poetry install
+
+# Install with development dependencies
+poetry install --with dev,docs
+
+# Activate virtual environment
+poetry shell
+
+# Run commands in virtual environment
+poetry run pytest
+poetry run black .
+poetry run mypy actingweb
 ```
 
 ### Documentation

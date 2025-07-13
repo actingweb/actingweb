@@ -2,6 +2,30 @@
 CHANGELOG
 =========
 
+v3.0.0: (In Development)
+------------------------
+- **BREAKING**: Minimum Python version is now 3.11+
+- **BREAKING**: Removed Python 2.7 and 3.6-3.10 support
+- **BREAKING**: Removed legacy imports (__future__, builtins)
+- **BREAKING**: Class definitions no longer inherit from object explicitly
+- **MAJOR**: Added comprehensive type hints using Python 3.11+ union syntax (str | None)
+- **MAJOR**: Modernized string formatting with f-strings
+- **MAJOR**: Added custom exception hierarchy for better error handling
+- **MAJOR**: Created enums and constants module for better code organization
+- **MAJOR**: Set up modern build system with pyproject.toml
+- **MAJOR**: Migrated from setuptools to Poetry for dependency management and builds
+- **MAJOR**: Added comprehensive test suite with pytest
+- **MAJOR**: Added development tooling (black, ruff, mypy)
+- **MAJOR**: Applied consistent code formatting and linting
+- **FEATURE**: Added ActorError, ActorNotFoundError, InvalidActorDataError, PeerCommunicationError, TrustRelationshipError
+- **FEATURE**: Added constants module with AuthType, HttpMethod, TrustRelationship, ResponseCode enums
+- **FEATURE**: Added type checking support with py.typed marker
+- **FEATURE**: Added __version__ attribute to actingweb module
+- **IMPROVEMENT**: Modernized all core modules (actor, config, property, trust, subscription)
+- **IMPROVEMENT**: Enhanced documentation with modern Python requirements
+- **IMPROVEMENT**: Updated build process to use Poetry instead of setuptools
+- **IMPROVEMENT**: Configured virtual environment management with Poetry
+
 v2.6.5: Apr 22, 2021
 --------------------
 - Fix bug in subscription_diff handling by replacing query with scan as query requires hash key

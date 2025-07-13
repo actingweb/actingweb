@@ -1,3 +1,5 @@
+__version__ = "3.0.0"
+
 __all__ = [
     "actor",
     "attribute",
@@ -10,5 +12,5 @@ __all__ = [
     "trust",
     "config",
     "on_aw",
-    "aw_web_request"
+    "aw_web_request",
 ]

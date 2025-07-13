@@ -136,17 +136,67 @@ programatically through the REST interface.
 
 See `http://actingweb.org/ <http://actingweb.org/>`_ for more information.
 
+Requirements
+------------
+
+**Python 3.11+**
+
+The actingweb library requires Python 3.11 or higher and uses modern Python features including:
+
+- Type hints with union syntax (``str | None``)
+- F-string formatting
+- Modern enum classes for constants
+- Enhanced error handling with custom exception hierarchies
+
+Dependencies:
+
+- ``pynamodb`` - DynamoDB ORM for AWS DynamoDB backend
+- ``boto3`` - AWS SDK for Python (DynamoDB support)
+- ``urlfetch`` - HTTP client library
+
+Development dependencies:
+
+- ``pytest`` - Testing framework
+- ``mypy`` - Static type checker
+- ``black`` - Code formatter
+- ``ruff`` - Fast Python linter
+
 Building and installing
 ------------------------
 
 ::
 
+    # Install from PyPI:
+    pip install actingweb
+
+    # For development:
+    pip install -e .
+    pip install -e .[dev]
+
     # Build source and binary distributions:
-    python setup.py sdist bdist_wheel --universal
+    python -m build
 
     # Upload to test server:
-    python setup.py sdist upload -r pypitest
     twine upload --repository pypitest dist/actingweb-a.b.c.*
 
     # Upload to production server:
     twine upload dist/actingweb-a.b.c.*
+
+Development
+-----------
+
+The library uses modern Python development practices:
+
+::
+
+    # Run tests:
+    pytest
+
+    # Type checking:
+    mypy actingweb
+
+    # Code formatting:
+    black actingweb tests
+
+    # Linting:
+    ruff check actingweb tests

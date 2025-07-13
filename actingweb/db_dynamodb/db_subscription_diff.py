@@ -1,11 +1,10 @@
-from builtins import str
-from builtins import object
-import logging
 import datetime
+import logging
 import os
+from builtins import str
 
+from pynamodb.attributes import NumberAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.models import Model
-from pynamodb.attributes import UnicodeAttribute, NumberAttribute, UTCDateTimeAttribute
 
 """
     DbSubscriptionDiff handles all db operations for a subscription diff
@@ -16,12 +15,12 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, UTCDateTimeAt
 
 
 class SubscriptionDiff(Model):
-    class Meta(object):
-        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_subscriptiondiffs"
+    class Meta:
+        table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_subscriptiondiffs"
         read_capacity_units = 2
         write_capacity_units = 3
-        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
-        host = os.getenv('AWS_DB_HOST', None)
+        region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
+        host = os.getenv("AWS_DB_HOST", None)
 
     id = UnicodeAttribute(hash_key=True)
     subid_seqnr = UnicodeAttribute(range_key=True)
@@ -31,15 +30,15 @@ class SubscriptionDiff(Model):
     seqnr = NumberAttribute(default=1)
 
 
-class DbSubscriptionDiff(object):
+class DbSubscriptionDiff:
     """
-        DbSubscriptionDiff does all the db operations for subscription diff objects
+    DbSubscriptionDiff does all the db operations for subscription diff objects
 
-        The  actor_id must always be set.
+    The  actor_id must always be set.
     """
 
-    def get(self,  actor_id=None, subid=None, seqnr=None):
-        """ Retrieves the subscriptiondiff from the database """
+    def get(self, actor_id=None, subid=None, seqnr=None):
+        """Retrieves the subscriptiondiff from the database"""
         if not actor_id and not self.handle:
             return None
         if not subid and not self.handle:
@@ -50,7 +49,8 @@ class DbSubscriptionDiff(object):
                 query = SubscriptionDiff.query(
                     actor_id,
                     SubscriptionDiff.subid_seqnr.startswith(subid),
-                    consistent_read=True)
+                    consistent_read=True,
+                )
                 # Find the record with lowest seqnr
                 for t in query:
                     if not self.handle:
@@ -60,9 +60,8 @@ class DbSubscriptionDiff(object):
                         self.handle = t
             else:
                 self.handle = SubscriptionDiff.get(
-                    actor_id,
-                    subid + ":" + str(seqnr),
-                    consistent_read=True)
+                    actor_id, subid + ":" + str(seqnr), consistent_read=True
+                )
         if self.handle:
             t = self.handle
             return {
@@ -75,24 +74,23 @@ class DbSubscriptionDiff(object):
         else:
             return None
 
-    def create(self, actor_id=None,
-               subid=None,
-               diff='',
-               seqnr=1):
-        """ Create a new subscription diff """
+    def create(self, actor_id=None, subid=None, diff="", seqnr=1):
+        """Create a new subscription diff"""
         if not actor_id or not subid:
             logging.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
-        self.handle = SubscriptionDiff(id=actor_id,
-                                       subid_seqnr=subid + ":" + str(seqnr),
-                                       subid=subid,
-                                       diff=diff,
-                                       seqnr=seqnr)
+        self.handle = SubscriptionDiff(
+            id=actor_id,
+            subid_seqnr=subid + ":" + str(seqnr),
+            subid=subid,
+            diff=diff,
+            seqnr=seqnr,
+        )
         self.handle.save()
         return True
 
     def delete(self):
-        """ Deletes the subscription diff in the database """
+        """Deletes the subscription diff in the database"""
         if not self.handle:
             return False
         self.handle.delete()
@@ -105,51 +103,49 @@ class DbSubscriptionDiff(object):
             SubscriptionDiff.create_table(wait=True)
 
 
-class DbSubscriptionDiffList(object):
+class DbSubscriptionDiffList:
     """
-        DbSubscriptionDiffList does all the db operations for list of diff objects
+    DbSubscriptionDiffList does all the db operations for list of diff objects
 
-        The actor_id must always be set. 
+    The actor_id must always be set.
     """
 
     def fetch(self, actor_id=None, subid=None):
-        """ Retrieves the subscription diffs of an actor_id from the database as an array"""
+        """Retrieves the subscription diffs of an actor_id from the database as an array"""
         if not actor_id:
             return None
         self.actor_id = actor_id
         self.subid = subid
-        self.handle = SubscriptionDiff.query(
-            actor_id,
-            consistent_read=True)
+        self.handle = SubscriptionDiff.query(actor_id, consistent_read=True)
         self.diffs = []
         if self.handle:
             for t in self.handle:
                 if subid and subid != t.subid:
                     continue
-                self.diffs.append({
-                    "id": t.id,
-                    "subscriptionid": t.subid,
-                    "timestamp": t.timestamp,
-                    "diff": t.diff,
-                    "sequence": t.seqnr,
-                })
+                self.diffs.append(
+                    {
+                        "id": t.id,
+                        "subscriptionid": t.subid,
+                        "timestamp": t.timestamp,
+                        "diff": t.diff,
+                        "sequence": t.seqnr,
+                    }
+                )
                 sorted(self.diffs, key=lambda diff: diff["sequence"])
             return self.diffs
         else:
             return []
 
     def delete(self, seqnr=None):
-        """ Deletes all the fetched subscription diffs in the database 
+        """Deletes all the fetched subscription diffs in the database
 
-            Optional seqnr deletes up to (excluding) a specific seqnr
+        Optional seqnr deletes up to (excluding) a specific seqnr
         """
         if not self.handle:
             return False
         if not seqnr or not isinstance(seqnr, int):
             seqnr = 0
-        self.handle = SubscriptionDiff.query(
-            self.actor_id,
-            consistent_read=True)
+        self.handle = SubscriptionDiff.query(self.actor_id, consistent_read=True)
         for p in self.handle:
             if self.subid and self.subid != p.subid:
                 continue

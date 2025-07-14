@@ -1,11 +1,12 @@
 import datetime
 import logging
+from typing import Any
 
 
 class Subscription:
     """Base class with core subscription methods (storage-related)"""
 
-    def get(self):
+    def get(self) -> dict[str, Any]:
         """Retrieve subscription from db given pre-initialized variables"""
         if not self.actor_id or not self.peerid or not self.subid:
             return None
@@ -19,8 +20,8 @@ class Subscription:
         return self.subscription
 
     def create(
-        self, target=None, subtarget=None, resource=None, granularity=None, seqnr=1
-    ):
+        self, target: str | None = None, subtarget: str | None = None, resource: str | None = None, granularity: str | None = None, seqnr: int = 1
+    ) -> bool:
         """Create new subscription and push it to db"""
         if self.subscription and len(self.subscription) > 0:
             logging.debug(

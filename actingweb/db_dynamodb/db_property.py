@@ -1,4 +1,5 @@
 import os
+from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
@@ -10,7 +11,7 @@ from pynamodb.models import Model
 """
 
 
-class PropertyIndex(GlobalSecondaryIndex):
+class PropertyIndex(GlobalSecondaryIndex[Any]):
     """
     Secondary index on property
     """
@@ -52,7 +53,7 @@ class DbProperty:
     delete().
     """
 
-    def get(self, actor_id=None, name=None):
+    def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
         """Retrieves the property from the database"""
         if not actor_id or not name:
             return None
@@ -68,7 +69,7 @@ class DbProperty:
             return None
         return self.handle.value
 
-    def get_actor_id_from_property(self, name=None, value=None):
+    def get_actor_id_from_property(self, name: str | None = None, value: str | None = None) -> str | None:
         """Retrives an actor_id based on the value of a property."""
         if not name or not value:
             return None
@@ -81,7 +82,7 @@ class DbProperty:
             return None
         return self.handle.id
 
-    def set(self, actor_id=None, name=None, value=None):
+    def set(self, actor_id: str | None = None, name: str | None = None, value: str | None = None) -> bool:
         """Sets a new value for the property name"""
         if not name:
             return False
@@ -98,7 +99,7 @@ class DbProperty:
         self.handle.save()
         return True
 
-    def delete(self):
+    def delete(self) -> bool:
         """Deletes the property in the database after a get()"""
         if not self.handle:
             return False

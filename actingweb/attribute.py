@@ -38,7 +38,7 @@ class InternalStore:
             self.__dict__[k] = v
             self.__dict__["_db"].set_attr(name=k, data=v)
 
-    def __getattr__(self, k):
+    def __getattr__(self, k: str) -> Any:
         try:
             return self.__dict__[k]
         except KeyError:
@@ -53,7 +53,7 @@ class Attributes:
 
     """
 
-    def get_bucket(self):
+    def get_bucket(self) -> dict[str, Any] | None:
         """Retrieves the attribute bucket from the database"""
         if not self.data or len(self.data) == 0:
             self.data = self.dbprop.get_bucket(
@@ -61,7 +61,7 @@ class Attributes:
             )
         return self.data
 
-    def get_attr(self, name=None):
+    def get_attr(self, name: str | None = None) -> dict[str, Any] | None:
         """Retrieves a single attribute"""
         if not name:
             return None
@@ -71,7 +71,7 @@ class Attributes:
             )
         return self.data[name]
 
-    def set_attr(self, name=None, data=None, timestamp=None):
+    def set_attr(self, name: str | None = None, data: Any | None = None, timestamp: Any | None = None) -> bool:
         """Sets new data for this attribute"""
         if not self.actor_id or not self.bucket:
             return False
@@ -87,7 +87,7 @@ class Attributes:
             timestamp=timestamp,
         )
 
-    def delete_attr(self, name=None):
+    def delete_attr(self, name: str | None = None) -> bool:
         if not name:
             return False
         if "name" in self.data:
@@ -96,7 +96,7 @@ class Attributes:
             actor_id=self.actor_id, bucket=self.bucket, name=name
         )
 
-    def delete_bucket(self):
+    def delete_bucket(self) -> bool:
         """Deletes the attribute bucket in the database"""
         if not self.dbprop:
             return False
@@ -107,7 +107,7 @@ class Attributes:
         else:
             return False
 
-    def __init__(self, actor_id=None, bucket=None, config=None):
+    def __init__(self, actor_id: str | None = None, bucket: str | None = None, config: Any | None = None) -> None:
         """A attribute must be initialised with actor_id and bucket"""
         self.config = config
         self.dbprop = self.config.DbAttribute.DbAttribute()
@@ -125,24 +125,24 @@ class Buckets:
     in .props as a dictionary
     """
 
-    def fetch(self):
+    def fetch(self) -> dict[str, Any] | bool:
         if not self.actor_id:
             return False
         return self.list.fetch(actor_id=self.actor_id)
 
-    def fetch_timestamps(self):
+    def fetch_timestamps(self) -> dict[str, Any] | bool:
         if not self.actor_id:
             return False
         return self.list.fetch_timestamps(actor_id=self.actor_id)
 
-    def delete(self):
+    def delete(self) -> bool:
         if not self.list:
             return False
         self.list.delete(actor_id=self.actor_id)
         self.list = self.config.DbAttribute.DbAttributeBucketList()
         return True
 
-    def __init__(self, actor_id=None, config=None):
+    def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         """attributes must always be initialised with an actor_id"""
         self.config = config
         if not actor_id:

@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
@@ -11,7 +12,7 @@ from pynamodb.models import Model
 """
 
 
-class CreatorIndex(GlobalSecondaryIndex):
+class CreatorIndex(GlobalSecondaryIndex[Any]):
     """
     Secondary index on actor
     """
@@ -49,7 +50,7 @@ class DbActor:
 
     """
 
-    def get(self, actor_id=None):
+    def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
         """Retrieves the actor from the database"""
         if not actor_id:
             return None
@@ -67,7 +68,7 @@ class DbActor:
         else:
             return None
 
-    def get_by_creator(self, creator=None):
+    def get_by_creator(self, creator: str | None = None) -> dict[str, Any] | list[dict[str, Any]] | None:
         """Retrieves the actor from db based on creator field
 
         Returns None if none was found. If one is found, that one is
@@ -84,7 +85,7 @@ class DbActor:
             ret.append(self.get(actor_id=c.id))
         return ret
 
-    def modify(self, creator=None, passphrase=None):
+    def modify(self, creator: str | None = None, passphrase: bytes | None = None) -> bool:
         """Modify an actor"""
         if not self.handle:
             logging.debug("Attempted modification of DbActor without db handle")
@@ -99,7 +100,7 @@ class DbActor:
         self.handle.save()
         return True
 
-    def create(self, actor_id=None, creator=None, passphrase=None):
+    def create(self, actor_id: str | None = None, creator: str | None = None, passphrase: str | None = None) -> bool:
         """Create a new actor"""
         if not actor_id:
             return False

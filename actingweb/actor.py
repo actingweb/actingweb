@@ -44,7 +44,7 @@ class TrustRelationshipError(ActorError):
 class DummyPropertyClass:
     """Only used to deprecate get_property() in 2.4.4"""
 
-    def __init__(self, v=None):
+    def __init__(self, v: Any = None) -> None:
         self.value = v
 
 

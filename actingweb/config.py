@@ -3,11 +3,12 @@ import importlib
 import logging
 import os
 import uuid
+from typing import Any
 
 
 class Config:
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         #########
         # Basic settings for this app
         #########
@@ -138,11 +139,11 @@ class Config:
             self.__setattr__(k, v)
         if self.database == "dynamodb":
             self.env = "aws"
-        if self.logLevel == "DEBUG":
+        if str(self.logLevel) == "DEBUG":
             self.logLevel = logging.DEBUG
-        elif self.logLevel == "WARN":
+        elif str(self.logLevel) == "WARN":
             self.logLevel = logging.WARN
-        elif self.logLevel == "INFO":
+        elif str(self.logLevel) == "INFO":
             self.logLevel = logging.INFO
         else:
             self.logLevel = logging.DEBUG
@@ -175,7 +176,7 @@ class Config:
         self.DbTrust = importlib.import_module(
             "actingweb" + ".db_" + self.database + ".db_trust"
         )
-        self.module = {}
+        self.module: dict[str, Any] = {}
         self.module["deferred"] = None
         self.module["urlfetch"] = importlib.import_module("urlfetch")
         #########
@@ -207,10 +208,10 @@ class Config:
         self.auth_realm = self.fqdn
 
     @staticmethod
-    def new_uuid(seed):
+    def new_uuid(seed: str) -> str:
         return uuid.uuid5(uuid.NAMESPACE_URL, str(seed)).hex
 
     @staticmethod
-    def new_token(length=40):
+    def new_token(length: int = 40) -> str:
         tok = binascii.hexlify(os.urandom(int(length // 2)))
         return tok.decode("utf-8")

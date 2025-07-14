@@ -27,7 +27,7 @@ class PropertyStore:
         # set() will retrieve an attribute and delete it if value = None
         self.__dict__["_db"].set(actor_id=self.__dict__["_actor_id"], name=k, value=v)
 
-    def __getattr__(self, k):
+    def __getattr__(self, k: str) -> Any:
         try:
             return self.__dict__[k]
         except KeyError:
@@ -46,7 +46,7 @@ class Property:
 
     """
 
-    def get(self):
+    def get(self) -> Any:
         """Retrieves the property from the database"""
         if not self.dbprop:
             # New property after a delete()
@@ -55,7 +55,7 @@ class Property:
         self.value = self.dbprop.get(actor_id=self.actor_id, name=self.name)
         return self.value
 
-    def set(self, value):
+    def set(self, value: Any) -> bool:
         """Sets a new value for this property"""
         if not self.dbprop:
             # New property after a delete()
@@ -70,7 +70,7 @@ class Property:
         self.value = value
         return self.dbprop.set(actor_id=self.actor_id, name=self.name, value=value)
 
-    def delete(self):
+    def delete(self) -> bool | None:
         """Deletes the property in the database"""
         if not self.dbprop:
             return
@@ -81,10 +81,10 @@ class Property:
         else:
             return False
 
-    def get_actor_id(self):
+    def get_actor_id(self) -> str | None:
         return self.actor_id
 
-    def __init__(self, actor_id=None, name=None, value=None, config=None):
+    def __init__(self, actor_id: str | None = None, name: str | None = None, value: Any | None = None, config: Any | None = None) -> None:
         """A property must be initialised with actor_id and name or
         name and value (to find an actor's property of a certain value)
         """
@@ -112,7 +112,7 @@ class Properties:
     in .props as a dictionary
     """
 
-    def fetch(self):
+    def fetch(self) -> dict[str, Any] | bool:
         if not self.actor_id:
             return False
         if not self.list:
@@ -122,7 +122,7 @@ class Properties:
         self.props = self.list.fetch(actor_id=self.actor_id)
         return self.props
 
-    def delete(self):
+    def delete(self) -> bool:
         if not self.list:
             self.fetch()
         if not self.list:
@@ -130,7 +130,7 @@ class Properties:
         self.list.delete()
         return True
 
-    def __init__(self, actor_id=None, config=None):
+    def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         """Properties must always be initialised with an actor_id"""
         self.config = config
         if not actor_id:

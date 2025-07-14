@@ -1,9 +1,10 @@
 import logging
+from typing import Any
 
 
 class Trust:
 
-    def get(self):
+    def get(self) -> dict[str, Any] | None:
         """Retrieve a trust relationship with either peerid or token"""
         if self.trust and len(self.trust) > 0:
             return self.trust
@@ -17,7 +18,7 @@ class Trust:
             )
         return self.trust
 
-    def delete(self):
+    def delete(self) -> bool:
         """Delete the trust relationship"""
         if not self.handle:
             return False
@@ -26,14 +27,14 @@ class Trust:
 
     def modify(
         self,
-        baseuri=None,
-        secret=None,
-        desc=None,
-        approved=None,
-        verified=None,
-        verification_token=None,
-        peer_approved=None,
-    ):
+        baseuri: str | None = None,
+        secret: str | None = None,
+        desc: str | None = None,
+        approved: bool | None = None,
+        verified: bool | None = None,
+        verification_token: str | None = None,
+        peer_approved: bool | None = None,
+    ) -> bool:
         if not self.handle:
             logging.debug("Attempted modifcation of trust without handle")
             return False
@@ -63,16 +64,16 @@ class Trust:
 
     def create(
         self,
-        baseuri="",
-        peer_type="",
-        relationship="",
-        secret="",
-        approved=False,
-        verified=False,
-        verification_token="",
-        desc="",
-        peer_approved=False,
-    ):
+        baseuri: str = "",
+        peer_type: str = "",
+        relationship: str = "",
+        secret: str = "",
+        approved: bool = False,
+        verified: bool = False,
+        verification_token: str = "",
+        desc: str = "",
+        peer_approved: bool = False,
+    ) -> bool:
         """Create a new trust relationship"""
         self.trust = {"baseuri": baseuri, "type": peer_type}
         if not relationship or len(relationship) == 0:
@@ -112,7 +113,7 @@ class Trust:
             desc=self.trust["desc"],
         )
 
-    def __init__(self, actor_id=None, peerid=None, token=None, config=None):
+    def __init__(self, actor_id: str | None = None, peerid: str | None = None, token: str | None = None, config: Any | None = None) -> None:
         self.config = config
         self.handle = self.config.DbTrust.DbTrust()
         self.trust = {}
@@ -140,7 +141,7 @@ class Trusts:
     in .trusts as a dictionary
     """
 
-    def fetch(self):
+    def fetch(self) -> dict[str, Any] | None:
         if self.trusts is not None:
             return self.trusts
         if not self.list:
@@ -149,14 +150,14 @@ class Trusts:
             self.trusts = self.list.fetch(actor_id=self.actor_id)
         return self.trusts
 
-    def delete(self):
+    def delete(self) -> bool:
         if not self.list:
             logging.debug("Already deleted list in trusts")
             return False
         self.list.delete()
         return True
 
-    def __init__(self, actor_id=None, config=None):
+    def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         """Properties must always be initialised with an actor_id"""
         self.config = config
         if not actor_id:

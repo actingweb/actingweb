@@ -21,9 +21,6 @@ class Config:
         self.ui = True
         # Enable /devtest path for test purposes, MUST be False in production
         self.devtest = True
-        # Enable migrate if you want to turn on code that enables migration from one version to another
-        # 2.4.4 : migrate oauth properties and email to internal attributes (myself.store)
-        self.migrate_2_5_0 = True
         # Will enforce unique creator field across all actors
         self.unique_creator = False
         # Use "email" internal value to set creator value (after creation and property set)
@@ -36,9 +33,9 @@ class Config:
         # Configurable ActingWeb settings for this app
         #########
         # The app type this actor implements
-        self.aw_type = "urn:actingweb:actingweb.org:gae-demo"
+        self.aw_type = "urn:actingweb:actingweb.org:demo"
         # A human-readable description for this specific actor
-        self.desc = "GAE Demo actor: "
+        self.desc = "Demo actor: "
         # URL to a RAML/Swagger etc definition if available
         self.specification = ""
         # A version number for this app
@@ -139,9 +136,7 @@ class Config:
         # Pick up the config variables
         for k, v in kwargs.items():
             self.__setattr__(k, v)
-        if self.database == "gae":
-            self.env = "appengine"
-        elif self.database == "dynamodb":
+        if self.database == "dynamodb":
             self.env = "aws"
         if self.logLevel == "DEBUG":
             self.logLevel = logging.DEBUG
@@ -181,16 +176,8 @@ class Config:
             "actingweb" + ".db_" + self.database + ".db_trust"
         )
         self.module = {}
-        if self.env == "appengine":
-            self.module["deferred"] = importlib.import_module(
-                ".deferred", "google.appengine.api"
-            )
-            self.module["urlfetch"] = importlib.import_module(
-                ".urlfetch", "google.appengine.ext"
-            )
-        else:
-            self.module["deferred"] = None
-            self.module["urlfetch"] = importlib.import_module("urlfetch")
+        self.module["deferred"] = None
+        self.module["urlfetch"] = importlib.import_module("urlfetch")
         #########
         # ActingWeb settings for this app
         #########
@@ -205,20 +192,15 @@ class Config:
         #########
         # Only touch the below if you know what you are doing
         #########
-        if self.env == "appengine":
-            logging.getLogger().handlers[0].setLevel(
-                self.logLevel
-            )  # Hack to get access to GAE logger
-        else:
-            logging.basicConfig(level=self.logLevel)
-            # Turn off debugging for pynamodb and botocore, too noisy
-            if self.logLevel == logging.DEBUG:
-                log = logging.getLogger("pynamodb")
-                log.setLevel(logging.INFO)
-                log.propagate = True
-                log = logging.getLogger("botocore")
-                log.setLevel(logging.INFO)
-                log.propagate = True
+        logging.basicConfig(level=self.logLevel)
+        # Turn off debugging for pynamodb and botocore, too noisy
+        if self.logLevel == logging.DEBUG:
+            log = logging.getLogger("pynamodb")
+            log.setLevel(logging.INFO)
+            log.propagate = True
+            log = logging.getLogger("botocore")
+            log.setLevel(logging.INFO)
+            log.propagate = True
         # root URI used to identity actor externally
         self.root = self.proto + self.fqdn + "/"
         # Authentication realm used in Basic auth

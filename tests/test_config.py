@@ -18,7 +18,6 @@ class TestConfigInitialization:
         assert config.database == "dynamodb"
         assert config.ui is True
         assert config.devtest is True
-        assert config.migrate_2_5_0 is True
         assert config.unique_creator is False
         assert config.force_email_prop_as_creator is True
         assert config.www_auth == "basic"
@@ -28,7 +27,7 @@ class TestConfigInitialization:
         config = Config(
             fqdn="test.example.com",
             proto="http://",
-            database="dynamodb",  # Use dynamodb instead of gae since gae module doesn't exist
+            database="dynamodb",
             ui=False,
             devtest=False,
         )
@@ -43,8 +42,8 @@ class TestConfigInitialization:
         """Test ActingWeb-specific settings."""
         config = Config()
 
-        assert config.aw_type == "urn:actingweb:actingweb.org:gae-demo"
-        assert config.desc == "GAE Demo actor: "
+        assert config.aw_type == "urn:actingweb:actingweb.org:demo"
+        assert config.desc == "Demo actor: "
         assert config.specification == ""
         assert config.version == "1.0"
         assert config.info == "http://actingweb.org/"
@@ -81,15 +80,12 @@ class TestConfigMethods:
         config = Config()
 
         # Test default database type
-        assert config.database in [DatabaseType.DYNAMODB.value, DatabaseType.GAE.value]
+        assert config.database == DatabaseType.DYNAMODB.value
 
         # Test setting different database types
         config.database = DatabaseType.DYNAMODB.value
         assert config.database == "dynamodb"
 
-        # Note: GAE module doesn't exist in current codebase, so we can't test it directly
-        # config.database = DatabaseType.GAE.value
-        # assert config.database == "gae"
 
     def test_config_environment_types(self):
         """Test environment type handling."""
@@ -99,8 +95,8 @@ class TestConfigMethods:
         assert config.env == "aws"  # Default dynamodb sets env to aws
 
         # Test setting environment
-        config.env = Environment.APPENGINE.value
-        assert config.env == "appengine"
+        config.env = Environment.AWS.value
+        assert config.env == "aws"
 
         config.env = Environment.STANDALONE.value
         assert config.env == "standalone"
@@ -172,7 +168,6 @@ class TestConfigModernization:
         # Test boolean attributes
         assert isinstance(config.ui, bool)
         assert isinstance(config.devtest, bool)
-        assert isinstance(config.migrate_2_5_0, bool)
         assert isinstance(config.unique_creator, bool)
         assert isinstance(config.force_email_prop_as_creator, bool)
 
@@ -184,7 +179,7 @@ class TestConfigValidation:
         """Test valid database types."""
         config = Config()
 
-        valid_databases = ["dynamodb", "gae"]
+        valid_databases = ["dynamodb"]
         assert config.database in valid_databases
 
     def test_config_valid_auth_types(self):
@@ -208,7 +203,6 @@ class TestConfigValidation:
         # Test boolean type validation
         assert isinstance(config.ui, bool)
         assert isinstance(config.devtest, bool)
-        assert isinstance(config.migrate_2_5_0, bool)
         assert isinstance(config.unique_creator, bool)
         assert isinstance(config.force_email_prop_as_creator, bool)
 

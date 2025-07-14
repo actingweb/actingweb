@@ -25,6 +25,13 @@ v3.0.0: (In Development)
 - **IMPROVEMENT**: Enhanced documentation with modern Python requirements
 - **IMPROVEMENT**: Updated build process to use Poetry instead of setuptools
 - **IMPROVEMENT**: Configured virtual environment management with Poetry
+- **BREAKING**: Removed deprecated Google App Engine (GAE) database implementation
+- **BREAKING**: Removed migrate_2_5_0 migration flag and related migration code
+- **BREAKING**: Database backend now only supports DynamoDB (removed GAE support)
+- **BREAKING**: Environment types updated to remove APPENGINE, added AWS
+- **CLEANUP**: Removed all GAE-specific imports and logging configuration
+- **CLEANUP**: Simplified config initialization by removing GAE conditional logic
+- **CLEANUP**: Updated default actor type from gae-demo to demo
 
 v2.6.5: Apr 22, 2021
 --------------------

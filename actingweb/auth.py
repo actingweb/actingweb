@@ -161,42 +161,16 @@ class Auth:
         # Property name used to set self.token
         self.oauth_token_property = "oauth_token"
         self.token = self.actor.store.oauth_token
-        if self.config.migrate_2_5_0 and not self.token:
-            self.token = self.actor.property.oauth_token
-            if self.token:
-                self.actor.store.oauth_token = self.token
-                self.actor.property.oauth_token = None
         self.oauth = oauth.OAuth(token=self.token, config=self.config)
         self.expiry = self.actor.store.oauth_token_expiry
         self.refresh_expiry = self.actor.store.oauth_refresh_token_expiry
         self.refresh_token = self.actor.store.oauth_refresh_token
-        if self.config.migrate_2_5_0:
-            if not self.expiry:
-                self.expiry = self.actor.property.oauth_token_expiry
-                if self.expiry:
-                    self.actor.store.oauth_token_expiry = self.expiry
-                    self.actor.property.oauth_token_expiry = None
-            if not self.refresh_expiry:
-                self.refresh_expiry = self.actor.property.oauth_refresh_token_expiry
-                if self.refresh_expiry:
-                    self.actor.store.oauth_refresh_token_expiry = self.refresh_expiry
-                    self.actor.property.oauth_refresh_token_expiry = None
-            if not self.refresh_token:
-                self.refresh_token = self.actor.property.oauth_refresh_token
-                if self.refresh_token:
-                    self.actor.store.oauth_refresh_token = self.refresh_token
-                    self.actor.property.oauth_refresh_token = None
         if self.type == "basic":
             self.realm = self.config.auth_realm
         elif self.type == "oauth":
             if self.oauth.enabled():
                 self.cookie = "oauth_token"
                 redir = self.actor.store.cookie_redirect
-                if self.config.migrate_2_5_0 and not redir:
-                    redir = self.actor.property.cookie_redirect
-                    if redir:
-                        self.actor.store.cookie_redirect = redir
-                        self.actor.property.cookie_redirect = None
                 if redir:
                     self.cookie_redirect = self.config.root + redir
                 else:
@@ -542,11 +516,6 @@ class Auth:
             return False
         self.authn_done = True
         trustee = self.actor.store.trustee_root
-        if self.config.migrate_2_5_0 and not trustee:
-            trustee = self.actor.property.trustee_root
-            if trustee:
-                self.actor.property.trustee_root = None
-                self.actor.store.trustee_root = trustee
         # If trustee_root is set, creator name is 'trustee' and
         # bit strength of passphrase is > 80, use passphrase as
         # token

@@ -24,11 +24,6 @@ class RootHandler(base_handler.BaseHandler):
             "passphrase": myself.passphrase,
         }
         trustee_root = myself.store.trustee_root
-        if self.config.migrate_2_5_0 and not trustee_root:
-            trustee_root = myself.property.trustee_root
-            if trustee_root:
-                myself.property.trustee_root = None
-                myself.store.trustee_root = trustee_root
         if trustee_root and len(trustee_root) > 0:
             pair["trustee_root"] = trustee_root
         out = json.dumps(pair)

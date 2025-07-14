@@ -121,11 +121,6 @@ class Actor:
             self.property = property.PropertyStore(actor_id=self.id, config=self.config)
             if self.config.force_email_prop_as_creator:
                 em = self.store.email
-                if self.config.migrate_2_5_0 and not em:
-                    em = self.property.email
-                    if em:
-                        self.store.email = em.lower()
-                        self.property.email = None
                 if em and em.lower() != self.creator:
                     self.modify(creator=em.lower())
         else:
@@ -206,11 +201,6 @@ class Actor:
                         for c in exists:
                             anactor = Actor(actor_id=c["id"])
                             em = anactor.store.email
-                            if self.config.migrate_2_5_0 and not em:
-                                em = anactor.property.email
-                                if em:
-                                    anactor.store.email = em.lower()
-                                    anactor.property.email = None
                             if em:
                                 anactor.modify(creator=em.lower())
                     for c in exists:

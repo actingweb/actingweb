@@ -62,11 +62,10 @@ class TestEnums:
     def test_database_type_enum(self):
         """Test DatabaseType enum values."""
         assert DatabaseType.DYNAMODB.value == "dynamodb"
-        assert DatabaseType.GAE.value == "gae"
 
     def test_environment_enum(self):
         """Test Environment enum values."""
-        assert Environment.APPENGINE.value == "appengine"
+        assert Environment.AWS.value == "aws"
         assert Environment.STANDALONE.value == "standalone"
 
     def test_response_code_enum(self):

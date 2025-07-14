@@ -44,13 +44,12 @@ class DatabaseType(Enum):
     """Database backend types."""
 
     DYNAMODB = "dynamodb"
-    GAE = "gae"
 
 
 class Environment(Enum):
     """Runtime environment types."""
 
-    APPENGINE = "appengine"
+    AWS = "aws"
     STANDALONE = "standalone"
 
 

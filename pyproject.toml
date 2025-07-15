@@ -21,9 +21,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
-packages = [
-    { include = "actingweb" },
-]
+packages = [{ include = "actingweb" }]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -47,6 +45,11 @@ sphinx-rtd-theme = "^1.0.0"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "pypitest"
+url = "https://test.pypi.org/legacy/"
+priority = "explicit"
 
 [tool.black]
 line-length = 88

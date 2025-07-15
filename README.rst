@@ -169,34 +169,40 @@ Building and installing
     # Install from PyPI:
     pip install actingweb
 
-    # For development:
-    pip install -e .
-    pip install -e .[dev]
+    # For development with Poetry:
+    poetry install
+    poetry install --with dev,docs
 
     # Build source and binary distributions:
-    python -m build
+    poetry build
 
     # Upload to test server:
-    twine upload --repository pypitest dist/actingweb-a.b.c.*
+    poetry publish --repository pypitest
 
     # Upload to production server:
-    twine upload dist/actingweb-a.b.c.*
+    poetry publish
 
 Development
 -----------
 
-The library uses modern Python development practices:
+The library uses modern Python development practices with Poetry:
 
 ::
 
+    # Install development dependencies:
+    poetry install --with dev,docs
+
     # Run tests:
-    pytest
+    poetry run pytest
 
     # Type checking:
-    mypy actingweb
+    poetry run mypy actingweb
 
     # Code formatting:
-    black actingweb tests
+    poetry run black actingweb tests
 
     # Linting:
-    ruff check actingweb tests
+    poetry run ruff check actingweb tests
+
+    # Activate virtual environment:
+    poetry shell

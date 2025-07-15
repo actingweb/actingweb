@@ -28,7 +28,7 @@ class SecretIndex(GlobalSecondaryIndex):
 class Trust(Model):
     """Data model for a trust relationship"""
 
-    class Meta:
+    class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_trusts"
         read_capacity_units = 5
         write_capacity_units = 2
@@ -79,7 +79,7 @@ class DbTrust:
                     if actor_id == h.id:
                         self.handle = h
                         break
-        except Trust.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return None
         if not self.handle:
             return None

@@ -8,10 +8,11 @@ class WwwHandler(base_handler.BaseHandler):
         (myself, check) = auth.init_actingweb(
             appreq=self, actor_id=actor_id, path="www", subpath=path, config=self.config
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
         if not self.config.ui:
-            self.response.set_status(404, "Web interface is not enabled")
+            if self.response:
+                self.response.set_status(404, "Web interface is not enabled")
             return
         if not check.check_authorisation(path="www", subpath=path, method="GET"):
             self.response.write("")
@@ -34,16 +35,17 @@ class WwwHandler(base_handler.BaseHandler):
             return
         if path == "properties":
             properties = myself.get_properties()
-            properties = self.on_aw.get_properties(path=None, data=properties)
+            properties = self.on_aw.get_properties(path=[], data=properties)
             self.response.template_values = {
                 "id": myself.id,
                 "properties": properties,
             }
             return
         if path == "property":
-            lookup = myself.property[self.request.get("name")]
+            prop_name = self.request.get("name")
+            lookup = myself.property[prop_name] if prop_name and myself.property else None
             lookup = self.on_aw.get_properties(
-                path=self.request.get("name"), data=lookup
+                path=[self.request.get("name")] if self.request.get("name") else [], data=lookup or {}
             )
             if lookup:
                 self.response.template_values = {
@@ -68,11 +70,11 @@ class WwwHandler(base_handler.BaseHandler):
             for t in relationships:
                 t["approveuri"] = (
                     self.config.root
-                    + myself.id
+                    + (myself.id or "")
                     + "/trust/"
-                    + t.relationship
+                    + (t.relationship or "")
                     + "/"
-                    + t.peerid
+                    + (t.peerid or "")
                 )
                 self.response.template_values = {
                     "id": myself.id,

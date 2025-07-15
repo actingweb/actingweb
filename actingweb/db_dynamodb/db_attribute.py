@@ -14,7 +14,7 @@ class Attribute(Model):
     DynamoDB data model for a property
     """
 
-    class Meta:
+    class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_attributes"
         read_capacity_units = 26
         write_capacity_units = 2
@@ -47,7 +47,7 @@ class DbAttribute:
             query = Attribute.query(
                 actor_id, Attribute.bucket_name.startswith(bucket), consistent_read=True
             )
-        except Attribute.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return None
         ret = {}
         for t in query:
@@ -64,7 +64,7 @@ class DbAttribute:
             return None
         try:
             r = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
-        except Attribute.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return None
         return {
             "data": r.data,
@@ -82,7 +82,7 @@ class DbAttribute:
                     actor_id, bucket + ":" + name, consistent_read=True
                 )
                 item.delete()
-            except Attribute.DoesNotExist:
+            except Exception:  # PynamoDB DoesNotExist exception
                 pass
             return True
         new = Attribute(
@@ -109,7 +109,7 @@ class DbAttribute:
             query = Attribute.query(
                 actor_id, Attribute.bucket_name.startswith(bucket), consistent_read=True
             )
-        except Attribute.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return True
         for t in query:
             t.delete()
@@ -134,7 +134,7 @@ class DbAttributeBucketList:
             return None
         try:
             query = Attribute.query(actor_id)
-        except Attribute.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return None
         ret = {}
         for t in query:
@@ -153,7 +153,7 @@ class DbAttributeBucketList:
             return False
         try:
             query = Attribute.query(actor_id)
-        except Attribute.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return False
         for t in query:
             t.delete()

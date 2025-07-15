@@ -21,12 +21,22 @@ class DevtestHandler(base_handler.BaseHandler):
             subpath=path,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
         try:
-            params = json.loads(self.request.body.decode("utf-8", "ignore"))
+            body = self.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "ignore")
+            elif body is None:
+                body = "{}"
+            params = json.loads(body)
         except (TypeError, ValueError, KeyError):
-            params = self.request.body.decode("utf-8", "ignore")
+            body = self.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "ignore")
+            elif body is None:
+                body = ""
+            params = body
         paths = path.split("/")
         if paths[0] == "proxy":
             mytwin = myself.get_peer_trustee(shorttype="myself")
@@ -63,7 +73,7 @@ class DevtestHandler(base_handler.BaseHandler):
             subpath=path,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
         paths = path.split("/")
         if paths[0] == "proxy":
@@ -105,7 +115,7 @@ class DevtestHandler(base_handler.BaseHandler):
             subpath=path,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
         paths = path.split("/")
         if paths[0] == "proxy":
@@ -118,7 +128,8 @@ class DevtestHandler(base_handler.BaseHandler):
                         self.response.set_status(proxy.last_response_code)
                         return
                     out = json.dumps(prop)
-                    self.response.write(out.encode("utf-8"))
+                    if self.response:
+                        self.response.write(out)
                     self.response.headers["Content-Type"] = "application/json"
                     self.response.set_status(200)
                     return
@@ -131,26 +142,39 @@ class DevtestHandler(base_handler.BaseHandler):
                     actor_id=myself.id, bucket=paths[1], config=self.config
                 )
                 params = bucket.get_bucket()
-                for k, v in params.items():
-                    params[k]["timestamp"] = v["timestamp"].strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-                out = json.dumps(params)
-                self.response.write(out.encode("utf-8"))
+                if params:
+                    for k, v in params.items():
+                        params[k]["timestamp"] = v["timestamp"].strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                    out = json.dumps(params)
+                    if self.response:
+                        self.response.write(out)
+                else:
+                    if self.response:
+                        self.response.set_status(404)
+                    return
                 self.response.headers["Content-Type"] = "application/json"
                 self.response.set_status(200)
                 return
             else:
                 buckets = attribute.Buckets(actor_id=myself.id, config=self.config)
                 params = buckets.fetch()
-                if len(params) == 0:
-                    self.response.set_status(404)
+                if not params or (isinstance(params, dict) and len(params) == 0):
+                    if self.response:
+                        self.response.set_status(404)
                     return
-                for b, d in params.items():
-                    for k, v in d.items():
-                        d[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-                out = json.dumps(params)
-                self.response.write(out.encode("utf-8"))
+                if isinstance(params, dict):
+                    for b, d in params.items():
+                        for k, v in d.items():
+                            d[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+                    out = json.dumps(params)
+                    if self.response:
+                        self.response.write(out)
+                else:
+                    if self.response:
+                        self.response.set_status(404)
+                    return
                 self.response.headers["Content-Type"] = "application/json"
                 self.response.set_status(200)
                 return
@@ -169,10 +193,15 @@ class DevtestHandler(base_handler.BaseHandler):
             subpath=path,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
         try:
-            params = json.loads(self.request.body.decode("utf-8", "ignore"))
+            body = self.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "ignore")
+            elif body is None:
+                body = "{}"
+            params = json.loads(body)
         except (TypeError, ValueError, KeyError):
             params = None
         paths = path.split("/")
@@ -185,7 +214,8 @@ class DevtestHandler(base_handler.BaseHandler):
                     if params:
                         proxy.create_resource("/properties", params=params)
                     out = json.dumps(meta)
-                    self.response.write(out.encode("utf-8"))
+                    if self.response:
+                        self.response.write(out)
                     self.response.headers["Content-Type"] = "application/json"
                     self.response.headers["Location"] = str(mytwin["baseuri"])
                     self.response.set_status(200)
@@ -198,10 +228,16 @@ class DevtestHandler(base_handler.BaseHandler):
                 bucket = attribute.Attributes(
                     actor_id=myself.id, bucket=paths[1], config=self.config
                 )
-                for k, v in params.items():
-                    bucket.set_attr(k, v, timestamp=datetime.datetime.utcnow())
-                out = json.dumps(params)
-                self.response.write(out.encode("utf-8"))
+                if params:
+                    for k, v in params.items():
+                        bucket.set_attr(k, v, timestamp=datetime.datetime.utcnow())
+                    out = json.dumps(params)
+                    if self.response:
+                        self.response.write(out)
+                else:
+                    if self.response:
+                        self.response.set_status(400)
+                    return
                 self.response.headers["Content-Type"] = "application/json"
                 self.response.set_status(200)
                 return

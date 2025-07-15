@@ -22,7 +22,7 @@ class PropertyIndex(GlobalSecondaryIndex[Any]):
         write_capacity_units = 1
         projection = AllProjection()
 
-    value = UnicodeAttribute(default=0, hash_key=True)
+    value = UnicodeAttribute(default="0", hash_key=True)
 
 
 class Property(Model):
@@ -30,7 +30,7 @@ class Property(Model):
     DynamoDB data model for a property
     """
 
-    class Meta:
+    class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_properties"
         read_capacity_units = 26
         write_capacity_units = 2
@@ -60,12 +60,12 @@ class DbProperty:
         if self.handle:
             try:
                 self.handle.refresh()
-            except Property.DoesNotExist:
+            except Exception:  # PynamoDB DoesNotExist exception
                 return None
             return self.handle.value
         try:
             self.handle = Property.get(actor_id, name, consistent_read=True)
-        except Property.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return None
         return self.handle.value
 

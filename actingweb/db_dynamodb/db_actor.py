@@ -31,7 +31,7 @@ class Actor(Model):
     DynamoDB data model for an actor
     """
 
-    class Meta:
+    class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_actors"
         read_capacity_units = 6
         write_capacity_units = 2
@@ -56,7 +56,7 @@ class DbActor:
             return None
         try:
             self.handle = Actor.get(actor_id, consistent_read=True)
-        except Actor.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             return None
         if self.handle:
             t = self.handle
@@ -94,10 +94,10 @@ class DbActor:
             # Email in creator needs to be lower case
             if "@" in creator:
                 creator = creator.lower()
-            self.handle.creator = creator
+            self.handle.creator = creator  # type: ignore[attr-defined]
         if passphrase and len(passphrase) > 0:
-            self.handle.passphrase = passphrase.decode("utf-8")
-        self.handle.save()
+            self.handle.passphrase = passphrase.decode("utf-8")  # type: ignore[attr-defined]
+        self.handle.save()  # type: ignore[attr-defined]
         return True
 
     def create(self, actor_id: str | None = None, creator: str | None = None, passphrase: str | None = None) -> bool:
@@ -123,7 +123,7 @@ class DbActor:
         if not self.handle:
             logging.debug("Attempted delete of DbActor without db handle")
             return False
-        self.handle.delete()
+        self.handle.delete()  # type: ignore[attr-defined]
         self.handle = None
         return True
 

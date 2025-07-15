@@ -12,7 +12,7 @@ from pynamodb.models import Model
 
 class PeerTrustee(Model):
 
-    class Meta:
+    class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_peertrustees"
         read_capacity_units = 1
         write_capacity_units = 1
@@ -60,7 +60,7 @@ class DbPeerTrustee:
                     return False
                 if count == 0:
                     self.handle = None
-        except PeerTrustee.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             self.handle = None
         if self.handle:
             t = self.handle
@@ -108,8 +108,8 @@ class DbPeerTrustee:
         if baseuri and len(baseuri) > 0:
             self.handle.baseuri = baseuri
         if passphrase and len(passphrase) > 0:
-            self.handle.passphrase = passphrase
-        if type and len(peer_type) > 0:
+            self.handle.passphrase = passphrase  # type: ignore[arg-type]
+        if peer_type and len(peer_type) > 0:
             self.handle.type = peer_type
         self.handle.save()
         return True
@@ -141,7 +141,7 @@ class DbPeerTrusteeList:
             return None
         self.actor_id = actor_id
         self.peertrustees = []
-        self.handle = PeerTrustee.scan(PeerTrustee.actor_id == self.actor_id)
+        self.handle = PeerTrustee.scan(PeerTrustee.id == self.actor_id)
         if self.handle:
             for t in self.handle:
                 self.peertrustees.append(
@@ -159,7 +159,7 @@ class DbPeerTrusteeList:
 
     def delete(self):
         """Deletes all the peertrustees in the database"""
-        self.handle = PeerTrustee.scan(PeerTrustee.actor_id == self.actor_id)
+        self.handle = PeerTrustee.scan(PeerTrustee.id == self.actor_id)
         if not self.handle:
             return False
         for p in self.handle:

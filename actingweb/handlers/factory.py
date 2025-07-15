@@ -20,7 +20,12 @@ class RootFactoryHandler(base_handler.BaseHandler):
     def post(self):
         myself = actor.Actor(config=self.config)
         try:
-            params = json.loads(self.request.body.decode("utf-8", "ignore"))
+            body = self.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "ignore")
+            elif body is None:
+                body = "{}"
+            params = json.loads(body)
             is_json = True
             if "creator" in params:
                 creator = params["creator"]
@@ -40,7 +45,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
             trustee_root = self.request.get("trustee_root")
             passphrase = self.request.get("passphrase")
         if not myself.create(
-            url=self.request.url, creator=creator, passphrase=passphrase
+            url=self.request.url or "", creator=creator, passphrase=passphrase
         ):
             self.response.set_status(400, "Not created")
             logging.warning(
@@ -51,11 +56,11 @@ class RootFactoryHandler(base_handler.BaseHandler):
                 + ")"
             )
             return
-        if len(trustee_root) > 0:
+        if len(trustee_root) > 0 and myself.store:
             myself.store.trustee_root = trustee_root
-        self.response.headers["Location"] = str(self.config.root + myself.id)
+        self.response.headers["Location"] = str(self.config.root + (myself.id or ""))
         if self.config.www_auth == "oauth" and not is_json:
-            self.response.set_redirect(self.config.root + myself.id + "/www")
+            self.response.set_redirect(self.config.root + (myself.id or "") + "/www")
             return
         pair = {
             "id": myself.id,

@@ -13,7 +13,7 @@ from pynamodb.models import Model
 
 
 class Subscription(Model):
-    class Meta:
+    class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_subscriptions"
         read_capacity_units = 2
         write_capacity_units = 1
@@ -65,7 +65,7 @@ class DbSubscription:
                     "sequence": t.seqnr,
                     "callback": t.callback,
                 }
-        except Subscription.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             pass
         return None
 

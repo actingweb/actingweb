@@ -6,7 +6,7 @@ from actingweb import trust
 try:
     from urllib.parse import urlencode as urllib_urlencode
 except ImportError:
-    from urllib import urlencode as urllib_urlencode
+    from urllib.parse import urlencode as urllib_urlencode
 
 
 class AwProxy:
@@ -52,6 +52,14 @@ class AwProxy:
         }
         logging.debug("Getting trust peer resource at (" + url + ")")
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 408
+                return {
+                    "error": {
+                        "code": 408,
+                        "message": "Unable to communicate with trust peer service.",
+                    }
+                }
             if self.config.env == "appengine":
                 response = self.config.module["urlfetch"].fetch(
                     url=url, method=self.config.module["urlfetch"].GET, headers=headers
@@ -60,12 +68,7 @@ class AwProxy:
                 response = self.config.module["urlfetch"].get(url=url, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             logging.debug("Not able to get peer resource")
             self.last_response_code = 408
             return {
@@ -108,6 +111,14 @@ class AwProxy:
             "Creating trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 408
+                return {
+                    "error": {
+                        "code": 408,
+                        "message": "Unable to communicate with trust peer service.",
+                    }
+                }
             if self.config.env == "appengine":
                 response = self.config.module["urlfetch"].fetch(
                     url=url,
@@ -116,17 +127,12 @@ class AwProxy:
                     headers=headers,
                 )
             else:
-                response = self.config.module["urlfetch"].fetch(
+                response = self.config.module["urlfetch"].post(
                     url=url, data=data, headers=headers
                 )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             logging.debug("Not able to create new peer resource")
             self.last_response_code = 408
             return {
@@ -173,6 +179,14 @@ class AwProxy:
             "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 408
+                return {
+                    "error": {
+                        "code": 408,
+                        "message": "Unable to communicate with trust peer service.",
+                    }
+                }
             if self.config.env == "appengine":
                 response = self.config.module["urlfetch"].fetch(
                     url=url,
@@ -186,12 +200,7 @@ class AwProxy:
                 )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             logging.debug("Not able to change peer resource")
             self.last_response_code = 408
             return {
@@ -228,6 +237,14 @@ class AwProxy:
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logging.debug("Deleting trust peer resource at (" + url + ")")
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 408
+                return {
+                    "error": {
+                        "code": 408,
+                        "message": "Unable to communicate with trust peer service.",
+                    }
+                }
             if self.config.env == "appengine":
                 response = self.config.module["urlfetch"].fetch(
                     url=url,
@@ -240,12 +257,7 @@ class AwProxy:
                 )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             logging.debug("Not able to delete peer resource")
             self.last_response_code = 408
             return {

@@ -13,8 +13,8 @@ class OnAWBase:
         self.auth = None
 
     def aw_init(self, auth=None, webobj=None):
-        self.config = auth.config
-        self.myself = auth.actor
+        self.config = auth.config if auth else None
+        self.myself = auth.actor if auth else None
         self.webobj = webobj
         self.auth = auth
 
@@ -26,7 +26,7 @@ class OnAWBase:
 
         # Safety valve to make sure we don't do anything if bot is not
         # configured.
-        if not self.config.bot["token"] or len(self.config.bot["token"]) == 0:
+        if not self.config or not self.config.bot or not self.config.bot["token"] or len(self.config.bot["token"]) == 0:
             return False
         if path == "something":
             pass
@@ -58,7 +58,7 @@ class OnAWBase:
         # Do something
         return True
 
-    def get_properties(self, path: list, data: dict) -> dict or None:
+    def get_properties(self, path: list, data: dict) -> dict | None:
         """Called on GET to properties for transformations to be done
 
         :param path: Target path requested
@@ -84,7 +84,7 @@ class OnAWBase:
         """
         return True
 
-    def put_properties(self, path: list, old: dict, new: dict) -> dict or None:
+    def put_properties(self, path: list, old: dict, new: dict | str) -> dict | str | None:
         """Called on PUT to properties for transformations to be done before save
         :param path: Target path requested to be updated
         :type path: list[str]
@@ -92,18 +92,18 @@ class OnAWBase:
         :type old: dict
         :param new:
         :type new: New data from PUT request (after merge)
-        :return: The dict that should be stored or None if 400 should be returned and nothing stored
-        :rtype: dict or None
+        :return: The dict or str that should be stored or None if 400 should be returned and nothing stored
+        :rtype: dict or str or None
         """
         return new
 
-    def post_properties(self, prop: str, data: dict) -> dict or None:
+    def post_properties(self, prop: str, data: dict | str) -> dict | str | None:
         """Called on POST to properties, once for each property
 
         :param prop: Property to be created
         :type prop: str
         :param data: The data to be stored in prop
-        :type data: dict
+        :type data: dict or str
         :return: The transformed data to store in prop or None if that property should be skipped and not stored
         :rtype: dict or None
         """

@@ -3,7 +3,7 @@ from builtins import str
 try:
     from urllib.parse import urlencode as urllib_urlencode
 except ImportError:
-    from urllib import urlencode as urllib_urlencode
+    from urllib.parse import urlencode as urllib_urlencode
 import base64
 import json
 import logging
@@ -47,6 +47,8 @@ class OAuth:
         self.last_response_message = ""
 
     def enabled(self):
+        if not self.config or not self.config.oauth:
+            return False
         if len(self.config.oauth["client_id"]) == 0:
             return False
         else:
@@ -97,26 +99,28 @@ class OAuth:
             else:
                 headers = {"Content-Type": "application/json"}
         try:
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    payload=data,
-                    method=self.config.module["urlfetch"].POST,
-                    headers=headers,
-                )
+            if self.config and self.config.env == "appengine":
+                if self.config.module:
+                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
+                    response = self.config.module["urlfetch"].fetch(
+                        url=url,
+                        payload=data,
+                        method=self.config.module["urlfetch"].POST,
+                        headers=headers,
+                    )
+                else:
+                    return None
             else:
-                response = self.config.module["urlfetch"].post(
-                    url=url, data=data, headers=headers
-                )
-            self.last_response_code = response.status_code
-            self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+                if self.config and self.config.module:
+                    response = self.config.module["urlfetch"].post(
+                        url=url, data=data, headers=headers
+                    )
+                else:
+                    return None
+            if response:
+                self.last_response_code = response.status_code
+                self.last_response_message = response.content
+        except Exception:
             self.last_response_code = 0
             self.last_response_message = "No response"
             logging.warning("Oauth POST failed with exception")
@@ -167,9 +171,13 @@ class OAuth:
             else:
                 headers = {"Content-Type": "application/json"}
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 0
+                self.last_response_message = "No response"
+                return None
             if self.config.env == "appengine":
                 self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                response = self.config.module["urlfetch"](
+                response = self.config.module["urlfetch"].fetch(
                     url=url,
                     payload=data,
                     method=self.config.module["urlfetch"].PUT,
@@ -181,12 +189,7 @@ class OAuth:
                 )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             self.last_response_code = 0
             self.last_response_message = "No response"
             logging.warning("Oauth PUT failed with exception")
@@ -211,6 +214,10 @@ class OAuth:
             url = url + "?" + urllib_urlencode(params)
         logging.debug("Oauth GET request: " + url)
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 0
+                self.last_response_message = "No response"
+                return None
             if self.config.env == "appengine":
                 self.config.module["urlfetch"].set_default_fetch_deadline(60)
                 response = self.config.module["urlfetch"].fetch(
@@ -229,12 +236,7 @@ class OAuth:
                 )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             self.last_response_code = 0
             self.last_response_message = "No response"
             logging.warning("Oauth GET failed with exception")
@@ -268,17 +270,16 @@ class OAuth:
             url = url + "?" + urllib_urlencode(params)
         logging.debug("Oauth HEAD request: " + url)
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 0
+                self.last_response_message = "No response"
+                return None
             response = self.config.module["urlfetch"].head(
                 url=url, headers={"Authorization": "Bearer " + self.token}
             )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             self.last_response_code = 0
             self.last_response_message = "No response"
             logging.warning("Oauth HEAD failed with exception")
@@ -297,6 +298,10 @@ class OAuth:
             return None
         logging.debug("Oauth DELETE request: " + url)
         try:
+            if not self.config or not self.config.module:
+                self.last_response_code = 0
+                self.last_response_message = "No response"
+                return None
             if self.config.env == "appengine":
                 response = self.config.module["urlfetch"].fetch(
                     url=url,
@@ -309,12 +314,7 @@ class OAuth:
                 )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
-        ):
+        except Exception:
             logging.warning("Spark DELETE failed.")
             self.last_response_code = 0
             self.last_response_message = "No response"
@@ -340,6 +340,8 @@ class OAuth:
         return ret
 
     def oauth_redirect_uri(self, state="", creator=None):
+        if not self.config or not self.config.oauth:
+            return ""
         params = {
             "response_type": self.config.oauth["response_type"],
             "client_id": self.config.oauth["client_id"],
@@ -359,6 +361,8 @@ class OAuth:
 
     def oauth_request_token(self, code=None):
         if not code:
+            return None
+        if not self.config or not self.config.oauth:
             return None
         params = {
             "grant_type": self.config.oauth["grant_type"],
@@ -383,6 +387,8 @@ class OAuth:
 
     def oauth_refresh_token(self, refresh_token):
         if not refresh_token:
+            return None
+        if not self.config or not self.config.oauth:
             return None
         params = {
             "grant_type": self.config.oauth["refresh_type"],

@@ -15,7 +15,7 @@ from pynamodb.models import Model
 
 
 class SubscriptionDiff(Model):
-    class Meta:
+    class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_subscriptiondiffs"
         read_capacity_units = 2
         write_capacity_units = 3
@@ -48,7 +48,7 @@ class DbSubscriptionDiff:
             if not seqnr:
                 query = SubscriptionDiff.query(
                     actor_id,
-                    SubscriptionDiff.subid_seqnr.startswith(subid),
+                    SubscriptionDiff.subid_seqnr.startswith(subid or ""),
                     consistent_read=True,
                 )
                 # Find the record with lowest seqnr
@@ -60,7 +60,7 @@ class DbSubscriptionDiff:
                         self.handle = t
             else:
                 self.handle = SubscriptionDiff.get(
-                    actor_id, subid + ":" + str(seqnr), consistent_read=True
+                    actor_id, (subid or "") + ":" + str(seqnr), consistent_read=True
                 )
         if self.handle:
             t = self.handle

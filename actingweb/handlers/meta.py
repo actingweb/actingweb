@@ -18,13 +18,14 @@ class MetaHandler(base_handler.BaseHandler):
         # We accept no auth here, so don't check response code
         if not myself:
             return
-        if not check.check_authorisation(
+        if not check or not check.check_authorisation(
             path="meta", subpath=path, method="GET", approved=False
         ):
-            self.response.set_status(403)
+            if self.response:
+                self.response.set_status(403)
             return
 
-        trustee_root = myself.store.trustee_root
+        trustee_root = myself.store.trustee_root if myself.store else None
         if not trustee_root:
             trustee_root = ""
         if not path:
@@ -41,7 +42,8 @@ class MetaHandler(base_handler.BaseHandler):
                 "aw_formats": self.config.aw_formats,
             }
             out = json.dumps(values)
-            self.response.write(out.encode("utf-8"))
+            if self.response:
+                self.response.write(out)
             self.response.headers["Content-Type"] = "application/json"
             return
 
@@ -52,7 +54,7 @@ class MetaHandler(base_handler.BaseHandler):
         elif path == "version":
             out = self.config.version
         elif path == "desc":
-            out = self.config.desc + myself.id
+            out = self.config.desc + (myself.id or "")
         elif path == "info":
             out = self.config.info
         elif path == "trustee_root":
@@ -66,6 +68,8 @@ class MetaHandler(base_handler.BaseHandler):
         elif path == "actingweb/formats":
             out = self.config.aw_formats
         else:
-            self.response.set_status(404)
+            if self.response:
+                self.response.set_status(404)
             return
-        self.response.write(out.encode("utf-8"))
+        if self.response:
+            self.response.write(out)

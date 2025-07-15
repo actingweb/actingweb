@@ -45,7 +45,6 @@ def delete_dict(d1, path):
 
 
 class PropertiesHandler(base_handler.BaseHandler):
-
     def get(self, actor_id, name):
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
@@ -60,7 +59,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             subpath=name,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
         if not name:
             path = {0: None}
@@ -68,15 +67,17 @@ class PropertiesHandler(base_handler.BaseHandler):
             path = name.split("/")
             name = path[0]
         if not check.check_authorisation(path="properties", subpath=name, method="GET"):
-            self.response.set_status(403)
+            if self.response:
+                self.response.set_status(403)
             return
         # if name is not set, this request URI was the properties root
         if not name:
             self.listall(myself)
             return
-        lookup = myself.property[name]
+        lookup = myself.property[name] if myself and myself.property else None
         if not lookup:
-            self.response.set_status(404, "Property not found")
+            if self.response:
+                self.response.set_status(404, "Property not found")
             return
         try:
             jsonblob = json.loads(lookup)
@@ -86,20 +87,23 @@ class PropertiesHandler(base_handler.BaseHandler):
                     del path[0]
                     for p in path:
                         out = out[p]
-                out = self.on_aw.get_properties(path=path, data=out)
+                out = self.on_aw.get_properties(path=path if isinstance(path, list) else [], data=out)
                 if out is None:
-                    self.response.set_status(404)
+                    if self.response:
+                        self.response.set_status(404)
                     return
                 out = json.dumps(out)
             except (TypeError, ValueError, KeyError):
-                self.response.set_status(404)
+                if self.response:
+                    self.response.set_status(404)
                 return
-            out = out.encode("utf-8")
+            # Keep as string for response.write()
         except (TypeError, ValueError, KeyError):
             out = lookup
-        self.response.set_status(200, "Ok")
-        self.response.headers["Content-Type"] = "application/json"
-        self.response.write(out)
+        if self.response:
+            self.response.set_status(200, "Ok")
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(out)
 
     def listall(self, myself):
         properties = myself.get_properties()
@@ -113,12 +117,12 @@ class PropertiesHandler(base_handler.BaseHandler):
                 pair[name] = js
             except ValueError:
                 pair[name] = value
-        pair = self.on_aw.get_properties(path=None, data=pair)
+        pair = self.on_aw.get_properties(path=[], data=pair)
         if pair is None:
             self.response.set_status(404)
             return
         out = json.dumps(pair)
-        self.response.write(out.encode("utf-8"))
+        self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         return
 
@@ -130,7 +134,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             subpath=name,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or (check and check.response["code"] != 200):
             return
         resource = None
         if not name:
@@ -140,30 +144,37 @@ class PropertiesHandler(base_handler.BaseHandler):
             name = path[0]
             if len(path) >= 2 and len(path[1]) > 0:
                 resource = path[1]
-        if not check.check_authorisation(path="properties", subpath=name, method="PUT"):
-            self.response.set_status(403)
+        if not check or not check.check_authorisation(path="properties", subpath=name, method="PUT"):
+            if self.response:
+                self.response.set_status(403)
             return
-        body = self.request.body.decode("utf-8", "ignore")
+        body = self.request.body
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "ignore")
+        elif body is None:
+            body = ""
         if len(path) == 1:
-            old = myself.property[name]
+            old = myself.property[name] if myself and myself.property else None
             try:
-                old = json.loads(old)
+                old = json.loads(old or "{}")
             except (TypeError, ValueError, KeyError):
                 old = {}
             try:
-                new = json.loads(body)
+                new_body = json.loads(body)
                 is_json = True
             except (TypeError, ValueError, KeyError):
-                new = body
+                new_body = body
                 is_json = False
-            new = self.on_aw.put_properties(path=path, old=old, new=new)
+            new = self.on_aw.put_properties(path=path, old=old, new=new_body)
             if new is None:
                 self.response.set_status(400, "Payload is not accepted")
                 return
             if is_json:
-                myself.property[name] = json.dumps(new)
+                if myself and myself.property:
+                    myself.property[name] = json.dumps(new)
             else:
-                myself.property[name] = new
+                if myself and myself.property:
+                    myself.property[name] = new
             myself.register_diffs(target="properties", subtarget=name, blob=body)
             self.response.set_status(204)
             return
@@ -184,24 +195,23 @@ class PropertiesHandler(base_handler.BaseHandler):
             # logging.debug('store with i=' + str(i) + ' (' + json.dumps(store) + ')')
             i -= 1
         # logging.debug('Snippet to store(' + json.dumps(store) + ')')
-        orig = myself.property[name]
-        logging.debug("Original value(" + orig + ")")
+        orig = myself.property[name] if myself and myself.property else None
+        logging.debug("Original value(" + (orig or "") + ")")
         try:
-            orig = json.loads(orig)
+            orig = json.loads(orig or "{}")
             merge_dict(orig, store)
             res = orig
         except (TypeError, ValueError, KeyError):
             res = store
-        res = self.on_aw.put_properties(path=path, old=orig, new=res)
+        res = self.on_aw.put_properties(path=path, old=orig or {}, new=res)
         if res is None:
             self.response.set_status(400, "Payload is not accepted")
             return
         res = json.dumps(res)
         logging.debug("Result to store( " + res + ") in /properties/" + name)
-        myself.property[name] = res
-        myself.register_diffs(
-            target="properties", subtarget=name, resource=resource, blob=blob
-        )
+        if myself and myself.property:
+            myself.property[name] = res
+        myself.register_diffs(target="properties", subtarget=name, resource=resource, blob=blob)
         self.response.set_status(204)
 
     def post(self, actor_id, name):
@@ -212,38 +222,45 @@ class PropertiesHandler(base_handler.BaseHandler):
             subpath=name,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
-        if not check.check_authorisation(
-            path="properties", subpath=name, method="POST"
-        ):
-            self.response.set_status(403)
+        if not check.check_authorisation(path="properties", subpath=name, method="POST"):
+            if self.response:
+                self.response.set_status(403)
             return
         if len(name) > 0:
-            self.response.set_status(400)
+            if self.response:
+                self.response.set_status(400)
         pair = dict()
         # Handle the simple form
         if self.request.get("property") and self.request.get("value"):
-            val = self.on_aw.post_properties(
-                prop=self.request.get("property"), data=self.request.get("value")
-            )
+            val = self.on_aw.post_properties(prop=self.request.get("property"), data=self.request.get("value"))
             if val is None:
-                self.response.set_status(403)
+                if self.response:
+                    self.response.set_status(403)
                 return
             pair[self.request.get("property")] = val
-            myself.property[self.request.get("property")] = self.request.get("value")
+            if myself and myself.property:
+                myself.property[self.request.get("property")] = self.request.get("value")
         elif len(self.request.arguments()) > 0:
             for name in self.request.arguments():
                 val = self.on_aw.post_properties(prop=name, data=self.request.get(name))
                 if val is None:
                     continue
                 pair[name] = val
-                myself.property[name] = val
+                if myself and myself.property:
+                    myself.property[name] = val
         else:
             try:
-                params = json.loads(self.request.body.decode("utf-8", "ignore"))
+                body = self.request.body
+                if isinstance(body, bytes):
+                    body = body.decode("utf-8", "ignore")
+                elif body is None:
+                    body = "{}"
+                params = json.loads(body)
             except (TypeError, ValueError, KeyError):
-                self.response.set_status(400, "Error in json body")
+                if self.response:
+                    self.response.set_status(400, "Error in json body")
                 return
             for key in params:
                 val = self.on_aw.post_properties(prop=key, data=params[key])
@@ -254,15 +271,18 @@ class PropertiesHandler(base_handler.BaseHandler):
                     text = json.dumps(val)
                 else:
                     text = val
-                myself.property[key] = text
+                if myself and myself.property:
+                    myself.property[key] = text
         if not pair:
-            self.response.set_status(403, "No attributes accepted")
+            if self.response:
+                self.response.set_status(403, "No attributes accepted")
             return
         out = json.dumps(pair)
         myself.register_diffs(target="properties", blob=out)
-        self.response.write(out.encode("utf-8"))
-        self.response.headers["Content-Type"] = "application/json"
-        self.response.set_status(201, "Created")
+        if self.response:
+            self.response.write(out)
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(201, "Created")
 
     def delete(self, actor_id, name):
         (myself, check) = auth.init_actingweb(
@@ -272,7 +292,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             subpath=name,
             config=self.config,
         )
-        if not myself or check.response["code"] != 200:
+        if not myself or not check or check.response["code"] != 200:
             return
         resource = None
         if not name:
@@ -282,18 +302,11 @@ class PropertiesHandler(base_handler.BaseHandler):
             name = path[0]
             if len(path) >= 2 and len(path[1]) > 0:
                 resource = path[1]
-        if not check.check_authorisation(
-            path="properties", subpath=name, method="DELETE"
-        ):
+        if not check.check_authorisation(path="properties", subpath=name, method="DELETE"):
             self.response.set_status(403)
             return
         if not name:
-            if (
-                self.on_aw.delete_properties(
-                    path=path, old=myself.get_properties(), new=dict()
-                )
-                is False
-            ):
+            if self.on_aw.delete_properties(path=path, old=myself.get_properties(), new=dict()) is False:
                 self.response.set_status(403)
                 return
             myself.delete_properties()
@@ -301,23 +314,20 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(204)
             return
         if len(path) == 1:
-            if (
-                self.on_aw.delete_properties(
-                    path=path, old=myself.property[name], new=dict()
-                )
-                is False
-            ):
+            old_prop = myself.property[name] if myself and myself.property else None
+            if self.on_aw.delete_properties(path=path, old=old_prop or {}, new=dict()) is False:
                 self.response.set_status(403)
                 return
-            myself.property[name] = None
+            if myself and myself.property:
+                myself.property[name] = None
             myself.register_diffs(target="properties", subtarget=name, blob="")
             self.response.set_status(204)
             return
-        orig = myself.property[name]
+        orig = myself.property[name] if myself and myself.property else None
         old = orig
-        logging.debug("DELETE /properties original value(" + orig + ")")
+        logging.debug("DELETE /properties original value(" + (orig or "") + ")")
         try:
-            orig = json.loads(orig)
+            orig = json.loads(orig or "{}")
         except (TypeError, ValueError, KeyError):
             # Since /properties/something was handled above
             # orig must be json loadable
@@ -326,13 +336,12 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not delete_dict(orig, path[1:]):
             self.response.set_status(404)
             return
-        if self.on_aw.delete_properties(path=path, old=old, new=orig) is False:
+        if self.on_aw.delete_properties(path=path, old=old or {}, new=orig) is False:
             self.response.set_status(403)
             return
         res = json.dumps(orig)
         logging.debug("Result to store( " + res + ") in /properties/" + name)
-        myself.property[name] = res
-        myself.register_diffs(
-            target="properties", subtarget=name, resource=resource, blob=""
-        )
+        if myself and myself.property:
+            myself.property[name] = res
+        myself.register_diffs(target="properties", subtarget=name, resource=resource, blob="")
         self.response.set_status(204)

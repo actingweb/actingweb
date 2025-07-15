@@ -28,6 +28,10 @@ v3.0.0: (In Development)
 - **BREAKING**: Removed deprecated Google App Engine (GAE) database implementation
 - **BREAKING**: Removed migrate_2_5_0 migration flag and related migration code
 - **BREAKING**: Database backend now only supports DynamoDB (removed GAE support)
+- **BREAKING**: Removed Google App Engine urlfetch abstraction layer
+- **IMPROVEMENT**: Simplified HTTP client code to use urlfetch library directly
+- **IMPROVEMENT**: Removed config.env == "appengine" environment checks
+- **IMPROVEMENT**: Removed config.module["urlfetch"] abstraction in favor of direct urlfetch imports
 - **BREAKING**: Environment types updated to remove APPENGINE, added AWS
 - **CLEANUP**: Removed all GAE-specific imports and logging configuration
 - **CLEANUP**: Simplified config initialization by removing GAE conditional logic

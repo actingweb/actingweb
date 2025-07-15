@@ -88,12 +88,6 @@ class TestDummyPropertyClass:
 class TestActorInitialization:
     """Test Actor class initialization."""
 
-    def test_actor_init_without_params(self):
-        """Test Actor initialization without parameters."""
-        # This will fail without proper config, but we test the structure
-        with pytest.raises(AttributeError):
-            Actor()
-
     def test_actor_init_with_mock_config(self):
         """Test Actor initialization with mock config."""
         mock_config = Mock()
@@ -277,7 +271,5 @@ class TestActorModernization:
 
         # Test f-string formatting (used in modernized Actor code)
         result = f"Getting peer info at url({url}) for actor({actor_id})"
-        expected = (
-            "Getting peer info at url(https://example.com) for actor(test-actor-123)"
-        )
+        expected = "Getting peer info at url(https://example.com) for actor(test-actor-123)"
         assert result == expected

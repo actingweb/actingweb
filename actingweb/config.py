@@ -178,7 +178,6 @@ class Config:
         )
         self.module: dict[str, Any] = {}
         self.module["deferred"] = None
-        self.module["urlfetch"] = importlib.import_module("urlfetch")
         #########
         # ActingWeb settings for this app
         #########

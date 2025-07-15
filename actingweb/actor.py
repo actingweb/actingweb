@@ -2,6 +2,7 @@ import base64
 import datetime
 import json
 import logging
+import urlfetch
 from typing import Any
 
 from actingweb import attribute, peertrustee, property, subscription, trust
@@ -92,11 +93,7 @@ class Actor:
         """
         try:
             logging.debug(f"Getting peer info at url({url})")
-            if not self.config or not self.config.module:
-                return {}
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(20)
-            response = self.config.module["urlfetch"].fetch(url=url + "/meta")
+            response = urlfetch.fetch(url=url + "/meta")
             res = {
                 "last_response_code": response.status_code,
                 "last_response_message": response.content,
@@ -330,21 +327,7 @@ class Actor:
             "Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8"),
         }
         try:
-            if self.config and self.config.env == "appengine":
-                if self.config.module:
-                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                    response = self.config.module["urlfetch"].fetch(
-                        url=peer_data["baseuri"],
-                        method=self.config.module["urlfetch"].DELETE,
-                        headers=headers,
-                    )
-                else:
-                    return False
-            else:
-                if self.config and self.config.module:
-                    response = self.config.module["urlfetch"].delete(url=peer_data["baseuri"], headers=headers)
-                else:
-                    return False
+            response = urlfetch.delete(url=peer_data["baseuri"], headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -399,25 +382,11 @@ class Actor:
             logging.debug(f"Creating peer actor at factory({factory}) with data({data})")
             response = None
             try:
-                if self.config and self.config.env == "appengine":
-                    if self.config.module:
-                        self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                        response = self.config.module["urlfetch"].fetch(
-                            url=factory,
-                            method=self.config.module["urlfetch"].POST,
-                            payload=data,
-                        )
-                    else:
-                        return None
-                else:
-                    if self.config and self.config.module:
-                        response = self.config.module["urlfetch"].post(
-                            url=factory,
-                            data=data,
-                            headers={"Content-Type": "application/json"},
-                        )
-                    else:
-                        return None
+                response = urlfetch.post(
+                    url=factory,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                )
                 if response:
                     self.last_response_code = response.status_code
                     self.last_response_message = response.content
@@ -487,34 +456,15 @@ class Actor:
             }
             data = json.dumps(params)
             try:
-                if self.config and self.config.env == "appengine":
-                    if self.config.module:
-                        self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                        response = self.config.module["urlfetch"].fetch(
-                            url=new_peer_data["baseuri"]
-                            + "/trust/"
-                            + relationship
-                            + "/"
-                            + (self.id or ""),
-                            method=self.config.module["urlfetch"].PUT,
-                            payload=data,
-                            headers=headers,
-                        )
-                    else:
-                        return new_peer_data
-                else:
-                    if self.config and self.config.module:
-                        response = self.config.module["urlfetch"].put(
-                            url=new_peer_data["baseuri"]
-                            + "/trust/"
-                            + relationship
-                            + "/"
-                            + (self.id or ""),
-                            data=data,
-                            headers=headers,
-                        )
-                    else:
-                        return new_peer_data
+                response = urlfetch.put(
+                    url=new_peer_data["baseuri"]
+                    + "/trust/"
+                    + relationship
+                    + "/"
+                    + (self.id or ""),
+                    data=data,
+                    headers=headers,
+                )
                 if response:
                     self.last_response_code = response.status_code
                     self.last_response_message = response.content
@@ -584,18 +534,7 @@ class Actor:
             # would do)
             logging.debug("Trust relationship has been approved, notifying peer at url(" + requrl + ")")
             try:
-                if not self.config or not self.config.module:
-                    return False
-                if self.config.env == "appengine":
-                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                    response = self.config.module["urlfetch"].fetch(
-                        url=requrl,
-                        method=self.config.module["urlfetch"].POST,
-                        payload=data,
-                        headers=headers,
-                    )
-                else:
-                    response = self.config.module["urlfetch"].post(url=requrl, data=data, headers=headers)
+                response = urlfetch.post(url=requrl, data=data, headers=headers)
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
             except Exception:
@@ -662,26 +601,13 @@ class Actor:
         data = json.dumps(params)
         logging.debug("Creating reciprocal trust at url(" + requrl + ") and body (" + str(data) + ")")
         try:
-            if not self.config or not self.config.module:
-                return False
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                response = self.config.module["urlfetch"].fetch(
-                    url=requrl,
-                    method=self.config.module["urlfetch"].POST,
-                    payload=data,
-                    headers={
-                        "Content-Type": "application/json",
-                    },
-                )
-            else:
-                response = self.config.module["urlfetch"].post(
-                    url=requrl,
-                    data=data,
-                    headers={
-                        "Content-Type": "application/json",
-                    },
-                )
+            response = urlfetch.post(
+                url=requrl,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                },
+            )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -739,30 +665,19 @@ class Actor:
                 "Verifying trust at requesting peer(" + peerid + ") at url (" + requrl + ") and secret(" + secret + ")"
             )
             try:
-                if not self.config or not self.config.module:
-                    verified = False
-                else:
-                    if self.config.env == "appengine":
-                        self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                        response = self.config.module["urlfetch"].fetch(
-                            url=requrl,
-                            method=self.config.module["urlfetch"].GET,
-                            headers=headers,
-                        )
+                response = urlfetch.get(url=requrl, headers=headers)
+                self.last_response_code = response.status_code
+                self.last_response_message = response.content
+                try:
+                    logging.debug("Verifying trust response JSON:" + str(response.content))
+                    data = json.loads(response.content.decode("utf-8", "ignore"))
+                    if data["verification_token"] == verification_token:
+                        verified = True
                     else:
-                        response = self.config.module["urlfetch"].get(url=requrl, headers=headers)
-                    self.last_response_code = response.status_code
-                    self.last_response_message = response.content
-                    try:
-                        logging.debug("Verifying trust response JSON:" + str(response.content))
-                        data = json.loads(response.content.decode("utf-8", "ignore"))
-                        if data["verification_token"] == verification_token:
-                            verified = True
-                        else:
-                            verified = False
-                    except ValueError:
-                        logging.debug("No json body in response when verifying trust at url(" + requrl + ")")
                         verified = False
+                except ValueError:
+                    logging.debug("No json body in response when verifying trust at url(" + requrl + ")")
+                    verified = False
             except Exception:
                 logging.debug("No response when verifying trust at url" + requrl + ")")
                 verified = False
@@ -799,17 +714,7 @@ class Actor:
                     }
                 logging.debug("Deleting reciprocal relationship at url(" + url + ")")
                 try:
-                    if not self.config or not self.config.module:
-                        return False
-                    if self.config.env == "appengine":
-                        self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                        response = self.config.module["urlfetch"].fetch(
-                            url=url,
-                            method=self.config.module["urlfetch"].DELETE,
-                            headers=headers,
-                        )
-                    else:
-                        response = self.config.module["urlfetch"].delete(url=url, headers=headers)
+                    response = urlfetch.delete(url=url, headers=headers)
                 except Exception:
                     logging.debug("Failed to delete reciprocal relationship at url(" + url + ")")
                     failed_once = True
@@ -891,18 +796,7 @@ class Actor:
         }
         try:
             logging.debug("Creating remote subscription at url(" + requrl + ") with body (" + str(data) + ")")
-            if not self.config or not self.config.module:
-                return None
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                response = self.config.module["urlfetch"].fetch(
-                    url=requrl,
-                    method=self.config.module["urlfetch"].POST,
-                    payload=data,
-                    headers=headers,
-                )
-            else:
-                response = self.config.module["urlfetch"].post(url=requrl, data=data, headers=headers)
+            response = urlfetch.post(url=requrl, data=data, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -998,17 +892,7 @@ class Actor:
         }
         try:
             logging.debug("Deleting remote subscription at url(" + url + ")")
-            if not self.config or not self.config.module:
-                return False
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    method=self.config.module["urlfetch"].DELETE,
-                    headers=headers,
-                )
-            else:
-                response = self.config.module["urlfetch"].delete(url=url, headers=headers)
+            response = urlfetch.delete(url=url, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
             if response.status_code == 204:
@@ -1077,18 +961,7 @@ class Actor:
         }
         try:
             logging.debug("Doing a callback on subscription at url(" + requrl + ") with body(" + str(data) + ")")
-            if not self.config or not self.config.module:
-                return False
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                response = self.config.module["urlfetch"].fetch(
-                    url=requrl,
-                    method=self.config.module["urlfetch"].POST,
-                    payload=data.encode("utf-8"),
-                    headers=headers,
-                )
-            else:
-                response = self.config.module["urlfetch"].post(url=requrl, data=data.encode("utf-8"), headers=headers)
+            response = urlfetch.post(url=requrl, data=data.encode("utf-8"), headers=headers)
         except Exception:
             logging.debug("Peer did not respond to callback on url(" + requrl + ")")
             self.last_response_code = 0

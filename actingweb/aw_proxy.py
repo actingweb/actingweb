@@ -1,5 +1,6 @@
 import json
 import logging
+import urlfetch
 
 from actingweb import trust
 
@@ -52,20 +53,7 @@ class AwProxy:
         }
         logging.debug("Getting trust peer resource at (" + url + ")")
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 408
-                return {
-                    "error": {
-                        "code": 408,
-                        "message": "Unable to communicate with trust peer service.",
-                    }
-                }
-            if self.config.env == "appengine":
-                response = self.config.module["urlfetch"].fetch(
-                    url=url, method=self.config.module["urlfetch"].GET, headers=headers
-                )
-            else:
-                response = self.config.module["urlfetch"].get(url=url, headers=headers)
+            response = urlfetch.get(url=url, headers=headers)
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -111,25 +99,9 @@ class AwProxy:
             "Creating trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 408
-                return {
-                    "error": {
-                        "code": 408,
-                        "message": "Unable to communicate with trust peer service.",
-                    }
-                }
-            if self.config.env == "appengine":
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    method=self.config.module["urlfetch"].POST,
-                    payload=data,
-                    headers=headers,
-                )
-            else:
-                response = self.config.module["urlfetch"].post(
-                    url=url, data=data, headers=headers
-                )
+            response = urlfetch.post(
+                url=url, data=data, headers=headers
+            )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -179,25 +151,9 @@ class AwProxy:
             "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 408
-                return {
-                    "error": {
-                        "code": 408,
-                        "message": "Unable to communicate with trust peer service.",
-                    }
-                }
-            if self.config.env == "appengine":
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    method=self.config.module["urlfetch"].PUT,
-                    payload=data,
-                    headers=headers,
-                )
-            else:
-                response = self.config.module["urlfetch"].put(
-                    url=url, data=data, headers=headers
-                )
+            response = urlfetch.put(
+                url=url, data=data, headers=headers
+            )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -237,24 +193,9 @@ class AwProxy:
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logging.debug("Deleting trust peer resource at (" + url + ")")
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 408
-                return {
-                    "error": {
-                        "code": 408,
-                        "message": "Unable to communicate with trust peer service.",
-                    }
-                }
-            if self.config.env == "appengine":
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    method=self.config.module["urlfetch"].DELETE,
-                    headers=headers,
-                )
-            else:
-                response = self.config.module["urlfetch"].delete(
-                    url=url, headers=headers
-                )
+            response = urlfetch.delete(
+                url=url, headers=headers
+            )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:

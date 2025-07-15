@@ -7,6 +7,7 @@ except ImportError:
 import base64
 import json
 import logging
+import urlfetch
 
 # This function code is from latest urlfetch. For some reason the
 # Appengine version of urlfetch does not include links()
@@ -99,24 +100,9 @@ class OAuth:
             else:
                 headers = {"Content-Type": "application/json"}
         try:
-            if self.config and self.config.env == "appengine":
-                if self.config.module:
-                    self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                    response = self.config.module["urlfetch"].fetch(
-                        url=url,
-                        payload=data,
-                        method=self.config.module["urlfetch"].POST,
-                        headers=headers,
-                    )
-                else:
-                    return None
-            else:
-                if self.config and self.config.module:
-                    response = self.config.module["urlfetch"].post(
-                        url=url, data=data, headers=headers
-                    )
-                else:
-                    return None
+            response = urlfetch.post(
+                url=url, data=data, headers=headers
+            )
             if response:
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
@@ -171,22 +157,9 @@ class OAuth:
             else:
                 headers = {"Content-Type": "application/json"}
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 0
-                self.last_response_message = "No response"
-                return None
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(20)
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    payload=data,
-                    method=self.config.module["urlfetch"].PUT,
-                    headers=headers,
-                )
-            else:
-                response = self.config.module["urlfetch"].put(
-                    url=url, data=data, headers=headers
-                )
+            response = urlfetch.put(
+                url=url, data=data, headers=headers
+            )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -214,26 +187,12 @@ class OAuth:
             url = url + "?" + urllib_urlencode(params)
         logging.debug("Oauth GET request: " + url)
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 0
-                self.last_response_message = "No response"
-                return None
-            if self.config.env == "appengine":
-                self.config.module["urlfetch"].set_default_fetch_deadline(60)
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    method=self.config.module["urlfetch"].GET,
-                    headers={
-                        "Authorization": "Bearer " + self.token,
-                    },
-                )
-            else:
-                response = self.config.module["urlfetch"].get(
-                    url,
-                    headers={
-                        "Authorization": "Bearer " + self.token,
-                    },
-                )
+            response = urlfetch.get(
+                url,
+                headers={
+                    "Authorization": "Bearer " + self.token,
+                },
+            )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -270,11 +229,7 @@ class OAuth:
             url = url + "?" + urllib_urlencode(params)
         logging.debug("Oauth HEAD request: " + url)
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 0
-                self.last_response_message = "No response"
-                return None
-            response = self.config.module["urlfetch"].head(
+            response = urlfetch.head(
                 url=url, headers={"Authorization": "Bearer " + self.token}
             )
             self.last_response_code = response.status_code
@@ -298,20 +253,9 @@ class OAuth:
             return None
         logging.debug("Oauth DELETE request: " + url)
         try:
-            if not self.config or not self.config.module:
-                self.last_response_code = 0
-                self.last_response_message = "No response"
-                return None
-            if self.config.env == "appengine":
-                response = self.config.module["urlfetch"].fetch(
-                    url=url,
-                    method=self.config.module["urlfetch"].DELETE,
-                    headers={"Authorization": "Bearer " + self.token},
-                )
-            else:
-                response = self.config.module["urlfetch"].delete(
-                    url=url, headers={"Authorization": "Bearer " + self.token}
-                )
+            response = urlfetch.delete(
+                url=url, headers={"Authorization": "Bearer " + self.token}
+            )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
@@ -331,10 +275,10 @@ class OAuth:
         try:
             ret = json.loads(response.content.decode("utf-8", "ignore"))
         except (
-            self.config.module["urlfetch"].UrlfetchException,
-            self.config.module["urlfetch"].URLError,
-            self.config.module["urlfetch"].Timeout,
-            self.config.module["urlfetch"].TooManyRedirects,
+            urlfetch.UrlfetchException,
+            urlfetch.URLError,
+            urlfetch.Timeout,
+            urlfetch.TooManyRedirects,
         ):
             return {}
         return ret

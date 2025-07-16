@@ -1,142 +1,398 @@
 Getting Started
 ===============
 
-The easiest way to get started is to start out with the actingwebdemo mini-application
-`http://acting-web-demo.readthedocs.io/ <http://acting-web-demo.readthedocs.io/>`_.
+The easiest way to get started is to use the modern ActingWeb interface that provides a clean, fluent API for building ActingWeb applications. For a complete example, see the actingwebdemo mini-application at `http://acting-web-demo.readthedocs.io/ <http://acting-web-demo.readthedocs.io/>`_.
 
-It uses the Flask framework to set up all the REST endpoints that the ActingWeb library exposes, and pretty much
-the entire specification.
+Quick Start
+-----------
 
-If you want to use  another framework, that is  easy, the application.py shows how this is done for Flask.
+Create a basic ActingWeb application:
 
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp, ActorInterface
+
+    # Create app with fluent configuration
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com"
+    ).with_web_ui().with_devtest()
+
+    # Define actor factory
+    @app.actor_factory
+    def create_actor(creator: str, **kwargs) -> ActorInterface:
+        actor = ActorInterface.create(creator=creator, config=app.get_config())
+        actor.properties.email = creator
+        return actor
+
+    # Add property hooks
+    @app.property_hook("email")
+    def handle_email(actor, operation, value, path):
+        if operation == "put":
+            return value.lower() if "@" in value else None
+        return value
+
+    # Run the application
+    app.run(port=5000)
+
+Flask Integration
+-----------------
+
+For production applications, integrate with Flask:
+
+.. code-block:: python
+
+    from flask import Flask
+    from actingweb.interface import ActingWebApp
+
+    # Create Flask app
+    flask_app = Flask(__name__)
+
+    # Create ActingWeb app
+    aw_app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com"
+    ).with_oauth(
+        client_id="your-client-id",
+        client_secret="your-client-secret"
+    ).with_web_ui()
+
+    # Integrate with Flask (auto-generates all routes)
+    aw_app.integrate_flask(flask_app)
+
+    if __name__ == "__main__":
+        flask_app.run()
 
 How it works
+------------
+
+An ActingWeb mini-application exposes an endpoint to create a new actor representing one instance on behalf of one person or entity. This could for example be the location of a mobile phone, and the app is thus a location app. The ActingWeb actor representing one mobile phone's location can be reached on https://app-url.a-domain.io/actor-id and all the ActingWeb endpoints to get the location, subscribe to location updates and so on can be found below this actor root URL.
+
+The modern interface automatically generates all the necessary routes and handles request/response transformation. You no longer need to manually define routes or handle complex request parsing.
+
+Actor Management
 ----------------
-An ActingWeb mini-application exposes an endpoint to create a new actor representing one instance on behalf of one
-person or entity. This could for example be the location of a mobile phone, and the app is thus a location app.
-The ActingWeb actor representing one mobile phones location can be reached on https://app-url.a-domain.io/actor-id and
-all the ActingWeb endpoints to get the location, subscribe to location updates and so on can be found below this
-actor root URL.
 
-Below is an example of how the trust endpoint is exposed in the demo app.
-The same code here handles all the three different ways the trust endpoint can be invoked (to create a new trust
-relationship between two actors or change it). The Flask code maps these URL patterns and invokes the app_trust()
-function. In Handler, the Flask request is parsed and simplified into a dictionary that can be easily passed to the
-ActingWeb framework. The process() function is then invoked with the right parameters and finally get_response()
-is used to map the ActingWeb response into a Flask response.
+Creating and managing actors is straightforward:
 
-Some endpoints can return template variables to be used in a rendered web output. The variables can be found in
-h.webobj.response.template_values and can easily be rendered with Jinja2 (Flask's template renderer) this way:
-return render_template('aw-actor-www-root.html', **h.webobj.response.template_values)
+.. code-block:: python
 
+    # Create a new actor
+    actor = ActorInterface.create(creator="user@example.com", config=config)
 
-::
-    @app.route('/<actor_id>/trust', methods=['GET', 'POST', 'DELETE', 'PUT'], strict_slashes=False)
-    @app.route('/<actor_id>/trust/<relationship>', methods=['GET', 'POST', 'DELETE', 'PUT'], strict_slashes=False)
-    @app.route('/<actor_id>/trust/<relationship>/<peerid>', methods=['GET', 'POST', 'DELETE', 'PUT'], strict_slashes=False)
-    def app_trust(actor_id, relationship=None, peerid=None):
-        h = Handler(request)
-        if peerid:
-            if not h.process(actor_id=actor_id, relationship=relationship, peerid=peerid):
-                return Response(status=404)
-        elif relationship:
-            if not h.process(actor_id=actor_id, relationship=relationship):
-                return Response(status=404)
-        else:
-            if not h.process(actor_id=actor_id):
-                return Response(status=404)
-        return h.get_response()
+    # Access properties
+    actor.properties.email = "user@example.com"
+    actor.properties.status = "active"
 
-Config Object
+    # Manage trust relationships
+    peer = actor.trust.create_relationship(
+        peer_url="https://peer.example.com/actor123",
+        relationship="friend"
+    )
+
+    # Handle subscriptions
+    actor.subscriptions.subscribe_to_peer(
+        peer_id="peer123",
+        target="properties"
+    )
+
+    # Notify subscribers of changes
+    actor.subscriptions.notify_subscribers(
+        target="properties",
+        data={"status": "active"}
+    )
+
+Configuration
 -------------
 
-In order to set the configuration, the config function is used to return a config object that is
-passed into the actingweb framework.
+The modern interface uses a fluent configuration API that's much simpler than the old approach:
 
-The ActingWebDemo app shows mostly empty values as placeholders where APP_HOST_FQDN is the only you must make sure
-matches the domain where the app is hosted.
+.. code-block:: python
 
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com",
+        proto="https://"
+    )
 
+    # Chain configuration methods
+    app.with_oauth(
+        client_id="your-client-id",
+        client_secret="your-client-secret",
+        scope="read write"
+    ).with_web_ui(enable=True
+    ).with_devtest(enable=True
+    ).with_bot(
+        token="bot-token",
+        email="bot@example.com"
+    ).with_unique_creator(enable=True
+    ).add_actor_type("myself", relationship="friend")
 
-All Configuration Variables and Their Defaults
-----------------------------------------------
+All Configuration Options
+--------------------------
 
-::
+The ``ActingWebApp`` constructor accepts these parameters:
 
-    # Basic settings for this app
-    fqdn = "actingwebdemo-dev.appspot.com"  # The host and domain, i.e. FQDN, of the URL
-    proto = "https://"  # http or https
-    database = 'dynamodb'                          # 'dynamodb', for future other databases supported
-    ui = True                                      # Turn on the /www path
-    devtest = True                                 # Enable /devtest path for test purposes, MUST be False in production
-    unique_creator = False                         # Will enforce unique creator field across all actors
-    force_email_prop_as_creator = True             # Use "email" internal property to set creator value (after creation and property set)
-    www_auth = "basic"                             # basic or oauth: basic for creator + bearer tokens
-    logLevel = "DEBUG"                             # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
+- ``aw_type``: The ActingWeb type URI (required)
+- ``database``: Database backend ("dynamodb", default)
+- ``fqdn``: Fully qualified domain name (required)
+- ``proto``: Protocol ("https://", default)
 
-    # Configurable ActingWeb settings for this app
-    type = "urn:actingweb:actingweb.org:gae-demo"  # The app type this actor implements
-    desc = "GAE Demo actor: "                      # A human-readable description for this specific actor
-    specification = ""                             # URL to a RAML/Swagger etc definition if available
-    version = "1.0"                                # A version number for this app
-    info = "http://actingweb.org/"                 # Where can more info be found
+Configuration methods:
 
-    # Trust settings for this app
-    default_relationship = "associate"  # Default relationship if not specified
-    auto_accept_default_relationship = False  # True if auto-approval
+- ``.with_oauth(client_id, client_secret, scope, ...)`` - Configure OAuth authentication
+- ``.with_web_ui(enable=True)`` - Enable/disable web UI at /www
+- ``.with_devtest(enable=True)`` - Enable/disable development endpoints (MUST be False in production)
+- ``.with_bot(token, email, secret, admin_room)`` - Configure bot integration
+- ``.with_unique_creator(enable=True)`` - Enforce unique creator field
+- ``.with_email_as_creator(enable=True)`` - Use email property as creator
+- ``.add_actor_type(name, factory, relationship)`` - Add known actor type
 
-    # Known and trusted ActingWeb actors
-    actors = {
-        '<SHORTTYPE>': {
-            'type': 'urn:<ACTINGWEB_TYPE>',
-            'factory': '<ROOT_URI>',
-            'relationship': 'friend',               # associate, friend, partner, admin
-            },
-    }
-
-    # OAuth settings for this app, fill in if OAuth is used
-    oauth = {
-        'client_id': "",                                # An empty client_id turns off oauth capabilities
-        'client_secret': "",
-        'redirect_uri': proto + fqdn + "/oauth",
-        'scope': "",
-        'auth_uri': "",
-        'token_uri': "",
-        'response_type': "code",
-        'grant_type': "authorization_code",
-        'refresh_type': "refresh_token",
-    }
-    bot = {
-        'token': '',
-        'email': '',
-    }
-
-    # myself should be an actor if we want actors to have relationships with other actors of the same type
-    actors['myself'] = {
-        'type': type,
-        'factory': proto + fqdn + '/',
-        'relationship': 'friend',  # associate, friend, partner, admin
-    }
-
-
-Tailoring behaviour on requests
+Customizing Behavior with Hooks
 --------------------------------
 
-The on_aw module implements a base class with a set of methods that will be called on certain actions.
-For example, requests to /bot can and should be handled by the application outside actingweb.
+The modern interface uses a hook system instead of the old ``OnAWBase`` class. Hooks are focused functions that handle specific events:
 
-|   > The /bot path can be used
-|   > to handle requests to the mini-application, for example to create a new actor or create a trust relationship between
-|   > two actors, or just to handle incoming requests that don't use the actor's id in the URL, but where the actor can be
-|   > identified through the POST data.``
+Property Hooks
+~~~~~~~~~~~~~~
 
-To make your own bot handler, make you own instance inheriting the on_aw_base class and override the correct method.
+Handle property access and validation:
 
-::
+.. code-block:: python
+
+    @app.property_hook("email")
+    def handle_email_property(actor, operation, value, path):
+        if operation == "get":
+            # Control who can see the email
+            return value if actor.is_owner() else None
+        elif operation == "put":
+            # Validate email format
+            return value.lower() if "@" in value else None
+        return value
+
+    @app.property_hook("settings")
+    def handle_settings_property(actor, operation, value, path):
+        if operation == "put" or operation == "post":
+            # Ensure settings is always a dict
+            if isinstance(value, str):
+                import json
+                try:
+                    return json.loads(value)
+                except:
+                    return None
+            return value if isinstance(value, dict) else {}
+        return value
+
+Callback Hooks
+~~~~~~~~~~~~~~
+
+Handle custom endpoints and bot integration:
+
+.. code-block:: python
+
+    @app.callback_hook("bot")
+    def handle_bot_callback(actor, name, data):
+        if data.get("method") == "POST":
+            # Process bot request
+            body = data.get("body", {})
+            # Handle bot integration logic
+            return True
+        return False
+
+    @app.callback_hook("status")
+    def handle_status_callback(actor, name, data):
+        if data.get("method") == "GET":
+            return {
+                "status": "active",
+                "actor_id": actor.id,
+                "last_seen": str(datetime.now())
+            }
+        return False
+
+Subscription Hooks
+~~~~~~~~~~~~~~~~~~
+
+Handle subscription callbacks from other actors:
+
+.. code-block:: python
+
+    @app.subscription_hook
+    def handle_subscription_callback(actor, subscription, peer_id, data):
+        print(f"Received subscription callback from {peer_id}: {data}")
+        
+        # Process the subscription data
+        if subscription.get("target") == "properties":
+            # Handle property changes from peer
+            if "status" in data:
+                actor.properties[f"peer_{peer_id}_status"] = data["status"]
+                
+        return True
+
+Lifecycle Hooks
+~~~~~~~~~~~~~~~
+
+Handle actor lifecycle events:
+
+.. code-block:: python
+
+    @app.lifecycle_hook("actor_created")
+    def on_actor_created(actor, **kwargs):
+        # Initialize new actor
+        actor.properties.created_at = str(datetime.now())
+        actor.properties.version = "1.0"
+
+    @app.lifecycle_hook("actor_deleted")
+    def on_actor_deleted(actor, **kwargs):
+        # Cleanup before deletion
+        print(f"Actor {actor.id} is being deleted")
+
+    @app.lifecycle_hook("oauth_success")
+    def on_oauth_success(actor, **kwargs):
+        token = kwargs.get("token")
+        if token:
+            actor.properties.oauth_token = token
+
+Legacy OnAWBase Support
+-----------------------
+
+If you're migrating from the old interface, you can still use the ``OnAWBase`` class:
+
+.. code-block:: python
 
     from actingweb import on_aw
 
-    class my_aw(on_aw.OnAWBase()):
-
+    class MyOnAW(on_aw.OnAWBase):
         def bot_post(self, path):
-            # Do stuff with posts to the bot
+            # Handle bot posts
+            return True
+
+        def get_properties(self, path, data):
+            # Handle property access
+            return data
+
+        def put_properties(self, path, old, new):
+            # Handle property updates
+            return new
+
+However, the new hook system is recommended for new applications as it provides better organization, type safety, and testing capabilities.
+
+Database Configuration
+-----------------------
+
+ActingWeb currently supports DynamoDB as the database backend. For local development, you can use DynamoDB Local:
+
+.. code-block:: python
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="localhost:5000"
+    )
+
+For production, ensure your AWS credentials are properly configured and DynamoDB tables are created with the appropriate permissions.
+
+Testing
+-------
+
+The modern interface makes testing much easier:
+
+.. code-block:: python
+
+    import unittest
+    from actingweb.interface import ActingWebApp, ActorInterface
+
+    class TestMyApp(unittest.TestCase):
+        def setUp(self):
+            self.app = ActingWebApp(
+                aw_type="urn:test:example.com:test",
+                database="dynamodb"
+            )
+
+        def test_actor_creation(self):
+            actor = ActorInterface.create(
+                creator="test@example.com", 
+                config=self.app.get_config()
+            )
+            self.assertIsNotNone(actor.id)
+            self.assertEqual(actor.creator, "test@example.com")
+
+        def test_property_hook(self):
+            @self.app.property_hook("email")
+            def handle_email(actor, operation, value, path):
+                return value.lower() if operation == "put" else value
+
+            # Test hook directly
+            actor = ActorInterface.create(
+                creator="test@example.com", 
+                config=self.app.get_config()
+            )
+            result = handle_email(actor, "put", "TEST@EXAMPLE.COM", [])
+            self.assertEqual(result, "test@example.com")
+
+Deployment
+----------
+
+For production deployment, use standard Python deployment practices:
+
+**Docker:**
+
+.. code-block:: dockerfile
+
+    FROM python:3.11-slim
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install -r requirements.txt
+    COPY . .
+    CMD ["python", "app.py"]
+
+**AWS Lambda (Serverless):**
+
+.. code-block:: python
+
+    import serverless_wsgi
+    from flask import Flask
+    from actingweb.interface import ActingWebApp
+
+    flask_app = Flask(__name__)
+    aw_app = ActingWebApp(...).with_web_ui()
+    aw_app.integrate_flask(flask_app)
+
+    def handler(event, context):
+        return serverless_wsgi.handle_request(flask_app, event, context)
+
+**Kubernetes:**
+
+.. code-block:: yaml
+
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: actingweb-app
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: actingweb-app
+      template:
+        metadata:
+          labels:
+            app: actingweb-app
+        spec:
+          containers:
+          - name: actingweb-app
+            image: myapp:latest
+            ports:
+            - containerPort: 5000
+
+Next Steps
+----------
+
+1. See the :doc:`developers` guide for detailed API documentation
+2. Check out the actingwebdemo application for a complete working example
+3. Read the ActingWeb specification for protocol details
+4. Join the ActingWeb community for support and discussion
+
+The modern ActingWeb interface makes it easy to build distributed, actor-based applications with minimal boilerplate code while maintaining full compatibility with the ActingWeb protocol.

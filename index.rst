@@ -18,6 +18,7 @@ application needs to implement a set of API endpoints. These can be implemented 
    LICENSE
    README
    docs/getting-started
+   docs/developers
    docs/actingweb-spec
 
    docs/actingweb

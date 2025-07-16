@@ -100,3 +100,132 @@ Core dependencies (from setup.py):
 - OAuth tokens and credentials are stored securely in actor properties
 - Trust relationships must be established before data sharing
 - Each actor maintains its own security boundary
+
+## Code Quality Guidelines
+
+To maintain code quality and avoid pylint/pylance issues, follow these guidelines when writing or modifying code:
+
+### Type Safety
+- **Always check for None values** before using objects that might be None:
+  ```python
+  # Good
+  if obj is not None:
+      result = obj.method()
+  
+  # Bad
+  result = obj.method()  # obj might be None
+  ```
+
+- **Handle optional return values properly**:
+  ```python
+  # Good
+  result = some_method()
+  if result is None:
+      return []
+  return [item for item in result]
+  
+  # Bad
+  return [item for item in some_method()]  # some_method() might return None
+  ```
+
+### Method Overrides
+- **Match base class signatures exactly** when overriding methods:
+  ```python
+  # Good - parameter names and types match base class
+  def method(self, param1: str, param2: Dict[str, Any]) -> bool:
+  
+  # Bad - parameter names don't match base class
+  def method(self, param1: str, _param2: Dict[str, Any]) -> bool:
+  ```
+
+- **Return compatible types** when overriding methods:
+  ```python
+  # Good - returns same literal type as base class
+  def get_callbacks(self, name):
+      result = self.hook_registry.execute_callback_hooks(name, ...)
+      return False  # Always return False like base class
+  
+  # Bad - returns generic bool instead of Literal[False]
+  def get_callbacks(self, name):
+      return bool(result)
+  ```
+
+### Import Management
+- **Remove unused imports** immediately after editing:
+  ```python
+  # Good - only import what's used
+  from typing import Dict, Optional
+  
+  # Bad - importing unused types
+  from typing import Dict, Optional, List, Union  # List and Union not used
+  ```
+
+- **Use TYPE_CHECKING for forward references**:
+  ```python
+  from typing import TYPE_CHECKING
+  if TYPE_CHECKING:
+      from .some_module import SomeClass
+  ```
+
+### Function Attributes
+- **Use setattr() for dynamic attribute assignment**:
+  ```python
+  # Good
+  setattr(func, '_operations', operations)
+  
+  # Bad
+  func._operations = operations  # Pylance error on function objects
+  ```
+
+### Response Type Handling
+- **Be explicit about response types in web frameworks**:
+  ```python
+  # Good - wrap template responses
+  return Response(render_template("template.html", **data))
+  
+  # Bad - return raw template string when Response expected
+  return render_template("template.html", **data)
+  ```
+
+### Variable Binding
+- **Initialize variables before conditional use**:
+  ```python
+  # Good
+  import json
+  data = {}
+  if condition:
+      data = json.loads(body)
+  
+  # Bad
+  if condition:
+      import json
+      data = json.loads(body)
+  # json might be unbound in exception handler
+  ```
+
+### Parameter Validation
+- **Validate parameters early and fail fast**:
+  ```python
+  # Good
+  if core_store is None:
+      raise RuntimeError("Core store is required")
+  self._store = CorePropertyStore(core_store)
+  
+  # Bad
+  self._store = CorePropertyStore(core_store)  # core_store might be None
+  ```
+
+### Unused Parameters
+- **Use `# pylint: disable=unused-argument` for interface compliance**:
+  ```python
+  def method(self, required_param, unused_param):  # pylint: disable=unused-argument
+      """Method that must match interface but doesn't use all parameters."""
+      return self.process(required_param)
+  ```
+
+### Before Committing
+Always run these checks before committing code:
+1. Ensure all pylance/mypy issues are resolved
+2. Remove unused imports and variables
+3. Test that method overrides maintain compatibility
+4. Verify None checks are in place for optional values

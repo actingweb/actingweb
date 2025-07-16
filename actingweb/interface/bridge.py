@@ -41,12 +41,10 @@ class ActingWebBridge(OnAWBase):
         
     def bot_post(self, path: str) -> bool:
         """Handle bot POST requests through hooks."""
-        # Execute callback hooks for bot
-        actor_interface = self._get_actor_interface()
-        if actor_interface:
-            processed = self.hook_registry.execute_callback_hooks("bot", actor_interface, {"path": path})
-            if processed:
-                return True
+        # Execute application-level callback hooks for bot (no actor context)
+        processed = self.hook_registry.execute_app_callback_hooks("bot", {"path": path, "method": "POST"})
+        if processed:
+            return True
         
         # Fall back to factory function if available
         if self.aw_app._actor_factory_func:
@@ -238,3 +236,85 @@ class ActingWebBridge(OnAWBase):
         result = self.hook_registry.execute_callback_hooks("www", actor_interface, {"path": path})
         # Base class always returns False - we need to match that
         return False
+        
+    def get_methods(self, name: str = "") -> Optional[Dict[str, Any]]:
+        """Handle GET methods through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return None
+            
+        if not name:
+            # Return list of available methods
+            # This could be enhanced to automatically discover methods
+            return {"methods": list(self.hook_registry._method_hooks.keys())}
+            
+        result = self.hook_registry.execute_method_hooks(name, actor_interface, {"method": "GET"})
+        return result
+        
+    def post_methods(self, name: str = "", data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Handle POST methods through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return None
+            
+        result = self.hook_registry.execute_method_hooks(name, actor_interface, data or {})
+        return result
+        
+    def put_methods(self, name: str = "", data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Handle PUT methods through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return None
+            
+        result = self.hook_registry.execute_method_hooks(name, actor_interface, data or {})
+        return result
+        
+    def delete_methods(self, name: str = "") -> bool:
+        """Handle DELETE methods through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return False
+            
+        result = self.hook_registry.execute_method_hooks(name, actor_interface, {"method": "DELETE"})
+        return result is not None
+        
+    def get_actions(self, name: str = "") -> Optional[Dict[str, Any]]:
+        """Handle GET actions through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return None
+            
+        if not name:
+            # Return list of available actions
+            # This could be enhanced to automatically discover actions
+            return {"actions": list(self.hook_registry._action_hooks.keys())}
+            
+        result = self.hook_registry.execute_action_hooks(name, actor_interface, {"method": "GET"})
+        return result
+        
+    def post_actions(self, name: str = "", data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Handle POST actions through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return None
+            
+        result = self.hook_registry.execute_action_hooks(name, actor_interface, data or {})
+        return result
+        
+    def put_actions(self, name: str = "", data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Handle PUT actions through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return None
+            
+        result = self.hook_registry.execute_action_hooks(name, actor_interface, data or {})
+        return result
+        
+    def delete_actions(self, name: str = "") -> bool:
+        """Handle DELETE actions through hooks."""
+        actor_interface = self._get_actor_interface()
+        if not actor_interface:
+            return False
+            
+        result = self.hook_registry.execute_action_hooks(name, actor_interface, {"method": "DELETE"})
+        return result is not None

@@ -203,6 +203,62 @@ class OnAWBase:
         """
         return {}
 
+    def get_methods(self, name=""):
+        """Called on GET to methods. Return struct for json out.
+
+        Returning None will give a 404 response back to requestor.
+        """
+        return None
+
+    def post_methods(self, name, data):
+        """Called on POST to methods. Return struct for json out.
+
+        Returning None will give a 404 response back to requestor.
+        """
+        return None
+
+    def put_methods(self, name, data):
+        """Called on PUT to methods. Return struct for json out.
+
+        Returning None will give a 404 response back to requestor.
+        """
+        return None
+
+    def delete_methods(self, name):
+        """Called on DELETE to methods. Return True if successful.
+
+        Returning False will give a 403 response back to requestor.
+        """
+        return False
+
+    def get_actions(self, name=""):
+        """Called on GET to actions. Return struct for json out.
+
+        Returning None will give a 404 response back to requestor.
+        """
+        return None
+
+    def post_actions(self, name, data):
+        """Called on POST to actions. Return struct for json out.
+
+        Returning None will give a 404 response back to requestor.
+        """
+        return None
+
+    def put_actions(self, name, data):
+        """Called on PUT to actions. Return struct for json out.
+
+        Returning None will give a 404 response back to requestor.
+        """
+        return None
+
+    def delete_actions(self, name):
+        """Called on DELETE to actions. Return True if successful.
+
+        Returning False will give a 403 response back to requestor.
+        """
+        return False
+
     def www_paths(self, path=""):
         # THIS METHOD IS CALLED WHEN AN actorid/www/* PATH IS CALLED (AND AFTER ACTINGWEB DEFAULT PATHS HAVE BEEN
         # HANDLED)

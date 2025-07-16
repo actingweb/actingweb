@@ -16,6 +16,8 @@ class HookType(Enum):
     CALLBACK = "callback"
     SUBSCRIPTION = "subscription"
     LIFECYCLE = "lifecycle"
+    METHOD = "method"
+    ACTION = "action"
 
 
 class PropertyOperation(Enum):
@@ -43,13 +45,16 @@ class HookRegistry:
     without modifying the core library.
     """
     
-    def __init__(self):
-        self._property_hooks: Dict[str, Dict[str, List[Callable]]] = {}
-        self._callback_hooks: Dict[str, List[Callable]] = {}
-        self._subscription_hooks: List[Callable] = []
-        self._lifecycle_hooks: Dict[str, List[Callable]] = {}
+    def __init__(self) -> None:
+        self._property_hooks: Dict[str, Dict[str, List[Callable[..., Any]]]] = {}
+        self._callback_hooks: Dict[str, List[Callable[..., Any]]] = {}
+        self._app_callback_hooks: Dict[str, List[Callable[..., Any]]] = {}  # New: for application-level callbacks
+        self._subscription_hooks: List[Callable[..., Any]] = []
+        self._lifecycle_hooks: Dict[str, List[Callable[..., Any]]] = {}
+        self._method_hooks: Dict[str, List[Callable[..., Any]]] = {}  # New: for method hooks
+        self._action_hooks: Dict[str, List[Callable[..., Any]]] = {}  # New: for action hooks
         
-    def register_property_hook(self, property_name: str, func: Callable) -> None:
+    def register_property_hook(self, property_name: str, func: Callable[..., Any]) -> None:
         """
         Register a property hook function.
         
@@ -71,7 +76,7 @@ class HookRegistry:
             if op in self._property_hooks[property_name]:
                 self._property_hooks[property_name][op].append(func)
                 
-    def register_callback_hook(self, callback_name: str, func: Callable) -> None:
+    def register_callback_hook(self, callback_name: str, func: Callable[..., Any]) -> None:
         """
         Register a callback hook function.
         
@@ -83,7 +88,19 @@ class HookRegistry:
             self._callback_hooks[callback_name] = []
         self._callback_hooks[callback_name].append(func)
         
-    def register_subscription_hook(self, func: Callable) -> None:
+    def register_app_callback_hook(self, callback_name: str, func: Callable[..., Any]) -> None:
+        """
+        Register an application-level callback hook function.
+        
+        Args:
+            callback_name: Name of callback to hook (e.g., "bot", "oauth")
+            func: Function with signature (data) -> Any (no actor parameter)
+        """
+        if callback_name not in self._app_callback_hooks:
+            self._app_callback_hooks[callback_name] = []
+        self._app_callback_hooks[callback_name].append(func)
+        
+    def register_subscription_hook(self, func: Callable[..., Any]) -> None:
         """
         Register a subscription hook function.
         
@@ -92,7 +109,7 @@ class HookRegistry:
         """
         self._subscription_hooks.append(func)
         
-    def register_lifecycle_hook(self, event: str, func: Callable) -> None:
+    def register_lifecycle_hook(self, event: str, func: Callable[..., Any]) -> None:
         """
         Register a lifecycle hook function.
         
@@ -103,6 +120,30 @@ class HookRegistry:
         if event not in self._lifecycle_hooks:
             self._lifecycle_hooks[event] = []
         self._lifecycle_hooks[event].append(func)
+        
+    def register_method_hook(self, method_name: str, func: Callable[..., Any]) -> None:
+        """
+        Register a method hook function.
+        
+        Args:
+            method_name: Name of method to hook ("*" for all methods)
+            func: Function with signature (actor, method_name, data) -> Any
+        """
+        if method_name not in self._method_hooks:
+            self._method_hooks[method_name] = []
+        self._method_hooks[method_name].append(func)
+        
+    def register_action_hook(self, action_name: str, func: Callable[..., Any]) -> None:
+        """
+        Register an action hook function.
+        
+        Args:
+            action_name: Name of action to hook ("*" for all actions)
+            func: Function with signature (actor, action_name, data) -> Any
+        """
+        if action_name not in self._action_hooks:
+            self._action_hooks[action_name] = []
+        self._action_hooks[action_name].append(func)
         
     def execute_property_hooks(self, property_name: str, operation: str, 
                              actor: Any, value: Any, path: Optional[List[str]] = None) -> Any:
@@ -172,6 +213,28 @@ class HookRegistry:
             return result_data
         return processed
         
+    def execute_app_callback_hooks(self, callback_name: str, data: Any) -> Union[bool, Dict[str, Any]]:
+        """Execute application-level callback hooks (no actor context)."""
+        processed = False
+        result_data: Optional[Dict[str, Any]] = None
+        
+        # Execute hooks for specific callback
+        if callback_name in self._app_callback_hooks:
+            for hook in self._app_callback_hooks[callback_name]:
+                try:
+                    hook_result = hook(data)
+                    if hook_result:
+                        processed = True
+                        if isinstance(hook_result, dict):
+                            result_data = hook_result
+                except Exception as e:
+                    logging.error(f"Error in app callback hook '{callback_name}': {e}")
+                    
+        # Return result data if available, otherwise return processed status
+        if result_data is not None:
+            return result_data
+        return processed
+        
     def execute_subscription_hooks(self, actor: Any, subscription: Dict[str, Any], 
                                  peer_id: str, data: Any) -> bool:
         """Execute subscription hooks and return whether subscription was processed."""
@@ -200,13 +263,69 @@ class HookRegistry:
                     logging.error(f"Error in lifecycle hook for {event}: {e}")
                     
         return result
+        
+    def execute_method_hooks(self, method_name: str, actor: Any, data: Any) -> Any:
+        """Execute method hooks and return result."""
+        result = None
+        
+        # Execute hooks for specific method
+        if method_name in self._method_hooks:
+            for hook in self._method_hooks[method_name]:
+                try:
+                    hook_result = hook(actor, method_name, data)
+                    if hook_result is not None:
+                        result = hook_result
+                        break  # First successful hook wins
+                except Exception as e:
+                    logging.error(f"Error in method hook for {method_name}: {e}")
+                    
+        # Execute hooks for all methods if no specific hook handled it
+        if result is None and "*" in self._method_hooks:
+            for hook in self._method_hooks["*"]:
+                try:
+                    hook_result = hook(actor, method_name, data)
+                    if hook_result is not None:
+                        result = hook_result
+                        break  # First successful hook wins
+                except Exception as e:
+                    logging.error(f"Error in wildcard method hook: {e}")
+                    
+        return result
+        
+    def execute_action_hooks(self, action_name: str, actor: Any, data: Any) -> Any:
+        """Execute action hooks and return result."""
+        result = None
+        
+        # Execute hooks for specific action
+        if action_name in self._action_hooks:
+            for hook in self._action_hooks[action_name]:
+                try:
+                    hook_result = hook(actor, action_name, data)
+                    if hook_result is not None:
+                        result = hook_result
+                        break  # First successful hook wins
+                except Exception as e:
+                    logging.error(f"Error in action hook for {action_name}: {e}")
+                    
+        # Execute hooks for all actions if no specific hook handled it
+        if result is None and "*" in self._action_hooks:
+            for hook in self._action_hooks["*"]:
+                try:
+                    hook_result = hook(actor, action_name, data)
+                    if hook_result is not None:
+                        result = hook_result
+                        break  # First successful hook wins
+                except Exception as e:
+                    logging.error(f"Error in wildcard action hook: {e}")
+                    
+        return result
 
 
 # Global hook registry instance
 _hook_registry = HookRegistry()
 
 
-def property_hook(property_name: str = "*", operations: Optional[List[str]] = None):
+def property_hook(property_name: str = "*", operations: Optional[List[str]] = None) -> Callable[..., Any]:
     """
     Decorator for registering property hooks.
     
@@ -223,33 +342,52 @@ def property_hook(property_name: str = "*", operations: Optional[List[str]] = No
                 return value.lower() if "@" in value else None
             return value
     """
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable:
         setattr(func, '_operations', operations or ['get', 'put', 'post', 'delete'])
         _hook_registry.register_property_hook(property_name, func)
         return func
     return decorator
 
 
-def callback_hook(callback_name: str = "*"):
+def callback_hook(callback_name: str = "*") -> Callable[..., Any]:
     """
-    Decorator for registering callback hooks.
+    Decorator for registering actor-level callback hooks.
     
     Args:
         callback_name: Name of callback to hook ("*" for all)
     
     Example:
-        @callback_hook("bot")
-        def handle_bot_callback(actor, name, data):
-            # Process bot callback
+        @callback_hook("ping")
+        def handle_ping_callback(actor, name, data):
+            # Process actor-level callback
             return True
     """
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable:
         _hook_registry.register_callback_hook(callback_name, func)
         return func
     return decorator
 
 
-def subscription_hook(func: Callable) -> Callable:
+def app_callback_hook(callback_name: str) -> Callable[..., Any]:
+    """
+    Decorator for registering application-level callback hooks (no actor context).
+    
+    Args:
+        callback_name: Name of callback to hook (e.g., "bot", "oauth")
+    
+    Example:
+        @app_callback_hook("bot")
+        def handle_bot_callback(data):
+            # Process bot callback (no actor context)
+            return True
+    """
+    def decorator(func: Callable[..., Any]) -> Callable:
+        _hook_registry.register_app_callback_hook(callback_name, func)
+        return func
+    return decorator
+
+
+def subscription_hook(func: Callable[..., Any]) -> Callable:
     """
     Decorator for registering subscription hooks.
     
@@ -263,7 +401,7 @@ def subscription_hook(func: Callable) -> Callable:
     return func
 
 
-def lifecycle_hook(event: str):
+def lifecycle_hook(event: str) -> Callable[..., Any]:
     """
     Decorator for registering lifecycle hooks.
     
@@ -276,8 +414,48 @@ def lifecycle_hook(event: str):
             # Initialize actor
             actor.properties.created_at = datetime.now()
     """
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable:
         _hook_registry.register_lifecycle_hook(event, func)
+        return func
+    return decorator
+
+
+def method_hook(method_name: str = "*") -> Callable[..., Any]:
+    """
+    Decorator for registering method hooks.
+    
+    Args:
+        method_name: Name of method to hook ("*" for all methods)
+    
+    Example:
+        @method_hook("calculate")
+        def handle_calculate_method(actor, method_name, data):
+            # Execute RPC-style method
+            result = perform_calculation(data)
+            return {"result": result}
+    """
+    def decorator(func: Callable[..., Any]) -> Callable:
+        _hook_registry.register_method_hook(method_name, func)
+        return func
+    return decorator
+
+
+def action_hook(action_name: str = "*") -> Callable[..., Any]:
+    """
+    Decorator for registering action hooks.
+    
+    Args:
+        action_name: Name of action to hook ("*" for all actions)
+    
+    Example:
+        @action_hook("send_notification")
+        def handle_send_notification(actor, action_name, data):
+            # Execute trigger-based action
+            send_notification(data.get("message"))
+            return {"status": "sent"}
+    """
+    def decorator(func: Callable[..., Any]) -> Callable:
+        _hook_registry.register_action_hook(action_name, func)
         return func
     return decorator
 

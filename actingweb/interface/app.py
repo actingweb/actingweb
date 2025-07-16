@@ -64,7 +64,7 @@ class ActingWebApp:
         self._config: Optional[Config] = None
         
     def with_oauth(self, client_id: str, client_secret: str, scope: str = "",
-                   auth_uri: str = "", token_uri: str = "", **kwargs) -> 'ActingWebApp':
+                   auth_uri: str = "", token_uri: str = "", **kwargs: Any) -> 'ActingWebApp':
         """Configure OAuth authentication."""
         self._oauth_config = {
             "client_id": client_id,
@@ -126,29 +126,50 @@ class ActingWebApp:
         self._actor_factory_func = func
         return func
         
-    def property_hook(self, property_name: str = "*"):
+    def property_hook(self, property_name: str = "*") -> Callable[..., Any]:
         """Decorator to register property hooks."""
-        def decorator(func: Callable):
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             self.hooks.register_property_hook(property_name, func)
             return func
         return decorator
         
-    def callback_hook(self, callback_name: str = "*"):
-        """Decorator to register callback hooks."""
-        def decorator(func: Callable):
+    def callback_hook(self, callback_name: str = "*") -> Callable[..., Any]:
+        """Decorator to register actor-level callback hooks."""
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             self.hooks.register_callback_hook(callback_name, func)
             return func
         return decorator
         
-    def subscription_hook(self, func: Callable):
+    def app_callback_hook(self, callback_name: str) -> Callable[..., Any]:
+        """Decorator to register application-level callback hooks (no actor context)."""
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self.hooks.register_app_callback_hook(callback_name, func)
+            return func
+        return decorator
+        
+    def subscription_hook(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """Decorator to register subscription hooks."""
         self.hooks.register_subscription_hook(func)
         return func
         
-    def lifecycle_hook(self, event: str):
+    def lifecycle_hook(self, event: str) -> Callable[..., Any]:
         """Decorator to register lifecycle hooks."""
-        def decorator(func: Callable):
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             self.hooks.register_lifecycle_hook(event, func)
+            return func
+        return decorator
+        
+    def method_hook(self, method_name: str = "*") -> Callable[..., Any]:
+        """Decorator to register method hooks."""
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self.hooks.register_method_hook(method_name, func)
+            return func
+        return decorator
+        
+    def action_hook(self, action_name: str = "*") -> Callable[..., Any]:
+        """Decorator to register action hooks."""
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self.hooks.register_action_hook(action_name, func)
             return func
         return decorator
         
@@ -185,7 +206,7 @@ class ActingWebApp:
         integration.setup_routes()
         return integration
         
-    def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
+    def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False) -> None:
         """Run as standalone application with Flask."""
         flask_app = Flask(__name__)
         self.integrate_flask(flask_app)

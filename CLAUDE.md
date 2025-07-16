@@ -66,6 +66,123 @@ poetry run black .
 poetry run mypy actingweb
 ```
 
+### Code Quality and Type Safety
+
+This project uses comprehensive type annotations and mypy for static type checking. When making changes:
+
+#### Running Type Checks
+```bash
+# Check all core modules
+poetry run mypy actingweb
+
+# Check specific files
+poetry run mypy actingweb/handlers/methods.py actingweb/handlers/actions.py
+
+# Check with error codes for better debugging
+poetry run mypy actingweb --show-error-codes
+
+# Check demo application
+poetry run mypy application.py
+```
+
+#### Type Annotation Guidelines
+
+**Always use proper type annotations:**
+```python
+# Good - explicit types
+def handle_method(actor: ActorInterface, method_name: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    return {"result": "success"}
+
+# Bad - missing types
+def handle_method(actor, method_name, data):
+    return {"result": "success"}
+```
+
+**For request body handling:**
+```python
+# Correct pattern for handling request.body
+from typing import Union
+
+body: Union[str, bytes, None] = self.request.body
+if body is None:
+    body_str = "{}"
+elif isinstance(body, bytes):
+    body_str = body.decode("utf-8", "ignore")
+else:
+    body_str = body
+```
+
+**For hook functions:**
+```python
+# Use Callable[..., Any] for flexible hook signatures
+from typing import Callable, Any
+
+def register_hook(self, func: Callable[..., Any]) -> None:
+    # Implementation
+    pass
+
+def decorator_function(name: str) -> Callable[..., Any]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        # Implementation
+        return func
+    return decorator
+```
+
+#### Common Type Issues to Avoid
+
+1. **Response Object Methods**
+   - Use `response.write()` not `response.out.write()`
+   - Use `response.headers["Content-Type"]` not `response.set_header()`
+
+2. **OnAWBase Method Signatures**
+   - All handler methods must exist in `on_aw.py`
+   - Return types: `Optional[Dict[str, Any]]` for methods/actions, `bool` for delete operations
+
+3. **Union Types**
+   - Use `Union[str, bytes, None]` for request body types
+   - Use `Optional[T]` instead of `T | None` for compatibility
+
+4. **Missing Return Statements**
+   - Always add `return` after error handling in try/except blocks
+   - Avoid unreachable code after return statements
+
+#### Pre-commit Quality Checks
+
+Before committing changes, always run:
+```bash
+# Type checking
+poetry run mypy actingweb
+
+# Code formatting
+poetry run black .
+
+# Import sorting (if available)
+poetry run isort .
+
+# Syntax check
+poetry run python -m py_compile actingweb/path/to/file.py
+```
+
+#### Integration with IDEs
+
+For optimal development experience:
+- **VS Code**: Install Python extension with mypy support
+- **PyCharm**: Enable mypy inspection in settings
+- **Vim/Neovim**: Use ale or coc-pyright for real-time type checking
+
+#### Type Checking in CI/CD
+
+Add type checking to your CI pipeline:
+```yaml
+# Example GitHub Actions step
+- name: Type check with mypy
+  run: |
+    poetry run mypy actingweb
+    poetry run mypy application.py
+```
+
+This ensures type safety is maintained across all contributions and prevents type-related runtime errors.
+
 ### Documentation
 The project uses Sphinx for documentation:
 ```bash
@@ -223,9 +340,26 @@ To maintain code quality and avoid pylint/pylance issues, follow these guideline
       return self.process(required_param)
   ```
 
+### Callback Hook Types
+- **Use `@app.callback_hook()` for actor-level callbacks** (e.g., `/<actor_id>/callbacks/<name>`):
+  ```python
+  @app.callback_hook("ping")
+  def handle_ping(actor: ActorInterface, name: str, data: Dict[str, Any]) -> bool:
+      return {"status": "pong", "actor_id": actor.id}
+  ```
+
+- **Use `@app.app_callback_hook()` for application-level callbacks** (e.g., `/bot`, `/oauth`):
+  ```python
+  @app.app_callback_hook("bot")
+  def handle_bot(data: Dict[str, Any]) -> bool:
+      # No actor context - this is application-level
+      return True
+  ```
+
 ### Before Committing
 Always run these checks before committing code:
 1. Ensure all pylance/mypy issues are resolved
 2. Remove unused imports and variables
 3. Test that method overrides maintain compatibility
 4. Verify None checks are in place for optional values
+5. Use correct hook types for application-level vs actor-level callbacks

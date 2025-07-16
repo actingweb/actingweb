@@ -501,32 +501,149 @@ Hook Function Signature
 Callback Hooks
 --------------
 
-Handle callback requests:
+Handle callback requests at both application and actor levels:
 
 .. code-block:: python
 
-    @app.callback_hook("bot")
-    def handle_bot_callback(actor, name, data):
+    # Application-level callbacks (no actor context)
+    @app.app_callback_hook("bot")
+    def handle_bot_callback(data):
         if data.get("method") == "POST":
-            # Process bot request
+            # Process bot webhook (no actor context)
             return True
+        return False
+
+    # Actor-level callbacks (with actor context)
+    @app.callback_hook("ping")
+    def handle_ping_callback(actor, name, data):
+        if data.get("method") == "GET":
+            return {"status": "pong", "actor_id": actor.id}
         return False
 
     @app.callback_hook("status")
     def handle_status_callback(actor, name, data):
         return {"status": "active", "actor_id": actor.id}
 
-Hook Function Signature
-~~~~~~~~~~~~~~~~~~~~~~~
+Application-Level vs Actor-Level Callbacks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Application-level callbacks** (``@app.app_callback_hook``):
+- Used for endpoints like ``/bot``, ``/oauth``
+- No actor context - these are application-wide endpoints
+- Function signature: ``def callback(data) -> bool``
+
+**Actor-level callbacks** (``@app.callback_hook``):
+- Used for endpoints like ``/<actor_id>/callbacks/<name>``
+- Have actor context - these are specific to individual actors
+- Function signature: ``def callback(actor, name, data) -> bool``
+
+Hook Function Signatures
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. py:function:: app_callback_hook_function(data)
+
+    Application-level callback hook function signature.
+
+    :param data: Request data including method and body
+    :return: True if processed, False otherwise, or dict for response data
 
 .. py:function:: callback_hook_function(actor, name, data)
 
-    Callback hook function signature.
+    Actor-level callback hook function signature.
 
     :param actor: ActorInterface instance
     :param name: Callback name
     :param data: Request data including method and body
     :return: True if processed, False otherwise, or dict for response data
+
+Method Hooks
+------------
+
+Handle RPC-style method calls with JSON-RPC support:
+
+.. code-block:: python
+
+    # Simple method hook
+    @app.method_hook("calculate")
+    def handle_calculate(actor, method_name, data):
+        a = data.get("a", 0)
+        b = data.get("b", 0)
+        operation = data.get("operation", "add")
+        
+        if operation == "add":
+            result = a + b
+        elif operation == "multiply":
+            result = a * b
+        else:
+            return None  # Method not supported
+            
+        return {"result": result}
+
+    # JSON-RPC method hook
+    @app.method_hook("greet")
+    def handle_greet(actor, method_name, data):
+        name = data.get("name", "World")
+        return {"greeting": f"Hello, {name}!"}
+
+Method Hook Function Signature
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. py:function:: method_hook_function(actor, method_name, data)
+
+    Method hook function signature.
+
+    :param actor: ActorInterface instance
+    :param method_name: Method name being called
+    :param data: Method parameters (for JSON-RPC, this is the "params" field)
+    :return: Method result (will be wrapped in JSON-RPC response if applicable)
+
+Action Hooks
+------------
+
+Handle trigger-based actions that execute external events:
+
+.. code-block:: python
+
+    # Action hook for notifications
+    @app.action_hook("send_notification")
+    def handle_send_notification(actor, action_name, data):
+        message = data.get("message", "")
+        recipient = data.get("recipient", "")
+        
+        # Execute external action (e.g., send email, trigger webhook)
+        success = send_notification_email(recipient, message)
+        
+        return {
+            "status": "sent" if success else "failed",
+            "timestamp": datetime.now().isoformat()
+        }
+
+    # Action hook for device control
+    @app.action_hook("toggle_light")
+    def handle_toggle_light(actor, action_name, data):
+        device_id = data.get("device_id")
+        state = data.get("state", "on")
+        
+        # Control physical device
+        result = control_iot_device(device_id, state)
+        
+        return {
+            "device_id": device_id,
+            "state": state,
+            "success": result
+        }
+
+Action Hook Function Signature
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. py:function:: action_hook_function(actor, action_name, data)
+
+    Action hook function signature.
+
+    :param actor: ActorInterface instance
+    :param action_name: Action name being executed
+    :param data: Action parameters
+    :return: Action result (status information, execution results, etc.)
 
 Subscription Hooks
 ------------------

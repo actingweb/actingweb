@@ -12,5 +12,7 @@ __all__ = [
     "subscription",
     "trust",
     "www",
+    "methods",
+    "actions",
     "base_handler",
 ]

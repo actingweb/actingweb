@@ -11,7 +11,7 @@ import logging
 from ...aw_web_request import AWWebObj
 from ...handlers import (
     callbacks, properties, meta, root, trust, devtest, subscription,
-    resources, oauth, callback_oauth, bot, www, factory
+    resources, oauth, callback_oauth, bot, www, factory, methods, actions
 )
 from ..bridge import ActingWebBridge
 
@@ -111,6 +111,18 @@ class FlaskIntegration:
         @self.flask_app.route("/<actor_id>/devtest/<path:path>", methods=["GET", "POST", "DELETE", "PUT"])
         def app_devtest(actor_id, path=""):
             return self._handle_actor_request(actor_id, "devtest", path=path)
+            
+        # Actor methods
+        @self.flask_app.route("/<actor_id>/methods", methods=["GET", "POST", "DELETE", "PUT"])
+        @self.flask_app.route("/<actor_id>/methods/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
+        def app_methods(actor_id, name=""):
+            return self._handle_actor_request(actor_id, "methods", name=name)
+            
+        # Actor actions
+        @self.flask_app.route("/<actor_id>/actions", methods=["GET", "POST", "DELETE", "PUT"])
+        @self.flask_app.route("/<actor_id>/actions/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
+        def app_actions(actor_id, name=""):
+            return self._handle_actor_request(actor_id, "actions", name=name)
             
     def _normalize_request(self) -> Dict[str, Any]:
         """Convert Flask request to ActingWeb format."""
@@ -289,6 +301,12 @@ class FlaskIntegration:
                 elif endpoint == "devtest":
                     # DevtestHandler.get(actor_id, path) - path defaults to "" if not provided
                     args.append(kwargs.get("path", ""))
+                elif endpoint == "methods":
+                    # MethodsHandler.get(actor_id, name) - name defaults to "" if not provided
+                    args.append(kwargs.get("name", ""))
+                elif endpoint == "actions":
+                    # ActionsHandler.get(actor_id, name) - name defaults to "" if not provided
+                    args.append(kwargs.get("name", ""))
                 
                 handler_method(*args)
             else:
@@ -326,6 +344,8 @@ class FlaskIntegration:
             "resources": lambda: resources.ResourcesHandler(webobj, config, on_aw=self.bridge),
             "callbacks": lambda: callbacks.CallbacksHandler(webobj, config, on_aw=self.bridge),
             "devtest": lambda: devtest.DevtestHandler(webobj, config, on_aw=self.bridge),
+            "methods": lambda: methods.MethodsHandler(webobj, config, on_aw=self.bridge),
+            "actions": lambda: actions.ActionsHandler(webobj, config, on_aw=self.bridge),
         }
         
         # Special handling for trust endpoint

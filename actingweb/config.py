@@ -1,14 +1,14 @@
-from builtins import object
-import uuid
 import binascii
-import logging
 import importlib
+import logging
 import os
+import uuid
+from typing import Any
 
 
-class Config(object):
+class Config:
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         #########
         # Basic settings for this app
         #########
@@ -16,15 +16,12 @@ class Config(object):
         # The host and domain, i.e. FQDN, of the URL
         self.fqdn = "demo.actingweb.io"
         self.proto = "https://"  # http or https
-        self.env = ''
-        self.database = 'dynamodb'
+        self.env = ""
+        self.database = "dynamodb"
         # Turn on the /www path
         self.ui = True
         # Enable /devtest path for test purposes, MUST be False in production
         self.devtest = True
-        # Enable migrate if you want to turn on code that enables migration from one version to another
-        # 2.4.4 : migrate oauth properties and email to internal attributes (myself.store)
-        self.migrate_2_5_0 = True
         # Will enforce unique creator field across all actors
         self.unique_creator = False
         # Use "email" internal value to set creator value (after creation and property set)
@@ -37,9 +34,9 @@ class Config(object):
         # Configurable ActingWeb settings for this app
         #########
         # The app type this actor implements
-        self.aw_type = "urn:actingweb:actingweb.org:gae-demo"
+        self.aw_type = "urn:actingweb:actingweb.org:demo"
         # A human-readable description for this specific actor
-        self.desc = "GAE Demo actor: "
+        self.desc = "Demo actor: "
         # URL to a RAML/Swagger etc definition if available
         self.specification = ""
         # A version number for this app
@@ -56,10 +53,10 @@ class Config(object):
         # Known and trusted ActingWeb actors
         #########
         self.actors = {
-            '<SHORTTYPE>': {
-                'type': 'urn:<ACTINGWEB_TYPE>',
-                'factory': '<ROOT_URI>',
-                'relationship': 'friend',                   # associate, friend, partner, admin
+            "<SHORTTYPE>": {
+                "type": "urn:<ACTINGWEB_TYPE>",
+                "factory": "<ROOT_URI>",
+                "relationship": "friend",  # associate, friend, partner, admin
             },
         }
         #########
@@ -67,19 +64,19 @@ class Config(object):
         #########
         self.oauth = {
             # An empty client_id turns off oauth capabilities
-            'client_id': "",
-            'client_secret': "",
-            'redirect_uri': self.proto + self.fqdn + "/oauth",
-            'scope': "",
-            'auth_uri': "",
-            'token_uri': "",
-            'response_type': "code",
-            'grant_type': "authorization_code",
-            'refresh_type': "refresh_token",
+            "client_id": "",
+            "client_secret": "",
+            "redirect_uri": self.proto + self.fqdn + "/oauth",
+            "scope": "",
+            "auth_uri": "",
+            "token_uri": "",
+            "response_type": "code",
+            "grant_type": "authorization_code",
+            "refresh_type": "refresh_token",
         }
         self.bot = {
-            'token': '',
-            'email': '',
+            "token": "",
+            "email": "",
         }
         # List of paths and their access levels
         # Matching is done top to bottom stopping at first match (role, path)
@@ -93,131 +90,127 @@ class Config(object):
             # Methods: GET, POST, PUT, DELETE
             # Access: a (allow) or r (reject)
             # Allow GET to anybody without auth
-            ('', 'meta', 'GET', 'a'),
+            ("", "meta", "GET", "a"),
             # Allow any method to anybody without auth
-            ('', 'oauth', '', 'a'),
+            ("", "oauth", "", "a"),
             # Allow owners on subscriptions
-            ('owner', 'callbacks/subscriptions', 'POST', 'a'),
+            ("owner", "callbacks/subscriptions", "POST", "a"),
             # Allow anybody callbacks witout auth
-            ('', 'callbacks', '', 'a'),
+            ("", "callbacks", "", "a"),
             # Allow only creator access to /www
-            ('creator', 'www', '', 'a'),
+            ("creator", "www", "", "a"),
             # Allow creator access to /properties
-            ('creator', 'properties', '', 'a'),
+            ("creator", "properties", "", "a"),
             # Allow GET only to associate
-            ('associate', 'properties', 'GET', 'a'),
+            ("associate", "properties", "GET", "a"),
             # Allow friend/partner/admin all
-            ('friend', 'properties', '', 'a'),
-            ('partner', 'properties', '', 'a'),
-            ('admin', 'properties', '', 'a'),
-            ('creator', 'resources', '', 'a'),
+            ("friend", "properties", "", "a"),
+            ("partner", "properties", "", "a"),
+            ("admin", "properties", "", "a"),
+            ("creator", "resources", "", "a"),
             # Allow friend/partner/admin all
-            ('friend', 'resources', '', 'a'),
-            ('partner', 'resources', '', 'a'),
-            ('admin', 'resources', '', 'a'),
+            ("friend", "resources", "", "a"),
+            ("partner", "resources", "", "a"),
+            ("admin", "resources", "", "a"),
             # Allow unauthenticated POST
-            ('', 'trust/<type>', 'POST', 'a'),
+            ("", "trust/<type>", "POST", "a"),
             # Allow trust peer full access
-            ('owner', 'trust/<type>/<id>', '', 'a'),
+            ("owner", "trust/<type>/<id>", "", "a"),
             # Allow access to all to
-            ('creator', 'trust', '', 'a'),
+            ("creator", "trust", "", "a"),
             # creator/trustee/admin
-            ('trustee', 'trust', '', 'a'),
-            ('admin', 'trust', '', 'a'),
+            ("trustee", "trust", "", "a"),
+            ("admin", "trust", "", "a"),
             # Owner can create++ own subscriptions
-            ('owner', 'subscriptions', '', 'a'),
+            ("owner", "subscriptions", "", "a"),
             # Owner can create subscriptions
-            ('friend', 'subscriptions/<id>', '', 'a'),
+            ("friend", "subscriptions/<id>", "", "a"),
             # Creator can do everything
-            ('creator', 'subscriptions', '', 'a'),
+            ("creator", "subscriptions", "", "a"),
             # Trustee can do everything
-            ('trustee', 'subscriptions', '', 'a'),
+            ("trustee", "subscriptions", "", "a"),
             # Root access for actor
-            ('creator', '/', '', 'a'),
-            ('trustee', '/', '', 'a'),
-            ('admin', '/', '', 'a'),
+            ("creator", "/", "", "a"),
+            ("trustee", "/", "", "a"),
+            ("admin", "/", "", "a"),
         ]
         # Pick up the config variables
         for k, v in kwargs.items():
             self.__setattr__(k, v)
-        if self.database == 'gae':
-            self.env = 'appengine'
-        elif self.database == 'dynamodb':
-            self.env = 'aws'
-        if self.logLevel == "DEBUG":
+        if self.database == "dynamodb":
+            self.env = "aws"
+        if str(self.logLevel) == "DEBUG":
             self.logLevel = logging.DEBUG
-        elif self.logLevel == "WARN":
+        elif str(self.logLevel) == "WARN":
             self.logLevel = logging.WARN
-        elif self.logLevel == "INFO":
+        elif str(self.logLevel) == "INFO":
             self.logLevel = logging.INFO
         else:
             self.logLevel = logging.DEBUG
-        if 'myself' not in self.actors:
+        if "myself" not in self.actors:
             # Add myself as a known type
-            self.actors['myself'] = {
-                'type': self.aw_type,
-                'factory': self.proto + self.fqdn + '/',
-                'relationship': 'friend',  # associate, friend, partner, admin
+            self.actors["myself"] = {
+                "type": self.aw_type,
+                "factory": self.proto + self.fqdn + "/",
+                "relationship": "friend",  # associate, friend, partner, admin
             }
         # Dynamically load all the database modules
         self.DbActor = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_actor")
+            "actingweb" + ".db_" + self.database + ".db_actor"
+        )
         self.DbPeerTrustee = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_peertrustee")
+            "actingweb" + ".db_" + self.database + ".db_peertrustee"
+        )
         self.DbProperty = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_property")
+            "actingweb" + ".db_" + self.database + ".db_property"
+        )
         self.DbAttribute = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_attribute")
+            "actingweb" + ".db_" + self.database + ".db_attribute"
+        )
         self.DbSubscription = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_subscription")
-        self.DbSubscriptionDiff = importlib.import_module("actingweb" + ".db_" + self.database +
-                                                          ".db_subscription_diff")
+            "actingweb" + ".db_" + self.database + ".db_subscription"
+        )
+        self.DbSubscriptionDiff = importlib.import_module(
+            "actingweb" + ".db_" + self.database + ".db_subscription_diff"
+        )
         self.DbTrust = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_trust")
-        self.module = {}
-        if self.env == 'appengine':
-            self.module["deferred"] = importlib.import_module(
-                ".deferred", "google.appengine.api")
-            self.module["urlfetch"] = importlib.import_module(
-                ".urlfetch", "google.appengine.ext")
-        else:
-            self.module["deferred"] = None
-            self.module["urlfetch"] = importlib.import_module("urlfetch")
+            "actingweb" + ".db_" + self.database + ".db_trust"
+        )
+        self.module: dict[str, Any] = {}
+        self.module["deferred"] = None
         #########
         # ActingWeb settings for this app
         #########
         # This app follows the actingweb specification specified
         self.aw_version = "1.0"
-        self.aw_supported = "www,oauth,callbacks,trust,onewaytrust,subscriptions," \
-                            "actions,resources,methods,sessions,nestedproperties"  # This app supports these options
+        self.aw_supported = (
+            "www,oauth,callbacks,trust,onewaytrust,subscriptions,"
+            "actions,resources,methods,sessions,nestedproperties"
+        )  # This app supports these options
         # These are the supported formats
         self.aw_formats = "json"
         #########
         # Only touch the below if you know what you are doing
         #########
-        if self.env == 'appengine':
-            logging.getLogger().handlers[0].setLevel(
-                self.logLevel)  # Hack to get access to GAE logger
-        else:
-            logging.basicConfig(level=self.logLevel)
-            # Turn off debugging for pynamodb and botocore, too noisy
-            if self.logLevel == logging.DEBUG:
-                log = logging.getLogger("pynamodb")
-                log.setLevel(logging.INFO)
-                log.propagate = True
-                log = logging.getLogger("botocore")
-                log.setLevel(logging.INFO)
-                log.propagate = True
+        logging.basicConfig(level=self.logLevel)
+        # Turn off debugging for pynamodb and botocore, too noisy
+        if self.logLevel == logging.DEBUG:
+            log = logging.getLogger("pynamodb")
+            log.setLevel(logging.INFO)
+            log.propagate = True
+            log = logging.getLogger("botocore")
+            log.setLevel(logging.INFO)
+            log.propagate = True
         # root URI used to identity actor externally
         self.root = self.proto + self.fqdn + "/"
         # Authentication realm used in Basic auth
         self.auth_realm = self.fqdn
 
     @staticmethod
-    def new_uuid(seed):
+    def new_uuid(seed: str) -> str:
         return uuid.uuid5(uuid.NAMESPACE_URL, str(seed)).hex
 
     @staticmethod
-    def new_token(length=40):
+    def new_token(length: int = 40) -> str:
         tok = binascii.hexlify(os.urandom(int(length // 2)))
-        return tok.decode('utf-8')
+        return tok.decode("utf-8")

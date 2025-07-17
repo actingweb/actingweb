@@ -4,7 +4,7 @@ README - actingweb - an ActingWeb Library
 This is a python library implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
 distributed micro-services model. A typical use case is bot to bot communication on a peer to peer level.
 It serves as the reference implementation for the `ActingWeb REST protocol
-specification <http://actingweb.readthedocs.io/en/release/actingweb-spec.html>`_ for
+specification <http://actingweb.readthedocs.io/en/release/>`_ for
 how such micro-services interact.
 
 Repository and documentation
@@ -136,17 +136,73 @@ programatically through the REST interface.
 
 See `http://actingweb.org/ <http://actingweb.org/>`_ for more information.
 
+Requirements
+------------
+
+**Python 3.11+**
+
+The actingweb library requires Python 3.11 or higher and uses modern Python features including:
+
+- Type hints with union syntax (``str | None``)
+- F-string formatting
+- Modern enum classes for constants
+- Enhanced error handling with custom exception hierarchies
+
+Dependencies:
+
+- ``pynamodb`` - DynamoDB ORM for AWS DynamoDB backend
+- ``boto3`` - AWS SDK for Python (DynamoDB support)
+- ``urlfetch`` - HTTP client library
+
+Development dependencies:
+
+- ``pytest`` - Testing framework
+- ``mypy`` - Static type checker
+- ``black`` - Code formatter
+- ``ruff`` - Fast Python linter
+
 Building and installing
 ------------------------
 
 ::
 
+    # Install from PyPI:
+    pip install actingweb
+
+    # For development with Poetry:
+    poetry install
+    poetry install --with dev,docs
+
     # Build source and binary distributions:
-    python setup.py sdist bdist_wheel --universal
+    poetry build
 
     # Upload to test server:
-    python setup.py sdist upload -r pypitest
-    twine upload --repository pypitest dist/actingweb-a.b.c.*
+    poetry publish --repository pypitest
 
     # Upload to production server:
-    twine upload dist/actingweb-a.b.c.*
+    poetry publish
+
+Development
+-----------
+
+The library uses modern Python development practices with Poetry:
+
+::
+
+    # Install development dependencies:
+    poetry install --with dev,docs
+
+    # Run tests:
+    poetry run pytest
+
+    # Type checking:
+    poetry run mypy actingweb
+
+    # Code formatting:
+    poetry run black actingweb tests
+
+    # Linting:
+    poetry run ruff check actingweb tests
+
+    # Activate virtual environment:
+    poetry shell

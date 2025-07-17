@@ -1,45 +1,59 @@
-from builtins import object
 import datetime
 import logging
+from typing import Any
 
 
-class Subscription(object):
+class Subscription:
     """Base class with core subscription methods (storage-related)"""
 
-    def get(self):
-        """Retrieve subscription from db given pre-initialized variables """
+    def get(self) -> dict[str, Any]:
+        """Retrieve subscription from db given pre-initialized variables"""
         if not self.actor_id or not self.peerid or not self.subid:
-            return None
+            return {}
         if self.subscription and len(self.subscription) > 0:
             return self.subscription
-        self.subscription = self.handle.get(actor_id=self.actor_id,
-                                            peerid=self.peerid,
-                                            subid=self.subid)
+        if self.handle:
+            self.subscription = self.handle.get(
+                actor_id=self.actor_id, peerid=self.peerid, subid=self.subid
+            )
+        else:
+            self.subscription = {}
         if not self.subscription:
             self.subscription = {}
         return self.subscription
 
-    def create(self, target=None, subtarget=None, resource=None, granularity=None, seqnr=1):
+    def create(
+        self, target: str | None = None, subtarget: str | None = None, resource: str | None = None, granularity: str | None = None, seqnr: int = 1
+    ) -> bool:
         """Create new subscription and push it to db"""
         if self.subscription and len(self.subscription) > 0:
-            logging.debug("Attempted creation of subscription when already loaded from storage")
+            logging.debug(
+                "Attempted creation of subscription when already loaded from storage"
+            )
             return False
         if not self.actor_id or not self.peerid:
-            logging.debug("Attempted creation of subscription without actor_id or peerid set")
+            logging.debug(
+                "Attempted creation of subscription without actor_id or peerid set"
+            )
             return False
         if not self.subid:
             now = datetime.datetime.utcnow()
-            seed = self.config.root + now.strftime("%Y%m%dT%H%M%S%f")
-            self.subid = self.config.new_uuid(seed)
-        if not self.handle.create(actor_id=self.actor_id,
-                                  peerid=self.peerid,
-                                  subid=self.subid,
-                                  granularity=granularity,
-                                  target=target,
-                                  subtarget=subtarget,
-                                  resource=resource,
-                                  seqnr=seqnr,
-                                  callback=self.callback):
+            if self.config:
+                seed = self.config.root + now.strftime("%Y%m%dT%H%M%S%f")
+                self.subid = self.config.new_uuid(seed)
+            else:
+                self.subid = None
+        if not self.handle or not self.handle.create(
+            actor_id=self.actor_id,
+            peerid=self.peerid,
+            subid=self.subid,
+            granularity=granularity,
+            target=target,
+            subtarget=subtarget,
+            resource=resource,
+            seqnr=seqnr,
+            callback=self.callback,
+        ):
             return False
         self.subscription["id"] = self.actor_id
         self.subscription["subscriptionid"] = self.subid
@@ -63,7 +77,9 @@ class Subscription(object):
 
     def increase_seq(self):
         if not self.handle:
-            logging.debug("Attempted increase_seq without subscription retrieved from storage")
+            logging.debug(
+                "Attempted increase_seq without subscription retrieved from storage"
+            )
             return False
         self.subscription["sequence"] += 1
         return self.handle.modify(seqnr=self.subscription["sequence"])
@@ -73,15 +89,22 @@ class Subscription(object):
         if not self.actor_id or not self.subid or not blob:
             logging.debug("Attempted add_diff without actorid, subid, or blob")
             return False
+        if not self.config:
+            return False
         diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
-        diff.create(actor_id=self.actor_id,
-                    subid=self.subid,
-                    diff=blob,
-                    seqnr=self.subscription["sequence"]
-                    )
+        diff.create(
+            actor_id=self.actor_id,
+            subid=self.subid,
+            diff=blob,
+            seqnr=self.subscription["sequence"],
+        )
         if not self.increase_seq():
-            logging.error("Failed increasing sequence number for subscription " +
-                          self.subid + " for peer " + self.peerid)
+            logging.error(
+                "Failed increasing sequence number for subscription "
+                + self.subid
+                + " for peer "
+                + self.peerid
+            )
         return diff.get()
 
     def get_diff(self, seqnr=0):
@@ -90,29 +113,42 @@ class Subscription(object):
             return None
         if not isinstance(seqnr, int):
             return None
+        if not self.config:
+            return None
         diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
         return diff.get(actor_id=self.actor_id, subid=self.subid, seqnr=seqnr)
 
     def get_diffs(self):
         """Get all the diffs available for this subscription ordered by the timestamp, oldest first"""
+        if not self.config:
+            return []
         diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
         return diff_list.fetch(actor_id=self.actor_id, subid=self.subid)
 
     def clear_diff(self, seqnr):
         """Clears one specific diff"""
+        if not self.config:
+            return False
         diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
         diff.get(actor_id=self.actor_id, subid=self.subid, seqnr=seqnr)
         return diff.delete()
 
     def clear_diffs(self, seqnr=0):
         """Clear all diffs up to and including a seqnr"""
+        if not self.config:
+            return False
         diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
         diff_list.fetch(actor_id=self.actor_id, subid=self.subid)
         diff_list.delete(seqnr=seqnr)
 
-    def __init__(self, actor_id=None, peerid=None, subid=None, callback=False, config=None):
+    def __init__(
+        self, actor_id=None, peerid=None, subid=None, callback=False, config=None
+    ):
         self.config = config
-        self.handle = self.config.DbSubscription.DbSubscription()
+        if self.config:
+            self.handle = self.config.DbSubscription.DbSubscription()
+        else:
+            self.handle = None
         self.subscription = {}
         if not actor_id:
             return
@@ -124,19 +160,19 @@ class Subscription(object):
             self.get()
 
 
-class Subscriptions(object):
-    """ Handles all subscriptions of a specific actor_id
+class Subscriptions:
+    """Handles all subscriptions of a specific actor_id
 
-        Access the indvidual subscriptions in .dbsubscriptions and the subscription data
-        in .subscriptions as a dictionary
+    Access the indvidual subscriptions in .dbsubscriptions and the subscription data
+    in .subscriptions as a dictionary
     """
 
     def fetch(self):
         if self.subscriptions is not None:
             return self.subscriptions
-        if not self.list:
+        if not self.list and self.config:
             self.list = self.config.DbSubscription.DbSubscriptionList()
-        if not self.subscriptions:
+        if not self.subscriptions and self.list:
             self.subscriptions = self.list.fetch(actor_id=self.actor_id)
         return self.subscriptions
 
@@ -144,23 +180,29 @@ class Subscriptions(object):
         if not self.list:
             logging.debug("Already deleted list in subscriptions")
             return False
-        for sub in self.subscriptions:
-            diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
-            diff_list.fetch(actor_id=self.actor_id, subid=sub["subscriptionid"])
-            diff_list.delete()
+        if self.subscriptions:
+            for sub in self.subscriptions:
+                if not self.config:
+                    continue
+                diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
+                diff_list.fetch(actor_id=self.actor_id, subid=sub["subscriptionid"])
+                diff_list.delete()
         self.list.delete()
         self.list = None
         self.subscriptions = None
         return True
 
-    def __init__(self,  actor_id=None, config=None):
-        """ Properties must always be initialised with an actor_id """
+    def __init__(self, actor_id=None, config=None):
+        """Properties must always be initialised with an actor_id"""
         self.config = config
         if not actor_id:
             self.list = None
             logging.debug("No actor_id in initialisation of subscriptions")
             return
-        self.list = self.config.DbSubscription.DbSubscriptionList()
+        if self.config:
+            self.list = self.config.DbSubscription.DbSubscriptionList()
+        else:
+            self.list = None
         self.actor_id = actor_id
         self.subscriptions = None
         self.fetch()

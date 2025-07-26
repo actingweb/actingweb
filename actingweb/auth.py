@@ -75,9 +75,7 @@ def init_actingweb(
     auth_obj.check_authentication(appreq=appreq, path=fullpath)
     if add_response and appreq and appreq.response:
         add_auth_response(appreq.response, auth_obj)
-    # Initialize the on_aw object with auth (.actor) and webobj (.config) for functions in on_aw
-    if appreq and appreq.on_aw:
-        appreq.on_aw.aw_init(auth=auth_obj, webobj=appreq)
+    # No longer need to initialize legacy on_aw object
     return auth_obj.actor, auth_obj
 
 

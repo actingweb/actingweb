@@ -19,6 +19,7 @@ application needs to implement a set of API endpoints. These can be implemented 
    README
    docs/getting-started
    docs/developers
+   docs/migration-v3.1
    docs/actingweb-spec
 
    docs/actingweb

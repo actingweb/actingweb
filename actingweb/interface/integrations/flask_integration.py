@@ -13,8 +13,6 @@ from ...handlers import (
     callbacks, properties, meta, root, trust, devtest, subscription,
     resources, oauth, callback_oauth, bot, www, factory, methods, actions
 )
-from ..bridge import ActingWebBridge
-
 if TYPE_CHECKING:
     from ..app import ActingWebApp
 
@@ -30,7 +28,6 @@ class FlaskIntegration:
     def __init__(self, aw_app: 'ActingWebApp', flask_app: Flask):
         self.aw_app = aw_app
         self.flask_app = flask_app
-        self.bridge = ActingWebBridge(aw_app)
         
     def setup_routes(self) -> None:
         """Setup all ActingWeb routes in Flask."""
@@ -187,7 +184,7 @@ class FlaskIntegration:
             cookies=req_data["cookies"]
         )
         
-        handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), on_aw=self.bridge)
+        handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
         
         try:
             method_name = request.method.lower()
@@ -224,7 +221,7 @@ class FlaskIntegration:
             cookies=req_data["cookies"]
         )
         
-        handler = callback_oauth.CallbackOauthHandler(webobj, self.aw_app.get_config(), on_aw=self.bridge)
+        handler = callback_oauth.CallbackOauthHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
         handler.get()
         
         return self._create_flask_response(webobj)
@@ -240,7 +237,7 @@ class FlaskIntegration:
             cookies=req_data["cookies"]
         )
         
-        handler = bot.BotHandler(webobj=webobj, config=self.aw_app.get_config(), on_aw=self.bridge)
+        handler = bot.BotHandler(webobj=webobj, config=self.aw_app.get_config(), hooks=self.aw_app.hooks)
         handler.post(path="/bot")
         
         return self._create_flask_response(webobj)
@@ -338,27 +335,27 @@ class FlaskIntegration:
         config = self.aw_app.get_config()
         
         handlers = {
-            "root": lambda: root.RootHandler(webobj, config, on_aw=self.bridge),
-            "meta": lambda: meta.MetaHandler(webobj, config, on_aw=self.bridge),
-            "oauth": lambda: oauth.OauthHandler(webobj, config, on_aw=self.bridge),
-            "www": lambda: www.WwwHandler(webobj, config, on_aw=self.bridge),
-            "properties": lambda: properties.PropertiesHandler(webobj, config, on_aw=self.bridge),
-            "resources": lambda: resources.ResourcesHandler(webobj, config, on_aw=self.bridge),
-            "callbacks": lambda: callbacks.CallbacksHandler(webobj, config, on_aw=self.bridge),
-            "devtest": lambda: devtest.DevtestHandler(webobj, config, on_aw=self.bridge),
-            "methods": lambda: methods.MethodsHandler(webobj, config, on_aw=self.bridge),
-            "actions": lambda: actions.ActionsHandler(webobj, config, on_aw=self.bridge),
+            "root": lambda: root.RootHandler(webobj, config, hooks=self.aw_app.hooks),
+            "meta": lambda: meta.MetaHandler(webobj, config, hooks=self.aw_app.hooks),
+            "oauth": lambda: oauth.OauthHandler(webobj, config, hooks=self.aw_app.hooks),
+            "www": lambda: www.WwwHandler(webobj, config, hooks=self.aw_app.hooks),
+            "properties": lambda: properties.PropertiesHandler(webobj, config, hooks=self.aw_app.hooks),
+            "resources": lambda: resources.ResourcesHandler(webobj, config, hooks=self.aw_app.hooks),
+            "callbacks": lambda: callbacks.CallbacksHandler(webobj, config, hooks=self.aw_app.hooks),
+            "devtest": lambda: devtest.DevtestHandler(webobj, config, hooks=self.aw_app.hooks),
+            "methods": lambda: methods.MethodsHandler(webobj, config, hooks=self.aw_app.hooks),
+            "actions": lambda: actions.ActionsHandler(webobj, config, hooks=self.aw_app.hooks),
         }
         
         # Special handling for trust endpoint
         if endpoint == "trust":
             path_parts = [p for p in [kwargs.get("relationship"), kwargs.get("peerid")] if p]
             if len(path_parts) == 0:
-                return trust.TrustHandler(webobj, config, on_aw=self.bridge)
+                return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
-                return trust.TrustRelationshipHandler(webobj, config, on_aw=self.bridge)
+                return trust.TrustRelationshipHandler(webobj, config, hooks=self.aw_app.hooks)
             else:
-                return trust.TrustPeerHandler(webobj, config, on_aw=self.bridge)
+                return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
                 
         # Special handling for subscriptions endpoint
         if endpoint == "subscriptions":
@@ -366,13 +363,13 @@ class FlaskIntegration:
             seqnr = kwargs.get("seqnr")
             
             if len(path_parts) == 0:
-                return subscription.SubscriptionRootHandler(webobj, config, on_aw=self.bridge)
+                return subscription.SubscriptionRootHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
-                return subscription.SubscriptionRelationshipHandler(webobj, config, on_aw=self.bridge)
+                return subscription.SubscriptionRelationshipHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 2 and seqnr is None:
-                return subscription.SubscriptionHandler(webobj, config, on_aw=self.bridge)
+                return subscription.SubscriptionHandler(webobj, config, hooks=self.aw_app.hooks)
             else:
-                return subscription.SubscriptionDiffHandler(webobj, config, on_aw=self.bridge)
+                return subscription.SubscriptionDiffHandler(webobj, config, hooks=self.aw_app.hooks)
                 
         if endpoint in handlers:
             return handlers[endpoint]()

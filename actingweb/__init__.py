@@ -1,4 +1,4 @@
-__version__ = "3.0.1"
+__version__ = "3.1"
 
 __all__ = [
     "actor",
@@ -11,7 +11,6 @@ __all__ = [
     "subscription",
     "trust",
     "config",
-    "on_aw",
     "aw_web_request",
     # New modern interface
     "interface",

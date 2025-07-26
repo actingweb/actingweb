@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Dict, Optional
 
 from actingweb import auth
 from actingweb.handlers import base_handler
@@ -30,9 +31,16 @@ class OauthHandler(base_handler.BaseHandler):
             else:
                 # Even if oauth is successful, we need to validate that the identity that did the oauth is identical
                 # to the original identity that was bound to this actor.
-                # The check_on_oauth_success() function returns False if identity (or
-                # anything else) is wrong.
-                if not self.on_aw.check_on_oauth_success(token=check.token):
+                # Execute lifecycle hook to validate OAuth success
+                # The hook should return False if identity or anything else is wrong
+                oauth_valid = True
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        result = self.hooks.execute_lifecycle_hooks("oauth_success", actor_interface, token=check.token)
+                        oauth_valid = bool(result) if result is not None else True
+                        
+                if not oauth_valid:
                     logging.info("Forbidden identity.")
                     self.response.set_status(403, "Forbidden to this identity")
                     return
@@ -42,8 +50,12 @@ class OauthHandler(base_handler.BaseHandler):
             self.response.set_redirect(redirect_uri)
             return
         if len(redirect_uri) == 0:
-            self.on_aw.aw_init(auth=check, webobj=self)
-            self.on_aw.actions_on_oauth_success()
+            # Execute OAuth completion lifecycle hook
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    self.hooks.execute_lifecycle_hooks("oauth_completed", actor_interface, auth=check)
+                    
             if check.set_cookie_on_cookie_redirect(self):
                 return
             self.response.set_status(204, "OAuthorization Done")

@@ -1,0 +1,1212 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>ActingWeb Developer Interface &#8212; ActingWeb 2.6.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/alabaster.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="ActingWeb Specification - version 1.0" href="actingweb-spec.html" />
+    <link rel="prev" title="Getting Started" href="getting-started.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="actingweb-developer-interface">
+<h1>ActingWeb Developer Interface<a class="headerlink" href="#actingweb-developer-interface" title="Permalink to this heading">¶</a></h1>
+<p>This document describes the modern developer interface for the ActingWeb library. It replaces the complex <code class="docutils literal notranslate"><span class="pre">OnAWBase</span></code> callback system with a clean, fluent API and decorator-based hooks.</p>
+<section id="key-features">
+<h2>Key Features<a class="headerlink" href="#key-features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>Fluent Configuration API</strong>: Chain configuration methods for easy setup</p></li>
+<li><p><strong>Decorator-Based Hooks</strong>: Simple, focused functions for handling events</p></li>
+<li><p><strong>Automatic Route Generation</strong>: Web framework integration with auto-generated routes</p></li>
+<li><p><strong>Intuitive Actor Interface</strong>: Clean, object-oriented actor management</p></li>
+<li><p><strong>Type Safety</strong>: Better type hints and IDE support</p></li>
+<li><p><strong>Backward Compatibility</strong>: Works with existing ActingWeb applications</p></li>
+</ul>
+</section>
+<section id="quick-start">
+<h2>Quick Start<a class="headerlink" href="#quick-start" title="Permalink to this heading">¶</a></h2>
+<section id="basic-application">
+<h3>Basic Application<a class="headerlink" href="#basic-application" title="Permalink to this heading">¶</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">actingweb.interface</span><span class="w"> </span><span class="kn">import</span> <span class="n">ActingWebApp</span><span class="p">,</span> <span class="n">ActorInterface</span>
+
+<span class="c1"># Create app with fluent configuration</span>
+<span class="n">app</span> <span class="o">=</span> <span class="n">ActingWebApp</span><span class="p">(</span>
+    <span class="n">aw_type</span><span class="o">=</span><span class="s2">&quot;urn:actingweb:example.com:myapp&quot;</span><span class="p">,</span>
+    <span class="n">database</span><span class="o">=</span><span class="s2">&quot;dynamodb&quot;</span><span class="p">,</span>
+    <span class="n">fqdn</span><span class="o">=</span><span class="s2">&quot;myapp.example.com&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">with_oauth</span><span class="p">(</span>
+    <span class="n">client_id</span><span class="o">=</span><span class="s2">&quot;your-client-id&quot;</span><span class="p">,</span>
+    <span class="n">client_secret</span><span class="o">=</span><span class="s2">&quot;your-client-secret&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">with_web_ui</span><span class="p">()</span><span class="o">.</span><span class="n">with_devtest</span><span class="p">()</span>
+
+<span class="c1"># Define actor factory</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">actor_factory</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">create_actor</span><span class="p">(</span><span class="n">creator</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ActorInterface</span><span class="p">:</span>
+    <span class="n">actor</span> <span class="o">=</span> <span class="n">ActorInterface</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">creator</span><span class="o">=</span><span class="n">creator</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">app</span><span class="o">.</span><span class="n">get_config</span><span class="p">())</span>
+    <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">email</span> <span class="o">=</span> <span class="n">creator</span>
+    <span class="k">return</span> <span class="n">actor</span>
+
+<span class="c1"># Add hooks</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">property_hook</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_email</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">operation</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;get&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">value</span> <span class="k">if</span> <span class="n">actor</span><span class="o">.</span><span class="n">is_owner</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">elif</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;put&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">in</span> <span class="n">value</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">value</span>
+
+<span class="c1"># Run the application</span>
+<span class="n">app</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="mi">5000</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="flask-integration">
+<h3>Flask Integration<a class="headerlink" href="#flask-integration" title="Permalink to this heading">¶</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">flask</span><span class="w"> </span><span class="kn">import</span> <span class="n">Flask</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">actingweb.interface</span><span class="w"> </span><span class="kn">import</span> <span class="n">ActingWebApp</span>
+
+<span class="c1"># Create Flask app</span>
+<span class="n">flask_app</span> <span class="o">=</span> <span class="n">Flask</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="c1"># Create ActingWeb app</span>
+<span class="n">aw_app</span> <span class="o">=</span> <span class="n">ActingWebApp</span><span class="p">(</span>
+    <span class="n">aw_type</span><span class="o">=</span><span class="s2">&quot;urn:actingweb:example.com:myapp&quot;</span><span class="p">,</span>
+    <span class="n">database</span><span class="o">=</span><span class="s2">&quot;dynamodb&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">with_web_ui</span><span class="p">()</span>
+
+<span class="c1"># Integrate with Flask (auto-generates all routes)</span>
+<span class="n">aw_app</span><span class="o">.</span><span class="n">integrate_flask</span><span class="p">(</span><span class="n">flask_app</span><span class="p">)</span>
+
+<span class="c1"># Run Flask app</span>
+<span class="n">flask_app</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="core-components">
+<h2>Core Components<a class="headerlink" href="#core-components" title="Permalink to this heading">¶</a></h2>
+<section id="actingwebapp">
+<h3>ActingWebApp<a class="headerlink" href="#actingwebapp" title="Permalink to this heading">¶</a></h3>
+<p>The main application class that provides fluent configuration:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">app</span> <span class="o">=</span> <span class="n">ActingWebApp</span><span class="p">(</span>
+    <span class="n">aw_type</span><span class="o">=</span><span class="s2">&quot;urn:actingweb:example.com:myapp&quot;</span><span class="p">,</span>
+    <span class="n">database</span><span class="o">=</span><span class="s2">&quot;dynamodb&quot;</span><span class="p">,</span>
+    <span class="n">fqdn</span><span class="o">=</span><span class="s2">&quot;myapp.example.com&quot;</span>
+<span class="p">)</span>
+
+<span class="c1"># Configuration methods</span>
+<span class="n">app</span><span class="o">.</span><span class="n">with_oauth</span><span class="p">(</span><span class="n">client_id</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="n">client_secret</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">)</span>
+<span class="n">app</span><span class="o">.</span><span class="n">with_web_ui</span><span class="p">(</span><span class="n">enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">app</span><span class="o">.</span><span class="n">with_devtest</span><span class="p">(</span><span class="n">enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">app</span><span class="o">.</span><span class="n">with_bot</span><span class="p">(</span><span class="n">token</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="n">email</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">)</span>
+<span class="n">app</span><span class="o">.</span><span class="n">with_unique_creator</span><span class="p">(</span><span class="n">enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">app</span><span class="o">.</span><span class="n">add_actor_type</span><span class="p">(</span><span class="s2">&quot;myself&quot;</span><span class="p">,</span> <span class="n">relationship</span><span class="o">=</span><span class="s2">&quot;friend&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="configuration-methods">
+<h4>Configuration Methods<a class="headerlink" href="#configuration-methods" title="Permalink to this heading">¶</a></h4>
+<dl class="py method">
+<dt class="sig sig-object py" id="with_oauth">
+<span class="sig-name descname"><span class="pre">with_oauth</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">client_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client_secret</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scope</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">auth_uri</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">token_uri</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#with_oauth" title="Permalink to this definition">¶</a></dt>
+<dd><p>Configure OAuth authentication.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>client_id</strong> – OAuth client ID</p></li>
+<li><p><strong>client_secret</strong> – OAuth client secret</p></li>
+<li><p><strong>scope</strong> – OAuth scope (optional)</p></li>
+<li><p><strong>auth_uri</strong> – Authorization URI (optional)</p></li>
+<li><p><strong>token_uri</strong> – Token URI (optional)</p></li>
+<li><p><strong>kwargs</strong> – Additional OAuth parameters</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>ActingWebApp instance for chaining</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="with_web_ui">
+<span class="sig-name descname"><span class="pre">with_web_ui</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">enable</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#with_web_ui" title="Permalink to this definition">¶</a></dt>
+<dd><p>Enable or disable the web UI.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>enable</strong> – Whether to enable web UI</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>ActingWebApp instance for chaining</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="with_devtest">
+<span class="sig-name descname"><span class="pre">with_devtest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">enable</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#with_devtest" title="Permalink to this definition">¶</a></dt>
+<dd><p>Enable or disable development/testing endpoints.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>enable</strong> – Whether to enable devtest endpoints</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>ActingWebApp instance for chaining</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="with_bot">
+<span class="sig-name descname"><span class="pre">with_bot</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">token</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">email</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">secret</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">admin_room</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#with_bot" title="Permalink to this definition">¶</a></dt>
+<dd><p>Configure bot integration.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>token</strong> – Bot token</p></li>
+<li><p><strong>email</strong> – Bot email</p></li>
+<li><p><strong>secret</strong> – Bot secret</p></li>
+<li><p><strong>admin_room</strong> – Admin room ID</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>ActingWebApp instance for chaining</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="actorinterface">
+<h3>ActorInterface<a class="headerlink" href="#actorinterface" title="Permalink to this heading">¶</a></h3>
+<p>Clean interface for working with actors:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create actor</span>
+<span class="n">actor</span> <span class="o">=</span> <span class="n">ActorInterface</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">creator</span><span class="o">=</span><span class="s2">&quot;user@example.com&quot;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+
+<span class="c1"># Access properties</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">email</span> <span class="o">=</span> <span class="s2">&quot;user@example.com&quot;</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="p">[</span><span class="s2">&quot;settings&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="s2">&quot;dark&quot;</span><span class="p">}</span>
+
+<span class="c1"># Manage trust relationships</span>
+<span class="n">peer</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">trust</span><span class="o">.</span><span class="n">create_relationship</span><span class="p">(</span>
+    <span class="n">peer_url</span><span class="o">=</span><span class="s2">&quot;https://peer.example.com/actor123&quot;</span><span class="p">,</span>
+    <span class="n">relationship</span><span class="o">=</span><span class="s2">&quot;friend&quot;</span>
+<span class="p">)</span>
+
+<span class="c1"># Handle subscriptions</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">subscriptions</span><span class="o">.</span><span class="n">subscribe_to_peer</span><span class="p">(</span>
+    <span class="n">peer_id</span><span class="o">=</span><span class="s2">&quot;peer123&quot;</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;properties&quot;</span>
+<span class="p">)</span>
+
+<span class="c1"># Notify subscribers</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">subscriptions</span><span class="o">.</span><span class="n">notify_subscribers</span><span class="p">(</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">}</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<section id="class-methods">
+<h4>Class Methods<a class="headerlink" href="#class-methods" title="Permalink to this heading">¶</a></h4>
+<dl class="py method">
+<dt class="sig sig-object py" id="create">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">create</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">creator</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">actor_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">passphrase</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delete_existing</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#create" title="Permalink to this definition">¶</a></dt>
+<dd><p>Create a new actor.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>creator</strong> – Creator identifier (usually email)</p></li>
+<li><p><strong>config</strong> – ActingWeb Config object</p></li>
+<li><p><strong>actor_id</strong> – Optional custom actor ID</p></li>
+<li><p><strong>passphrase</strong> – Optional custom passphrase</p></li>
+<li><p><strong>delete_existing</strong> – Whether to delete existing actor with same creator</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>New ActorInterface instance</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="get_by_id">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">get_by_id</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">actor_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#get_by_id" title="Permalink to this definition">¶</a></dt>
+<dd><p>Get an existing actor by ID.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>actor_id</strong> – Actor ID</p></li>
+<li><p><strong>config</strong> – ActingWeb Config object</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>ActorInterface instance or None if not found</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="get_by_creator">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">get_by_creator</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">creator</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#get_by_creator" title="Permalink to this definition">¶</a></dt>
+<dd><p>Get an existing actor by creator.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>creator</strong> – Creator identifier</p></li>
+<li><p><strong>config</strong> – ActingWeb Config object</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>ActorInterface instance or None if not found</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="properties">
+<h4>Properties<a class="headerlink" href="#properties" title="Permalink to this heading">¶</a></h4>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="id">
+<span class="sig-name descname"><span class="pre">id</span></span><a class="headerlink" href="#id" title="Permalink to this definition">¶</a></dt>
+<dd><p>Actor ID (read-only)</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="creator">
+<span class="sig-name descname"><span class="pre">creator</span></span><a class="headerlink" href="#creator" title="Permalink to this definition">¶</a></dt>
+<dd><p>Actor creator (read-only)</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="url">
+<span class="sig-name descname"><span class="pre">url</span></span><a class="headerlink" href="#url" title="Permalink to this definition">¶</a></dt>
+<dd><p>Actor URL (read-only)</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">properties</span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>PropertyStore instance for property management</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="trust">
+<span class="sig-name descname"><span class="pre">trust</span></span><a class="headerlink" href="#trust" title="Permalink to this definition">¶</a></dt>
+<dd><p>TrustManager instance for trust relationship management</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="subscriptions">
+<span class="sig-name descname"><span class="pre">subscriptions</span></span><a class="headerlink" href="#subscriptions" title="Permalink to this definition">¶</a></dt>
+<dd><p>SubscriptionManager instance for subscription management</p>
+</dd></dl>
+
+</section>
+</section>
+<section id="propertystore">
+<h3>PropertyStore<a class="headerlink" href="#propertystore" title="Permalink to this heading">¶</a></h3>
+<p>Dictionary-like interface for actor properties:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Set properties</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">email</span> <span class="o">=</span> <span class="s2">&quot;user@example.com&quot;</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="p">[</span><span class="s2">&quot;config&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="s2">&quot;dark&quot;</span><span class="p">}</span>
+
+<span class="c1"># Get properties</span>
+<span class="n">email</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">email</span>
+<span class="n">config</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;config&quot;</span><span class="p">,</span> <span class="p">{})</span>
+
+<span class="c1"># Check existence</span>
+<span class="k">if</span> <span class="s2">&quot;email&quot;</span> <span class="ow">in</span> <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Email is set&quot;</span><span class="p">)</span>
+
+<span class="c1"># Iterate</span>
+<span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="methods">
+<h4>Methods<a class="headerlink" href="#methods" title="Permalink to this heading">¶</a></h4>
+<dl class="py method">
+<dt class="sig sig-object py" id="get">
+<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">default</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#get" title="Permalink to this definition">¶</a></dt>
+<dd><p>Get property value with default.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>key</strong> – Property key</p></li>
+<li><p><strong>default</strong> – Default value if property doesn’t exist</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Property value or default</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="set">
+<span class="sig-name descname"><span class="pre">set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#set" title="Permalink to this definition">¶</a></dt>
+<dd><p>Set property value.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>key</strong> – Property key</p></li>
+<li><p><strong>value</strong> – Property value</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="delete">
+<span class="sig-name descname"><span class="pre">delete</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#delete" title="Permalink to this definition">¶</a></dt>
+<dd><p>Delete property.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>key</strong> – Property key</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if property existed and was deleted</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="update">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">other</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#update" title="Permalink to this definition">¶</a></dt>
+<dd><p>Update properties from dictionary.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>other</strong> – Dictionary of properties to update</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="to_dict">
+<span class="sig-name descname"><span class="pre">to_dict</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#to_dict" title="Permalink to this definition">¶</a></dt>
+<dd><p>Convert to dictionary.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Dictionary representation of all properties</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="trustmanager">
+<h3>TrustManager<a class="headerlink" href="#trustmanager" title="Permalink to this heading">¶</a></h3>
+<p>Simplified trust relationship management:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create relationship</span>
+<span class="n">relationship</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">trust</span><span class="o">.</span><span class="n">create_relationship</span><span class="p">(</span>
+    <span class="n">peer_url</span><span class="o">=</span><span class="s2">&quot;https://peer.example.com/actor123&quot;</span><span class="p">,</span>
+    <span class="n">relationship</span><span class="o">=</span><span class="s2">&quot;friend&quot;</span>
+<span class="p">)</span>
+
+<span class="c1"># List relationships</span>
+<span class="k">for</span> <span class="n">rel</span> <span class="ow">in</span> <span class="n">actor</span><span class="o">.</span><span class="n">trust</span><span class="o">.</span><span class="n">relationships</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Trust with </span><span class="si">{</span><span class="n">rel</span><span class="o">.</span><span class="n">peer_id</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">rel</span><span class="o">.</span><span class="n">relationship</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># Find specific relationship</span>
+<span class="n">friend</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">trust</span><span class="o">.</span><span class="n">find_relationship</span><span class="p">(</span><span class="n">relationship</span><span class="o">=</span><span class="s2">&quot;friend&quot;</span><span class="p">)</span>
+
+<span class="c1"># Approve relationship</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">trust</span><span class="o">.</span><span class="n">approve_relationship</span><span class="p">(</span><span class="n">peer_id</span><span class="o">=</span><span class="s2">&quot;peer123&quot;</span><span class="p">)</span>
+
+<span class="c1"># Check if peer is trusted</span>
+<span class="k">if</span> <span class="n">actor</span><span class="o">.</span><span class="n">trust</span><span class="o">.</span><span class="n">is_trusted_peer</span><span class="p">(</span><span class="s2">&quot;peer123&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Peer is trusted&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id1">
+<h4>Properties<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h4>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="relationships">
+<span class="sig-name descname"><span class="pre">relationships</span></span><a class="headerlink" href="#relationships" title="Permalink to this definition">¶</a></dt>
+<dd><p>List of all trust relationships</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="active_relationships">
+<span class="sig-name descname"><span class="pre">active_relationships</span></span><a class="headerlink" href="#active_relationships" title="Permalink to this definition">¶</a></dt>
+<dd><p>List of active (approved and verified) relationships</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pending_relationships">
+<span class="sig-name descname"><span class="pre">pending_relationships</span></span><a class="headerlink" href="#pending_relationships" title="Permalink to this definition">¶</a></dt>
+<dd><p>List of pending relationships</p>
+</dd></dl>
+
+</section>
+<section id="id2">
+<h4>Methods<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h4>
+<dl class="py method">
+<dt class="sig sig-object py" id="create_relationship">
+<span class="sig-name descname"><span class="pre">create_relationship</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">peer_url</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">relationship</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'friend'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">secret</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#create_relationship" title="Permalink to this definition">¶</a></dt>
+<dd><p>Create a new trust relationship with another actor.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>peer_url</strong> – URL of the peer actor</p></li>
+<li><p><strong>relationship</strong> – Type of relationship (friend, partner, etc.)</p></li>
+<li><p><strong>secret</strong> – Shared secret (auto-generated if not provided)</p></li>
+<li><p><strong>description</strong> – Description of the relationship</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>TrustRelationship instance or None if failed</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="get_relationship">
+<span class="sig-name descname"><span class="pre">get_relationship</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">peer_id</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#get_relationship" title="Permalink to this definition">¶</a></dt>
+<dd><p>Get relationship with specific peer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>peer_id</strong> – Peer actor ID</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>TrustRelationship instance or None if not found</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="approve_relationship">
+<span class="sig-name descname"><span class="pre">approve_relationship</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">peer_id</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#approve_relationship" title="Permalink to this definition">¶</a></dt>
+<dd><p>Approve a trust relationship.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>peer_id</strong> – Peer actor ID</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if successful</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="delete_relationship">
+<span class="sig-name descname"><span class="pre">delete_relationship</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">peer_id</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#delete_relationship" title="Permalink to this definition">¶</a></dt>
+<dd><p>Delete a trust relationship.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>peer_id</strong> – Peer actor ID</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if successful</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="is_trusted_peer">
+<span class="sig-name descname"><span class="pre">is_trusted_peer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">peer_id</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#is_trusted_peer" title="Permalink to this definition">¶</a></dt>
+<dd><p>Check if peer is trusted (has active relationship).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>peer_id</strong> – Peer actor ID</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if peer is trusted</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="subscriptionmanager">
+<h3>SubscriptionManager<a class="headerlink" href="#subscriptionmanager" title="Permalink to this heading">¶</a></h3>
+<p>Easy subscription handling:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Subscribe to peer</span>
+<span class="n">subscription_url</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">subscriptions</span><span class="o">.</span><span class="n">subscribe_to_peer</span><span class="p">(</span>
+    <span class="n">peer_id</span><span class="o">=</span><span class="s2">&quot;peer123&quot;</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+    <span class="n">granularity</span><span class="o">=</span><span class="s2">&quot;high&quot;</span>
+<span class="p">)</span>
+
+<span class="c1"># List subscriptions</span>
+<span class="k">for</span> <span class="n">sub</span> <span class="ow">in</span> <span class="n">actor</span><span class="o">.</span><span class="n">subscriptions</span><span class="o">.</span><span class="n">all_subscriptions</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Subscription to </span><span class="si">{</span><span class="n">sub</span><span class="o">.</span><span class="n">peer_id</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">sub</span><span class="o">.</span><span class="n">target</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># Notify subscribers</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">subscriptions</span><span class="o">.</span><span class="n">notify_subscribers</span><span class="p">(</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">}</span>
+<span class="p">)</span>
+
+<span class="c1"># Unsubscribe</span>
+<span class="n">actor</span><span class="o">.</span><span class="n">subscriptions</span><span class="o">.</span><span class="n">unsubscribe</span><span class="p">(</span>
+    <span class="n">peer_id</span><span class="o">=</span><span class="s2">&quot;peer123&quot;</span><span class="p">,</span>
+    <span class="n">subscription_id</span><span class="o">=</span><span class="s2">&quot;sub123&quot;</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<section id="id3">
+<h4>Properties<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h4>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="all_subscriptions">
+<span class="sig-name descname"><span class="pre">all_subscriptions</span></span><a class="headerlink" href="#all_subscriptions" title="Permalink to this definition">¶</a></dt>
+<dd><p>List of all subscriptions (both inbound and outbound)</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="outbound_subscriptions">
+<span class="sig-name descname"><span class="pre">outbound_subscriptions</span></span><a class="headerlink" href="#outbound_subscriptions" title="Permalink to this definition">¶</a></dt>
+<dd><p>List of subscriptions to other actors</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="inbound_subscriptions">
+<span class="sig-name descname"><span class="pre">inbound_subscriptions</span></span><a class="headerlink" href="#inbound_subscriptions" title="Permalink to this definition">¶</a></dt>
+<dd><p>List of subscriptions from other actors</p>
+</dd></dl>
+
+</section>
+<section id="id4">
+<h4>Methods<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h4>
+<dl class="py method">
+<dt class="sig sig-object py" id="subscribe_to_peer">
+<span class="sig-name descname"><span class="pre">subscribe_to_peer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">peer_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subtarget</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resource</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">granularity</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'high'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#subscribe_to_peer" title="Permalink to this definition">¶</a></dt>
+<dd><p>Subscribe to another actor’s data.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>peer_id</strong> – Peer actor ID</p></li>
+<li><p><strong>target</strong> – Target to subscribe to</p></li>
+<li><p><strong>subtarget</strong> – Subtarget (optional)</p></li>
+<li><p><strong>resource</strong> – Resource (optional)</p></li>
+<li><p><strong>granularity</strong> – Notification granularity (high, low, none)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Subscription URL if successful, None otherwise</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="unsubscribe">
+<span class="sig-name descname"><span class="pre">unsubscribe</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">peer_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subscription_id</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#unsubscribe" title="Permalink to this definition">¶</a></dt>
+<dd><p>Unsubscribe from a peer’s data.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>peer_id</strong> – Peer actor ID</p></li>
+<li><p><strong>subscription_id</strong> – Subscription ID</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if successful</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="notify_subscribers">
+<span class="sig-name descname"><span class="pre">notify_subscribers</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">target</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subtarget</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resource</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#notify_subscribers" title="Permalink to this definition">¶</a></dt>
+<dd><p>Notify all subscribers of changes to the specified target.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>target</strong> – Target that changed</p></li>
+<li><p><strong>data</strong> – Change data</p></li>
+<li><p><strong>subtarget</strong> – Subtarget (optional)</p></li>
+<li><p><strong>resource</strong> – Resource (optional)</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="has_subscribers_for">
+<span class="sig-name descname"><span class="pre">has_subscribers_for</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">target</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subtarget</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resource</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#has_subscribers_for" title="Permalink to this definition">¶</a></dt>
+<dd><p>Check if there are any subscribers for the given target.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>target</strong> – Target to check</p></li>
+<li><p><strong>subtarget</strong> – Subtarget (optional)</p></li>
+<li><p><strong>resource</strong> – Resource (optional)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if there are subscribers</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+</section>
+<section id="hook-system">
+<h2>Hook System<a class="headerlink" href="#hook-system" title="Permalink to this heading">¶</a></h2>
+<section id="property-hooks">
+<h3>Property Hooks<a class="headerlink" href="#property-hooks" title="Permalink to this heading">¶</a></h3>
+<p>Handle property operations:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@app</span><span class="o">.</span><span class="n">property_hook</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_email_property</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">operation</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;get&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">value</span> <span class="k">if</span> <span class="n">actor</span><span class="o">.</span><span class="n">is_owner</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">elif</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;put&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">in</span> <span class="n">value</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">value</span>
+
+<span class="c1"># Hook specific operations</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">property_hook</span><span class="p">(</span><span class="s2">&quot;settings&quot;</span><span class="p">,</span> <span class="n">operations</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;put&quot;</span><span class="p">,</span> <span class="s2">&quot;post&quot;</span><span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_settings_property</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">operation</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+        <span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">value</span>
+</pre></div>
+</div>
+<section id="hook-function-signature">
+<h4>Hook Function Signature<a class="headerlink" href="#hook-function-signature" title="Permalink to this heading">¶</a></h4>
+<dl class="py function">
+<dt class="sig sig-object py" id="property_hook_function">
+<span class="sig-name descname"><span class="pre">property_hook_function</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">actor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">operation</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#property_hook_function" title="Permalink to this definition">¶</a></dt>
+<dd><p>Property hook function signature.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>actor</strong> – ActorInterface instance</p></li>
+<li><p><strong>operation</strong> – Operation type (“get”, “put”, “post”, “delete”)</p></li>
+<li><p><strong>value</strong> – Property value</p></li>
+<li><p><strong>path</strong> – Property path as list</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Transformed value or None to reject operation</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="callback-hooks">
+<h3>Callback Hooks<a class="headerlink" href="#callback-hooks" title="Permalink to this heading">¶</a></h3>
+<p>Handle callback requests at both application and actor levels:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Application-level callbacks (no actor context)</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">app_callback_hook</span><span class="p">(</span><span class="s2">&quot;bot&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_bot_callback</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;method&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;POST&quot;</span><span class="p">:</span>
+        <span class="c1"># Process bot webhook (no actor context)</span>
+        <span class="k">return</span> <span class="kc">True</span>
+    <span class="k">return</span> <span class="kc">False</span>
+
+<span class="c1"># Actor-level callbacks (with actor context)</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">callback_hook</span><span class="p">(</span><span class="s2">&quot;ping&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_ping_callback</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;method&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;GET&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;pong&quot;</span><span class="p">,</span> <span class="s2">&quot;actor_id&quot;</span><span class="p">:</span> <span class="n">actor</span><span class="o">.</span><span class="n">id</span><span class="p">}</span>
+    <span class="k">return</span> <span class="kc">False</span>
+
+<span class="nd">@app</span><span class="o">.</span><span class="n">callback_hook</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_status_callback</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">,</span> <span class="s2">&quot;actor_id&quot;</span><span class="p">:</span> <span class="n">actor</span><span class="o">.</span><span class="n">id</span><span class="p">}</span>
+</pre></div>
+</div>
+<section id="application-level-vs-actor-level-callbacks">
+<h4>Application-Level vs Actor-Level Callbacks<a class="headerlink" href="#application-level-vs-actor-level-callbacks" title="Permalink to this heading">¶</a></h4>
+<p><strong>Application-level callbacks</strong> (<code class="docutils literal notranslate"><span class="pre">&#64;app.app_callback_hook</span></code>):
+- Used for endpoints like <code class="docutils literal notranslate"><span class="pre">/bot</span></code>, <code class="docutils literal notranslate"><span class="pre">/oauth</span></code>
+- No actor context - these are application-wide endpoints
+- Function signature: <code class="docutils literal notranslate"><span class="pre">def</span> <span class="pre">callback(data)</span> <span class="pre">-&gt;</span> <span class="pre">bool</span></code></p>
+<p><strong>Actor-level callbacks</strong> (<code class="docutils literal notranslate"><span class="pre">&#64;app.callback_hook</span></code>):
+- Used for endpoints like <code class="docutils literal notranslate"><span class="pre">/&lt;actor_id&gt;/callbacks/&lt;name&gt;</span></code>
+- Have actor context - these are specific to individual actors
+- Function signature: <code class="docutils literal notranslate"><span class="pre">def</span> <span class="pre">callback(actor,</span> <span class="pre">name,</span> <span class="pre">data)</span> <span class="pre">-&gt;</span> <span class="pre">bool</span></code></p>
+</section>
+<section id="hook-function-signatures">
+<h4>Hook Function Signatures<a class="headerlink" href="#hook-function-signatures" title="Permalink to this heading">¶</a></h4>
+<dl class="py function">
+<dt class="sig sig-object py" id="app_callback_hook_function">
+<span class="sig-name descname"><span class="pre">app_callback_hook_function</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#app_callback_hook_function" title="Permalink to this definition">¶</a></dt>
+<dd><p>Application-level callback hook function signature.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>data</strong> – Request data including method and body</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if processed, False otherwise, or dict for response data</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="callback_hook_function">
+<span class="sig-name descname"><span class="pre">callback_hook_function</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">actor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#callback_hook_function" title="Permalink to this definition">¶</a></dt>
+<dd><p>Actor-level callback hook function signature.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>actor</strong> – ActorInterface instance</p></li>
+<li><p><strong>name</strong> – Callback name</p></li>
+<li><p><strong>data</strong> – Request data including method and body</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if processed, False otherwise, or dict for response data</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="method-hooks">
+<h3>Method Hooks<a class="headerlink" href="#method-hooks" title="Permalink to this heading">¶</a></h3>
+<p>Handle RPC-style method calls with JSON-RPC support:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Simple method hook</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">method_hook</span><span class="p">(</span><span class="s2">&quot;calculate&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_calculate</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">method_name</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">operation</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;operation&quot;</span><span class="p">,</span> <span class="s2">&quot;add&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;add&quot;</span><span class="p">:</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
+    <span class="k">elif</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;multiply&quot;</span><span class="p">:</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">a</span> <span class="o">*</span> <span class="n">b</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>  <span class="c1"># Method not supported</span>
+
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="n">result</span><span class="p">}</span>
+
+<span class="c1"># JSON-RPC method hook</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">method_hook</span><span class="p">(</span><span class="s2">&quot;greet&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_greet</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">method_name</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;World&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;greeting&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">!&quot;</span><span class="p">}</span>
+</pre></div>
+</div>
+<section id="method-hook-function-signature">
+<h4>Method Hook Function Signature<a class="headerlink" href="#method-hook-function-signature" title="Permalink to this heading">¶</a></h4>
+<dl class="py function">
+<dt class="sig sig-object py" id="method_hook_function">
+<span class="sig-name descname"><span class="pre">method_hook_function</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">actor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">method_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#method_hook_function" title="Permalink to this definition">¶</a></dt>
+<dd><p>Method hook function signature.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>actor</strong> – ActorInterface instance</p></li>
+<li><p><strong>method_name</strong> – Method name being called</p></li>
+<li><p><strong>data</strong> – Method parameters (for JSON-RPC, this is the “params” field)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Method result (will be wrapped in JSON-RPC response if applicable)</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="action-hooks">
+<h3>Action Hooks<a class="headerlink" href="#action-hooks" title="Permalink to this heading">¶</a></h3>
+<p>Handle trigger-based actions that execute external events:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Action hook for notifications</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">action_hook</span><span class="p">(</span><span class="s2">&quot;send_notification&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_send_notification</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">action_name</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="n">message</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;message&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="n">recipient</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;recipient&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Execute external action (e.g., send email, trigger webhook)</span>
+    <span class="n">success</span> <span class="o">=</span> <span class="n">send_notification_email</span><span class="p">(</span><span class="n">recipient</span><span class="p">,</span> <span class="n">message</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;sent&quot;</span> <span class="k">if</span> <span class="n">success</span> <span class="k">else</span> <span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
+    <span class="p">}</span>
+
+<span class="c1"># Action hook for device control</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">action_hook</span><span class="p">(</span><span class="s2">&quot;toggle_light&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_toggle_light</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">action_name</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="n">device_id</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;device_id&quot;</span><span class="p">)</span>
+    <span class="n">state</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;state&quot;</span><span class="p">,</span> <span class="s2">&quot;on&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Control physical device</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">control_iot_device</span><span class="p">(</span><span class="n">device_id</span><span class="p">,</span> <span class="n">state</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;device_id&quot;</span><span class="p">:</span> <span class="n">device_id</span><span class="p">,</span>
+        <span class="s2">&quot;state&quot;</span><span class="p">:</span> <span class="n">state</span><span class="p">,</span>
+        <span class="s2">&quot;success&quot;</span><span class="p">:</span> <span class="n">result</span>
+    <span class="p">}</span>
+</pre></div>
+</div>
+<section id="action-hook-function-signature">
+<h4>Action Hook Function Signature<a class="headerlink" href="#action-hook-function-signature" title="Permalink to this heading">¶</a></h4>
+<dl class="py function">
+<dt class="sig sig-object py" id="action_hook_function">
+<span class="sig-name descname"><span class="pre">action_hook_function</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">actor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">action_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#action_hook_function" title="Permalink to this definition">¶</a></dt>
+<dd><p>Action hook function signature.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>actor</strong> – ActorInterface instance</p></li>
+<li><p><strong>action_name</strong> – Action name being executed</p></li>
+<li><p><strong>data</strong> – Action parameters</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Action result (status information, execution results, etc.)</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="subscription-hooks">
+<h3>Subscription Hooks<a class="headerlink" href="#subscription-hooks" title="Permalink to this heading">¶</a></h3>
+<p>Handle subscription callbacks:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@app</span><span class="o">.</span><span class="n">subscription_hook</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_subscription_callback</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">subscription</span><span class="p">,</span> <span class="n">peer_id</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Received data from </span><span class="si">{</span><span class="n">peer_id</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">data</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Process the subscription data</span>
+    <span class="k">if</span> <span class="n">subscription</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;properties&quot;</span><span class="p">:</span>
+        <span class="c1"># Handle property changes from peer</span>
+        <span class="k">pass</span>
+
+    <span class="k">return</span> <span class="kc">True</span>
+</pre></div>
+</div>
+<section id="id5">
+<h4>Hook Function Signature<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h4>
+<dl class="py function">
+<dt class="sig sig-object py" id="subscription_hook_function">
+<span class="sig-name descname"><span class="pre">subscription_hook_function</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">actor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subscription</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">peer_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#subscription_hook_function" title="Permalink to this definition">¶</a></dt>
+<dd><p>Subscription hook function signature.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>actor</strong> – ActorInterface instance</p></li>
+<li><p><strong>subscription</strong> – Subscription information dict</p></li>
+<li><p><strong>peer_id</strong> – Peer actor ID</p></li>
+<li><p><strong>data</strong> – Subscription data</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if processed, False otherwise</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+<section id="lifecycle-hooks">
+<h3>Lifecycle Hooks<a class="headerlink" href="#lifecycle-hooks" title="Permalink to this heading">¶</a></h3>
+<p>Handle actor lifecycle events:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@app</span><span class="o">.</span><span class="n">lifecycle_hook</span><span class="p">(</span><span class="s2">&quot;actor_created&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">on_actor_created</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="c1"># Initialize new actor</span>
+    <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">created_at</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">())</span>
+
+<span class="nd">@app</span><span class="o">.</span><span class="n">lifecycle_hook</span><span class="p">(</span><span class="s2">&quot;actor_deleted&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">on_actor_deleted</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="c1"># Cleanup before deletion</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Actor </span><span class="si">{</span><span class="n">actor</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2"> is being deleted&quot;</span><span class="p">)</span>
+
+<span class="nd">@app</span><span class="o">.</span><span class="n">lifecycle_hook</span><span class="p">(</span><span class="s2">&quot;oauth_success&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">on_oauth_success</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">token</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;token&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">token</span><span class="p">:</span>
+        <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">oauth_token</span> <span class="o">=</span> <span class="n">token</span>
+</pre></div>
+</div>
+<section id="available-lifecycle-events">
+<h4>Available Lifecycle Events<a class="headerlink" href="#available-lifecycle-events" title="Permalink to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">actor_created</span></code>: Called when a new actor is created</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">actor_deleted</span></code>: Called when an actor is deleted</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">oauth_success</span></code>: Called when OAuth authentication succeeds</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">trust_approved</span></code>: Called when a trust relationship is approved</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">trust_deleted</span></code>: Called when a trust relationship is deleted</p></li>
+</ul>
+</section>
+<section id="id6">
+<h4>Hook Function Signature<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h4>
+<dl class="py function">
+<dt class="sig sig-object py" id="lifecycle_hook_function">
+<span class="sig-name descname"><span class="pre">lifecycle_hook_function</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">actor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#lifecycle_hook_function" title="Permalink to this definition">¶</a></dt>
+<dd><p>Lifecycle hook function signature.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>actor</strong> – ActorInterface instance</p></li>
+<li><p><strong>kwargs</strong> – Event-specific parameters</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Event-specific return value</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+</section>
+<section id="migration-from-onawbase">
+<h2>Migration from OnAWBase<a class="headerlink" href="#migration-from-onawbase" title="Permalink to this heading">¶</a></h2>
+<p>The new interface provides a clean migration path from the old <code class="docutils literal notranslate"><span class="pre">OnAWBase</span></code> system:</p>
+<section id="before-onawbase">
+<h3>Before (OnAWBase)<a class="headerlink" href="#before-onawbase" title="Permalink to this heading">¶</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">OnAWDemo</span><span class="p">(</span><span class="n">on_aw</span><span class="o">.</span><span class="n">OnAWBase</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_properties</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">path</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">PROP_HIDE</span><span class="p">:</span>
+                    <span class="k">del</span> <span class="n">data</span><span class="p">[</span><span class="n">k</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">path</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="n">PROP_HIDE</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="n">data</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">put_properties</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">old</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">new</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">dict</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span> <span class="o">|</span> <span class="nb">str</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">path</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">path</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="n">PROP_PROTECT</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="n">new</span>
+</pre></div>
+</div>
+</section>
+<section id="after-new-interface">
+<h3>After (New Interface)<a class="headerlink" href="#after-new-interface" title="Permalink to this heading">¶</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@app</span><span class="o">.</span><span class="n">property_hook</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_email_property</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">operation</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;get&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">actor</span><span class="o">.</span><span class="n">is_owner</span><span class="p">()</span> <span class="k">else</span> <span class="n">value</span>
+    <span class="k">elif</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;put&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">in</span> <span class="n">value</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">value</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="benefits">
+<h2>Benefits<a class="headerlink" href="#benefits" title="Permalink to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p><strong>Reduced Boilerplate</strong>: No more manual route definitions or complex handler setup</p></li>
+<li><p><strong>Better Organization</strong>: Hooks are focused on specific functionality</p></li>
+<li><p><strong>Improved Readability</strong>: Code is easier to understand and maintain</p></li>
+<li><p><strong>Type Safety</strong>: Better IDE support and error detection</p></li>
+<li><p><strong>Flexibility</strong>: Easy to add new hooks without modifying core classes</p></li>
+<li><p><strong>Testing</strong>: Hooks can be tested independently</p></li>
+</ol>
+</section>
+<section id="backward-compatibility">
+<h2>Backward Compatibility<a class="headerlink" href="#backward-compatibility" title="Permalink to this heading">¶</a></h2>
+<p>The new interface is fully backward compatible with existing ActingWeb applications. You can:</p>
+<ol class="arabic simple">
+<li><p>Continue using the old <code class="docutils literal notranslate"><span class="pre">OnAWBase</span></code> system</p></li>
+<li><p>Gradually migrate to the new interface</p></li>
+<li><p>Mix both approaches during transition</p></li>
+</ol>
+<p>The new interface uses a bridge pattern to translate between the hook system and the existing <code class="docutils literal notranslate"><span class="pre">OnAWBase</span></code> callbacks, ensuring seamless operation.</p>
+</section>
+<section id="advanced-usage">
+<h2>Advanced Usage<a class="headerlink" href="#advanced-usage" title="Permalink to this heading">¶</a></h2>
+<section id="accessing-core-components">
+<h3>Accessing Core Components<a class="headerlink" href="#accessing-core-components" title="Permalink to this heading">¶</a></h3>
+<p>If you need access to the underlying ActingWeb components:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Access core actor</span>
+<span class="n">core_actor</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">core_actor</span>
+
+<span class="c1"># Access core property store</span>
+<span class="n">core_properties</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">properties</span><span class="o">.</span><span class="n">core_store</span>
+
+<span class="c1"># Access configuration</span>
+<span class="n">config</span> <span class="o">=</span> <span class="n">app</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="custom-web-framework-integration">
+<h3>Custom Web Framework Integration<a class="headerlink" href="#custom-web-framework-integration" title="Permalink to this heading">¶</a></h3>
+<p>You can extend the integration system for other web frameworks:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">actingweb.interface.integrations</span><span class="w"> </span><span class="kn">import</span> <span class="n">FlaskIntegration</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">FastAPIIntegration</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">aw_app</span><span class="p">,</span> <span class="n">fastapi_app</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">aw_app</span> <span class="o">=</span> <span class="n">aw_app</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fastapi_app</span> <span class="o">=</span> <span class="n">fastapi_app</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_routes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Implement FastAPI route setup</span>
+        <span class="k">pass</span>
+</pre></div>
+</div>
+</section>
+<section id="error-handling">
+<h3>Error Handling<a class="headerlink" href="#error-handling" title="Permalink to this heading">¶</a></h3>
+<p>The new interface provides better error handling:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
+    <span class="n">actor</span> <span class="o">=</span> <span class="n">ActorInterface</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">creator</span><span class="o">=</span><span class="s2">&quot;user@example.com&quot;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+<span class="k">except</span> <span class="ne">RuntimeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Failed to create actor: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># Hook error handling</span>
+<span class="nd">@app</span><span class="o">.</span><span class="n">property_hook</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_email_property</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">operation</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;put&quot;</span> <span class="ow">and</span> <span class="s2">&quot;@&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">value</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>  <span class="c1"># Reject invalid email</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">if</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;put&quot;</span> <span class="k">else</span> <span class="n">value</span>
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="c1"># Log error and reject operation</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error in email hook: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="testing">
+<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this heading">¶</a></h2>
+<p>The new interface makes testing much easier:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">unittest</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">actingweb.interface</span><span class="w"> </span><span class="kn">import</span> <span class="n">ActingWebApp</span><span class="p">,</span> <span class="n">ActorInterface</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">TestActingWebApp</span><span class="p">(</span><span class="n">unittest</span><span class="o">.</span><span class="n">TestCase</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setUp</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">app</span> <span class="o">=</span> <span class="n">ActingWebApp</span><span class="p">(</span>
+            <span class="n">aw_type</span><span class="o">=</span><span class="s2">&quot;urn:test:example.com:test&quot;</span><span class="p">,</span>
+            <span class="n">database</span><span class="o">=</span><span class="s2">&quot;dynamodb&quot;</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_property_hook</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nd">@self</span><span class="o">.</span><span class="n">app</span><span class="o">.</span><span class="n">property_hook</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">)</span>
+        <span class="k">def</span><span class="w"> </span><span class="nf">handle_email</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">operation</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">if</span> <span class="n">operation</span> <span class="o">==</span> <span class="s2">&quot;put&quot;</span> <span class="k">else</span> <span class="n">value</span>
+
+        <span class="c1"># Test the hook directly</span>
+        <span class="n">actor</span> <span class="o">=</span> <span class="n">ActorInterface</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">creator</span><span class="o">=</span><span class="s2">&quot;test@example.com&quot;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">app</span><span class="o">.</span><span class="n">get_config</span><span class="p">())</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">handle_email</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="s2">&quot;put&quot;</span><span class="p">,</span> <span class="s2">&quot;TEST@EXAMPLE.COM&quot;</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">assertEqual</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="s2">&quot;test@example.com&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">test_actor_creation</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">actor</span> <span class="o">=</span> <span class="n">ActorInterface</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">creator</span><span class="o">=</span><span class="s2">&quot;test@example.com&quot;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">app</span><span class="o">.</span><span class="n">get_config</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">assertIsNotNone</span><span class="p">(</span><span class="n">actor</span><span class="o">.</span><span class="n">id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">assertEqual</span><span class="p">(</span><span class="n">actor</span><span class="o">.</span><span class="n">creator</span><span class="p">,</span> <span class="s2">&quot;test@example.com&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../index.html">ActingWeb</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../LICENSE.html">License</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../README.html">README - actingweb - an ActingWeb Library</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getting-started.html">Getting Started</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">ActingWeb Developer Interface</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#key-features">Key Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#quick-start">Quick Start</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#core-components">Core Components</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#hook-system">Hook System</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#migration-from-onawbase">Migration from OnAWBase</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#benefits">Benefits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#backward-compatibility">Backward Compatibility</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#advanced-usage">Advanced Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#testing">Testing</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="actingweb-spec.html">ActingWeb Specification - version 1.0</a></li>
+<li class="toctree-l1"><a class="reference internal" href="actingweb.html">actingweb code</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../CHANGELOG.html">CHANGELOG</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="getting-started.html" title="previous chapter">Getting Started</a></li>
+      <li>Next: <a href="actingweb-spec.html" title="next chapter">ActingWeb Specification - version 1.0</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2020, Greger Teigre Wedel.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 5.3.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="../_sources/docs/developers.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

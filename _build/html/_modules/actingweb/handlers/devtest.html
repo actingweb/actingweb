@@ -1,0 +1,354 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>actingweb.handlers.devtest &#8212; ActingWeb 2.6.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/alabaster.css" />
+    <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
+    <script src="../../../_static/jquery.js"></script>
+    <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for actingweb.handlers.devtest</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">datetime</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">builtins</span><span class="w"> </span><span class="kn">import</span> <span class="nb">str</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">actingweb</span><span class="w"> </span><span class="kn">import</span> <span class="n">attribute</span><span class="p">,</span> <span class="n">auth</span><span class="p">,</span> <span class="n">aw_proxy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">actingweb.handlers</span><span class="w"> </span><span class="kn">import</span> <span class="n">base_handler</span>
+
+
+<div class="viewcode-block" id="DevtestHandler"><a class="viewcode-back" href="../../../docs/actingweb.handlers.html#actingweb.handlers.devtest.DevtestHandler">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">DevtestHandler</span><span class="p">(</span><span class="n">base_handler</span><span class="o">.</span><span class="n">BaseHandler</span><span class="p">):</span>
+
+<div class="viewcode-block" id="DevtestHandler.put"><a class="viewcode-back" href="../../../docs/actingweb.handlers.html#actingweb.handlers.devtest.DevtestHandler.put">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">put</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">actor_id</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles PUT for devtest&quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">devtest</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="p">(</span><span class="n">myself</span><span class="p">,</span> <span class="n">check</span><span class="p">)</span> <span class="o">=</span> <span class="n">auth</span><span class="o">.</span><span class="n">init_actingweb</span><span class="p">(</span>
+            <span class="n">appreq</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
+            <span class="n">actor_id</span><span class="o">=</span><span class="n">actor_id</span><span class="p">,</span>
+            <span class="n">path</span><span class="o">=</span><span class="s2">&quot;devtest&quot;</span><span class="p">,</span>
+            <span class="n">subpath</span><span class="o">=</span><span class="n">path</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">myself</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">check</span> <span class="ow">or</span> <span class="n">check</span><span class="o">.</span><span class="n">response</span><span class="p">[</span><span class="s2">&quot;code&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">200</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">body</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">request</span><span class="o">.</span><span class="n">body</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">):</span>
+                <span class="n">body</span> <span class="o">=</span> <span class="n">body</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">,</span> <span class="s2">&quot;ignore&quot;</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">body</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">body</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span>
+            <span class="n">params</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">TypeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">,</span> <span class="ne">KeyError</span><span class="p">):</span>
+            <span class="n">body</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">request</span><span class="o">.</span><span class="n">body</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">):</span>
+                <span class="n">body</span> <span class="o">=</span> <span class="n">body</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">,</span> <span class="s2">&quot;ignore&quot;</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">body</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">body</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+            <span class="n">params</span> <span class="o">=</span> <span class="n">body</span>
+        <span class="n">paths</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;proxy&quot;</span><span class="p">:</span>
+            <span class="n">mytwin</span> <span class="o">=</span> <span class="n">myself</span><span class="o">.</span><span class="n">get_peer_trustee</span><span class="p">(</span><span class="n">shorttype</span><span class="o">=</span><span class="s2">&quot;myself&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">mytwin</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">mytwin</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;properties&quot;</span> <span class="ow">and</span> <span class="n">paths</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">proxy</span> <span class="o">=</span> <span class="n">aw_proxy</span><span class="o">.</span><span class="n">AwProxy</span><span class="p">(</span><span class="n">peer_target</span><span class="o">=</span><span class="n">mytwin</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">params</span><span class="p">:</span>
+                        <span class="n">proxy</span><span class="o">.</span><span class="n">change_resource</span><span class="p">(</span><span class="s2">&quot;/properties/&quot;</span> <span class="o">+</span> <span class="n">paths</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="n">proxy</span><span class="o">.</span><span class="n">last_response_code</span><span class="p">)</span>
+                    <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;ping&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">204</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;attribute&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="n">bucket</span> <span class="o">=</span> <span class="n">attribute</span><span class="o">.</span><span class="n">Attributes</span><span class="p">(</span>
+                    <span class="n">actor_id</span><span class="o">=</span><span class="n">myself</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">bucket</span><span class="o">=</span><span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span>
+                <span class="p">)</span>
+                <span class="n">bucket</span><span class="o">.</span><span class="n">set_attr</span><span class="p">(</span><span class="n">paths</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">params</span><span class="p">,</span> <span class="n">timestamp</span><span class="o">=</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">utcnow</span><span class="p">())</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">204</span><span class="p">)</span>
+                <span class="k">return</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DevtestHandler.delete"><a class="viewcode-back" href="../../../docs/actingweb.handlers.html#actingweb.handlers.devtest.DevtestHandler.delete">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">delete</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">actor_id</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles DELETE for devtest&quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">devtest</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="p">(</span><span class="n">myself</span><span class="p">,</span> <span class="n">check</span><span class="p">)</span> <span class="o">=</span> <span class="n">auth</span><span class="o">.</span><span class="n">init_actingweb</span><span class="p">(</span>
+            <span class="n">appreq</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
+            <span class="n">actor_id</span><span class="o">=</span><span class="n">actor_id</span><span class="p">,</span>
+            <span class="n">path</span><span class="o">=</span><span class="s2">&quot;devtest&quot;</span><span class="p">,</span>
+            <span class="n">subpath</span><span class="o">=</span><span class="n">path</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">myself</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">check</span> <span class="ow">or</span> <span class="n">check</span><span class="o">.</span><span class="n">response</span><span class="p">[</span><span class="s2">&quot;code&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">200</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="n">paths</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;proxy&quot;</span><span class="p">:</span>
+            <span class="n">mytwin</span> <span class="o">=</span> <span class="n">myself</span><span class="o">.</span><span class="n">get_peer_trustee</span><span class="p">(</span><span class="n">shorttype</span><span class="o">=</span><span class="s2">&quot;myself&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">mytwin</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">mytwin</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;properties&quot;</span><span class="p">:</span>
+                    <span class="n">proxy</span> <span class="o">=</span> <span class="n">aw_proxy</span><span class="o">.</span><span class="n">AwProxy</span><span class="p">(</span><span class="n">peer_target</span><span class="o">=</span><span class="n">mytwin</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span>
+                    <span class="n">proxy</span><span class="o">.</span><span class="n">delete_resource</span><span class="p">(</span><span class="n">path</span><span class="o">=</span><span class="s2">&quot;/properties&quot;</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="n">proxy</span><span class="o">.</span><span class="n">last_response_code</span><span class="p">)</span>
+                    <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;ping&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">204</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;attribute&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="n">bucket</span> <span class="o">=</span> <span class="n">attribute</span><span class="o">.</span><span class="n">Attributes</span><span class="p">(</span>
+                    <span class="n">actor_id</span><span class="o">=</span><span class="n">myself</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">bucket</span><span class="o">=</span><span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span>
+                <span class="p">)</span>
+                <span class="n">bucket</span><span class="o">.</span><span class="n">delete_attr</span><span class="p">(</span><span class="n">paths</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">204</span><span class="p">)</span>
+                <span class="k">return</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">buckets</span> <span class="o">=</span> <span class="n">attribute</span><span class="o">.</span><span class="n">Buckets</span><span class="p">(</span><span class="n">actor_id</span><span class="o">=</span><span class="n">myself</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span>
+                <span class="n">buckets</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">204</span><span class="p">)</span>
+                <span class="k">return</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DevtestHandler.get"><a class="viewcode-back" href="../../../docs/actingweb.handlers.html#actingweb.handlers.devtest.DevtestHandler.get">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">actor_id</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles GET for devtest&quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">devtest</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="p">(</span><span class="n">myself</span><span class="p">,</span> <span class="n">check</span><span class="p">)</span> <span class="o">=</span> <span class="n">auth</span><span class="o">.</span><span class="n">init_actingweb</span><span class="p">(</span>
+            <span class="n">appreq</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
+            <span class="n">actor_id</span><span class="o">=</span><span class="n">actor_id</span><span class="p">,</span>
+            <span class="n">path</span><span class="o">=</span><span class="s2">&quot;devtest&quot;</span><span class="p">,</span>
+            <span class="n">subpath</span><span class="o">=</span><span class="n">path</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">myself</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">check</span> <span class="ow">or</span> <span class="n">check</span><span class="o">.</span><span class="n">response</span><span class="p">[</span><span class="s2">&quot;code&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">200</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="n">paths</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;proxy&quot;</span><span class="p">:</span>
+            <span class="n">mytwin</span> <span class="o">=</span> <span class="n">myself</span><span class="o">.</span><span class="n">get_peer_trustee</span><span class="p">(</span><span class="n">shorttype</span><span class="o">=</span><span class="s2">&quot;myself&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">mytwin</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">mytwin</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;properties&quot;</span><span class="p">:</span>
+                    <span class="n">proxy</span> <span class="o">=</span> <span class="n">aw_proxy</span><span class="o">.</span><span class="n">AwProxy</span><span class="p">(</span><span class="n">peer_target</span><span class="o">=</span><span class="n">mytwin</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span>
+                    <span class="n">prop</span> <span class="o">=</span> <span class="n">proxy</span><span class="o">.</span><span class="n">get_resource</span><span class="p">(</span><span class="n">path</span><span class="o">=</span><span class="s2">&quot;/properties&quot;</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">proxy</span><span class="o">.</span><span class="n">last_response_code</span> <span class="o">!=</span> <span class="mi">200</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="n">proxy</span><span class="o">.</span><span class="n">last_response_code</span><span class="p">)</span>
+                        <span class="k">return</span>
+                    <span class="n">out</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">prop</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;Content-Type&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;application/json&quot;</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+                    <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;ping&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">204</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;attribute&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="n">bucket</span> <span class="o">=</span> <span class="n">attribute</span><span class="o">.</span><span class="n">Attributes</span><span class="p">(</span>
+                    <span class="n">actor_id</span><span class="o">=</span><span class="n">myself</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">bucket</span><span class="o">=</span><span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span>
+                <span class="p">)</span>
+                <span class="n">params</span> <span class="o">=</span> <span class="n">bucket</span><span class="o">.</span><span class="n">get_bucket</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">params</span><span class="p">:</span>
+                    <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                        <span class="n">params</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="s2">&quot;timestamp&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span><span class="p">[</span><span class="s2">&quot;timestamp&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span>
+                            <span class="s2">&quot;%Y-%m-</span><span class="si">%d</span><span class="s2"> %H:%M:%S&quot;</span>
+                        <span class="p">)</span>
+                    <span class="n">out</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span>
+                    <span class="k">return</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;Content-Type&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;application/json&quot;</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+                <span class="k">return</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">buckets</span> <span class="o">=</span> <span class="n">attribute</span><span class="o">.</span><span class="n">Buckets</span><span class="p">(</span><span class="n">actor_id</span><span class="o">=</span><span class="n">myself</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span>
+                <span class="n">params</span> <span class="o">=</span> <span class="n">buckets</span><span class="o">.</span><span class="n">fetch</span><span class="p">()</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">params</span> <span class="ow">or</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">params</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">):</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span>
+                    <span class="k">return</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+                    <span class="k">for</span> <span class="n">b</span><span class="p">,</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">d</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                            <span class="n">d</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="s2">&quot;timestamp&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span><span class="p">[</span><span class="s2">&quot;timestamp&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y-%m-</span><span class="si">%d</span><span class="s2"> %H:%M:%S&quot;</span><span class="p">)</span>
+                    <span class="n">out</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span>
+                    <span class="k">return</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;Content-Type&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;application/json&quot;</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+                <span class="k">return</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DevtestHandler.post"><a class="viewcode-back" href="../../../docs/actingweb.handlers.html#actingweb.handlers.devtest.DevtestHandler.post">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">post</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">actor_id</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles POST for devtest&quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">devtest</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="p">(</span><span class="n">myself</span><span class="p">,</span> <span class="n">check</span><span class="p">)</span> <span class="o">=</span> <span class="n">auth</span><span class="o">.</span><span class="n">init_actingweb</span><span class="p">(</span>
+            <span class="n">appreq</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
+            <span class="n">actor_id</span><span class="o">=</span><span class="n">actor_id</span><span class="p">,</span>
+            <span class="n">path</span><span class="o">=</span><span class="s2">&quot;devtest&quot;</span><span class="p">,</span>
+            <span class="n">subpath</span><span class="o">=</span><span class="n">path</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">myself</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">check</span> <span class="ow">or</span> <span class="n">check</span><span class="o">.</span><span class="n">response</span><span class="p">[</span><span class="s2">&quot;code&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">200</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">body</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">request</span><span class="o">.</span><span class="n">body</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">):</span>
+                <span class="n">body</span> <span class="o">=</span> <span class="n">body</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">,</span> <span class="s2">&quot;ignore&quot;</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">body</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">body</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span>
+            <span class="n">params</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">TypeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">,</span> <span class="ne">KeyError</span><span class="p">):</span>
+            <span class="n">params</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">paths</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;proxy&quot;</span><span class="p">:</span>
+            <span class="n">mytwin</span> <span class="o">=</span> <span class="n">myself</span><span class="o">.</span><span class="n">get_peer_trustee</span><span class="p">(</span><span class="n">shorttype</span><span class="o">=</span><span class="s2">&quot;myself&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">mytwin</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">mytwin</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;create&quot;</span><span class="p">:</span>
+                    <span class="n">proxy</span> <span class="o">=</span> <span class="n">aw_proxy</span><span class="o">.</span><span class="n">AwProxy</span><span class="p">(</span><span class="n">peer_target</span><span class="o">=</span><span class="n">mytwin</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span>
+                    <span class="n">meta</span> <span class="o">=</span> <span class="n">proxy</span><span class="o">.</span><span class="n">get_resource</span><span class="p">(</span><span class="n">path</span><span class="o">=</span><span class="s2">&quot;/meta&quot;</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">params</span><span class="p">:</span>
+                        <span class="n">proxy</span><span class="o">.</span><span class="n">create_resource</span><span class="p">(</span><span class="s2">&quot;/properties&quot;</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+                    <span class="n">out</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">meta</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;Content-Type&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;application/json&quot;</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;Location&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">mytwin</span><span class="p">[</span><span class="s2">&quot;baseuri&quot;</span><span class="p">])</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+                    <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;ping&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">204</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="k">elif</span> <span class="n">paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;attribute&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">bucket</span> <span class="o">=</span> <span class="n">attribute</span><span class="o">.</span><span class="n">Attributes</span><span class="p">(</span>
+                    <span class="n">actor_id</span><span class="o">=</span><span class="n">myself</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">bucket</span><span class="o">=</span><span class="n">paths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">params</span><span class="p">:</span>
+                    <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                        <span class="n">bucket</span><span class="o">.</span><span class="n">set_attr</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">timestamp</span><span class="o">=</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">utcnow</span><span class="p">())</span>
+                    <span class="n">out</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">400</span><span class="p">)</span>
+                    <span class="k">return</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;Content-Type&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;application/json&quot;</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+                <span class="k">return</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">set_status</span><span class="p">(</span><span class="mi">404</span><span class="p">)</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">ActingWeb</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../LICENSE.html">License</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../README.html">README - actingweb - an ActingWeb Library</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/developers.html">ActingWeb Developer Interface</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/actingweb-spec.html">ActingWeb Specification - version 1.0</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/actingweb.html">actingweb code</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../CHANGELOG.html">CHANGELOG</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2020, Greger Teigre Wedel.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 5.3.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

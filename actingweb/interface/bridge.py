@@ -191,6 +191,49 @@ class ActingWebBridge(OnAWBase):
             return result if result is not None else True
         return True
         
+    def create_actor(self, creator: str, url: str = "", passphrase: str = "") -> Optional['ActorInterface']:
+        """
+        Create a new actor using either the modern factory function or fallback to legacy method.
+        
+        Args:
+            creator: The creator identifier (usually email)
+            url: The request URL for the actor
+            passphrase: Optional passphrase for the actor
+            
+        Returns:
+            ActorInterface if successful, None if creation failed
+        """
+        # Try to use the modern actor factory function if available
+        if hasattr(self, 'aw_app') and self.aw_app._actor_factory_func:
+            try:
+                actor_interface = self.aw_app._actor_factory_func(creator=creator)
+                if actor_interface and actor_interface.id:
+                    # Execute actor_created lifecycle hook
+                    self.aw_app.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+                    return actor_interface
+                else:
+                    logging.warning(f"Actor factory function failed to create new Actor({url} {creator})")
+                    return None
+            except Exception as e:
+                logging.error(f"Error in actor factory function: {e}")
+                return None
+        else:
+            # Fallback to legacy actor creation method
+            from .. import actor
+            from .actor_interface import ActorInterface
+            
+            legacy_actor = actor.Actor(config=self.aw_app.get_config() if hasattr(self, 'aw_app') else None)
+            if legacy_actor.create(url=url, creator=creator, passphrase=passphrase):
+                # Wrap legacy actor in interface
+                actor_interface = ActorInterface(legacy_actor)
+                # Execute actor_created lifecycle hook if we have the app
+                if hasattr(self, 'aw_app'):
+                    self.aw_app.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+                return actor_interface
+            else:
+                logging.warning(f"Was not able to create new Actor({url} {creator})")
+                return None
+        
     def get_resources(self, name: str) -> Dict[str, Any]:
         """Handle GET resources through hooks."""
         actor_interface = self._get_actor_interface()

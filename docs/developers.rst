@@ -719,16 +719,21 @@ Hook Function Signature
     :param kwargs: Event-specific parameters
     :return: Event-specific return value
 
-Migration from OnAWBase
-=======================
+Migration from OnAWBase (v3.1 Breaking Change)
+=================================================
 
-The new interface provides a clean migration path from the old ``OnAWBase`` system:
+.. warning::
+   **Breaking Change in v3.1**: The legacy ``OnAWBase`` interface has been completely removed.
+   Applications using the old interface must migrate to the modern ``ActingWebApp`` interface.
+   
+   See :doc:`migration-v3.1` for detailed migration instructions.
 
-Before (OnAWBase)
------------------
+Before (OnAWBase - NO LONGER SUPPORTED)
+---------------------------------------
 
 .. code-block:: python
 
+    # This code NO LONGER WORKS in v3.1+
     class OnAWDemo(on_aw.OnAWBase):
         def get_properties(self, path: list[str], data: dict) -> Optional[dict]:
             if not path:
@@ -746,8 +751,8 @@ Before (OnAWBase)
                 return None
             return new
 
-After (New Interface)
----------------------
+After (Modern Interface - REQUIRED in v3.1+)
+--------------------------------------------
 
 .. code-block:: python
 
@@ -769,16 +774,22 @@ Benefits
 5. **Flexibility**: Easy to add new hooks without modifying core classes
 6. **Testing**: Hooks can be tested independently
 
-Backward Compatibility
-======================
+Version 3.1 Breaking Changes
+============================
 
-The new interface is fully backward compatible with existing ActingWeb applications. You can:
+.. warning::
+   **ActingWeb v3.1 removes backward compatibility** with the legacy ``OnAWBase`` interface.
+   
+   This was necessary to:
+   
+   - Eliminate dual interface maintenance complexity
+   - Improve runtime performance by removing bridge layer overhead
+   - Provide better type safety and developer experience
+   - Reduce potential for interface synchronization bugs
 
-1. Continue using the old ``OnAWBase`` system
-2. Gradually migrate to the new interface
-3. Mix both approaches during transition
-
-The new interface uses a bridge pattern to translate between the hook system and the existing ``OnAWBase`` callbacks, ensuring seamless operation.
+**Migration Required**
+   All applications using the legacy ``OnAWBase`` interface must migrate to the modern 
+   ``ActingWebApp`` interface. See :doc:`migration-v3.1` for complete migration instructions.
 
 Advanced Usage
 ==============

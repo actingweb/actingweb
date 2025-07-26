@@ -1,3 +1,5 @@
+from typing import Any, Dict, Optional
+
 from actingweb import auth
 from actingweb.handlers import base_handler
 
@@ -35,7 +37,13 @@ class WwwHandler(base_handler.BaseHandler):
             return
         if path == "properties":
             properties = myself.get_properties()
-            properties = self.on_aw.get_properties(path=[], data=properties)
+            # Execute property hook for web interface
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    hook_result = self.hooks.execute_property_hooks("*", "get", actor_interface, properties, [])
+                    if hook_result is not None:
+                        properties = hook_result
             self.response.template_values = {
                 "id": myself.id,
                 "properties": properties,
@@ -44,9 +52,14 @@ class WwwHandler(base_handler.BaseHandler):
         if path == "property":
             prop_name = self.request.get("name")
             lookup = myself.property[prop_name] if prop_name and myself.property else None
-            lookup = self.on_aw.get_properties(
-                path=[self.request.get("name")] if self.request.get("name") else [], data=lookup or {}
-            )
+            # Execute property hook for specific property
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    prop_path = [prop_name] if prop_name else []
+                    hook_result = self.hooks.execute_property_hooks(prop_name or "*", "get", actor_interface, lookup or {}, prop_path)
+                    if hook_result is not None:
+                        lookup = hook_result
             if lookup:
                 self.response.template_values = {
                     "id": myself.id,
@@ -81,7 +94,14 @@ class WwwHandler(base_handler.BaseHandler):
                     "trusts": relationships,
                 }
             return
-        output = self.on_aw.www_paths(path=path)
+        # Execute callback hook for custom web paths
+        output = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                hook_result = self.hooks.execute_callback_hooks(f"www_{path}", actor_interface, {"path": path, "method": "GET"})
+                if hook_result is not None:
+                    output = str(hook_result) if not isinstance(hook_result, str) else hook_result
         if output:
             self.response.write(output)
         else:

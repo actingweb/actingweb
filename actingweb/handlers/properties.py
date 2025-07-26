@@ -62,7 +62,7 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not myself or not check or check.response["code"] != 200:
             return
         if not name:
-            path = {0: None}
+            path = []
         else:
             path = name.split("/")
             name = path[0]
@@ -87,11 +87,21 @@ class PropertiesHandler(base_handler.BaseHandler):
                     del path[0]
                     for p in path:
                         out = out[p]
-                out = self.on_aw.get_properties(path=path if isinstance(path, list) else [], data=out)
-                if out is None:
-                    if self.response:
-                        self.response.set_status(404)
-                    return
+                # Execute property hook if available
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        # Use the original name for the hook, not the modified path
+                        hook_path = name.split("/") if name else []
+                        transformed = self.hooks.execute_property_hooks(
+                            name or "*", "get", actor_interface, out, hook_path
+                        )
+                        if transformed is not None:
+                            out = transformed
+                        elif name:  # If hook returns None for specific property, it means 404
+                            if self.response:
+                                self.response.set_status(404)
+                            return
                 out = json.dumps(out)
             except (TypeError, ValueError, KeyError):
                 if self.response:
@@ -117,8 +127,17 @@ class PropertiesHandler(base_handler.BaseHandler):
                 pair[name] = js
             except ValueError:
                 pair[name] = value
-        pair = self.on_aw.get_properties(path=[], data=pair)
-        if pair is None:
+        # Execute property hooks for all properties if available
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                result = {}
+                for key, value in pair.items():
+                    transformed = self.hooks.execute_property_hooks(key, "get", actor_interface, value, [])
+                    if transformed is not None:
+                        result[key] = transformed
+                pair = result
+        if not pair:
             self.response.set_status(404)
             return
         out = json.dumps(pair)
@@ -165,10 +184,20 @@ class PropertiesHandler(base_handler.BaseHandler):
             except (TypeError, ValueError, KeyError):
                 new_body = body
                 is_json = False
-            new = self.on_aw.put_properties(path=path, old=old, new=new_body)
-            if new is None:
-                self.response.set_status(400, "Payload is not accepted")
-                return
+            # Execute property put hook if available
+            new = new_body
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface and path:
+                    property_name = path[0] if path else "*"
+                    transformed = self.hooks.execute_property_hooks(
+                        property_name, "put", actor_interface, new_body, path
+                    )
+                    if transformed is not None:
+                        new = transformed
+                    else:
+                        self.response.set_status(400, "Payload is not accepted")
+                        return
             if is_json:
                 if myself and myself.property:
                     myself.property[name] = json.dumps(new)
@@ -203,10 +232,19 @@ class PropertiesHandler(base_handler.BaseHandler):
             res = orig
         except (TypeError, ValueError, KeyError):
             res = store
-        res = self.on_aw.put_properties(path=path, old=orig or {}, new=res)
-        if res is None:
-            self.response.set_status(400, "Payload is not accepted")
-            return
+        # Execute property put hook if available
+        final_res = res
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface and path:
+                property_name = path[0] if path else "*"
+                transformed = self.hooks.execute_property_hooks(property_name, "put", actor_interface, res, path)
+                if transformed is not None:
+                    final_res = transformed
+                else:
+                    self.response.set_status(400, "Payload is not accepted")
+                    return
+        res = final_res
         res = json.dumps(res)
         logging.debug("Result to store( " + res + ") in /properties/" + name)
         if myself and myself.property:
@@ -234,19 +272,36 @@ class PropertiesHandler(base_handler.BaseHandler):
         pair = dict()
         # Handle the simple form
         if self.request.get("property") and self.request.get("value"):
-            val = self.on_aw.post_properties(prop=self.request.get("property"), data=self.request.get("value"))
-            if val is None:
-                if self.response:
-                    self.response.set_status(403)
-                return
+            # Execute property post hook if available
+            val = self.request.get("value")
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    prop_name = self.request.get("property")
+                    transformed = self.hooks.execute_property_hooks(
+                        prop_name, "post", actor_interface, val, [prop_name]
+                    )
+                    if transformed is not None:
+                        val = transformed
+                    else:
+                        if self.response:
+                            self.response.set_status(403)
+                        return
             pair[self.request.get("property")] = val
             if myself and myself.property:
                 myself.property[self.request.get("property")] = self.request.get("value")
         elif len(self.request.arguments()) > 0:
             for name in self.request.arguments():
-                val = self.on_aw.post_properties(prop=name, data=self.request.get(name))
-                if val is None:
-                    continue
+                # Execute property post hook if available
+                val = self.request.get(name)
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        transformed = self.hooks.execute_property_hooks(name, "post", actor_interface, val, [name])
+                        if transformed is not None:
+                            val = transformed
+                        else:
+                            continue
                 pair[name] = val
                 if myself and myself.property:
                     myself.property[name] = val
@@ -263,9 +318,16 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(400, "Error in json body")
                 return
             for key in params:
-                val = self.on_aw.post_properties(prop=key, data=params[key])
-                if val is None:
-                    continue
+                # Execute property post hook if available
+                val = params[key]
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, val, [key])
+                        if transformed is not None:
+                            val = transformed
+                        else:
+                            continue
                 pair[key] = val
                 if isinstance(val, dict):
                     text = json.dumps(val)
@@ -306,18 +368,33 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(403)
             return
         if not name:
-            if self.on_aw.delete_properties(path=path, old=myself.get_properties(), new=dict()) is False:
-                self.response.set_status(403)
-                return
+            # Execute property delete hook if available
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    result = self.hooks.execute_property_hooks(
+                        "*", "delete", actor_interface, myself.get_properties(), path
+                    )
+                    if result is None:
+                        self.response.set_status(403)
+                        return
             myself.delete_properties()
             myself.register_diffs(target="properties", subtarget=None, blob="")
             self.response.set_status(204)
             return
         if len(path) == 1:
             old_prop = myself.property[name] if myself and myself.property else None
-            if self.on_aw.delete_properties(path=path, old=old_prop or {}, new=dict()) is False:
-                self.response.set_status(403)
-                return
+            # Execute property delete hook if available
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface and path:
+                    property_name = path[0] if path else "*"
+                    result = self.hooks.execute_property_hooks(
+                        property_name, "delete", actor_interface, old_prop or {}, path
+                    )
+                    if result is None:
+                        self.response.set_status(403)
+                        return
             if myself and myself.property:
                 myself.property[name] = None
             myself.register_diffs(target="properties", subtarget=name, blob="")
@@ -336,9 +413,15 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not delete_dict(orig, path[1:]):
             self.response.set_status(404)
             return
-        if self.on_aw.delete_properties(path=path, old=old or {}, new=orig) is False:
-            self.response.set_status(403)
-            return
+        # Execute property delete hook if available
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface and path:
+                property_name = path[0] if path else "*"
+                result = self.hooks.execute_property_hooks(property_name, "delete", actor_interface, old or {}, path)
+                if result is None:
+                    self.response.set_status(403)
+                    return
         res = json.dumps(orig)
         logging.debug("Result to store( " + res + ") in /properties/" + name)
         if myself and myself.property:

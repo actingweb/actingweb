@@ -255,29 +255,16 @@ Handle actor lifecycle events:
         if token:
             actor.properties.oauth_token = token
 
-Legacy OnAWBase Support
------------------------
+Migration from Legacy Interface
+---------------------------------
 
-If you're migrating from the old interface, you can still use the ``OnAWBase`` class:
+.. warning::
+   **Breaking Change in v3.1**: The legacy ``OnAWBase`` interface has been completely removed.
+   
+   If you're migrating from the old interface, all code using ``OnAWBase`` must be updated 
+   to use the modern hook system. See :doc:`migration-v3.1` for detailed migration instructions.
 
-.. code-block:: python
-
-    from actingweb import on_aw
-
-    class MyOnAW(on_aw.OnAWBase):
-        def bot_post(self, path):
-            # Handle bot posts
-            return True
-
-        def get_properties(self, path, data):
-            # Handle property access
-            return data
-
-        def put_properties(self, path, old, new):
-            # Handle property updates
-            return new
-
-However, the new hook system is recommended for new applications as it provides better organization, type safety, and testing capabilities.
+The modern hook system provides better organization, type safety, and testing capabilities compared to the legacy interface.
 
 Database Configuration
 -----------------------

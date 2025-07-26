@@ -47,8 +47,16 @@ class ActionsHandler(base_handler.BaseHandler):
                 self.response.set_status(403, "Forbidden")
             return
             
-        # Call hook to get action info/status
-        result = self.on_aw.get_actions(name=name)
+        # Execute action hook to get action info/status
+        result = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                if not name:
+                    # Return list of available actions
+                    result = {"actions": list(self.hooks._action_hooks.keys())}
+                else:
+                    result = self.hooks.execute_action_hooks(name, actor_interface, {"method": "GET"})
         if result is not None:
             if self.response:
                 self.response.set_status(200, "OK")
@@ -96,8 +104,12 @@ class ActionsHandler(base_handler.BaseHandler):
                 self.response.set_status(400, "Error in json body")
             return
             
-        # Execute action
-        result = self.on_aw.post_actions(name=name, data=params)
+        # Execute action hook
+        result = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                result = self.hooks.execute_action_hooks(name, actor_interface, params)
         
         if result is not None:
             if self.response:
@@ -146,8 +158,12 @@ class ActionsHandler(base_handler.BaseHandler):
                 self.response.set_status(400, "Error in json body")
             return
             
-        # Execute action
-        result = self.on_aw.put_actions(name=name, data=params)
+        # Execute action hook (PUT treated same as POST)
+        result = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                result = self.hooks.execute_action_hooks(name, actor_interface, params)
         
         if result is not None:
             if self.response:
@@ -174,7 +190,14 @@ class ActionsHandler(base_handler.BaseHandler):
                 self.response.set_status(403, "Forbidden")
             return
             
-        result = self.on_aw.delete_actions(name=name)
+        # Execute action deletion hook
+        result = False
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                hook_result = self.hooks.execute_action_hooks(name, actor_interface, {"method": "DELETE"})
+                result = bool(hook_result)
+        
         if result:
             if self.response:
                 self.response.set_status(204, "Deleted")

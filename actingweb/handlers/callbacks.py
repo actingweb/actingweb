@@ -1,6 +1,7 @@
 import json
 import logging
 from builtins import str
+from typing import Any, Dict, Optional, Union
 
 from actingweb import auth
 from actingweb.handlers import base_handler
@@ -30,7 +31,15 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-        if not self.on_aw.get_callbacks(name=name):
+        # Execute callback hook for GET
+        result = False
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                hook_result = self.hooks.execute_callback_hooks(name, actor_interface, {"method": "GET"})
+                result = bool(hook_result) if hook_result is not None else False
+                
+        if not result:
             self.response.set_status(403, "Forbidden")
 
     def put(self, actor_id, name):
@@ -70,7 +79,15 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-        if not self.on_aw.delete_callbacks(name=name):
+        # Execute callback hook for DELETE
+        result = False
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                hook_result = self.hooks.execute_callback_hooks(name, actor_interface, {"method": "DELETE"})
+                result = bool(hook_result) if hook_result is not None else False
+                
+        if not result:
             self.response.set_status(403, "Forbidden")
 
     def post(self, actor_id, name):
@@ -101,16 +118,29 @@ class CallbacksHandler(base_handler.BaseHandler):
                         self.response.set_status(403, "Forbidden")
                     return
                 try:
-                    body = self.request.body
-                    if isinstance(body, bytes):
-                        body = body.decode("utf-8", "ignore")
-                    elif body is None:
-                        body = "{}"
-                    params = json.loads(body)
+                    body: Union[str, bytes, None] = self.request.body
+                    if body is None:
+                        body_str = "{}"
+                    elif isinstance(body, bytes):
+                        body_str = body.decode("utf-8", "ignore")
+                    else:
+                        body_str = body
+                    params = json.loads(body_str)
                 except (TypeError, ValueError, KeyError):
                     self.response.set_status(400, "Error in json body")
                     return
-                if self.on_aw.post_subscriptions(sub=sub, peerid=peerid, data=params):
+                    
+                # Execute subscription callback hook
+                result = False
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        hook_data = params.copy()
+                        hook_data.update({"subscription": sub, "peerid": peerid})
+                        hook_result = self.hooks.execute_callback_hooks("subscription", actor_interface, hook_data)
+                        result = bool(hook_result) if hook_result is not None else False
+                        
+                if result:
                     self.response.set_status(204, "Found")
                 else:
                     self.response.set_status(400, "Processing error")
@@ -126,5 +156,27 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-        if not self.on_aw.post_callbacks(name=name):
+        # Execute callback hook for POST
+        result = False
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                # Parse request body for hook data
+                try:
+                    body: Union[str, bytes, None] = self.request.body
+                    if body is None:
+                        body_str = "{}"
+                    elif isinstance(body, bytes):
+                        body_str = body.decode("utf-8", "ignore")
+                    else:
+                        body_str = body
+                    hook_data = json.loads(body_str)
+                except (TypeError, ValueError, KeyError):
+                    hook_data = {}
+                    
+                hook_data["method"] = "POST"
+                hook_result = self.hooks.execute_callback_hooks(name, actor_interface, hook_data)
+                result = bool(hook_result) if hook_result is not None else False
+                
+        if not result:
             self.response.set_status(403, "Forbidden")

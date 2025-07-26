@@ -47,8 +47,17 @@ class MethodsHandler(base_handler.BaseHandler):
                 self.response.set_status(403, "Forbidden")
             return
             
-        # Call hook to get method info
-        result = self.on_aw.get_methods(name=name)
+        # Execute method hook to get method info
+        result = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                if not name:
+                    # Return list of available methods
+                    result = {"methods": list(self.hooks._method_hooks.keys())}
+                else:
+                    result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "GET"})
+        
         if result is not None:
             if self.response:
                 self.response.set_status(200, "OK")
@@ -101,10 +110,14 @@ class MethodsHandler(base_handler.BaseHandler):
         
         if is_jsonrpc:
             # Handle JSON-RPC request
-            result = self._handle_jsonrpc_request(params, name)
+            result = self._handle_jsonrpc_request(params, name, myself)
         else:
             # Handle regular method call
-            result = self.on_aw.post_methods(name=name, data=params)
+            result = None
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    result = self.hooks.execute_method_hooks(name, actor_interface, params)
             
         if result is not None:
             if self.response:
@@ -135,7 +148,14 @@ class MethodsHandler(base_handler.BaseHandler):
                 self.response.set_status(403, "Forbidden")
             return
             
-        result = self.on_aw.delete_methods(name=name)
+        # Execute method delete hook
+        result = False
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                hook_result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "DELETE"})
+                result = hook_result is not None
+        
         if result:
             if self.response:
                 self.response.set_status(204, "Deleted")
@@ -143,7 +163,7 @@ class MethodsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
 
-    def _handle_jsonrpc_request(self, params: Dict[str, Any], method_name: str) -> Optional[Dict[str, Any]]:
+    def _handle_jsonrpc_request(self, params: Dict[str, Any], method_name: str, myself) -> Optional[Dict[str, Any]]:
         """
         Handle JSON-RPC 2.0 request.
         
@@ -183,7 +203,12 @@ class MethodsHandler(base_handler.BaseHandler):
         
         # Call the method hook
         try:
-            result = self.on_aw.post_methods(name=params["method"], data=method_params)
+            # Execute method hook
+            result = None
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    result = self.hooks.execute_method_hooks(params["method"], actor_interface, method_params)
             
             if result is not None:
                 # Success response

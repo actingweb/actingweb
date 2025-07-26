@@ -44,33 +44,26 @@ class RootFactoryHandler(base_handler.BaseHandler):
             trustee_root = self.request.get("trustee_root")
             passphrase = self.request.get("passphrase")
             
-        # Use the bridge to create the actor (handles both modern and legacy methods)
-        if hasattr(self.on_aw, 'create_actor'):
-            actor_interface = self.on_aw.create_actor(
-                creator=creator, 
-                url=self.request.url or "", 
-                passphrase=passphrase
+        # Create actor using direct method
+        myself = actor.Actor(config=self.config)
+        if not myself.create(
+            url=self.request.url or "", creator=creator, passphrase=passphrase
+        ):
+            self.response.set_status(400, "Not created")
+            logging.warning(
+                "Was not able to create new Actor("
+                + str(self.request.url)
+                + " "
+                + str(creator)
+                + ")"
             )
-            if actor_interface and actor_interface.id:
-                myself = actor_interface.core_actor
-            else:
-                self.response.set_status(400, "Not created")
-                return
-        else:
-            # Fallback to legacy method if bridge doesn't support create_actor
-            myself = actor.Actor(config=self.config)
-            if not myself.create(
-                url=self.request.url or "", creator=creator, passphrase=passphrase
-            ):
-                self.response.set_status(400, "Not created")
-                logging.warning(
-                    "Was not able to create new Actor("
-                    + str(self.request.url)
-                    + " "
-                    + str(creator)
-                    + ")"
-                )
-                return
+            return
+        
+        # Execute actor_created lifecycle hook if hooks are available
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
         
         if len(trustee_root) > 0 and myself.store:
             myself.store.trustee_root = trustee_root

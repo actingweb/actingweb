@@ -1,4 +1,5 @@
 import json
+from typing import Any, Dict, Optional, Union
 
 from actingweb import auth
 from actingweb.handlers import base_handler
@@ -20,8 +21,13 @@ class ResourcesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403)
             return
-        pair = self.on_aw.get_resources(name=name)
-        if pair and any(pair):
+        # Execute callback hook for resource GET
+        pair = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, {"method": "GET"})
+        if pair:
             out = json.dumps(pair)
             if self.response:
                 self.response.write(out)
@@ -47,11 +53,16 @@ class ResourcesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403)
             return
-        pair = self.on_aw.delete_resources(name=name)
+        # Execute callback hook for resource DELETE
+        pair = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, {"method": "DELETE"})
         if pair:
             if isinstance(pair, int) and 100 <= pair <= 999:
                 return
-            if any(pair):
+            if pair:
                 out = json.dumps(pair)
                 if self.response:
                     self.response.write(out)
@@ -76,21 +87,31 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(403)
             return
         try:
-            body = self.request.body
-            if isinstance(body, bytes):
-                body = body.decode("utf-8", "ignore")
-            elif body is None:
-                body = "{}"
-            params = json.loads(body)
+            body: Union[str, bytes, None] = self.request.body
+            if body is None:
+                body_str = "{}"
+            elif isinstance(body, bytes):
+                body_str = body.decode("utf-8", "ignore")
+            else:
+                body_str = body
+            params = json.loads(body_str)
         except (TypeError, ValueError, KeyError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
-        pair = self.on_aw.put_resources(name=name, params=params)
+            
+        # Execute callback hook for resource PUT
+        pair = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                data = params.copy()
+                data["method"] = "PUT"
+                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, data)
         if pair:
             if isinstance(pair, int) and 100 <= pair <= 999:
                 return
-            if any(pair):
+            if pair:
                 out = json.dumps(pair)
                 if self.response:
                     self.response.write(out)
@@ -115,21 +136,31 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(403)
             return
         try:
-            body = self.request.body
-            if isinstance(body, bytes):
-                body = body.decode("utf-8", "ignore")
-            elif body is None:
-                body = "{}"
-            params = json.loads(body)
+            body: Union[str, bytes, None] = self.request.body
+            if body is None:
+                body_str = "{}"
+            elif isinstance(body, bytes):
+                body_str = body.decode("utf-8", "ignore")
+            else:
+                body_str = body
+            params = json.loads(body_str)
         except (TypeError, ValueError, KeyError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
-        pair = self.on_aw.post_resources(name=name, params=params)
+            
+        # Execute callback hook for resource POST
+        pair = None
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                data = params.copy()
+                data["method"] = "POST"
+                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, data)
         if pair:
             if isinstance(pair, int) and 100 <= pair <= 999:
                 return
-            if any(pair):
+            if pair:
                 out = json.dumps(pair)
                 if self.response:
                     self.response.write(out)

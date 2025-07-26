@@ -1,0 +1,318 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>README - actingweb - an ActingWeb Library &#8212; ActingWeb 2.6.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css" />
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script src="_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Getting Started" href="docs/getting-started.html" />
+    <link rel="prev" title="License" href="LICENSE.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="readme-actingweb-an-actingweb-library">
+<h1>README - actingweb - an ActingWeb Library<a class="headerlink" href="#readme-actingweb-an-actingweb-library" title="Permalink to this heading">¶</a></h1>
+<p>This is a python library implementation showcasing the REST-based <a class="reference external" href="http://actingweb.org">ActingWeb</a>
+distributed micro-services model. A typical use case is bot to bot communication on a peer to peer level.
+It serves as the reference implementation for the <a class="reference external" href="http://actingweb.readthedocs.io/en/release/">ActingWeb REST protocol
+specification</a> for
+how such micro-services interact.</p>
+<section id="repository-and-documentation">
+<h2>Repository and documentation<a class="headerlink" href="#repository-and-documentation" title="Permalink to this heading">¶</a></h2>
+<p>The library is available as a PYPI library and installed with <cite>pip install actingweb</cite>. Project home is at
+<a class="reference external" href="https://pypi.org/project/actingweb/">https://pypi.org/project/actingweb/</a>.</p>
+<p>The git repository for this library can be found at
+<a class="reference external" href="https://github.com/gregertw/actingweb">https://github.com/gregertw/actingweb</a>.</p>
+<p>The latest documentation for the released version (release branch) of this library can be found at
+<a class="reference external" href="http://actingweb.readthedocs.io/">http://actingweb.readthedocs.io/</a>.</p>
+<p>The master branch of the library has the latest features and bug fixes and the updated documentation can be found at
+<a class="reference external" href="http://actingweb.readthedocs.io/en/master">http://actingweb.readthedocs.io/en/master</a>.</p>
+</section>
+<section id="why-use-actingweb">
+<h2>Why use actingweb?<a class="headerlink" href="#why-use-actingweb" title="Permalink to this heading">¶</a></h2>
+<p>ActingWeb is well suited for applications where each individual user’s data and functionality both needs high degree
+of security and privacy AND high degree of interactions with the outside world. Typical use cases are Internet of Things
+where each user’s “Thing” becomes a bot that interacts with the outside world, as well as bot to bot
+communication where each user can get a dedicated, controllable bot talking to other user’s bots.</p>
+<p>As a developer, you get a set of out of the box functionality from the ActingWeb library:</p>
+<ul class="simple">
+<li><p>an out-of-the-box REST bot representing each user’s thing, service, or functionality (your choice)</p></li>
+<li><p>a way to store and expose data over REST in a very granular way using properties</p></li>
+<li><p>a trust system that allows creation of relationships the user’s bot on the user level</p></li>
+<li><p>a subscription system that allows one bot (user) to subscribe to another bot’s (user’s) changes</p></li>
+<li><dl class="simple">
+<dt>an oauth framework to tie the bot to any other API service and thus allow user to user communication using</dt><dd><p>individual user’s data from the API service</p>
+</dd>
+</dl>
+</li>
+</ul>
+<p>There is a high degree of configurability in what to expose, and although the ActingWeb specification specifies
+a protocol set to allow bots from different developers to talk to each other, not all functionality needs to be
+exposed.`</p>
+<p>Each user’s indvidual bot is called an <code class="docutils literal notranslate"><span class="pre">actor</span></code> and this actor has its own root URL where its data and services are
+exposed. See below for further details.</p>
+</section>
+<section id="features-of-actingweb-library">
+<h2>Features of actingweb library<a class="headerlink" href="#features-of-actingweb-library" title="Permalink to this heading">¶</a></h2>
+<p>The latest code in master is at all times deployed to
+<a class="reference external" href="https://actingwebdemo.greger.io/">https://actingwebdemo.greger.io/</a>
+It has implemented a simple sign-up page as a front-end to a REST-based factory URL that will instantiate a
+new actor with a guid to identify the actor. The guid is then embedded in the actor’s root URL, e.g.
+<code class="docutils literal notranslate"><span class="pre">https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54</span></code>.</p>
+<p>If you try to create an actor, you will get to a simple web front-end where you can set the actor’s data
+(properties) and delete the actor. You can later access the actor (both /www and REST) by using the Creator
+you set as username and the passphrase you get when creating the actor and log in.</p>
+<p><strong>acting-web-gae-library</strong> is a close to complete implementation of the full ActingWeb specification where all
+functionality can be accessed through the actor’s root URL (e.g.
+<code class="docutils literal notranslate"><span class="pre">https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54</span></code>):</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">/properties</span></code>: attributed/value pairs as flat or nested json can be set, accessed, and deleted to store this actor’s data</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/meta</span></code>: a publicly available json structure allowing actor’s to discover each other’s capabilities</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/trust</span></code>: access to requesting, approving, and managing trust relationships with other actors of either the same type or any other actor “talking actingweb”</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/subscriptions</span></code>: once a trust relationship is set up, this path allows access to establishing, retrieving, and managing subscriptions that are based on paths and identified with target, sub-target, and resource, e.g. <code class="docutils literal notranslate"><span class="pre">/resources/folders/12345</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/callbacks</span></code>: used for verification when establishing trust/subscriptions, to receive callbacks on subscriptions, as well as a programming hook to process webhooks from 3rd party services</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/resources</span></code>: a skeleton to simplify exposure of any type of resource (where /properties is not suited)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/oauth</span></code>: used to initiate a www-based oauth flow to tie the actor to a specific OAuth user and service. Available if OAuth is turned on and a 3rd party OAuth service has been configured in config.py. /www will also be redirected to /oauth (<em>OAuth is not enabled in the online actingwebdemo mini-application</em>)</p></li>
+</ul>
+<p><strong>Sidenote</strong>: The <strong>actingweb  library</strong> also implements a simple mechanism for protecting the /www path with oauth
+(not in the specification). On successful OAuth authorisation, it will set a browser cookie to the oauth
+token. This is not used in the inline demo and requires also that the identity of the user authorising OAuth
+access is the same user already tied to the instantiated actor. There is a programming hook that allows such
+verification as part of the OAuth flow, but it is not enabled in the actingwebdemo mini-application.</p>
+</section>
+<section id="other-applications-using-the-actingweb-library">
+<h2>Other applications using the actingweb library<a class="headerlink" href="#other-applications-using-the-actingweb-library" title="Permalink to this heading">¶</a></h2>
+<p>There is also another demo application available for <a class="reference external" href="http://https://www.webex.com/products/teams">Cisco Webex Teams</a>
+. It uses the actingweb library to implement a Webex Teams bot and integration. If you have signed up as a
+Cisco Webex Teams user, you can try it out by sending a message to <a class="reference external" href="mailto:armyknife&#37;&#52;&#48;webex&#46;bot">armyknife<span>&#64;</span>webex<span>&#46;</span>bot</a>.</p>
+<p>More details about the Army Knife can be found on <a class="reference external" href="http://stuff.ttwedel.no/tag/spark">this blog</a>
+.</p>
+</section>
+<section id="the-actingweb-model">
+<h2>The ActingWeb Model<a class="headerlink" href="#the-actingweb-model" title="Permalink to this heading">¶</a></h2>
+<p>The ActingWeb micro-services model and protocol defines a bot-to-bot and micro-service-to-micro-service
+communication that allows extreme distribution of data and functionality. This makes it very suitable for
+holding small pieces of sensitive data on behalf of a user or “things” (as in Internet of Things).
+These sensitive data can then be used and shared in a very granular and controlled way through the secure
+and distributed ActingWeb REST protocol. This allows you to expose e.g. your location data from your phone
+directly on the Internet (protected by a security framework) and to be used by other services <strong>on your choosing</strong>.
+You can at any time revoke access to your data for one particular service without influencing anything else.</p>
+<section id="the-actingweb-micro-services-model">
+<h3>The ActingWeb Micro-Services Model<a class="headerlink" href="#the-actingweb-micro-services-model" title="Permalink to this heading">¶</a></h3>
+<p>The programming model in ActingWeb is based on an extreme focus on only representing one small set of functionality
+and for only one user or entity. This is achieved by not allowing any other way of calling the service
+(in ActingWeb called a “mini-application”) than through a user and the mini-app’s REST interface (a user’s
+instance of a mini-application is called an <em>actor</em> in ActingWeb). From a practical point of view, getting xyz’s
+location through the REST protocol is as simple as doing a GET <code class="docutils literal notranslate"><span class="pre">http://mini-app-url/xyz/properties/location</span></code>.</p>
+<p>There is absolutely no way of getting xyz’s and yyz’s location information in one request, and the security model
+enforces access based on user (i.e. actor), so even if you have access to
+<code class="docutils literal notranslate"><span class="pre">http://mini-app-url/xyz/properties/location</span></code>, you may not have access to
+<code class="docutils literal notranslate"><span class="pre">http://mini-app-url/yyz/properties/location</span></code>.</p>
+<p>Any functionality desired across actors, for example xyz sharing location information with yyz
+<strong>MUST</strong> be done through the ActingWeb REST protocol. However, since the ActingWeb service-to-service
+REST protocol is standardised, <strong>any</strong> service implementing the protocol can easily share data with other services.</p>
+</section>
+<section id="the-actingweb-rest-protocol">
+<h3>The ActingWeb REST Protocol<a class="headerlink" href="#the-actingweb-rest-protocol" title="Permalink to this heading">¶</a></h3>
+<p>The ActingWeb REST protocol specifies a set of default endpoints (like <code class="docutils literal notranslate"><span class="pre">/properties</span></code>, <code class="docutils literal notranslate"><span class="pre">/trust</span></code>,
+<code class="docutils literal notranslate"><span class="pre">/subscriptions</span></code> etc) that are used to implement the service-to-service communication, as well as a set of
+suggested endpoints (like <code class="docutils literal notranslate"><span class="pre">/resources</span></code>, <code class="docutils literal notranslate"><span class="pre">/actions</span></code> etc) where the mini-applications can expose their own
+functionality. All exchanges are based on REST principles and a set of flows are built into the protocol that
+support exchanging data, establishing trust between actors (per actor, not per mini-application), as well as
+subscribing to changes.</p>
+</section>
+<section id="the-actingweb-security-model">
+<h3>The ActingWeb Security Model<a class="headerlink" href="#the-actingweb-security-model" title="Permalink to this heading">¶</a></h3>
+<p>The security model is based on trust between actors, not mini-applications. This means that each instance of the
+mini-application holding the sensitive data for one particular person or thing <strong>must</strong> be connected through a trust
+relationship to another ActingWeb actor, but it doesn’t have to be a mini-application of the same type (like location
+sharing), but could be a location sharing actor establishing a trust relationship with 911 authorities to
+allow emergency services to always be able to look you up.</p>
+<p>There are currently two ways of establishing trust between actors: either through an explicit OAuth flow where an
+actor is tied to somebody’s account somewhere else (like Google, Box.com, etc) or through a flow where one actor
+requests a trust relationship with another, which then needs to be approved either interactively by a user or
+programatically through the REST interface.</p>
+<p>See <a class="reference external" href="http://actingweb.org/">http://actingweb.org/</a> for more information.</p>
+</section>
+</section>
+<section id="requirements">
+<h2>Requirements<a class="headerlink" href="#requirements" title="Permalink to this heading">¶</a></h2>
+<p><strong>Python 3.11+</strong></p>
+<p>The actingweb library requires Python 3.11 or higher and uses modern Python features including:</p>
+<ul class="simple">
+<li><p>Type hints with union syntax (<code class="docutils literal notranslate"><span class="pre">str</span> <span class="pre">|</span> <span class="pre">None</span></code>)</p></li>
+<li><p>F-string formatting</p></li>
+<li><p>Modern enum classes for constants</p></li>
+<li><p>Enhanced error handling with custom exception hierarchies</p></li>
+</ul>
+<p>Dependencies:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">pynamodb</span></code> - DynamoDB ORM for AWS DynamoDB backend</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">boto3</span></code> - AWS SDK for Python (DynamoDB support)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">urlfetch</span></code> - HTTP client library</p></li>
+</ul>
+<p>Development dependencies:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">pytest</span></code> - Testing framework</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">mypy</span></code> - Static type checker</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">black</span></code> - Code formatter</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ruff</span></code> - Fast Python linter</p></li>
+</ul>
+</section>
+<section id="building-and-installing">
+<h2>Building and installing<a class="headerlink" href="#building-and-installing" title="Permalink to this heading">¶</a></h2>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Install from PyPI:</span>
+<span class="n">pip</span> <span class="n">install</span> <span class="n">actingweb</span>
+
+<span class="c1"># For development with Poetry:</span>
+<span class="n">poetry</span> <span class="n">install</span>
+<span class="n">poetry</span> <span class="n">install</span> <span class="o">--</span><span class="k">with</span> <span class="n">dev</span><span class="p">,</span><span class="n">docs</span>
+
+<span class="c1"># Build source and binary distributions:</span>
+<span class="n">poetry</span> <span class="n">build</span>
+
+<span class="c1"># Upload to test server:</span>
+<span class="n">poetry</span> <span class="n">publish</span> <span class="o">--</span><span class="n">repository</span> <span class="n">pypitest</span>
+
+<span class="c1"># Upload to production server:</span>
+<span class="n">poetry</span> <span class="n">publish</span>
+</pre></div>
+</div>
+</section>
+<section id="development">
+<h2>Development<a class="headerlink" href="#development" title="Permalink to this heading">¶</a></h2>
+<p>The library uses modern Python development practices with Poetry:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Install development dependencies:</span>
+<span class="n">poetry</span> <span class="n">install</span> <span class="o">--</span><span class="k">with</span> <span class="n">dev</span><span class="p">,</span><span class="n">docs</span>
+
+<span class="c1"># Run tests:</span>
+<span class="n">poetry</span> <span class="n">run</span> <span class="n">pytest</span>
+
+<span class="c1"># Type checking:</span>
+<span class="n">poetry</span> <span class="n">run</span> <span class="n">mypy</span> <span class="n">actingweb</span>
+
+<span class="c1"># Code formatting:</span>
+<span class="n">poetry</span> <span class="n">run</span> <span class="n">black</span> <span class="n">actingweb</span> <span class="n">tests</span>
+
+<span class="c1"># Linting:</span>
+<span class="n">poetry</span> <span class="n">run</span> <span class="n">ruff</span> <span class="n">check</span> <span class="n">actingweb</span> <span class="n">tests</span>
+
+<span class="c1"># Activate virtual environment:</span>
+<span class="n">poetry</span> <span class="n">shell</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">ActingWeb</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="LICENSE.html">License</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">README - actingweb - an ActingWeb Library</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#repository-and-documentation">Repository and documentation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#why-use-actingweb">Why use actingweb?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#features-of-actingweb-library">Features of actingweb library</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#other-applications-using-the-actingweb-library">Other applications using the actingweb library</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#the-actingweb-model">The ActingWeb Model</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#requirements">Requirements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#building-and-installing">Building and installing</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#development">Development</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="docs/getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="docs/developers.html">ActingWeb Developer Interface</a></li>
+<li class="toctree-l1"><a class="reference internal" href="docs/actingweb-spec.html">ActingWeb Specification - version 1.0</a></li>
+<li class="toctree-l1"><a class="reference internal" href="docs/actingweb.html">actingweb code</a></li>
+<li class="toctree-l1"><a class="reference internal" href="CHANGELOG.html">CHANGELOG</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="LICENSE.html" title="previous chapter">License</a></li>
+      <li>Next: <a href="docs/getting-started.html" title="next chapter">Getting Started</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2020, Greger Teigre Wedel.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 5.3.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/README.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

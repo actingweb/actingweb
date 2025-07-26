@@ -18,7 +18,6 @@ class RootFactoryHandler(base_handler.BaseHandler):
             self.response.set_status(404)
 
     def post(self):
-        myself = actor.Actor(config=self.config)
         try:
             body = self.request.body
             if isinstance(body, bytes):
@@ -44,18 +43,35 @@ class RootFactoryHandler(base_handler.BaseHandler):
             creator = self.request.get("creator")
             trustee_root = self.request.get("trustee_root")
             passphrase = self.request.get("passphrase")
-        if not myself.create(
-            url=self.request.url or "", creator=creator, passphrase=passphrase
-        ):
-            self.response.set_status(400, "Not created")
-            logging.warning(
-                "Was not able to create new Actor("
-                + str(self.request.url)
-                + " "
-                + str(creator)
-                + ")"
+            
+        # Use the bridge to create the actor (handles both modern and legacy methods)
+        if hasattr(self.on_aw, 'create_actor'):
+            actor_interface = self.on_aw.create_actor(
+                creator=creator, 
+                url=self.request.url or "", 
+                passphrase=passphrase
             )
-            return
+            if actor_interface and actor_interface.id:
+                myself = actor_interface.core_actor
+            else:
+                self.response.set_status(400, "Not created")
+                return
+        else:
+            # Fallback to legacy method if bridge doesn't support create_actor
+            myself = actor.Actor(config=self.config)
+            if not myself.create(
+                url=self.request.url or "", creator=creator, passphrase=passphrase
+            ):
+                self.response.set_status(400, "Not created")
+                logging.warning(
+                    "Was not able to create new Actor("
+                    + str(self.request.url)
+                    + " "
+                    + str(creator)
+                    + ")"
+                )
+                return
+        
         if len(trustee_root) > 0 and myself.store:
             myself.store.trustee_root = trustee_root
         self.response.headers["Location"] = str(self.config.root + (myself.id or ""))

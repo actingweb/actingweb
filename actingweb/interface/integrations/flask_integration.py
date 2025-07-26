@@ -204,9 +204,11 @@ class FlaskIntegration:
         if request.method == "GET" and webobj.response.status_code == 200:
             return Response(render_template("aw-root-factory.html", **webobj.response.template_values))
         elif request.method == "POST":
-            if webobj.response.status_code == 200:
+            # Only render templates for form submissions, not JSON requests
+            is_json_request = request.content_type and "application/json" in request.content_type
+            if not is_json_request and webobj.response.status_code in [200, 201]:
                 return Response(render_template("aw-root-created.html", **webobj.response.template_values))
-            elif webobj.response.status_code == 400:
+            elif not is_json_request and webobj.response.status_code == 400:
                 return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
                 
         return self._create_flask_response(webobj)

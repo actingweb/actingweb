@@ -51,6 +51,8 @@ FIXED
 - Enhanced HTTP request safety with proper urlfetch module validation
 - Fixed OAuth configuration access with proper None checks
 - Applied systematic None safety patterns across all HTTP methods
+- Refactored actor creation to reduce coupling between factory handler and bridge implementation
+- Fixed template variables not being populated for web form POST to /
 
 QUALITY
 ~~~~~~~

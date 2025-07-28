@@ -434,15 +434,32 @@ class FastAPIIntegration:
             # for compatibility with ActingWeb's auth system
             if k.lower() == "authorization":
                 headers["Authorization"] = v
+                # Debug logging for auth headers
+                self.logger.debug(f"FastAPI: Found Authorization header: {v}")
             elif k.lower() == "content-type":
                 headers["Content-Type"] = v  
             else:
                 headers[k] = v
 
-        # Get query parameters
+        # Get query parameters and form data (similar to Flask's request.values)
         params = {}
+        # Start with query parameters
         for k, v in request.query_params.items():
             params[k] = v
+        
+        # Parse form data if content type is form-encoded
+        content_type = headers.get("Content-Type", "")
+        if "application/x-www-form-urlencoded" in content_type and body:
+            try:
+                from urllib.parse import parse_qs
+                body_str = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+                form_data = parse_qs(body_str, keep_blank_values=True)
+                # parse_qs returns lists, but we want single values like Flask
+                for k, v_list in form_data.items():
+                    if v_list:
+                        params[k] = v_list[0]  # Take first value, like Flask
+            except (UnicodeDecodeError, ValueError) as e:
+                self.logger.warning(f"Failed to parse form data: {e}")
             
         # Debug logging for trust endpoint
         if "/trust" in str(request.url.path) and params:
@@ -576,12 +593,14 @@ class FastAPIIntegration:
             # Parse request data
             creator = None
             passphrase = None
+            trustee_root = None
             
             if webobj.request.body:
                 try:
                     data = json.loads(webobj.request.body)
                     creator = data.get("creator")
                     passphrase = data.get("passphrase", "")
+                    trustee_root = data.get("trustee_root", "")
                 except (json.JSONDecodeError, ValueError):
                     pass
             
@@ -589,6 +608,7 @@ class FastAPIIntegration:
             if not creator:
                 creator = webobj.request.get("creator")
                 passphrase = webobj.request.get("passphrase")
+                trustee_root = webobj.request.get("trustee_root")
             
             if not creator:
                 webobj.response.set_status(400, "Missing creator")
@@ -611,6 +631,13 @@ class FastAPIIntegration:
             if not actor_interface:
                 webobj.response.set_status(400, "Actor creation failed")
                 return
+                
+            # Set trustee_root if provided (mirroring the factory handler behavior)
+            if trustee_root and len(trustee_root) > 0:
+                # Get the underlying actor from the interface
+                core_actor = actor_interface.core_actor
+                if core_actor and core_actor.store:
+                    core_actor.store.trustee_root = trustee_root
             
             # Set response data
             webobj.response.set_status(201, "Created")
@@ -619,6 +646,13 @@ class FastAPIIntegration:
                 "creator": creator,
                 "passphrase": actor_interface.passphrase or passphrase
             }
+            
+            # Add trustee_root to response if set (mirroring factory handler)
+            if trustee_root and len(trustee_root) > 0:
+                response_data["trustee_root"] = trustee_root
+            
+            self.logger.debug(f"FastAPI actor creation response: {response_data}")
+                
             webobj.response.body = json.dumps(response_data)
             webobj.response.headers["Content-Type"] = "application/json"
             

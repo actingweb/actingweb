@@ -14,6 +14,15 @@ BREAKING CHANGES
 - Handler constructors now accept `hooks: HookRegistry` instead of `on_aw: OnAWBase`
 - Applications must now use the modern `ActingWebApp` interface exclusively
 
+ADDED
+~~~~~
+
+- FastAPI integration with `app.integrate_fastapi()` method
+- FastAPI integration automatically generates OpenAPI/Swagger documentation
+- Synchronous ActingWeb handlers run in thread pools to prevent event loop blocking
+- Pydantic models for all ActingWeb endpoints with automatic validation
+- Support for modern `@app.actor_factory` decorator in FastAPI integration
+
 CHANGED
 ~~~~~~~
 

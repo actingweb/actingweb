@@ -14,6 +14,11 @@ from .hooks import HookRegistry
 if TYPE_CHECKING:
     from .actor_interface import ActorInterface
     from .integrations.flask_integration import FlaskIntegration
+    from .integrations.fastapi_integration import FastAPIIntegration
+    try:
+        from fastapi import FastAPI
+    except ImportError:
+        FastAPI = Any
 
 
 class ActingWebApp:
@@ -199,10 +204,43 @@ class ActingWebApp:
             )
         return self._config
         
+    def get_actor_factory(self) -> Optional[Callable[..., 'ActorInterface']]:
+        """Get the registered actor factory function."""
+        return self._actor_factory_func
+        
     def integrate_flask(self, flask_app: Flask) -> 'FlaskIntegration':
         """Integrate with Flask application."""
         from .integrations.flask_integration import FlaskIntegration
         integration = FlaskIntegration(self, flask_app)
+        integration.setup_routes()
+        return integration
+        
+    def integrate_fastapi(self, fastapi_app: 'FastAPI', templates_dir: Optional[str] = None, **options: Any) -> 'FastAPIIntegration':
+        """
+        Integrate ActingWeb with FastAPI application.
+        
+        Args:
+            fastapi_app: The FastAPI application instance
+            templates_dir: Directory containing Jinja2 templates (optional)
+            **options: Additional configuration options
+            
+        Returns:
+            FastAPIIntegration instance
+            
+        Raises:
+            ImportError: If FastAPI is not installed
+        """
+        try:
+            from .integrations.fastapi_integration import FastAPIIntegration
+        except ImportError as e:
+            if "fastapi" in str(e).lower():
+                raise ImportError(
+                    "FastAPI is required for FastAPI integration. "
+                    "Install with: pip install fastapi"
+                ) from e
+            raise
+            
+        integration = FastAPIIntegration(self, fastapi_app, templates_dir=templates_dir)
         integration.setup_routes()
         return integration
         

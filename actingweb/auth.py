@@ -37,9 +37,9 @@ def add_auth_response(appreq=None, auth_obj=None):
         + ":"
         + auth_obj.response["text"]
     )
-    appreq.set_status(auth_obj.response["code"], auth_obj.response["text"])
+    appreq.response.set_status(auth_obj.response["code"], auth_obj.response["text"])
     if auth_obj.response["code"] == 302:
-        appreq.set_redirect(url=auth_obj.redirect)
+        appreq.response.set_redirect(url=auth_obj.redirect)
     elif auth_obj.response["code"] == 401:
         appreq.write("Authentication required")
     for h, v in list(auth_obj.response["headers"].items()):
@@ -74,7 +74,7 @@ def init_actingweb(
         return None, None
     auth_obj.check_authentication(appreq=appreq, path=fullpath)
     if add_response and appreq and appreq.response:
-        add_auth_response(appreq.response, auth_obj)
+        add_auth_response(appreq, auth_obj)
     # No longer need to initialize legacy on_aw object
     return auth_obj.actor, auth_obj
 

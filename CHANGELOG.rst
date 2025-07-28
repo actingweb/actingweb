@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.1: Jul 27, 2025
+v3.1: Jul 28, 2025
 --------------------
 
 BREAKING CHANGES
@@ -34,7 +34,7 @@ CHANGED
 - Fixed missing arguments in execute_property_hooks calls
 - Resolved callback hook return type issues with any() function usage
 
-v3.0.1: (Jul 27, 2025)
+v3.0.1: (Jul 17, 2025)
 ------------------------
 
 BREAKING CHANGES
@@ -77,10 +77,10 @@ CHANGED
 
 FIXED
 ~~~~~
-- **CRITICAL**: Eliminated potential bugs from dual interface inconsistencies
-- **PERFORMANCE**: Removed unnecessary abstraction layers improving request handling speed
-- **MAINTAINABILITY**: Single code path reduces potential for interface synchronization issues
-- **TYPE SAFETY**: Better type checking with direct HookRegistry usage instead of generic OnAWBase
+- Eliminated potential bugs from dual interface inconsistencies
+- Removed unnecessary abstraction layers improving request handling speed
+- Single code path reduces potential for interface synchronization issues
+- Better type checking with direct HookRegistry usage instead of generic OnAWBase
 - Zero Pylance diagnostics errors across entire codebase
 - Comprehensive None safety checks across all core modules
 - Fixed handler method signatures for proper positional argument passing
@@ -92,11 +92,11 @@ FIXED
 
 QUALITY
 ~~~~~~~
-- **BREAKING BUT NECESSARY**: Legacy OnAWBase interface completely removed for better maintainability
-- **MIGRATION REQUIRED**: Applications using OnAWBase must migrate to ActingWebApp interface
-- **SIGNIFICANT IMPROVEMENT**: 95%+ reduction in complexity for handler logic
-- **ARCHITECTURE**: Clean separation of concerns with direct hook execution
-- **DEVELOPER EXPERIENCE**: Much simpler debugging without bridge layer abstraction
+- Legacy OnAWBase interface completely removed for better maintainability
+- Applications using OnAWBase must migrate to ActingWebApp interface
+- 95%+ reduction in complexity for handler logic
+- Clean separation of concerns with direct hook execution
+- Much simpler debugging without bridge layer abstraction
 - All tests continue to pass with new interface (30/30)
 - 90% reduction in boilerplate code for new applications
 - Proper circular import handling with TYPE_CHECKING

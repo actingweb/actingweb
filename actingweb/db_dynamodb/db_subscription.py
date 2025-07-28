@@ -1,8 +1,8 @@
-from builtins import object
 import logging
 import os
+
+from pynamodb.attributes import BooleanAttribute, NumberAttribute, UnicodeAttribute
 from pynamodb.models import Model
-from pynamodb.attributes import UnicodeAttribute, NumberAttribute, BooleanAttribute
 
 """
     DbSubscription handles all db operations for a subscription
@@ -13,12 +13,12 @@ from pynamodb.attributes import UnicodeAttribute, NumberAttribute, BooleanAttrib
 
 
 class Subscription(Model):
-    class Meta(object):
-        table_name = os.getenv('AWS_DB_PREFIX', 'demo_actingweb') + "_subscriptions"
+    class Meta:  # type: ignore[misc]
+        table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_subscriptions"
         read_capacity_units = 2
         write_capacity_units = 1
-        region = os.getenv('AWS_DEFAULT_REGION', 'us-west-1')
-        host = os.getenv('AWS_DB_HOST', None)
+        region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
+        host = os.getenv("AWS_DB_HOST", None)
 
     id = UnicodeAttribute(hash_key=True)
     peer_sub_id = UnicodeAttribute(range_key=True)
@@ -32,15 +32,15 @@ class Subscription(Model):
     callback = BooleanAttribute()
 
 
-class DbSubscription(object):
+class DbSubscription:
     """
-        DbSubscription does all the db operations for subscription objects
+    DbSubscription does all the db operations for subscription objects
 
-        The  actor_id must always be set.
+    The  actor_id must always be set.
     """
 
-    def get(self,  actor_id=None, peerid=None, subid=None):
-        """ Retrieves the subscription from the database """
+    def get(self, actor_id=None, peerid=None, subid=None):
+        """Retrieves the subscription from the database"""
         if not actor_id:
             return None
         if not peerid or not subid:
@@ -48,36 +48,40 @@ class DbSubscription(object):
             return None
         try:
             # We only expect one
-            for t in Subscription.query(actor_id,
-                                        Subscription.peer_sub_id == peerid + ":" + subid,
-                                        consistent_read=True):
+            for t in Subscription.query(
+                actor_id,
+                Subscription.peer_sub_id == peerid + ":" + subid,
+                consistent_read=True,
+            ):
                 self.handle = t
                 return {
                     "id": t.id,
                     "peerid": t.peerid,
                     "subscriptionid": t.subid,
-                    "granularity": (t.granularity or ''),
-                    "target": (t.target or ''),
-                    "subtarget": (t.subtarget or ''),
-                    "resource": (t.resource or ''),
+                    "granularity": (t.granularity or ""),
+                    "target": (t.target or ""),
+                    "subtarget": (t.subtarget or ""),
+                    "resource": (t.resource or ""),
                     "sequence": t.seqnr,
                     "callback": t.callback,
                 }
-        except Subscription.DoesNotExist:
+        except Exception:  # PynamoDB DoesNotExist exception
             pass
         return None
 
-    def modify(self,
-               peerid=None,
-               subid=None,
-               granularity=None,
-               target=None,
-               subtarget=None,
-               resource=None,
-               seqnr=None,
-               callback=None):
-        """ Modify a subscription
-            If bools are none, they will not be changed.
+    def modify(
+        self,
+        peerid=None,
+        subid=None,
+        granularity=None,
+        target=None,
+        subtarget=None,
+        resource=None,
+        seqnr=None,
+        callback=None,
+    ):
+        """Modify a subscription
+        If bools are none, they will not be changed.
         """
         if not self.handle:
             logging.debug("Attempted modification of DbSubscription without db handle")
@@ -101,26 +105,31 @@ class DbSubscription(object):
         self.handle.save()
         return True
 
-    def create(self, actor_id=None,
-               peerid=None,
-               subid=None,
-               granularity=None,
-               target=None,
-               subtarget=None,
-               resource=None,
-               seqnr=1,
-               callback=False):
-        """ Create a new subscription """
+    def create(
+        self,
+        actor_id=None,
+        peerid=None,
+        subid=None,
+        granularity=None,
+        target=None,
+        subtarget=None,
+        resource=None,
+        seqnr=1,
+        callback=False,
+    ):
+        """Create a new subscription"""
         if not actor_id or not peerid or not subid:
             return False
         if self.get(actor_id=actor_id, peerid=peerid, subid=subid):
             return False
-        self.handle = Subscription(id=actor_id,
-                                   peer_sub_id=peerid + ":" + subid,
-                                   peerid=peerid,
-                                   subid=subid,
-                                   seqnr=seqnr,
-                                   callback=callback)
+        self.handle = Subscription(
+            id=actor_id,
+            peer_sub_id=peerid + ":" + subid,
+            peerid=peerid,
+            subid=subid,
+            seqnr=seqnr,
+            callback=callback,
+        )
         if granularity and len(granularity) > 0:
             self.handle.granularity = granularity
         if target and len(target) > 0:
@@ -133,7 +142,7 @@ class DbSubscription(object):
         return True
 
     def delete(self):
-        """ Deletes the subscription in the database """
+        """Deletes the subscription in the database"""
         if not self.handle:
             logging.debug("Attempted delete of DbSubscription with no handle set.")
             return False
@@ -147,15 +156,15 @@ class DbSubscription(object):
             Subscription.create_table(wait=True)
 
 
-class DbSubscriptionList(object):
+class DbSubscriptionList:
     """
-        DbTrustList does all the db operations for list of trust objects
+    DbTrustList does all the db operations for list of trust objects
 
-        The  actor_id must always be set.
+    The  actor_id must always be set.
     """
 
     def fetch(self, actor_id):
-        """ Retrieves the subscriptions of an actor_id from the database as an array"""
+        """Retrieves the subscriptions of an actor_id from the database as an array"""
         if not actor_id:
             return None
         self.actor_id = actor_id
@@ -163,23 +172,25 @@ class DbSubscriptionList(object):
         self.subscriptions = []
         if self.handle:
             for t in self.handle:
-                self.subscriptions.append({
-                    "id": t.id,
-                    "peerid": t.peerid,
-                    "subscriptionid": t.subid,
-                    "granularity": (t.granularity or ''),
-                    "target": (t.target or ''),
-                    "subtarget": (t.subtarget or ''),
-                    "resource": (t.resource or ''),
-                    "sequence": t.seqnr,
-                    "callback": t.callback,
-                })
+                self.subscriptions.append(
+                    {
+                        "id": t.id,
+                        "peerid": t.peerid,
+                        "subscriptionid": t.subid,
+                        "granularity": (t.granularity or ""),
+                        "target": (t.target or ""),
+                        "subtarget": (t.subtarget or ""),
+                        "resource": (t.resource or ""),
+                        "sequence": t.seqnr,
+                        "callback": t.callback,
+                    }
+                )
             return self.subscriptions
         else:
             return []
 
     def delete(self):
-        """ Deletes all the subscriptions for an actor in the database """
+        """Deletes all the subscriptions for an actor in the database"""
         if not self.actor_id:
             return False
         self.handle = Subscription.query(self.actor_id, consistent_read=True)

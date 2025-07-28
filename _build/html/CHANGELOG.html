@@ -1,0 +1,681 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>CHANGELOG &#8212; ActingWeb 2.6.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css" />
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script src="_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="prev" title="actingweb.handlers package" href="docs/actingweb.handlers.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="changelog">
+<h1>CHANGELOG<a class="headerlink" href="#changelog" title="Permalink to this heading">¶</a></h1>
+<section id="v3-0-1-jul-27-2025">
+<h2>v3.0.1: (Jul 27, 2025)<a class="headerlink" href="#v3-0-1-jul-27-2025" title="Permalink to this heading">¶</a></h2>
+<section id="breaking-changes">
+<h3>BREAKING CHANGES<a class="headerlink" href="#breaking-changes" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Minimum Python version is now 3.11+</p></li>
+<li><p>Removed deprecated Google App Engine (GAE) database implementation</p></li>
+<li><p>Removed migrate_2_5_0 migration flag and related migration code</p></li>
+<li><p>Database backend now only supports DynamoDB</p></li>
+<li><p>Removed Google App Engine urlfetch abstraction layer</p></li>
+<li><p>Environment types updated to remove APPENGINE, added AWS</p></li>
+<li><p>Separated application-level callbacks (&#64;app.app_callback_hook) from actor-level callbacks (&#64;app.callback_hook)</p></li>
+</ul>
+</section>
+<section id="added">
+<h3>ADDED<a class="headerlink" href="#added" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Comprehensive type hints using Python 3.11+ union syntax (str | None)</p></li>
+<li><p>Custom exception hierarchy: ActorError, ActorNotFoundError, InvalidActorDataError, PeerCommunicationError, TrustRelationshipError</p></li>
+<li><p>Constants module with AuthType, HttpMethod, TrustRelationship, ResponseCode enums</p></li>
+<li><p>Modern build system with pyproject.toml and Poetry for dependency management</p></li>
+<li><p>Modern developer interface with ActingWebApp class and fluent API</p></li>
+<li><p>Decorator-based hook system for property, callback, subscription, and lifecycle events</p></li>
+<li><p>ActorInterface, PropertyStore, TrustManager, and SubscriptionManager wrappers</p></li>
+<li><p>Flask integration with automatic route generation</p></li>
+<li><p>/methods endpoint support with JSON-RPC 2.0 protocol compatibility</p></li>
+<li><p>/actions endpoint support for trigger-based functionality</p></li>
+<li><p>Method hooks (&#64;app.method_hook) and action hooks (&#64;app.action_hook)</p></li>
+<li><p>Development tooling (black, ruff, mypy) and comprehensive test suite with pytest</p></li>
+<li><p>Type checking support with py.typed marker</p></li>
+<li><p>__version__ attribute to actingweb module</p></li>
+</ul>
+</section>
+<section id="changed">
+<h3>CHANGED<a class="headerlink" href="#changed" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Modernized string formatting with f-strings</p></li>
+<li><p>Simplified HTTP client code to use urlfetch library directly</p></li>
+<li><p>Removed config.env == “appengine” environment checks</p></li>
+<li><p>Updated default actor type from gae-demo to demo</p></li>
+<li><p>Enhanced type safety with comprehensive None-checking patterns</p></li>
+<li><p>Applied systematic None validation patterns to prevent runtime errors</p></li>
+<li><p>Improved IDE support with better type inference and error detection</p></li>
+<li><p>Complete documentation overhaul with modern interface examples</p></li>
+</ul>
+</section>
+<section id="fixed">
+<h3>FIXED<a class="headerlink" href="#fixed" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Zero Pylance diagnostics errors across entire codebase</p></li>
+<li><p>Comprehensive None safety checks across all core modules</p></li>
+<li><p>Fixed handler method signatures for proper positional argument passing</p></li>
+<li><p>Enhanced HTTP request safety with proper urlfetch module validation</p></li>
+<li><p>Fixed OAuth configuration access with proper None checks</p></li>
+<li><p>Applied systematic None safety patterns across all HTTP methods</p></li>
+</ul>
+</section>
+<section id="quality">
+<h3>QUALITY<a class="headerlink" href="#quality" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Maintained 100% backward compatibility - no runtime behavior changes</p></li>
+<li><p>All existing tests continue to pass (30/30)</p></li>
+<li><p>90% reduction in boilerplate code for new applications</p></li>
+<li><p>Proper circular import handling with TYPE_CHECKING</p></li>
+<li><p>Enhanced developer experience with self-documenting type hints</p></li>
+</ul>
+</section>
+</section>
+<section id="v2-6-5-apr-22-2021">
+<h2>v2.6.5: Apr 22, 2021<a class="headerlink" href="#v2-6-5-apr-22-2021" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix bug in subscription_diff handling by replacing query with scan as query requires hash key</p></li>
+</ul>
+</section>
+<section id="v2-6-4-apr-11-2021">
+<h2>v2.6.4: Apr 11, 2021<a class="headerlink" href="#v2-6-4-apr-11-2021" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Messed up release versioning, bump up to avoid confusion</p></li>
+</ul>
+</section>
+<section id="v2-6-3-apr-11-2021">
+<h2>v2.6.3: Apr 11, 2021<a class="headerlink" href="#v2-6-3-apr-11-2021" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix bug in peertrustee handling by replacing dynamodb count() with scan() as count requires a hash key</p></li>
+</ul>
+</section>
+<section id="v2-6-2-oct-20-2020">
+<h2>v2.6.2: Oct 20, 2020<a class="headerlink" href="#v2-6-2-oct-20-2020" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Security fix on oauth refresh</p></li>
+</ul>
+</section>
+<section id="v2-6-1-aug-30-2020">
+<h2>v2.6.1: Aug 30, 2020<a class="headerlink" href="#v2-6-1-aug-30-2020" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix token refresh to also use Basic authorisation</p></li>
+</ul>
+</section>
+<section id="v2-6-0-aug-23-2020">
+<h2>v2.6.0: Aug 23, 2020<a class="headerlink" href="#v2-6-0-aug-23-2020" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for optional Basic authorisation in token request (e.g. Fitbit is requiring this)</p></li>
+</ul>
+</section>
+<section id="v2-5-1-jan-29-2019">
+<h2>v2.5.1: Jan 29, 2019<a class="headerlink" href="#v2-5-1-jan-29-2019" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Move some annoying info messages to debug in auth/oauth</p></li>
+<li><p>Fix bug in set_attr for store where struct is not initialised (attribute.py:70)</p></li>
+<li><p>Enforce lower case on creator if &#64; (i.e. email) in value</p></li>
+</ul>
+</section>
+<section id="v2-5-0-nov-17-2018">
+<h2>v2.5.0: Nov 17, 2018<a class="headerlink" href="#v2-5-0-nov-17-2018" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>BREAKING: /www/properties template_values now return a dict with { ‘key’: value} instead of list of { ‘name’: ‘key’,
+‘value’: value}</p></li>
+<li><p>Add support for scope GET parameter in callback from OAUTH2 provider (useful for e.g. Google)</p></li>
+<li><p>Add support for oauth_extras dict in oauth config to set additional oauth paramters forwarded to OAUTH2 provider
+(Google uses this)</p></li>
+<li><p>Add support for dynamic:creator in oauth_extras to preset login hint etc when forwarding to OAuth2 auth endpoints
+(if creator==email, this allows you to send Google hint on which account to use with ‘login_hint’: ‘dynamic:creator’
+in oauth_extras in config</p></li>
+<li><p>Add support for actor get_from_creator() to initialise an actor from a creator (only usable together with config
+variable unique_creator)</p></li>
+<li><p>Add support for get_properties(), delete_properties(), put_properties(), and post_properties in the on_aw() class.
+These allows on_aw overriding functions to process any old and new properties and return the resulting properties
+to be stored, deleted, or returned</p></li>
+<li><p>Move all internal (oauth_token, oauth_token_expiry, oauth_refresh_token, oauth_token_refresh_token_expiry,
+cookie_redirect, and trustee_root) data from properties (where they are exposed on GET /&lt;actor_id&gt;/properties) to internal
+variable store (attributes). Introduce config variable migrate_2_5_0 (default True) that will look for properties
+with oauth variable names if not found in internal store and move them over to internal store (should be turned
+off when all actors have migrated their oauth properties over to store)</p></li>
+<li><p>Add new interface InternalStore() (attribute.py) for storing and retrieving internal variables on an actor (i.e.
+attributes). All actors now have .store that can be used either as a dict or dot-notation. actor.store.var = ‘this’
+or actor.store[‘var’] = ‘this’. Set the variable to None to delete it. All variables are immediately stored to the
+database. Note that variable values must be json serializable</p></li>
+<li><p>Add new interface PropertyStore() (property.py) for storing and retrieving properties. Used just like InternalStore()
+and access through actor.property.my_var or actor.property[‘my_var’]</p></li>
+<li><p>InternalStore(actor_id=None, config=None, bucket=None) can be used independently and the optional bucket parameter
+allows you to create an internal store that stores a set of variables in a specific bucket. A bucket is retrieved
+all at once and variables are written to database immediately</p></li>
+<li><p>Fix issue where downstream (trusts) server processing errors resulted in 405 instead of 500 error code</p></li>
+<li><p>Fix bug in oauth.put_request() where post was used instead of put</p></li>
+<li><p>Fix issue where 200 had Forbidden text</p></li>
+</ul>
+</section>
+<section id="v2-4-3-sep-27-2018">
+<h2>v2.4.3: Sep 27, 2018<a class="headerlink" href="#v2-4-3-sep-27-2018" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Don’t do relative import with import_module, AWS Lambda gets a hiccup</p></li>
+</ul>
+</section>
+<section id="v2-4-2-sep-27-2018">
+<h2>v2.4.2: Sep 27, 2018<a class="headerlink" href="#v2-4-2-sep-27-2018" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Get rid of future requirement, just a pain</p></li>
+</ul>
+</section>
+<section id="v2-4-1-sep-26-2018">
+<h2>v2.4.1: Sep 26, 2018<a class="headerlink" href="#v2-4-1-sep-26-2018" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix bad relative imports</p></li>
+<li><p>Use extras_require for future (python2 support)</p></li>
+</ul>
+</section>
+<section id="v2-4-0-sep-22-2018">
+<h2>v2.4.0: Sep 22 2018<a class="headerlink" href="#v2-4-0-sep-22-2018" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Support python3</p></li>
+</ul>
+</section>
+<section id="v2-3-0-dec-27-2017">
+<h2>v2.3.0: Dec 27, 2017<a class="headerlink" href="#v2-3-0-dec-27-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Entire API for handlers and Actor() as well as other objects changed to be PEP8 compliant</p></li>
+<li><p>Add support for head_request(() in oauth and oauth_head() in auth</p></li>
+<li><p>Change all uses of now() to utcnow()</p></li>
+<li><p>db_gae for Google AppEngine is not kept updated, so folder deprecated and just kept for later reference</p></li>
+<li><p>Full linting/PEP8 review</p></li>
+<li><p>Add support for actor_id (set id) on Actor.create()</p></li>
+</ul>
+</section>
+<section id="v2-2-2-dec-3-2017">
+<h2>v2.2.2: Dec 3, 2017<a class="headerlink" href="#v2-2-2-dec-3-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix bug in region for properties and attributes resulting in using us-east-1 for these (and not us-west-1 as default)</p></li>
+</ul>
+</section>
+<section id="v2-2-1-dec-3-2017">
+<h2>v2.2.1: Dec 3, 2017<a class="headerlink" href="#v2-2-1-dec-3-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for environment variable AWS_DB_PREFIX to support multiple actingweb tables in same DynamoDB region</p></li>
+</ul>
+</section>
+<section id="v2-2-0-nov-25-2017">
+<h2>v2.2.0: Nov 25, 2017<a class="headerlink" href="#v2-2-0-nov-25-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for attribute.Attributes() and attribute.Buckets() (to be used for internal properties not exposed)</p></li>
+<li><p>Various bug fixes to make the oauth flows work</p></li>
+</ul>
+</section>
+<section id="v2-1-2-nov-12-2017">
+<h2>v2.1.2: Nov 12, 2017<a class="headerlink" href="#v2-1-2-nov-12-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Split out actingweb module as a separate pypi library and repository</p></li>
+<li><p>Python2 support, not python3</p></li>
+<li><p>Support AWS DynamoDB and Google Datastore in sub-modules</p></li>
+<li><p>Refactor out a set of handlers to allow easy integration into any web framework</p></li>
+<li><p>actingwebdemo as a full-functioning demo app to show how the library is used</p></li>
+</ul>
+</section>
+<section id="jul-9-2017">
+<h2>Jul 9, 2017<a class="headerlink" href="#jul-9-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix bug with unique actor setting and actor already exists</p></li>
+<li><p>Improve handling of enforce use of email property as creator</p></li>
+<li><p>Fix auth bug for callbacks (401 when no auth is expected)</p></li>
+<li><p>Add support for “lazy refresh” of oauth token, i.e. refresh if expired or refresh token has &lt;24h to expiry</p></li>
+<li><p>Add support for Actors() class in actor.py to get a list of all actors with id and creator (ONLY for admin usage)</p></li>
+<li><p>Fix various bugs when subscriptions don’t exist</p></li>
+<li><p>Improve logging when actor cannot be created</p></li>
+</ul>
+</section>
+<section id="apr-2-2017">
+<h2>Apr 2, 2017<a class="headerlink" href="#apr-2-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Changed license to BSD after approval from Cisco Systems</p></li>
+<li><p>Fix bug in deletion of trust relationship that would not delete subscription</p></li>
+<li><p>Add support for GET param ?refresh=true for web-based sessions to ignore set cookie and do oauth</p></li>
+<li><p>Fix bug in oauth.oauth_delete() returning success when &gt;299 is returned from upstream</p></li>
+</ul>
+</section>
+<section id="mar-11-2017">
+<h2>Mar 11, 2017<a class="headerlink" href="#mar-11-2017" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix bug in aw_actor_callbacks.py on does exist test after db refactoring</p></li>
+<li><p>Fix bug in handling of www/init form to set properties</p></li>
+<li><p>Add support to enforce that creator (in actor) is unique (Config.unique_creator bool)</p></li>
+<li><p>Add support to enforce that a creator field set to “creator” is overwritten if property “email” is set
+(Config.force_email_prop_as_creator bool, default True). Note that username for basic login then changes from
+creator to the value of email property.
+This functionality can be useful if actor is created by trustee and email is set later</p></li>
+<li><p>Add new DbActor.py function get_by_creator() to allow retrieving an actor based on the creator value</p></li>
+</ul>
+</section>
+<section id="feb-25-2016">
+<h2>Feb 25, 2016<a class="headerlink" href="#feb-25-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Major refactoring of all database code</p></li>
+<li><p>All db entities are now accessible only from the actingweb/* libraries</p></li>
+<li><p>Each entity can be accessed one by one (e.g. trust.py exposes trust class) and as a list (e.g. trust.py exposes trusts class)</p></li>
+<li><p>actor_id and any parameters that identify the entity must be set when the class is instantiated</p></li>
+<li><p>get() must be called on the object to retrieve it from the database and the object
+is returned as a dictionary</p></li>
+<li><p>Subsequent calls to get() will return the dictionary without database access, but
+any changes will be synced to database immediately</p></li>
+<li><p>The actingweb/* libraries do not contain any database-specific code, but imports
+a db library that exposes the barebone db operations per object</p></li>
+<li><p>The google datastore code can be found in actingweb/db_gae</p></li>
+<li><p>Each database entity has its own .py file exposing get(), modify(), create(), delete()
+and some additional search/utility functions where needed</p></li>
+<li><p>These db classes do not do anything at init, and get() and create() must include all parameters</p></li>
+<li><p>The database handles are kept in the object, so modify() and delete() require a get() or create()
+before they can be called</p></li>
+<li><p>Currently, Google Datastore is the only supported db backend, but the db_* code can now fairly
+easily be adapted to new databases</p></li>
+</ul>
+</section>
+<section id="nov-19-2016">
+<h2>Nov 19, 2016<a class="headerlink" href="#nov-19-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Create a better README in rst</p></li>
+<li><p>Add readthedocs.org support with conf.py and index.rst files</p></li>
+<li><p>Add the actingweb spec as an rst file</p></li>
+<li><p>Add a getting-started rst file</p></li>
+<li><p>Correct diff timestamps to UTC standard with T and Z notation</p></li>
+<li><p>Fix json issue where diff sub-structures are escaped</p></li>
+<li><p>Add 20 sec timeout on all urlfethc (inter-actor) communication</p></li>
+<li><p>Support using creator passphrase as bearer token IF creator username == trustee
+and passphrase has bitstrength &gt; 80</p></li>
+<li><p>Added id, peerid, and subscriptionid in subscriptions to align with spec</p></li>
+<li><p>Add modiify() for actor to allow change of creator username</p></li>
+<li><p>Add support for /trust/trustee operations to align with spec</p></li>
+<li><p>Add /devtest path and config.devtest bool to allow test scripts</p></li>
+<li><p>Add /devtest testing of all aw_proxy functionality</p></li>
+</ul>
+</section>
+<section id="nov-17-2016">
+<h2>Nov 17, 2016<a class="headerlink" href="#nov-17-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Renaming of getPeer() and deletePeer() to get_peer_trustee() and delete_peer_trustee() to avoid confusion</p></li>
+<li><p>Support for oauth_put() (and corresponding put_request()) and fix to accept 404 without refreshing token</p></li>
+<li><p>aw_proxy support for get_resource(), change_resource((), and delete_resource(()</p></li>
+<li><p>Support PUT on /resources</p></li>
+</ul>
+</section>
+<section id="nov-5-2016">
+<h2>Nov 5, 2016<a class="headerlink" href="#nov-5-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for getResources in aw_proxy.py</p></li>
+<li><p>Renamed peer to peerTrustee in peer.py to better reflect that it is created by actor as trustee</p></li>
+</ul>
+</section>
+<section id="nov-1-2016">
+<h2>Nov 1, 2016<a class="headerlink" href="#nov-1-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for change_resource(() and delete_resource(() in aw_proxy.py</p></li>
+<li><p>Add support for PUT to /resources and on_put_resources() in on_aw_resources.py</p></li>
+</ul>
+</section>
+<section id="oct-28-2016">
+<h2>Oct 28, 2016<a class="headerlink" href="#oct-28-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for establishment and tear-down of peer actors as trustee, actor.getPeer() and actor.deletePeer()</p>
+<ul>
+<li><p>Add new db storage for peers created as trustee</p></li>
+<li><p>Add new config.actor section in config.py to define known possible peers</p></li>
+</ul>
+</li>
+<li><p>Add new actor support function: getTrustRelationshipByType()</p></li>
+<li><p>Add new AwProxy() class with helper functions to do RPCish peer operations on trust relationships</p>
+<ul>
+<li><p>Either use trust_target or peer_target to send commands to a specific trust or to the trust associated with a peer (i.e. peer created by this app as a trustee)</p></li>
+<li><p>Support for create_resource() (POST on remote actor path like /resources or /properties)</p></li>
+</ul>
+</li>
+<li><p>Fix bug where clean up of actor did not delete remote subscription (actor.delete())</p>
+<ul>
+<li><p>Add remoteSubscription deletion in aw-actor-subscription.py</p></li>
+<li><p>Fix auth issue in aw-actor-callbacks.py revealed by ths bug</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="oct-26-2016">
+<h2>Oct 26, 2016<a class="headerlink" href="#oct-26-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for trustee by adding trustee_root to actor factory</p></li>
+<li><p>Add debug logging in auth process</p></li>
+<li><p>Fix bug where actors created within the same second got the same id</p></li>
+</ul>
+</section>
+<section id="oct-15-2016">
+<h2>Oct 15, 2016<a class="headerlink" href="#oct-15-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added support for requests to /bot and a bot (permanent) token in config.py to do API requests
+without going through the /&lt;actorid&gt;/ paths. Used to support scenarios where users can communicate with a bot to
+initiate creation of an actor (or to do commands that don’t need personal oauth authorization.</p></li>
+</ul>
+</section>
+<section id="oct-12-2016">
+<h2>Oct 12, 2016<a class="headerlink" href="#oct-12-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Support for actor.get_from_property(property-name, value) to initialse an actor from db by looking up a property value
+(it must be unique)</p></li>
+</ul>
+</section>
+<section id="oct-9-2016">
+<h2>Oct 9, 2016<a class="headerlink" href="#oct-9-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added support for GET, PUT, and DELETE for any sub-level of /properties,
+also below resource, i.e. /properties/&lt;subtarget&gt;/&lt;resource&gt;/something/andmore/…</p></li>
+<li><p>Fixed bug where blob=’’, i.e. deletion, would not be registered</p></li>
+</ul>
+</section>
+<section id="oct-7-2016">
+<h2>Oct 7, 2016<a class="headerlink" href="#oct-7-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added support for resource (in addition to target and subtarget) in subscriptions, thus allowing subscriptions to
+e.g. /resources/files/&lt;fileid&gt; (where &lt;fileid&gt; is the resource to subscribe to. /properties/subtarget/resource
+subscriptions are also allowed.</p></li>
+</ul>
+</section>
+<section id="oct-6-2016">
+<h2>Oct 6, 2016<a class="headerlink" href="#oct-6-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added support for /resources with on_aw_resources.py in on_aw/ to hook into GET, DELETE, and POST requests to /resources</p></li>
+<li><p>Added fixes for box.com specific OAUTH implementation</p></li>
+<li><p>Added new function oauth_get(), oauth_post(), and oauth_delete() to Auth() class. These will refresh a token if necessary and
+can be used insted of oauth.get_request(), post_request(), and delete_request(()</p></li>
+<li><p>Minor refactoring of inner workings of auth.py and oauth.py wrt return values and error codes</p></li>
+</ul>
+</section>
+<section id="sep-25-2016">
+<h2>Sep 25, 2016<a class="headerlink" href="#sep-25-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added use_cache=False to all db operations to avoid cache issue when there are multiple instances of same app in gae</p></li>
+</ul>
+</section>
+<section id="sep-4-2016">
+<h2>Sep 4, 2016<a class="headerlink" href="#sep-4-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Refactoring of creation of trust:
+- ensure that secret is generated by initiating peer
+- ensure that a peer cannot have more than one relationship
+- ensure that a secret can only be used for one relationship</p></li>
+</ul>
+</section>
+<section id="aug-28-2016">
+<h2>Aug 28, 2016<a class="headerlink" href="#aug-28-2016" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Major refactoring of auth.py. Only affects how init_actingweb() is used, see function docs</p></li>
+</ul>
+</section>
+<section id="aug-21-2016-new-features">
+<h2>Aug 21, 2016: New features<a class="headerlink" href="#aug-21-2016-new-features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Removed the possibility of setting a secret when initiating a new relationship, as well as ability to change secret. This is to avoid the possibility of detecting existing secrets (from other peers) by testing secrets</p></li>
+</ul>
+</section>
+<section id="aug-15-2016-bug-fixes">
+<h2>Aug 15, 2016: Bug fixes<a class="headerlink" href="#aug-15-2016-bug-fixes" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added new acl[“approved”] flag to auth.py indicating whether an authenticated peer has been approved</p></li>
+<li><p>Added new parameter to the authorise() function to turn off the requirement that peer has been approved to allow access</p></li>
+<li><p>Changed default relationship to the lowest level (associate) and turned off default approval of the default relationship</p></li>
+<li><p>Added a new authorisation check to subscriptions to make sure that only peers with access to a path are allowed to subscribe to those paths</p></li>
+<li><p>Added a new approval in trust to allow non-approved peers to delete their relationship (in case they want to “withdraw” their relationship request)</p></li>
+<li><p>Fixed uncaught json exception in create_remote_subscription()</p></li>
+<li><p>Fixed possibility of subpath being None instead of ‘’ in auth.py</p></li>
+<li><p>Fixed handling of both bool json type and string bool value for approved parameter for trust relationships</p></li>
+</ul>
+</section>
+<section id="aug-6-2016-new-features">
+<h2>Aug 6, 2016: New features<a class="headerlink" href="#aug-6-2016-new-features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Support for deleting remote subscription (i.e. callback and subscription, dependent on direction) when an actor is
+deleted</p>
+<ul>
+<li><p>New delete_remote_subscription() in actor.py</p></li>
+<li><p>Added deletion to actor.delete()</p></li>
+<li><p>New handler for DELETE of /callbacks in aw-actor-callbacks.py</p></li>
+<li><p>New on_delete_callbacks() in on_aw_callbacks.py</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="aug-6-2016-bug-fixes">
+<h2>Aug 6, 2016: Bug fixes<a class="headerlink" href="#aug-6-2016-bug-fixes" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fixed bug where /meta/nonexistent resulted in 500</p></li>
+</ul>
+</section>
+<section id="aug-3-2016-new-features">
+<h2>Aug 3, 2016: New features<a class="headerlink" href="#aug-3-2016-new-features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Support for doing callbacks when registering diffs</p>
+<ul>
+<li><p>New function in actor.py: callback_subscription()</p></li>
+<li><p>Added defer of callbacks to avoid stalling responses when adding diffs</p></li>
+<li><p>Added new function get_trust_relationship() to get one specific relationship based on peerid (instead of searching using get_trust_relationships())</p></li>
+</ul>
+</li>
+<li><p>Improved diff registration</p>
+<ul>
+<li><p>Totally rewrote register_diffs() to register diffs for subscriptions that are not exact matches (i.e. broader/higher-level and more specific)</p></li>
+<li><p>Added debug logging to trace how diffs are registered</p></li>
+</ul>
+</li>
+<li><p>Owner-based access only to /callbacks/subscriptions</p></li>
+<li><p>Support for handling callbacks for subscriptions</p>
+<ul>
+<li><p>New function in on_aw_callbacks.py: on_post_subscriptions() for handling callbacks on subscriptions</p></li>
+<li><p>Changed aw-actor-callbacks.py to handle POSTs to /callbacks/subscriptions and forward those to on_post_subscriptions()</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="aug-3-2016-bug-fixes">
+<h2>Aug 3, 2016: Bug fixes<a class="headerlink" href="#aug-3-2016-bug-fixes" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added no cache to the rest of subscriptionDiffs DB operations to make sure that deferred subscription callbacks don’t mess up sequencing</p></li>
+<li><p>Changed meta/raml to meta/specification to allow any type of specification language</p></li>
+</ul>
+</section>
+<section id="aug-1-2016-new-features">
+<h2>Aug 1, 2016: New features<a class="headerlink" href="#aug-1-2016-new-features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Added support for GET on subscriptions as peer, generic register diffs function, as well as adding diffs when changing /properties. Also added support for creator initiating creation of a subscription by distingushing on POST to /subscriptions (as creator to inititate a subscription with another peer) and to /subscriptions/&lt;peerid&gt; (as peer to create subscription)</p></li>
+<li><p>Subscription is also created when initiating a remote subscription (using callback bool to set flag to identify a subscription where callback is expected). Still missing support for sending callbacks (high/low/none), as well as processing callbacks</p></li>
+<li><p>Added support for sequence number in subscription, so that missing diffs can be detected. Specific diffs can be retrieved by doing GET as peer on /subscriptions/&lt;peerid&gt;/&lt;subid&gt;/&lt;seqnr&gt; (and the diff will be cleared)</p></li>
+</ul>
+</section>
+<section id="jul-27-2016-new-features">
+<h2>Jul 27, 2016: New features<a class="headerlink" href="#jul-27-2016-new-features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Started adding log statements to classes and methods</p></li>
+<li><p>Added this file to track changes</p></li>
+<li><p>Added support for requesting creation of subscriptions, GETing (with search) all subscriptions as creator (not peer), as well as deletion of subscriptions when an actor is deleted (still remaining GET all relationship as peer, GET on relationship to get diffs, DELETE subscription as peer, as well as mechanism to store diffs)</p></li>
+</ul>
+</section>
+<section id="jul-27-2016-bug-fixes">
+<h2>Jul 27, 2016: Bug fixes<a class="headerlink" href="#jul-27-2016-bug-fixes" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Changed all ndb.fetch() calls to not include a max item number</p></li>
+<li><p>Cleaned up actor delete() to go directly on database to delete all relevant items</p></li>
+<li><p>Fixed a bug where the requested peer would not store the requesting actor’s mini-app type in db (in trust)</p></li>
+<li><p>Added use_cache=False in all trust.py ndb calls to get rid of the cache issues experienced when two different threads communicate to set up a trust</p></li>
+<li><p>Added a new check and return message when secret is not included in an “establish trust” request (requestor must always include secret)</p></li>
+</ul>
+</section>
+<section id="july-12-2016-new-features">
+<h2>July 12, 2016: New features<a class="headerlink" href="#july-12-2016-new-features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>config.py cleaned up a bit</p></li>
+</ul>
+</section>
+<section id="july-12-2016-bug-fixes">
+<h2>July 12, 2016: Bug fixes<a class="headerlink" href="#july-12-2016-bug-fixes" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix in on_aw_oauth_success where token can optionally supplied (first time oauth was done the token has not been flushed to db)</p></li>
+<li><p>Fix in on_aw_oauth_success where login attempt with wrong Spark user did not clear the cookie_redirect variable</p></li>
+<li><p>Fixed issue with wrong Content-Type header for GET and DELETE messages without json body</p></li>
+</ul>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">ActingWeb</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="LICENSE.html">License</a></li>
+<li class="toctree-l1"><a class="reference internal" href="README.html">README - actingweb - an ActingWeb Library</a></li>
+<li class="toctree-l1"><a class="reference internal" href="docs/getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="docs/developers.html">ActingWeb Developer Interface</a></li>
+<li class="toctree-l1"><a class="reference internal" href="docs/actingweb-spec.html">ActingWeb Specification - version 1.0</a></li>
+<li class="toctree-l1"><a class="reference internal" href="docs/actingweb.html">actingweb code</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">CHANGELOG</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#v3-0-1-jul-27-2025">v3.0.1: (Jul 27, 2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-6-5-apr-22-2021">v2.6.5: Apr 22, 2021</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-6-4-apr-11-2021">v2.6.4: Apr 11, 2021</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-6-3-apr-11-2021">v2.6.3: Apr 11, 2021</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-6-2-oct-20-2020">v2.6.2: Oct 20, 2020</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-6-1-aug-30-2020">v2.6.1: Aug 30, 2020</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-6-0-aug-23-2020">v2.6.0: Aug 23, 2020</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-5-1-jan-29-2019">v2.5.1: Jan 29, 2019</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-5-0-nov-17-2018">v2.5.0: Nov 17, 2018</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-4-3-sep-27-2018">v2.4.3: Sep 27, 2018</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-4-2-sep-27-2018">v2.4.2: Sep 27, 2018</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-4-1-sep-26-2018">v2.4.1: Sep 26, 2018</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-4-0-sep-22-2018">v2.4.0: Sep 22 2018</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-3-0-dec-27-2017">v2.3.0: Dec 27, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-2-2-dec-3-2017">v2.2.2: Dec 3, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-2-1-dec-3-2017">v2.2.1: Dec 3, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-2-0-nov-25-2017">v2.2.0: Nov 25, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#v2-1-2-nov-12-2017">v2.1.2: Nov 12, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#jul-9-2017">Jul 9, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#apr-2-2017">Apr 2, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#mar-11-2017">Mar 11, 2017</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#feb-25-2016">Feb 25, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#nov-19-2016">Nov 19, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#nov-17-2016">Nov 17, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#nov-5-2016">Nov 5, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#nov-1-2016">Nov 1, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#oct-28-2016">Oct 28, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#oct-26-2016">Oct 26, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#oct-15-2016">Oct 15, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#oct-12-2016">Oct 12, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#oct-9-2016">Oct 9, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#oct-7-2016">Oct 7, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#oct-6-2016">Oct 6, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#sep-25-2016">Sep 25, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#sep-4-2016">Sep 4, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-28-2016">Aug 28, 2016</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-21-2016-new-features">Aug 21, 2016: New features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-15-2016-bug-fixes">Aug 15, 2016: Bug fixes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-6-2016-new-features">Aug 6, 2016: New features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-6-2016-bug-fixes">Aug 6, 2016: Bug fixes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-3-2016-new-features">Aug 3, 2016: New features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-3-2016-bug-fixes">Aug 3, 2016: Bug fixes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aug-1-2016-new-features">Aug 1, 2016: New features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#jul-27-2016-new-features">Jul 27, 2016: New features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#jul-27-2016-bug-fixes">Jul 27, 2016: Bug fixes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#july-12-2016-new-features">July 12, 2016: New features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#july-12-2016-bug-fixes">July 12, 2016: Bug fixes</a></li>
+</ul>
+</li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="docs/actingweb.handlers.html" title="previous chapter">actingweb.handlers package</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2020, Greger Teigre Wedel.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 5.3.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/CHANGELOG.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

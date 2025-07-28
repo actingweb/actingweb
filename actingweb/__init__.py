@@ -1,3 +1,5 @@
+__version__ = "3.1"
+
 __all__ = [
     "actor",
     "attribute",
@@ -9,6 +11,10 @@ __all__ = [
     "subscription",
     "trust",
     "config",
-    "on_aw",
-    "aw_web_request"
+    "aw_web_request",
+    # New modern interface
+    "interface",
 ]
+
+# Make the new interface easily accessible
+from . import interface

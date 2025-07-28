@@ -1,0 +1,2182 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>ActingWeb Specification - version 1.0 &#8212; ActingWeb 2.6.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/alabaster.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="actingweb code" href="actingweb.html" />
+    <link rel="prev" title="ActingWeb Developer Interface" href="developers.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="actingweb-specification-version-1-0">
+<h1>ActingWeb Specification - version 1.0<a class="headerlink" href="#actingweb-specification-version-1-0" title="Permalink to this heading">¶</a></h1>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
+<section id="this-document">
+<h3>This Document<a class="headerlink" href="#this-document" title="Permalink to this heading">¶</a></h3>
+<p><em>This specification is written in the format of an
+`IETF &lt;http://www.ietf.org&gt;`_ draft. However, there is currently no
+effort to submit this draft to a working group, nor to make it go
+through the process of becoming an IETF proposed standard or have any
+other official status. This may or may not be appropriate at some point,
+but the text is written in this format because people are used to
+reading specifications in this format and it is a well-proven approach</em>.</p>
+</section>
+<section id="copyright-notice">
+<h3>Copyright Notice<a class="headerlink" href="#copyright-notice" title="Permalink to this heading">¶</a></h3>
+<p>This specification is Copyright, Greger Teigre Wedel, 2007-2016.</p>
+<p>Permission is granted to copy, distribute, or communicate this
+specification without modification. No modification of this
+specification is allowed without the explicit permission of the
+copyright holder.</p>
+<p>All work, including code, derived from the concepts, specifications, and
+other instructions found in this specification do not require any
+license or permission, and may be distributed under any copyright or
+license.</p>
+</section>
+<section id="terminology">
+<h3>Terminology<a class="headerlink" href="#terminology" title="Permalink to this heading">¶</a></h3>
+<p>In this document, the key words “<strong>MUST</strong>”, “<strong>MUST NOT</strong>”, “<strong>REQUIRED</strong>”, “<strong>SHALL</strong>”,
+“<strong>SHALL NOT</strong>”, “<strong>SHOULD</strong>”, “<strong>SHOULD NOT</strong>”, “<strong>RECOMMENDED</strong>”, “<strong>NOT RECOMMENDED</strong>”,
+“<strong>MAY</strong>”, and “<strong>OPTIONAL</strong>” are to be interpreted as described in BCP 14, RFC
+2119 and indicate requirement levels for compliant ActingWeb
+implementations.</p>
+</section>
+<section id="abstract">
+<h3>Abstract<a class="headerlink" href="#abstract" title="Permalink to this heading">¶</a></h3>
+<p>The ActingWeb micro-services model and protocol defines a bot-to-bot and
+micro-service-to-micro-service communication that allows extreme
+distribution of data and functionality. This makes it very suitable for
+holding small pieces of sensitive data on behalf of a user or “things”
+(as in Internet of Things). These sensitive data can then be used and
+shared in a very granular and controlled way through the secure and
+distributed ActingWeb REST protocol. This allows you to expose e.g. your
+location data from your phone directly on the Internet (protected by the ActingWeb
+security framework) and to be used by other services <cite>on your
+choosing</cite>. You can at any time revoke access to your data for one
+particular service without influencing anything else.</p>
+<p>The programming model in ActingWeb is based on an extreme focus on only
+representing one small set of functionality and for only one user or
+entity. This is achieved by not allowing any other way of calling the
+service (in ActingWeb called a “mini-application”) than through a user
+and the mini-app’s REST interface (a user’s instance of a
+mini-application is called an <cite>actor</cite> in ActingWeb). From a practical
+point of view, getting xyz’s location through the REST protocol is as
+simple as doing a GET
+<cite>http://mini-app-url/xyz/properties/location</cite>.</p>
+<p>There is absolutely no way of getting xyz’s and yyz’s location
+information in one request, and the security model enforces access based
+on user (i.e. actor), so even if you have access to
+<cite>http://mini-app-url/xyz/properties/location</cite>, you will not have
+access to <cite>http://mini-app-url/yyz/properties/location</cite>.</p>
+<p>Any functionality desired across actors, for example xyz sharing
+location information with yyz <cite>MUST</cite> be done through the ActingWeb
+REST protocol. However, since the ActingWeb service-to-service REST
+protocol is standardised, <cite>any</cite> service implementing the protocol
+can easily share data with other services.</p>
+<p>The ActingWeb REST protocol specifies a set of default endpoints (like
+<cite>/properties</cite>, <cite>/trust</cite>, <cite>/subscriptions</cite> etc) that
+are used to implement the service-to-service communication, as well as a
+set of suggested endpoints (like <cite>/resources</cite>, <cite>/actions</cite>
+etc) where the mini-applications can expose their own functionality. All
+exchanges are based on REST principles and a set of flows are built into
+the protocol that support exchanging data, establishing trust between
+actors (per actor, not per mini-application), as well as subscribing to
+changes.</p>
+<p>The security model is based on trust between actors, not
+mini-applications. This means that each instance of the mini-application
+holding the sensitive data for one particular person or thing
+<cite>must</cite> be connected through a trust relationship to another
+ActingWeb actor, but it doesn’t have to be a mini-application of the
+same type (like location sharing), but could be a location sharing actor
+establishing a trust relationship with 911 authorities to allow
+emergency services to always be able to look you up.</p>
+<p>There are currently two ways of establishing trust between actors:
+either through an explicit OAuth flow where an actor is tied to
+somebody’s account somewhere else (like Google, Box.com, etc) or through
+a flow where one actor requests a trust relationship with another, which
+then needs to be approved either interactively by a user or
+programatically through the REST interface.</p>
+</section>
+<section id="overview-of-operations">
+<h3>Overview of operations<a class="headerlink" href="#overview-of-operations" title="Permalink to this heading">¶</a></h3>
+<p>The ActingWeb is an application-layer communication protocol used
+between independent software components that can reside on any
+computer-powered device. These software components or services, referred
+to as mini-applications, implement the ActingWeb protocol to expose
+data, resources, and services to other ActingWeb mini-applications or to
+clients of the ActingWeb services (that not themselves are ActingWeb
+mini-applications). ActingWeb is targeted towards machine-to-machine
+communication, and can be used to build Internet of Everything (IoT)
+type functionality.</p>
+<p>ActingWeb assumes a programming model where you can only access data and
+services through individual instances of the mini-application and where
+there is one and only one user or entity that is represented. That is, there
+is no concept of “get all instances” of something, only “get this data
+for this specific instance.”</p>
+<p>Thus, in ActingWeb terminology, an <em>actor</em> is an instance that is
+running and exposing the mini-application’s services for one specific
+entity/user/device, i.e. a mini-application may implement location
+awareness functionality, and a single actor (an instance of the
+mini-application) may represent one physical mobile device and keep
+track of that device’s current GPS position, as well as allow other
+actors to access that device’s GPS position. This is contrary to typical
+web applications, where one application normally implements a set of
+functionality for many entities/users. However, another mini-application
+could offer location services for users specifically (and not a device)
+and then multiple location-aware devices and services associated with a
+single user could serve data to that user’s actor. The scope of a
+mini-application is thus not a rigid concept, but rather a design
+principle.</p>
+<p>In order to access an actor’s data, a set of credentials is required.
+The credentials identifying the requesting actor are unique for the
+relationship between the two actors. Each such relationship has a trust
+level, controlling which level of access the requesting actor has to the
+actor’s data. Hence, a mini-application is always contacted through a
+specific actor, and the credentials give access to the actor’s data. The
+actors establish trust relationships with each other in many-to-many
+relationships where each relationship is bi-directional (optionally
+one-way) and has a trust level. The trust relationship is then used as
+authentication when requesting access. The mini-application itself
+specifies which access rights are given to which data, resources, and
+services for each trust level and thus outside the scope of this
+document, while the method used to create a trust relationship is
+specified in this document.</p>
+<p>The mini-application functionality of the actor is accessed through a
+set of pre-defined URIs. The ActingWeb protocol for interaction
+<strong>between</strong> actors is based on RESTful principles, while RPC-style
+methods like SOAP can also be exposed as part of the mini-applications
+accessible functionality if desired. The ActingWeb protocol specifies a
+basic set of URIs (<em>endpoints</em>) that must be supported.
+Mini-applications may (indeed is likely to) offer also other resources
+and services than those specified in this document.</p>
+<p>Each actor implements one and only one mini-application. The
+mini-application functionality and interface may be described in human
+or machine-readable form, dependent on the preference of the creator. A
+description of a mini-application is similar to the interface of a class
+in object-oriented terminology and exhaustively describes the
+mini-application so that it can be used by creators of other actors for
+the purpose of communication between the actors.</p>
+<p>Each actor also offers a subscription endpoint, where actors and clients
+can request to be notified about changes to a given endpoint path (like
+/resources/target/12345). The notification is either a callback to an
+URI provided by the requestor or, optionally, as a subscription resource
+that can be polled.</p>
+<p>An actor typically resides on a web server and is thus accessible via a
+root URI for that specific actor, ex.
+<a class="reference external" href="https://actingweb.net/apps/app1/897JGHGY76HGhgK/">https://actingweb.net/apps/app1/897JGHGY76HGhgK/</a></p>
+<p>An important aspect of actors is how they relate to traditional user
+accounts found in interactive (and SOAP/REST-based) web sites and
+services: In a classic web site/web service implementation, the root URL
+is the entry point to a login page asking for login credentials or
+authentication. Credentials, including a username, are thus required as
+part of the web service request. An ActingWeb actor’s root URL will
+typically not only identify the account in question, but the account’s
+specific functionality, for example the voicemail inbox. The credentials
+used to access the actor are never an account username and password, but
+rather the credentials of a trust relationship that has been established
+between the requesting and requested actor. This trust can for example
+be established using OAuth or through an approval process as described
+in this document.</p>
+</section>
+<section id="structure-of-the-protocol">
+<h3>Structure of the Protocol<a class="headerlink" href="#structure-of-the-protocol" title="Permalink to this heading">¶</a></h3>
+<p>As a REST-based protocol, the ActingWeb protocol utilises the http
+protocol specification. All communication between actors is based on
+usage of the basic principles of an http envelope with a message type,
+headers and corresponding values, and a payload. Http responses are also
+re-used.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">|</span> <span class="n">Actor</span> <span class="o">|</span> <span class="o">----</span> <span class="n">http</span><span class="p">(</span><span class="n">s</span><span class="p">)</span> <span class="o">-----|</span> <span class="n">Actor</span> <span class="o">|</span>
+</pre></div>
+</div>
+<p><em>Figure, http(s) as transport</em></p>
+<p>This specification defines the URI interface each actor must implement,
+which http methods shall be used to accomplish what, which http response
+codes shall be used in which situations, as well as definitions of the
+representations to be used in http requests and responses. There is a
+set of mandatory URI paths that any actor must respond to, as well as a
+set of optional paths to be used for specific pre-defined purposes.</p>
+<p>The protocol also specifies how trust relationships shall be
+established, how to use them for authentication and authorisation, as
+well as how they are terminated.</p>
+<p>Finally, the protocol specifies what a subscription is, how a
+subscription can be established, fulfilled, and cancelled.</p>
+</section>
+<section id="definitions">
+<h3>Definitions<a class="headerlink" href="#definitions" title="Permalink to this heading">¶</a></h3>
+<dl class="simple">
+<dt>Endpoint:</dt><dd><p>The ActingWeb protocol specifies a set of endpoints directly
+under the root URI of the actor that is used to get access to the
+functionalities offered by an actor</p>
+</dd>
+<dt>Actor:</dt><dd><p>A software component that exposes the ActingWeb protocol
+interface and is accessible to other actors or clients</p>
+</dd>
+<dt>Action:</dt><dd><p>An action is a resource exposed by an actor or an agent (see
+definition) that results an in external action like turning a lightbulb
+on or off, to be executed (i.e. external to the actor). The response may
+even be an OK, as in “action executed”</p>
+</dd>
+<dt>Agent:</dt><dd><p>A software component that implements partial or in whole a
+mini-application according to the ActingWeb Specification and which
+offers not only data, but also resources, actions, or methods that are
+callable. As opposed to an actor, an agent is typically not publicly
+available (could be on and off due to battery limitations or
+connectivity) and often has a Proxy as peer that can receive requests on
+behalf of the Agent</p>
+</dd>
+<dt>Client:</dt><dd><p>A software component that uses the ActingWeb protocol to access
+data, resources, or services from an actor, but which does not implement
+the ActingWeb protocol interface itself and thus cannot be contacted as
+an actor</p>
+</dd>
+<dt>Method:</dt><dd><p>A method is an RPC (Remote Procedure Call) style service that is
+accessible through a specific URI</p>
+</dd>
+<dt>Mini-application:</dt><dd><p>A set of functionality that can be instantiated to
+many actors. Consists of a set of data, resources, methods, and actions
+that other actors and clients can request and operate on. Defined by the
+mini-application definition.</p>
+</dd>
+<dt>Mini-application definition:</dt><dd><p>Either a human- or machine-readable
+description of the data, resources, methods, and actions a
+mini-application implements. A human-readable format can be of any type,
+as long as it is complete enough for somebody to use the actors
+implementing the mini-application.</p>
+</dd>
+<dt>Mini-application type:</dt><dd><p>A URN string prefixed with ActingWeb that
+uniquely identifies the mini-application, ex.
+<a class="reference external" href="urn:actingweb:domain.com:myapp">urn:actingweb:domain.com:myapp</a></p>
+</dd>
+<dt>Resource:</dt><dd><p>A resource is an entity exposed through a URI and other actors
+or clients can manipulate the resource through commands according to
+RESTful principles</p>
+</dd>
+<dt>Root URI:</dt><dd><p>All actors have a root URI where it can be contacted using
+http type methods, either directly (if the URI is http/https) or encoded
+in the protocol used (i.e. _method=…)</p>
+</dd>
+<dt>Peer:</dt><dd><p>An actor that has an established trust relationship with another
+actor. An actor will have many peers</p>
+</dd>
+<dt>Proxy:</dt><dd><p>A software component that implements a mini-application according
+to the ActingWeb Specification, but which does not offer anything beyond
+data and proxying capabilities. A proxy has a peer Agent that implements
+the same mini-application that it is a proxy for. The agent is using the
+proxy as a publicly available storage and proxy for communication with
+other actors. The proxy may store requests for resources, actions, and
+methods and forward these when the agent comes online</p>
+</dd>
+</dl>
+</section>
+</section>
+<section id="the-mini-application-model">
+<h2>The Mini-Application Model<a class="headerlink" href="#the-mini-application-model" title="Permalink to this heading">¶</a></h2>
+<section id="what-is-a-mini-application">
+<h3>What Is a Mini-Application?<a class="headerlink" href="#what-is-a-mini-application" title="Permalink to this heading">¶</a></h3>
+<p>The mini-application is the central element in the ActingWeb. The
+concept is very flexible, practically any tiny functionality, like
+holding one value, can be wrapped into a mini-application, or you can
+create one actor implementing all the functionality you need. If you
+have an existing web service, it may be tempting to just create one
+ActingWeb mini-application to expose your web service in the ActingWeb.
+However, you gain a lot more by creating mini-applications that follow
+the principles of the ActingWeb: user-centric, atomic, 24x7 alive, and
+isolated. These principles are explained in more detail further below.</p>
+<p>The mini-application can in many ways be compared to a class from
+object-oriented programming languages. The class has private and public
+data, as well as methods that can be called with certain parameters and
+return values. The mini-application offers the same (and more) through
+an interface definition. A class has a name; the mini-application has a
+type. Both can be instantiated, the class into an object, and the
+mini-application into an actor.</p>
+</section>
+<section id="the-mini-application-s-type">
+<h3>The Mini-Application’s Type<a class="headerlink" href="#the-mini-application-s-type" title="Permalink to this heading">¶</a></h3>
+<p>Each mini-application MUST have a type name in the form of a urn
+prefixed with <cite>actingweb</cite>. A unique namespace MUST be chosen by
+using either a rightfully owned domain name or email address. All other
+urns are reserved for use by a coordinating body, currently
+actingweb.org. Examples of valid mini-application types:
+<cite>urn:actingweb:payment:creditcard</cite>,
+<cite>urn:actingweb:mydomain.com:coolapps:app1</cite>,
+<cite>urn:actingweb:user&#64;domain.com:myapp2</cite></p>
+<p>Any given mini-application type can have zero, one, or many actual
+implementations (for example in different programming languages, for
+different server platforms etc). A mini-application type MUST correspond
+to one and only one human- or machine-readable description.</p>
+</section>
+<section id="option-tags">
+<h3>Option tags<a class="headerlink" href="#option-tags" title="Permalink to this heading">¶</a></h3>
+<p>Option tags are textual tags indicating support for a specific
+functionality as specified in this specification (i.e extensions). The
+<em>/meta/actingweb/supported</em> path MUST return a list of comma-separated
+option tags to indicate which OPTIONAL functionalities that the
+mini-application has implemented and thus the actor supports.</p>
+<p>The below table summarises all the option tags (and thus optional parts)
+in this specification. Only the basic creation and deletion of an actor
+and the /properties and /meta paths are mandatory to implement, thus
+allowing the implementation of a very simple actor. Most actors will
+also support /callbacks and maybe /www to allow interaction using web
+pages and getting callback data from third party services. Third party
+interactions will often be coupled with implementation of /oauth to
+allow use of OAuth to get access.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p><strong>Tag</strong></p></th>
+<th class="head"><p><strong>Description</strong></p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>trust</p></td>
+<td><p>The trust endpoint is available to request and establish regular, two-way trust
+relationships between actors. If trust is available, the actor should also be
+able to receive callbacks on /callbacks</p></td>
+</tr>
+<tr class="row-odd"><td><p>onewaytrust</p></td>
+<td><p>The version of trust implemented is more restrictive and although one actor A
+has a trust relationship with another actor B giving A access to B’s
+functionality, the reverse is not true</p></td>
+</tr>
+<tr class="row-even"><td><p>subscriptions</p></td>
+<td><p>The subscriptions endpoint can be used to establish subscriptions on the actor’s
+data, actions, or resources</p></td>
+</tr>
+<tr class="row-odd"><td><p>actions</p></td>
+<td><p>The actions path is available and offers ways of triggering something to happen.
+Example:* /actions/turn-lights-off*</p></td>
+</tr>
+<tr class="row-even"><td><p>resources</p></td>
+<td><p>The resources path is available and non-actingweb data, but relevant to the actor
+can be found under the resources path. Example: GET /resources/lights to get all
+lights available.</p></td>
+</tr>
+<tr class="row-odd"><td><p>methods</p></td>
+<td><p>The methods path is available and offers non-REST based API access.
+Example: <em>/methods/soap/sendMessage</em></p></td>
+</tr>
+<tr class="row-even"><td><p>sessions</p></td>
+<td><p>The sessions path is available and offers access to session-based functionality.
+Example: <em>/sessions/SIP/2f2ag-2696f-42gga</em></p></td>
+</tr>
+<tr class="row-odd"><td><p>www</p></td>
+<td><p>The www path is available for human web-based interaction with the actor</p></td>
+</tr>
+<tr class="row-even"><td><p>oauth</p></td>
+<td><p>The oauth path is available to do an OAuth2 authorisation flow. The /oauth path
+should give a redirect to the 3<sup>rd</sup> party authorisation web page that can
+be presented to the user</p></td>
+</tr>
+<tr class="row-odd"><td><p>proxy</p></td>
+<td><p>The actor implements capabilities to be a proxy</p></td>
+</tr>
+<tr class="row-even"><td><p>nestedproperties</p></td>
+<td><p>Announce support for deeper, nested json structures in /properties (beyond the
+mandatory attribute/value pairs)</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="the-actor">
+<h2>The Actor<a class="headerlink" href="#the-actor" title="Permalink to this heading">¶</a></h2>
+<section id="what-is-an-actor">
+<h3>What is an Actor?<a class="headerlink" href="#what-is-an-actor" title="Permalink to this heading">¶</a></h3>
+<p>An actor is a running software component that is ready to respond to
+external requests, as well as internal events or requests (for example
+if residing on a mobile phone). The actor implements a small and finite
+set of functionality with the purpose of offering parts or all of that
+functionality to the outside world. An actor is not a replacement for a
+SOAP or REST-based web service, and is not a part of a web site for
+human interactions. Actors are made for machine-to-machine
+communication, and is ideal for e.g. bot-to-bot communication.</p>
+<p>Each actor is, in the object-oriented terminology, an instantiation of a
+class, and thus can be seen as an object. The mini-application
+definition corresponds to the class definition and the mini-application
+itself to the class declaration. Like objects in object-oriented
+programming languages, actors can access other actors’ data (if they are
+public) and call methods.</p>
+<p>All actors MUST have a globally, unique root URI. The root URI can be in
+the form of a http or https URL, or any other type of URI that can allow
+two-way communication and which are specified in this or associated
+specifications. The root of the URI SHALL uniquely identify the actual
+actor, i.e. the mini-application instance:
+<a class="reference external" href="http://www.actingweb.net/miniapp1/my_actor_id/">http://www.actingweb.net/miniapp1/my_actor_id/</a>. In the case of an
+email, the full email address SHALL uniquely identify the instance:
+<a class="reference external" href="mailto:my_actor_id&#37;&#52;&#48;Actingweb&#46;net">mailto:my_actor_id<span>&#64;</span>Actingweb<span>&#46;</span>net</a>.</p>
+<p>The same holds for SIP URIs, example: <a class="reference external" href="sip:my_actor_id&#64;actingweb.net">sip:my_actor_id&#64;actingweb.net</a> or
+possibly <a class="reference external" href="sip:myapp&#64;actingweb.net;gruu=my_actor_id">sip:myapp&#64;actingweb.net;gruu=my_actor_id</a></p>
+</section>
+<section id="identity">
+<h3>Identity<a class="headerlink" href="#identity" title="Permalink to this heading">¶</a></h3>
+<p>Each actor’s root URI MUST be globally routable and, unless the actor is
+offline, behind NAT or otherwise, a request to this URI MUST reach the
+actor. Each actor MUST have an id that is created at creation
+(instantiation) and which is valid throughout the lifetime of the actor.</p>
+<p>The id MUST be globally unique. It is RECOMMENDED that a version 5
+(SHA-1) UUID (RFC 4122) is used with the base URI of the location of
+actor as name input to the algorithm. The resulting UUID MUST be added
+to the base URI using the standard encoding. Example:
+<em>​</em><a class="reference external" href="http://actingweb.net/myapp/f81d4fae7dec11d0a76500a0c91e6bf6">http://actingweb.net/myapp/f81d4fae7dec11d0a76500a0c91e6bf6</a></p>
+</section>
+<section id="data-representation">
+<h3>Data Representation<a class="headerlink" href="#data-representation" title="Permalink to this heading">¶</a></h3>
+<p>All input and output representation specified throughout this document
+MUST by in UTF-8 unless otherwise specified. The default data
+representation is the JSON format and MUST be supported. Alternative
+data representations, like urlencoded form-data, XML or others, can also
+be supported and MAY be announced as a capability through the formats
+element in /meta/actingweb (see /meta endpoint section). Content formats
+should be negotiated with standard http header mechanisms.</p>
+</section>
+<section id="instantiation-of-actors">
+<h3>Instantiation of Actors<a class="headerlink" href="#instantiation-of-actors" title="Permalink to this heading">¶</a></h3>
+<p>Actors can be instantiated in several ways dependent on their context
+and environment. For example, an installed application on a computer or
+mobile phone that implements a mini-application as an actor, is
+instantiated the first time it runs. Such instantiation is based on
+installing the software on a new device, a factory- or manual process.</p>
+<p>Actors that reside on a web server MUST implement dynamic instantiation
+through a mini-application factory present at the level right above the
+actors’ root URIs, ex: <em>​</em><a class="reference external" href="http://www.actingweb.net/miniapp1">http://www.actingweb.net/miniapp1</a>. The actor
+or client requesting instantiation sends an http POST to the factory URI
+with the following OPTIONAL application/json data:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>{
+  “creator”: “username”,
+  “passphrase”: “secret”,
+  “trustee_root”: “uri”
+}
+</pre></div>
+</div>
+<p>A special creator user with username “creator” and passphrase “secret”
+MUST have full access to manage and access the actor through http basic
+authentication. If “creator” is not supplied, “creator” MUST be the
+default username.</p>
+<p>The ‘trustee_root’ value is a URI pointing to the root URI of an actor that
+will act as a validator and manager of trust relationships for the new
+actor. This is typically used when another actor is instantiating a new
+actor to get access to some new functionality.</p>
+<p>If the creation of a new instance was successful, a 201 Created MUST be
+returned with the <em>Location</em> header set to the full root URI of the new
+actor instance. If the instantiation failed due to problems with the
+input parameters, a 400 Bad Request MUST be returned. Temporary problems
+in instantiating a new actor SHOULD result in a 503 Service Temporarily
+Unavailable. Other server errors SHOULD result in the 500 Internal
+Server Error return code.</p>
+</section>
+<section id="deleting-actor-instances">
+<h3>Deleting Actor Instances<a class="headerlink" href="#deleting-actor-instances" title="Permalink to this heading">¶</a></h3>
+<p>An actor instance can be deleted with all its data by sending a DELETE
+request to the root URI of the actor. The request MUST be authenticated
+and only the creator or ‘admin’ relationships are allowed to delete an
+actor (see the section on trust relationships). Upon receiving a valid
+DELETE, the actor SHOULD clean up its data, any 3<sup>rd</sup> party
+webhooks, and stop responding to requests on and below its root URI. If
+the actor is deleted after being migrated to a newer version/new actor,
+it MAY choose to respond with 301 Moved Permanently where the Location
+header is set to the root URI of the new actor.</p>
+</section>
+<section id="endpoints">
+<h3>Endpoints<a class="headerlink" href="#endpoints" title="Permalink to this heading">¶</a></h3>
+<p>ActingWeb actors communicate by sending http requests to each other on
+pre-defined URI paths with pre-defined meanings and representations.
+These messages can be sent over http/https or any other transport that
+can support such exchanges.</p>
+<p>The available endpoints are the most important structural elements of
+the protocol specification. Any actor or client will expect another
+actor implemented according to the ActingWeb specification to respond to
+a certain set of paths right beneath the root URI of the actor. These
+so-called endpoints have a defined purpose and use, and the use of http
+methods and representations are specified in this document.</p>
+<p>Below is a summary of the defined endpoints and a summary of their
+purpose. Details on how to use these endpoints can be found later in
+this specification in the Endpoints chapter, as well as separate
+chapters for /trust and /subscriptions. Each of the OPTIONAL access
+paths has a corresponding options tag (as found in
+meta/actingweb/supported) with the same name as the path. I.e. if the
+/www path is implemented, the meta/actingweb/supported options MUST
+include “www” as an options tag.</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Endpoint</strong></p></td>
+<td><p><strong>Status</strong></p></td>
+<td><p><strong>Description</strong></p></td>
+<td><p><strong>httpd methods</strong></p></td>
+</tr>
+<tr class="row-even"><td><p>/meta</p></td>
+<td><p>MUST</p></td>
+<td><p>Meta-information about the actor and it’s mini-application.</p></td>
+<td><p>GET</p></td>
+</tr>
+<tr class="row-odd"><td><p>/properties</p></td>
+<td colspan="2"><p>MUST        | Simple, public data that the actor for simplicity would like to expose in a unified way to simplify read and write. The interface is RESTful where the URI specifies the property or the part of the property tree to operate on. The data are in simple attribute/value pairs.</p></td>
+<td><p>GET, PUT, DELETE, and POST</p></td>
+</tr>
+<tr class="row-even"><td><p>/actions</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Actors may be able to execute actions that are not directly connected to data or resources, but where the action causes an external (maybe physical) event. A GET to an action returns status for the action, while a PUT or POST executes the action.</p></td>
+<td><p>GET, PUT, POST</p></td>
+</tr>
+<tr class="row-odd"><td><p>/callbacks</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>This URI is used by the actor to receive callbacks for trust and subscription creation, and subscriptions, as well deferred requests sent through a proxy.</p></td>
+<td><p>PUT, POST</p></td>
+</tr>
+<tr class="row-even"><td><p>/resources</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Any resources the actor wants to expose within a RESTful framework may reside here. The in and out representations can be freely defined by the mini-application. The URI path must specify the resource to operate on. GET MUST return information, PUT MUST change state of resource, DELETE MUST delete a resource, and POST MUST create a new resources.</p></td>
+<td><p>GET, PUT, DELETE, and POST</p></td>
+</tr>
+<tr class="row-odd"><td><p>/methods</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Any RPC style web service that an actor wants to expose MUST be exposed under this path. There are no restrictions on how to use http methods or on representations. Thus, any RPC-type service (ex. SOAP, XMLRPC) can be exposed here. An http GET can thus give side-effects.</p></td>
+<td><p>any</p></td>
+</tr>
+<tr class="row-even"><td><p>/sessions</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Session-based communication (bi-directional messages or streams) can have their own signalling and media/content protocols. Two actors may want to establish a two-way session over a time-period for communication that is not suited to do over the signalling or media protocols. The /sessions path is made for this purpose. Also, an actor implementing a session-protocol may want to allow http-based access to session data and/or actions. The /sessions path may implement websockets for bi-directional flows.</p></td>
+<td><p>any</p></td>
+</tr>
+<tr class="row-odd"><td><p>/www</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>If the actor wants to expose a web application for human consumption, this path can be used. A special path /www/init is reserved for the presentation of a web form for humans to initialise a newly instantiated actor.</p></td>
+<td><p>GET and POST</p></td>
+</tr>
+<tr class="row-even"><td><p>/oauth</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>The oauth endpoint is used to initiate a binding of the actor to an external OAuth-authorised service. Typically, this is used for actors that represent a service like Google Mail, Box, Dropbox, or any other service with OAuth-based APIs.</p></td>
+<td><p>GET and POST</p></td>
+</tr>
+<tr class="row-odd"><td><p>/subscriptions</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Other actors use this endpoint to establish new subscriptions or check state of an existing. A POST to /subscriptions will create a new subscription and return the path to the newly created subscription in the Location header of the http response. A GET on the subscription returns status on the subscription.</p></td>
+<td><p>GET and POST</p></td>
+</tr>
+<tr class="row-even"><td><p>/trust</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Other actors use this endpoint to create or remove relationships. A POST to /trust/trusttype will request the creation of a new relationship of type trusttype. The path to the new trust relationship is returned in the Location header.A DELETE to the trust URI will terminate the relationship. GET on the URI will send status information about the relationship (ex. approved, pending etc).</p></td>
+<td><p>GET, PUT, DELETE, POST</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="agents">
+<h3>Agents<a class="headerlink" href="#agents" title="Permalink to this heading">¶</a></h3>
+<p>Agents are actors that together with a proxy implement a
+mini-application fully and according to the principles outlined in this
+specification. Together, an agent/proxy pair MUST implement all
+mandatory aspects of the mini-application. However, as opposed to the
+actor, agents MAY be temporarily unavailable or accessible only through
+an actor acting as a proxy for the agent. For simpler functionality and
+low-powered devices, a client can instead be used. It can be as simple
+as just holding credentials that allow updating values, e.g. posting GPS
+coordinates once in a while through a POST.</p>
+</section>
+<section id="proxies">
+<h3>Proxies<a class="headerlink" href="#proxies" title="Permalink to this heading">¶</a></h3>
+<p>A proxy is an actor that implements /meta, /properties, /trust, and
+/subscriptions according to the definition of a mini-application, and
+that has a special proxy relationship with an agent that is just
+partially available to other actors. Together, the proxy and the agent
+MUST implement the mini-application fully. These two actors, the proxy
+and the agent, together form a pair representing the same entity or
+data. The proxy MUST be available to other actors on the Internet
+through a URI (or on a meaningfully defined private network), while the
+agent can be intermittently unavailable and will typically only
+communicate with its proxy. They MUST have a two-way trust relationship
+of the type proxy.</p>
+<p>An important characteristics of a proxy is that it MAY be implemented
+totally generically for any type mini-application and only needs a
+configuration that defines the /properties endpoint to respond to. In
+this case, all other endpoints like /actions, /resources etc will just
+be proxied to its agent. However, a proxy MAY implement more
+mini-application specific functionality to offload from the agent or if
+it otherwise makes sense.</p>
+<p>A paired proxy and the agent SHOULD have implicit subscriptions to each
+others /properties access paths in order to synchronise their
+/properties data.</p>
+<p><strong>Being a Proxy For Endpoints Proxied To The Agent</strong></p>
+<p>A proxy MAY implement endpoints on behalf of the proxy/agent pair. These
+MUST be implemented just like any other actor. However, a proxy MAY also
+implement endpoints that are proxied to the agent that is not available
+directly. Such a request to a path like /actions/dosumthin MUST give a
+http 307, Temporarily Moved. This indicates to the requestor that this
+is a proxy, and that the request should be sent as a subscription
+creation request to /subscriptions using the path as target (target =
+actions, sub-target=dosumthin) and with the parameter “proxied” set to
+true in the payload. If the proxy sees a subscription request with the
+parameter proxied set to true, it MUST treat the “data” element of the
+payload in the subscription request as the original payload to the
+endpoint, and thus forward this payload to the agent when forwarding.</p>
+</section>
+</section>
+<section id="id1">
+<h2>Endpoints<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
+<section id="meta-must">
+<h3>/meta (MUST)<a class="headerlink" href="#meta-must" title="Permalink to this heading">¶</a></h3>
+<p>Each actor has a set of meta-information used to facilitate effective
+discovery communication and is optionally a part of trust establishment
+if the requesting actor wants to validate that a given URL for an actor
+actually points to an actor of a certain and/or version. The
+meta-information can be found under the /meta path directly below the
+root URI of the actor. The http GET method is readable without a trust
+relationship. OPTIONAL paths that are not supported MUST result in 404
+Not found.</p>
+<p>These are the paths available:</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Path</strong></p></td>
+<td><p><strong>Status</strong></p></td>
+<td><p><strong>Description</strong></p></td>
+</tr>
+<tr class="row-even"><td><p>/meta/id</p></td>
+<td><p>MUST</p></td>
+<td><p>The id of the actor and is identical to the id embedded in the actor’s root path.</p></td>
+</tr>
+<tr class="row-odd"><td><p>/meta/type</p></td>
+<td><p>MUST</p></td>
+<td><p>Returns mini-application type in a 200 OK with a one-line text/plain body containing the urn type of the mini-application.</p></td>
+</tr>
+<tr class="row-even"><td><p>/meta/version</p></td>
+<td><p>MUST</p></td>
+<td><p>Returns the version of the mini-application type in a 200 OK with a one-line text/plain body containing the version number in the format a.b.c or a.b where a and b are digits 0-9.</p></td>
+</tr>
+<tr class="row-odd"><td><p>/meta/desc</p></td>
+<td><p>MUST</p></td>
+<td><p>Returns a human-readable description of the actor. The description MAY be based on a mini-application template, where information about this actor instance is substituted. Ex. “This actor allows deposits and withdrawals on Bob Bobson’s account #1234556 in the Bank of Lutitia”.</p></td>
+</tr>
+<tr class="row-even"><td><p>/meta/info</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Returns a 302 Refer with Location pointing to a URI with general human-readable web page about the mini-application.</p></td>
+</tr>
+<tr class="row-odd"><td><p>/meta/actingweb/version</p></td>
+<td><p>MUST</p></td>
+<td><p>Returns a 200 OK with a text/plain body containing the version number of this specification that the mini-application supports, I.e. 1.0</p></td>
+</tr>
+<tr class="row-even"><td><p>/meta/actingweb/supported</p></td>
+<td><p>MUST</p></td>
+<td><p>Returns a 200 OK with a text/plain body with a comma-separated list of tags identifying the supported OPTIONAL options found in this specification: option1,option2 See the Option tags section earlier in this document. An empty list means that only the mandatory requirements in this specification is supported.</p></td>
+</tr>
+<tr class="row-odd"><td><p>/meta/actingweb/formats</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Returns a 200 OK with a text/plain body with a comma-separated list of the supported OPTIONAL formats supported by the actor: e.g. xml,txt… The format name MUST be the standardised mime-type file extension. Only formats with standardised mime-types are allowed.</p></td>
+</tr>
+<tr class="row-even"><td><p>/meta/raml</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>A mini-application MAY choose to represent the mini-application through a RAML file (<a class="reference external" href="http://raml.org">*http://raml.org*</a>) Returns a URI to where the RAML file is found.</p></td>
+</tr>
+<tr class="row-odd"><td><p>/meta</p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Returns a 200 OK with an application/json body with an json document containing everything defined under the /meta path. Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>{
+   “actingweb”: {
+     “version”: “1.0”,
+     “supported”: “option1,option2”,
+ },
+ “type”: “urn:actingweb:domain.com:mytestapps:app1”,
+ “desc”: “Some description of this actor”,
+ “version”: “0.1”,
+ “info”: “”
+}
+</pre></div>
+</div>
+<p>Note that elements (both OPTIONAL and MUST), but empty, MAY be left out or returned as empty elements.</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>/meta/</p></td>
+<td><p>–</p></td>
+<td><p>All other meta paths are reserved for future use.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="properties-must">
+<h3>/properties (MUST)<a class="headerlink" href="#properties-must" title="Permalink to this heading">¶</a></h3>
+<p>Quick interactions between actors are important in ActingWeb. The
+/properties access path facilitates easy read and write of simple data.
+If you need to read and write more complex data structures or XML
+documents, you can use the access paths /resources (for RESTful access
+to data) or /methods (for RPC-style access like SOAP and XMLRPC).</p>
+<p>The /properties path is meant to contain the basic, most important data
+for the actor’s functionality. Most often a newly instantiated actor
+needs some properties set before proper functioning. However,
+/properties is not for static configurations only, but also for dynamic
+data. This implies that the actor MUST use current /properties data in
+its execution (and not treat them as a configuration file).</p>
+<p>The /properties path supports the http methods GET, PUT, DELETE, and
+POST. The requests can be unauthorised or authorised through a trust
+relationship by presenting credentials in the Authorization header of
+the http method.</p>
+<p>All attributes under /properties MUST be writable by the admin role.</p>
+<p><strong>Attribute/value pairs</strong></p>
+<p>The properties that can be stored under /properties are untyped, UTF-8
+encoded attribute/value pairs. The semantics of the attribute/value pair
+(as defined in the mini-application definition) must be used to convert
+representations into their specific types, for example a
+string-representation of an integer (“1234”) into the integer value
+1234.</p>
+<p>The below table shows the relationship between the attribute name, it’s
+value, and the URI where the value is stored.</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Attribute</strong></p></td>
+<td><p><strong>Value</strong></p></td>
+<td><p><strong>URI to attribute</strong></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>name</strong></p></td>
+<td><p>Alice</p></td>
+<td><p><a class="reference external" href="http://www.actingweb.org/app/78hjh76yug/properties/name">http://www.actingweb.org/app/78hjh76yug/properties/name</a></p></td>
+</tr>
+</tbody>
+</table>
+<p>Note that to facilitate use of proxies, actors MUST NOT apply any logic
+or process on semantics when a property is changed using PUT or POST.
+Syntax SHOULD be checked. This implies that any processing logic in an
+actor using /properties values must assume that the values can be
+semantically invalid or even harmful and must do error handling
+accordingly.</p>
+<p>A mini-application MAY choose to support the value for each attribute as
+either a blob or a json structure and must indicate in the returned
+MIME-type whether the returned value is text/plain, application/json, or
+any other content. A GET on /properties MUST return a proper
+application/json document with all the attribute value pairs. A
+mini-application MAY also support targeting nested json structs in the
+path, i.e. /properties/address/street/number, but MUST not assume that
+such support is present in peer actors. Such support SHOULD be announced
+as an options tag, <em>nestedproperties</em>.</p>
+<p><strong>GET</strong></p>
+<p>GET methods are used to retrieve properties. A GET can be done for a
+specific attribute or for the whole set of attributes. The response MUST
+be a 200 OK with a body of content type application/json.</p>
+<p>Example:</p>
+<p>When a GET request targets an attribute, the returned representation is
+the value of that specific attribute only using text/plain as content
+type: GET /app/78hjh76yug/properties/firstname</p>
+<p>A GET for an empty /properties (i.e. no attribute/value pairs set) or a
+GET for a non-set attribute should result in a 404 Not found from the
+actor. If the attribute is not accessible without a trust relationship,
+a 401 Unauthorised MUST be returned. If the request’s current trust
+relationship is not sufficient, a 403 Forbidden MUST be returned.</p>
+<p><strong>PUT</strong></p>
+<p>The PUT method is used to add or change an attribute/value pair. A PUT
+to an existing attribute will change the value of that attribute.</p>
+<p>All actors MUST accept PUT requests to change a specific element.
+Successful change of the value MUST result in a 201 Created response.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span><span class="p">:</span>
+
+<span class="n">PUT</span> <span class="o">/</span><span class="n">app</span><span class="o">/</span><span class="mi">78</span><span class="n">hjh76yug</span><span class="o">/</span><span class="n">properties</span><span class="o">/</span><span class="n">firstname</span>
+</pre></div>
+</div>
+<p>A PUT request to an attribute name not supported by the actor MUST
+result in a 404 Not Found. If the attribute is not writable without a
+trust relationship, a 401 Unauthorised MUST be returned. If the
+request’s current trust relationship is not sufficient, a 403 Forbidden
+MUST be returned.</p>
+<p>A PUT body can be of type application/json and MAY be stored as a blob
+by the mini-app, however, it MAY support nested json and thus MAY also
+support PUT /app/78hjh76yug/properties/people/person1/firstname</p>
+<p><strong>POST</strong></p>
+<p>The POST method is used to add or change a collection of attribute/value
+pairs. Only the /properties root endpoint MUST support POST. Content
+type application/json MUST be supported and
+application/x-www-form-urlencoded MAY be supported if the application
+supports web-based interactions. Successful change of all the values
+MUST result in a 201 Created response. An error on one or more values
+MUST result in no values changed and 409 Conflict returned.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span><span class="p">:</span>
+
+<span class="n">POST</span> <span class="o">/</span><span class="n">app</span><span class="o">/</span><span class="mi">78</span><span class="n">hjh76yug</span><span class="o">/</span><span class="n">properties</span>
+</pre></div>
+</div>
+<p>Any non-supported attribute names MUST result in a 400 Bad Request. If
+any of the attributes are not writable without a trust relationship, a
+401 Unauthorised MUST be returned. If the request’s current trust
+relationship is not sufficient, a 403 Forbidden MUST be returned.</p>
+</section>
+<section id="actions-optional">
+<h3>/actions (OPTIONAL)<a class="headerlink" href="#actions-optional" title="Permalink to this heading">¶</a></h3>
+<p>Choosing between the /actions or other endpoints like /methods and
+/resources cannot be done according to clear-cut rules, but each
+endpoint has some restrictions that may or may not suit what you are
+trying to accomplish and the one matching what you are trying to do, is
+the best.</p>
+<p>The /actions path is dedicated to operations or actions that not only
+changes the state of a resource or updates a database, but where
+triggering the action actually does something outside the actor. An
+example may be a video recorder where its actor can be requested to
+record on a specific channel at a specific time.</p>
+<p>Any action below the /actions path (ex. /actions/record) MUST respond to
+POST. This will create or execute a new action. The data representation
+to be used in the body of the POST is specific to the mini-application.
+If the actor offers a callback functionality for status updates, the
+callback URL should be included in the request data representation. The
+/callbacks endpoint MAY be used by adding an element to the path, e.g.
+/callbacks/actions.</p>
+<p>A successful action MUST return 201 Created. The body of the response
+MAY contain a mini-application specific data representation detailing
+the outcome of the action. The response MAY include a Location header
+pointing to a URL representing the action requested (e.g.
+/actions/record /3421433). This URL MUST respond to GET requests
+containing a representation of the action status/progress. The data
+representation is specified by the mini-application. If allowed, the
+cancellation of an action SHOULD be available through a DELETE request
+to the given location, while a PUT to the specific action URI MAY be
+used to change the action while in progress (for example, temporarily
+suspend a process).</p>
+</section>
+<section id="callbacks-optional">
+<h3>/callbacks (OPTIONAL)<a class="headerlink" href="#callbacks-optional" title="Permalink to this heading">¶</a></h3>
+<p>When an actor is requesting subscriptions, actions, sessions or other
+functions where a callback is required, the actor MUST create a new leaf
+node under the /callbacks path. The URI MUST expect POST requests with a
+data representation according to the requested path the callback was
+established for. It is up to the mini-application to keep track of the
+format expected for each callback by establishing sub-paths below
+/callbacks, e.g. /callbacks/subscriptions/… to handle callbacks on
+subscriptions and so on.</p>
+<p>All requests to /callbacks from other actors or clients MUST be
+authenticated using the shared secret as bearer token (<em>Authorization
+Bearer xxxxxxx</em>) or be an anonymous POST from a non-ActingWeb
+application. All /callbacks requests without authentication data MUST
+return 401 Authentication required, regardless of the callback URI
+exists or not. Requests for non-existent /callbacks URIs with
+authentication data SHOULD always return 403 Forbidden.</p>
+<p>Differentiating between various types of callbacks and authentication
+SHOULD be done be adding a path to callbacks/, e.g.
+callbacks/{callback_type}.</p>
+<p>A successfully received POST MUST result in a 204 No Content or 200 Ok
+(with content). The actor pushing the callback will then clear the
+callback.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Example of a callback:
+
+1. Actor B is interested in actor A&#39;s /properties and establishes a
+  subscription on actor A&#39;s /properties. A callback is established by B
+  on : &lt;rooturiB&gt;/callbacks/subscriptions/&lt;actorAid&gt;/afb343f3edfe
+2. Actor A&#39;s /properties/firstname changes and it uses B&#39;s callback
+  URI to notify about the change
+
+Actor B thus receives a POST request on its callback URL (Actor B’s root
+URI is
+http://www.actingweb.net/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf.
+Actor A’s id is 9f1c331a3e3b5cf38d4c3600a2ab5d54:
+
+POST
+  http://www.actingweb.net/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf/callbacks/subscriptions/9f1c331a3e3b5cf38d4c3600a2ab5d54/afb343f3edfe
+  ​
+Bob
+
+204 No content
+
+Actor B receives the content in POST (in the case of /properties
+changes, the content is application/json) and can immediately identify
+this as a callback from actor A, as well as identify the specific
+subscription this is a callback for.
+</pre></div>
+</div>
+</section>
+<section id="resources-optional">
+<h3>/resources (OPTIONAL)<a class="headerlink" href="#resources-optional" title="Permalink to this heading">¶</a></h3>
+<p>The /resources access path is reserved for an actor’s exposure of
+resources according to RESTful principles
+(<a class="reference external" href="http://en.wikipedia.org/wiki/Representational_State_Transfer">http://en.wikipedia.org/wiki/Representational_State_Transfer</a>).
+The exposure of resources MUST follow the following rules:</p>
+<ul class="simple">
+<li><p>Resources and sub-parts of a resources MUST be addressable by a URI
+where the path identifies the part of the resource that the request
+targets</p></li>
+<li><p>GET requests MUST not change state</p></li>
+<li><p>Any http method MAY be supported</p></li>
+<li><p>Non-GET/POST methods MAY be implemented using POST with the form
+variable _method set to the real method requested</p></li>
+</ul>
+<p>Data representations and other decisions are up to the mini-application.</p>
+</section>
+<section id="methods-optional">
+<h3>/methods (OPTIONAL)<a class="headerlink" href="#methods-optional" title="Permalink to this heading">¶</a></h3>
+<p>The /methods access path is reserved for RPC (Remote Procedure Call)
+methods like XML-RPC, SOAP, etc. The paths address methods and a GET
+request MAY change state as the path and/or GET parameters of the
+request may include information about the action.</p>
+<p>The intention of this path is to allow actors to expose
+traditional/existing RPC-style methods and isolate such methods to avoid
+unexpected state change through GET requests on other access paths.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Example:
+
+GET /methods/persons/add?firstname=Bob&amp;Lastname=Bobson
+</pre></div>
+</div>
+<p>There are no http response codes, data representations, or other
+restrictions for this access path.</p>
+</section>
+<section id="sessions-optional">
+<h3>/sessions (OPTIONAL)<a class="headerlink" href="#sessions-optional" title="Permalink to this heading">¶</a></h3>
+<p>The /sessions access path is reserved for session-type communication
+between two actors and will always have two parties. The purpose is to
+enable two actors to create a way to share state and keep track of that
+state over time. An actor can provide a session type by exposing the
+session type right below the /sessions path, ex. /sessions/im to
+identify im, instant messaging sessions. This location MUST respond to
+POST requests by returning 201 Created with a Location header pointing
+to a newly created session, ex.
+/sessions/&lt;requesting-actors-id&gt;/fbe654aacef where fbe654aacef is a
+session id uniquely identifying this session.</p>
+<p>The POST request MAY have an application/json body containing a callback
+URI that is URL-encoded (“callback”: “uri”). If not, the requesting
+actor MUST respond to requests on the “mirrored” URL,
+/sessions/&lt;requested-actors-id&gt;/&lt;sessionid&gt;, and the requested actor
+MUST start sending session-related requests to this URL. If the session
+creation fails, a 400 Bad request MUST be returned, or if the failure is
+caused by a server problem, 500 Internal Server Error SHOULD be
+returned.</p>
+<p>Subsequent communication between the two actors SHOULD continue on the
+returned new session URI and callback URIs using http methods and data
+representations as specified by the actors’ mini-applications.
+Extensions may specify the http methods and data representations for
+specific type sessions and it is RECOMMENDED that if such extensions
+exist, the actors use the extension to facilitate session-type exchanges
+between different types of mini-applications.</p>
+<p>A DELETE request to the session URI MUST terminate the session and
+return a 200 Ok. If there was a problem terminating the session, a 500
+Internal Server Error SHOULD be returned.</p>
+<p>Sessions may of course be established outside the ActingWeb actor
+implementation. The actor MAY choose to expose on-going sessions on
+other protocols through the /sessions path to allow simple signalling
+and session updates without the explicit creation of the session as
+described above. An example could be a SIP-based calling application
+where an on-going session (for example an instant messaging session) can
+be exposed through the URI /sessions/<em>SIP Call-Id</em>. This can for example
+allow non-SIP actors to insert messages into the dialog.</p>
+</section>
+<section id="www-optional">
+<h3>/www (OPTIONAL)<a class="headerlink" href="#www-optional" title="Permalink to this heading">¶</a></h3>
+<p>The /www access path is a special path as it is not meant for actor to
+actor communication, but rather allows humans to interact with the actor
+in a simple way. An actor may choose to expose a full web application
+below this path.</p>
+<p>The /www path does not have any particular restrictions except on
+/www/init, see next section.</p>
+<p><strong>/www/init</strong></p>
+<p>If the /www/init path exists, it MUST present a human-readable form with
+/properties as the defined html form action. The path MUST be
+authenticated using HTTP DIGEST with username ‘creator’ (or the username
+established as the creator) and the passphrase as set when the actor was
+instantiated.</p>
+<p>This form is intended to allow a newly created actor to be initialised
+by a human being with data in /properties. Thus, when submitting the
+form, the forms data will be sent to /properties in a POST request.
+Mini-applications supported this type of initialisation MUST, in
+addition to application/json, support POST of forms data to /properties.</p>
+</section>
+<section id="oauth-optional">
+<h3>/oauth (OPTIONAL)<a class="headerlink" href="#oauth-optional" title="Permalink to this heading">¶</a></h3>
+<p>The /oauth endpoint is used if the mini-application supports attaching
+to a 3<sup>rd</sup> party service using OAuth for authorisation. This way,
+an actor can easily expose services to other actors, e.g. a
+mini-application can offer users to create an actor that represent them
+towards a text-messaging service and thus easily allow other actors or
+clients to send text-messages to that user (or on behalf of the user).
+Such an actor could for example expose /actions/message_me to allow
+other actors to send text messages to the user who has (OAuth)
+authorised the actor.</p>
+<p>Similar to the /www endpoint, the /oauth endpoint assumes human
+interaction as the actor should redirect to the 3<sup>rd</sup> party
+service’s OAuth authorisation web page if a valid oauth token is not
+found for this actor. Obvisoulty, this page may be embedded in an
+application.</p>
+<p>The /oauth endpoint MUST be able to handle the OAuth2 flow with a
+redirect back where the code URL parameter is set. It is RECOMMENDED
+that the mini-application offers a root URL /oauth (i.e.
+actingweb.net/myapp/oauth) that can be used as the callback URL
+registered with the 3<sup>rd</sup> party OAuth service and that the state
+parameter in the initial OAuth2 request (see the OAuth2 specification)
+is set to the actor’s id). This special root URL can then parse the
+actor id from the state parameter and redirect to
+actingweb.net/myapp/&lt;actor-id&gt;/oauth?code=… where processing of the code
+can be done and the final token request to the 3<sup>rd</sup> party
+service can be done.</p>
+</section>
+</section>
+<section id="trust-trust-relationships-optional">
+<h2>/trust - Trust Relationships (OPTIONAL)<a class="headerlink" href="#trust-trust-relationships-optional" title="Permalink to this heading">¶</a></h2>
+<section id="trust-model">
+<h3>Trust Model<a class="headerlink" href="#trust-model" title="Permalink to this heading">¶</a></h3>
+<p>Trust relationships form the basis of interaction between actors and is
+the primary reason for why accounts (with usernames and passwords) are
+not necessary. Each actor only needs to know the relationships itself
+has to other actors (with the exception of the creator user
+credentials). The trust relationship credentials are then used in all
+communication between the actors using existing methods for
+authentication.</p>
+<p>Each actor (agent or proxy) is responsible for its own set of trust
+relationships with other actors. Each relationship is bi-directional
+where one actor initiates a trust relationship that then needs to be
+approved by the other actor. A mini-application can choose to implement
+one-way trust levels if necessary for its application, but this is not
+mandatory to implement. Each actor is responsible for storing and
+recognising actors it has trust relationships with. Each trust
+relationship has one out of a set of trust levels as defined in this
+specification.</p>
+<p>A newly formed actor has no trust relationships, and new relationships
+are formed by requesting a trust relationship. The request is processed
+by the actor and the request can be approved in real-time or at a later
+time.</p>
+<p>Once a trust relationship has been granted, the actor includes
+authentication details in all subsequent requests through a bearer
+token. Access to an actor’s resources can thus be granted based on the
+relationship.</p>
+<p>Trust relationships are managed authoritatively by the actor that
+granted the request, and a relationship can be revoked unilaterally at
+any time by either the granting or accepting actor.</p>
+<p>This specification specifies how to use the http Bearer token method for
+authentication after exchanging a shared secret as part of the trust
+relationship creation. An optional verification process is also
+specified to ensure that both actors can trust the authenticity of the
+domain hosting the actor. Using https, the actors can mutually assure
+that their root URIs are correct. However, this specification does not
+specify how an actor decides on whether a given domain should be
+trusted. Also, while the methods described here are sufficient for most
+Internet-based applications, the specification does not provide methods
+on a security level where each request’s integrity can be assured.</p>
+</section>
+<section id="determining-which-relationship-to-request">
+<h3>Determining Which Relationship to Request<a class="headerlink" href="#determining-which-relationship-to-request" title="Permalink to this heading">¶</a></h3>
+<p>The definition of the mini-application SHOULD contain information about
+what type of access is given for each type of trust relationship. The
+actor requesting the access will have some knowledge of the
+mini-application in order to use it, however, it may be useful to
+request a human-readable description for each trust relationship
+directly from the actor. This information can be presented to a user to
+determine if a given trust relationship is desired or to choose which
+relationship type to request. A GET to the uri of the trust relationship
+type + /desc MAY return such a human-readable description. Unlike the
+/meta/desc description, the text may be generic for the
+mini-application.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Example:
+
+Request to server *​*\ https://actingweb.net/ GET
+/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6/trust/friend/desc
+
+200 OK
+</pre></div>
+</div>
+<p>A friend can deposit and withdraw money as frequently as monthly, but
+limited up to an amount of $100. A specific friend relationship will
+also most likely establish an explicit limit at the requested amount.</p>
+</section>
+<section id="relationships-and-their-data">
+<h3>Relationships and their data<a class="headerlink" href="#relationships-and-their-data" title="Permalink to this heading">¶</a></h3>
+<p>The ‘creator’ user and ‘admin’ relationship MUST allow the retrieval of
+trust relationships through a GET to /trust and to
+/trust/’relationship_type’. The content is application/json. A request
+on a relationship type MAY also be supported and filter on a specific
+relationship, but give the same output. If no relationships exist, a 404
+Not found MUST be returned.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Example:
+
+Request to server *​*\ http://actingweb.net/
+GET /myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6/trust/friend
+
+200 OK
+
+[
+{
+  &quot;secret&quot;: &quot;ecb8a519288db1498a9b04706fc19e52abd3e0c0&quot;,
+  &quot;verified&quot;: false,
+  &quot;peerid&quot;: &quot;e41f4aae-4dee-10d0-b725-0af0a413bcf2&quot;,
+  &quot;relationship&quot;: &quot;friend&quot;,
+  &quot;baseuri&quot;:
+  &quot;http://actingweb.net/myotherapp/e41f4aae-4dee-10d0-b725-0af0a413bcf2&quot;,
+  &quot;desc&quot;: &quot;Test friend relationship&quot;,
+  &quot;peer\_approved&quot;: true,
+  &quot;type&quot;: &quot;urn:actingweb:actingweb.org:gae-demo&quot;,
+  &quot;id&quot;: &quot;f81d4fae-7dec-11d0-a765-00a0c91e6bf6&quot;,
+  &quot;approved&quot;: false
+},
+{
+  &quot;secret&quot;: &quot;8f4e4e86f249599c4be21aa4445065d4e6905cd4&quot;,
+  &quot;verified&quot;: true,
+  &quot;peerid&quot;: &quot;testid&quot;,
+  &quot;relationship&quot;: &quot;friend&quot;,
+  &quot;baseuri&quot;: &quot;testurl&quot;,
+  &quot;desc&quot;: &quot;Test friend relationship&quot;,
+  &quot;peer\_approved&quot;: true,
+  &quot;type&quot;: &quot;urn:actingweb:actingweb.org:gae2-demo&quot;,
+  &quot;id&quot;: &quot;f81d4fae-7dec-11d0-a765-00a0c91e6bf6&quot;,
+  &quot;approved&quot;: true
+}
+]
+</pre></div>
+</div>
+<p>‘creator’ and ‘admin’ MUST also be allowed to do a GET on a specific
+relationship to retrieve its status. The codes and contentreturned MUST
+be the same as the ones used when the owner of the relationship makes
+the request.</p>
+<p>The fields are all MANDATORY and are explained below.</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Field</strong></p></td>
+<td><p><strong>Description</strong></p></td>
+</tr>
+<tr class="row-even"><td><p>id</p></td>
+<td><p>Actor id of the actor owning the relationship, i.e. MUST be the same as the actor identified in the request</p></td>
+</tr>
+<tr class="row-odd"><td><p>type</p></td>
+<td><p>The urn: prefixed type of the peer in this relationship</p></td>
+</tr>
+<tr class="row-even"><td><p>baseuri</p></td>
+<td><p>The root URI of the peer in the this relationship</p></td>
+</tr>
+<tr class="row-odd"><td><p>relationship</p></td>
+<td><p>The relationship type</p></td>
+</tr>
+<tr class="row-even"><td><p>peerid</p></td>
+<td><p>The id of the peer. This is also embedded in the baseuri</p></td>
+</tr>
+<tr class="row-odd"><td><p>secret</p></td>
+<td><p>The shared secret to be used as bearer token</p></td>
+</tr>
+<tr class="row-even"><td><p>verified</p></td>
+<td><p>Bool that specifies if the remote peer has been verified as reachable on the baseuri</p></td>
+</tr>
+<tr class="row-odd"><td><p>approved</p></td>
+<td><p>Bool that specifies if this relationship has been approved</p></td>
+</tr>
+<tr class="row-even"><td><p>peer_approved</p></td>
+<td><p>Bool that specifies if this relationship has been approved by the peer</p></td>
+</tr>
+<tr class="row-odd"><td><p>desc</p></td>
+<td><p>Human-readable description of the relationship</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="creation-of-a-trust-relationship">
+<h3>Creation of a Trust Relationship<a class="headerlink" href="#creation-of-a-trust-relationship" title="Permalink to this heading">¶</a></h3>
+<p>When actor A wants to establish a trust relationship with B, it MUST
+send a POST request (step 1 in table below) to B’s /trust/&lt;trustlevel&gt;.
+The request does not carry authentication and has an application/json
+body. Actor B responds (step 2). If actor B through the request can
+immediately approve the relationship, it MUST respond with 201 Created.
+If actor B immediately can deny the request, a 403 Forbidden MUST be
+returned. If the request is well-formed and actor B is ready and willing
+to process the request, B MUST respond with 202 Accepted. In both cases,
+the URL of the newly created relationship MUST be returned in the
+Location header in the response. The URL MUST be formatted the following
+way: /&lt;baseuri-with-actor-id&gt;/trust/&lt;trustlevel&gt;/&lt;requesting-actor-id&gt;.</p>
+<p>If the requested actor wants to do a verification of the requesting
+actor, it MUST use baseuri, id, secret, and verify attributes to do a
+GET request to &lt;baseuri&gt;/trust/&lt;trustlevel&gt;/&lt;requested-actor-id&gt; using
+the secret as the Bearer token in the Authorization header. If the
+requesting actor supports verification, it MUST accept a GET request to
+this “reverse” URL, verify the shared secret, and then return the same
+secret as sent in “verify” as part of the trust relationship request, in
+the “verificationToken” attribute. If verification is not supported, the
+regular trust relationship attributes should be returned in
+application/json content.</p>
+<p>B will later try to notify A about an approved trust relationship at the
+reverse URI /&lt;requestor-id&gt;/trust/&lt;trustlevel/&lt;requested-actor-id&gt;, or a
+GET poll to the relationship’s URL can be used to retrieve status.</p>
+<p>The defined attribites to include in the POST request:</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Attribute</strong></p></td>
+<td></td>
+<td><p><strong>Description</strong></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>secret</strong></p></td>
+<td><p>MUST</p></td>
+<td><p>Value is the shared secret that actor A will use when authenticating with actor B and the other way around. The requesting actor needs to supply the secret in order for the requested actor to verify the requesting actor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>baseuri</strong></p></td>
+<td><p>MUST</p></td>
+<td><p>The base URI of the requesting actor (with id).</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>id</strong></p></td>
+<td><p>MUST</p></td>
+<td><p>The id of the requesting actor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>type</strong></p></td>
+<td><p>MUST</p></td>
+<td><p>The urn: type of the mini-app.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>desc</strong></p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>Human-readable description that explains what the relationship is meant for. Should be phrased to allow a human to evaluate whether to approve or reject the request and later to recognise what the relationship is doing. Ex. “Service subscription of monthly $29.95 for the Geekly Review magazine.”</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>verify</strong></p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>The value should be a secret that is used to verify the baseuri and the authenticity of the requestor.</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Example:
+
+Request to server `*http://actingweb.net/* &lt;http://actingweb.net/&gt;`_
+
+POST /myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6/trust/friend
+
+{
+  &quot;secret&quot;: &quot;8f4e4e86f249599c4be21aa4445065d4e6905cd4&quot;,
+  &quot;baseuri&quot;: &quot;http://myserver.org/app2/e41f4aae-4dee-10d0-b725-0af0a413bcf2&quot;,
+  &quot;id&quot;: &quot;e41f4aae-4dee-10d0-b725-0af0a413bcf2&quot;,
+  &quot;type&quot;: &quot;urn:actingweb:actingweb.net:myapp&quot;,
+  &quot;desc&quot;: &quot;A friend relationship between actors from myapp and myotherapp&quot;,
+  &quot;verify&quot;: &quot;66b6691aae69fb75919e754976a8e2eb6d2719ac&quot;
+}
+
+202 Accepted
+</pre></div>
+</div>
+<p>It is RECOMMENDED to use https in this POST exchange as this will
+protect the shared secret from eavesdropping. Using http SHOULD be
+reserved for trust requests between actors in a controlled environment
+like inside an IPsec tunnel where eavesdropping can be ruled out.</p>
+<p>After the initial request and response, the URI location of the new
+trust relationship (i.e. as in the path in the example above) MUST
+respond to GET requests with response codes as described above (5.).
+I.e. if the request has not yet been concluded or evaluated, 202
+Accepted MUST be returned. If the relationship has been refused, 403
+Forbidden MUST be returned. And if the relationship has been approved,
+201 Created MUST be returned. Such GET requests MUST be authenticated
+using the secret as a bearer token in the Authorization header, thus
+ensuring that only actor A can request an update of the status.</p>
+<p>The below table shows an overview of the process where actor A creates a
+trust relationship with Actor B (i.e. actor B trusts actor A).</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Step</strong></p></td>
+<td><p><strong>ACTOR A:
+http://myserver.org/app2/e41f4aae-4dee-10d0-b725-0af0a413bcf2</strong></p></td>
+<td><p><strong>ACTOR B: http://actingweb.net/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6</strong></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>1. Request relationship</strong></p></td>
+<td><p>POST request to initiate request for trust relationship</p>
+<p>POST<em>/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6/trust/friend</em></p>
+</td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p><strong>2. Immediate response to request</strong></p></td>
+<td></td>
+<td><p>POST response</p>
+<div class="line-block">
+<div class="line">Returns http response to indicate acceptance or not:</div>
+<div class="line">201 Created, 202 Accepted, 403 Forbidden</div>
+</div>
+</td>
+</tr>
+<tr class="row-even"><td><p><strong>3. Polling for result (OPTIONAL)</strong></p></td>
+<td><p>Awaits B’s processing, polling can be done (see 3. for return codes).
+GET <em>/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6/trust/friend/e41f4aae-4dee-10d0-b725-0af0a413bcf2</em></p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p><strong>4. Notification of result (OPTIONAL)</strong></p></td>
+<td></td>
+<td><p>POST <em>/trust/friend/f81d4fae-7dec-11d0-a765-00a0c91e6bf6</em></p>
+<p>Sends approval or refusal on relationship request in an application/json body:</p>
+<p>{</p>
+<blockquote>
+<div><p>“approved”: True</p>
+</div></blockquote>
+<p>}</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Accepting Or Rejecting A Request For Trust Relationship</strong></p>
+<p>It is entirely up to the actor receiving the trust request to use
+whatever methods or processes necessary to evaluate and conclude upon
+the request. How this is done is outside the scope of this
+specification. An actor may for example refuse to accept requests with
+base uris that are not known by the actor and auto-approve requests from
+other base uris. Criteria for accepting a trust relationship request
+SHOULD be documented in the mini-application definition.</p>
+<p><strong>Use of Callback To Verify</strong></p>
+<p>A callback can be used for verification of requesting actor and for
+notification of the result of the request. The table below shows on
+overview of the steps involved. Only notification of result is shown as
+polling was shown in the above section. The below section specifies in
+detail how the verification is done.</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Step</strong></p></td>
+<td><p><strong>ACTOR A: http://myserver.org/app2/e41f4aae-4dee-10d0-b725-0af0a413bcf2</strong></p></td>
+<td></td>
+<td><p><strong>ACTOR B: http://sctingweb.net/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6</strong></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>1. Establish trust callback</strong></p></td>
+<td><p>Creates verification callback URI on /trust/friend/f81d4fae-7dec-11d0-a765-00a0c91e6bf6</p></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p><strong>2. Request relationship</strong></p></td>
+<td><p>POST <em>/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6/trust/friend</em></p></td>
+<td><p>POST request to initiate request for trust relationship</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p><strong>3.Verification of requesting actor</strong></p></td>
+<td></td>
+<td></td>
+<td><p><em>GET /trust/friend/f81d4fae-7dec-11d0-a765-00a0c91e6bf6</em>using secret from step 2 as Bearer token and match “verify” from step 2 with the “verificationToken” returned in this step.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>4. Response to request</strong></p></td>
+<td></td>
+<td><p>Response to POST</p></td>
+<td><p>Returns http response to indicate acceptance or not:
+200 Ok, 201 Created, 202 Accepted, 403 Forbidden</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Verification</strong></p>
+<p>Whether to do verification is up to the requested actor B. Actor A’s
+provided baseuri parameter and Actor B’s id are used to create the
+verification URI used in the above step 4. If Actor A wants to provide
+verification (because B’s mini-application requires or recommends it),
+it MUST, before sending the initial POST request, make sure that a GET
+request to its ‘baseuri’/’ownid’/trust/’trustlevel’/’actorB-id’ will be
+responded to with a 200 OK (step 1 in table above). The GET request MUST
+be authenticated using the shared secret that actor A will send in the
+POST request to B as bearer token, thus ensuring that only actor B can
+request the URI.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Example:
+
+Request to server `*​http://myserver.org/* &lt;http://myserver.org/&gt;`__ GET
+/app2/e41f4aae-4dee-10d0-b725-0af0a413bcf2/trust/friend/f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+
+200 Ok
+</pre></div>
+</div>
+<p>Note that by using https both in the initial trust creation and for the
+verification, one can ensure that the root URIs of each of the actors
+are authentic (through https session setup and certificate validation).
+With appropriately loaded root certificates on each web server hosting
+the actors, one can also selectively accept a group of servers and thus
+actors. An actor may also choose to verify a trust relationship on
+criteria or methods outside the scope of this specification.</p>
+<p><strong>Notification of Result</strong></p>
+<p>Once actor B has finalised the request for a relationship and if it
+returned a 202 Accepted to actor A when receiving the initial POST
+request, actor B MUST send a POST request to the same URI used for
+verification with a application/json body containing the attribute
+approved=True.</p>
+<p><strong>Updating a Trust Relationship</strong></p>
+<p>The actor owning the trust relationship can update the relationship by
+sending a PUT request to the relationship URI with a application/json
+body with attribute/value pairs of the attributes that are to be
+changed. Normally, only baseuri, desc, and approved are the attributes
+that can be changed.</p>
+<p><strong>Reading Trust Relationship Data</strong></p>
+<p>‘admin’ relationships and the ‘creator’ user MUST be allowed to read the
+trust relationship data through an authenticated GET to
+/myapp/’actorid’/trust/friend/’friendid’. Also the shared secret SHOULD
+be readable to actors with these two relationships. If the shared secret
+is not readable, the actor may not be able to support
+versioning/migration of actors.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Example:
+
+Request to server `*​http://actingweb.net/* &lt;http://actingweb.net/&gt;`__
+GET
+/myapp/f81d4fae-7dec-11d0-a765-00a0c91e6bf6/trust/friend/e41f4aae-4dee-10d0-b725-0af0a413bcf2
+
+200 OK
+
+{
+  &quot;secret&quot;: &quot;66b6691aae69fb75919e754976a8e2eb6d2719ac&quot;,
+  &quot;verified&quot;: true,
+  &quot;peerid&quot;: &quot;e41f4aae-4dee-10d0-b725-0af0a413bcf2&quot;,
+  &quot;relationship&quot;: &quot;friend&quot;,
+  &quot;baseuri&quot;: &quot;https://actingweb.net/myotherapp/e41f4aae-4dee-10d0-b725-0af0a413bcf2&quot;,
+  &quot;desc&quot;: &quot;Service subscription of monthly $29.95 for the Geekly Review magazine. &quot;,
+  &quot;peer_approved&quot;: false,
+  &quot;type&quot;: &quot;urn:actingweb:actingweb.net:myotherapp&quot;,
+  &quot;id&quot;: &quot;f81d4fae-7dec-11d0-a765-00a0c91e6bf6&quot;,
+  &quot;approved&quot;: true
+}
+</pre></div>
+</div>
+<p><strong>Verification and Approval</strong></p>
+<p>There are two mechanisms for validating a trust requests. As seen in the
+above example, there are three attributes stored for each trust relationship:
+<em>verified</em>, <em>peer_approved</em>, and <em>approved</em>. Verification is done as part of the initial
+trust request where the receiving actor does a request back to the requesting actor
+on the requesting actor’s trust URL. The shared secret and a verification token are
+used as mutual authentication to verify that the two actors have a clear, trusted
+communication channel.  The requesting actor is assumed to implicitly have verified
+(or pre-verified, see below) the actor before sending a trust request and it’s verified
+is true as default.</p>
+<p>The approval is an explicit mutual approval that can happen automatically based on some
+criteria (including passed verification) or through an external process either through
+a trustee or a human. The <em>approved</em> attribute is set when the local actor has approved,
+<em>peer_approved</em> is set when the peer actor has approved the relationship.</p>
+</section>
+<section id="initiating-a-trust-request">
+<h3>Initiating a trust request<a class="headerlink" href="#initiating-a-trust-request" title="Permalink to this heading">¶</a></h3>
+<p>In some cases it is necessary for an external actor or maybe the creator
+to request an actor to initiate a trust relationship. This is done
+through a POST request sent to &lt;actorid&gt;/trust with an application/json
+body specifying the url of the actor to initiate with and the trust
+level to request.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span><span class="p">:</span>
+
+<span class="p">{</span>
+  <span class="s2">&quot;url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://actingweb.net/myapp/3973895dbe8457f68cdee59b0810d70a&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;relationship&quot;</span><span class="p">:</span> <span class="s2">&quot;friend&quot;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>If successful, a 201 Created should be returned with an application/json
+body equal to the body in a GET request to the location of the new
+relationship. Also, a Location header with the newly created trust
+relationship MUST be returned.</p>
+<p>The actor MAY choose to accept a <em>type</em> attribute as a mandatory type that
+the actor responding to the URL should have. In any case, the actor MAY
+implement a request to the peer actor to-be’s /meta path to verify type,
+response, and get information about actor capabilities.</p>
+</section>
+<section id="types-of-relationships">
+<h3>Types of Relationships<a class="headerlink" href="#types-of-relationships" title="Permalink to this heading">¶</a></h3>
+<p>When a new relationship is requested by an actor, the relationship has a
+type as specified in the URL path (i.e. /trust/friend/…). The actor
+receiving the request supports a number of trust relationship types. The
+mini-application’s definition SHOULD define exactly what a ‘friend’
+relationship means in terms of access. For example, one mini-application
+may allow ‘friends’ to update most of its properties, while another
+mini-application may only allow ‘friends’ to read parts of the
+properties.</p>
+<p>In this section, a small number of relationship types are specified. It
+is RECOMMENDED that mini-applications use these relationship types (and
+fill them with own meaning), but only the ‘admin’ relationship type
+(besides the ‘creator’ user) MUST be supported. If the mini-application
+requires more relationship types, it MAY define new relationship types
+and specify these in its definition. The guidelines for how to use the
+specified relationship types should thus be used as a recommendation. It
+is also conceivable that mini-applications allow actor instances to
+dynamically change what each trust relationship gives access to. Such
+dynamic access rights SHOULD be documented in the mini-application
+definition, but is beyond the scope of this specification.</p>
+<p>Below is an overview of the trust relationships. There are only three
+regular trust relationships meant for access to mini-application
+functionality/operations: associate, friend, and partner. The proxy and
+admin relationships have special uses. An actor MAY NOT hold more than
+one relationship with a given other actor.</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><strong>Regular relationship name</strong></p></td>
+<td></td>
+<td><p><strong>Description</strong></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>associate</strong></p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>The lowest level of trust (apart from no relationship). An actor will likely have the most relationships of this type and it will normally give read access.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>friend</strong></p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>The friend relationship allows more access than for ‘associates’. The friend actor has typically been verified to be friendly and can thus be allowed to write and/or request actions/methods.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>partner</strong></p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>A partner is more than a friend. A partner actor may be stronger verified than a friend and can be trusted to the most important properties and actions/methods of the actor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>proxy</strong></p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>A proxy actor MUST be of the same mini-application type. A subscription from the agent to the proxy on /properties SHOULD be set up to ensure that the the proxy’s properties are up to date. If the proxy only is updated through a client and based on client POSTs/PUTs, this is not necessary.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>admin</strong></p></td>
+<td><p>OPTIONAL</p></td>
+<td><p>The admin relationship has full access to an actor’s data and functions similar to the creator user.</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>The Associate Relationship</strong></p>
+<p>The associate relationship is the lowest relationship level. The rights
+given to this relationship are dependent on the mini-application.
+Validation of an associate may be limited as the damage an associate can
+do should be very limited. Normally, an associate should not be able to
+affect the operations of the actor beyond the scope of its own
+relationship.</p>
+<p>For example, a mini-application made to hold one person’s contact
+information may allow read access to the person’s basic contact
+information to anybody without a trust relationship, while an associate
+may get access to the full business contact information. The associate
+relationship can be used for creating networks of actors sharing
+information. Ex. a two-way associate relationship between two actors
+with contact information may allow a person to keep a real-time updated
+address book if each actor subscribes to the others’ contact information
+of interest.</p>
+<p>Use of the associate relationship MAY be allowed either unapproved (i.e.
+no explicit approbal) or auto-approved (possibly in combination with
+lists of pre-approved base URIs).</p>
+<p><strong>The Friend Relationship</strong></p>
+<p>The friend relationship is an intermediate step from associate to a
+partner relationship. The friend actor should be trusted to affect the
+basic operations of an actor. The validation before approving a new
+relationship should thus be appropriate for such access. Ex. a friend
+may be allowed to ask the actor to initiate a new trust relationship
+with another contact information actor. This would allow a trusted
+contact to introduce a new friend.</p>
+<p><strong>The Partner Relationship</strong></p>
+<p>The partner relationship is the most trusted level that gives access to
+actor operations. The partner may be trusted access to some or most of
+the inner workings of the actor. Ex. a partner may be allowed to update
+the actor’s contact information. This relationship can then be used to
+implement synchronisation between different sources of a person’s
+contact information. In particular, more dynamic contact information
+like presence can then be updated. If each presence source (like a
+mobile phone’s current profile or Messenger/AIM/Skype status) has an
+actor representing the presence status, the contact information actor
+can have partner relationships with each presence actor and allow
+presence information to be consolidated in one place.</p>
+<p><strong>The Proxy Relationship</strong></p>
+<p>The proxy relationship is a reserved relationship between two actors of
+the same mini-application type. A proxy relationship MUST always be
+two-ways such that if one relationship fails, the other MUST be removed.
+In a proxy relationship, the /properties access path SHOULD always be
+synchronised through a one-way or two-way subscription (dependent on
+application). These two subscriptions SHOULD be set up at the time of
+creation of the proxy relationship. Once set up, the two actors act as
+one entity to implement the mini-application’s functionality. See also
+the section on the proxy actor.</p>
+<p><strong>The Admin Relationship</strong></p>
+<p>The admin relationship has full access to all data and functions of an
+actor. See also the section on trustees as an alternative to using an
+admin relationship as this approach allows access to managing
+relationships without getting full access to the actor.</p>
+<p>An admin relationship can also delete an actor (take it completely out
+of action).</p>
+<p><strong>The Creator Special User</strong></p>
+<p>The creator user can only be established at the point of instantiating
+an actor. The creator relationship has two primary objectives:</p>
+<ul class="simple">
+<li><p>other actors can instantiate a new actor and immediately administrate
+the new actor</p></li>
+<li><p>the creator credentials can be either supplied by a human user when
+instantiating the actor or conveyed to a user and thus allow the user
+to initialise the actor using the /www/init form or the web front-end
+supplied by the actor at /www</p></li>
+</ul>
+<p>The creator MUST have all access rights similar to the ‘admin’
+relationship. A creator is a user authenticated with username and
+password, not a trust relationship. The default user name for a creator
+is ‘creator’ unless another username is provided as part of the
+instantiation of the actor.</p>
+<p><strong>Assigning Individual Rights To An Instance Of A Trust Relationship</strong></p>
+<p>A mini-application MAY implement assigning of rights to a specific
+instance of a trust relationship (i.e. rights per actor). This allows
+granular access control. For example allowing home contact information
+to be available to some actors, while others only get access to business
+information. Whether this granular access control is implemented
+assigning a new type of trust relationship to a defined access group or
+on an individual basis is outside the scope of this specification. The
+same holds for how to determine which relationship to get upgraded or
+reduced rights.</p>
+</section>
+<section id="using-a-trustee-to-manage-relationships">
+<h3>Using a Trustee To Manage Relationships<a class="headerlink" href="#using-a-trustee-to-manage-relationships" title="Permalink to this heading">¶</a></h3>
+<p><strong>The Use of Trustees</strong></p>
+<p>Managing trust relationship request can be one of actor’s the most
+complex operations and may require validation of the requesting actor’s
+identity, seeking approval from a human or applying some other logic to
+evaluate the request. Also, managing trust relationships over time
+requires maintenance actions, for example deleting a relationship after
+a certain time period or on a human’s request. To simplify this process,
+another (possibly dedicated) actor called a ‘trustee’ can take over the
+relationship management.</p>
+<p>A trustee actor can take many forms, two examples may be:</p>
+<p>1. A web application that presents a web page to a user and allows the
+user to approve or reject the request. The user can be authenticated
+using for example the Google Account API to validate Google credentials
+for the Google account stored as the trustee’s “owner”.</p>
+<p>2. A desktop application that graphically and dynamically depicts
+relationships between actors and that allows a human being to create new
+relationships through connecting and disconnecting icon representations
+using drag and drop.</p>
+<p>For example, a desktop application may allow a user to choose a bank
+account as a focal point and then visualise drawn lines to actors that
+represent subscription services that are allowed to withdraw money from
+the bank account. Hoovering over the relationship line can show details
+about the relationship, for example restrictions on amount and how often
+money is allowed to be transferred.</p>
+<p><strong>Assigning and Forwarding To a Trustee</strong></p>
+<p>A trustee can be assigned either at the instantiation of an actor (by
+specifying trustee root URI on instantiation in the application/json
+body using the attribute ‘trustee_root’) or by changing the trustee’s
+root URI by PUTing a new URI to /trust/trustee (an admin or creator
+relationship is required) with application/json content and the URL in
+the attribute ‘trustee_root’. In the same PUT, the ‘creator’ attribute
+MUST also be available to allow changing creator to ‘trustee’.
+The ‘creator’ user’s passphrase/secret MAY
+then be used as a bearer token to do trustee REST requests if ‘creator’ is
+set to ‘trustee’. As a passphrase is
+supplied at instantiation time for creator, it is RECOMMENDED that the
+passphrase is checked for security strength if the trustee_root
+attribute is set.</p>
+<p>However, the token MUST NOT give access as bearer token in requests unless
+the ‘creator’ user is ‘trustee’ and the bit strength of the passphrase is &gt;
+80 bits.</p>
+<p>A trustee MUST have access to the /trust and /subscription endpoints, as well
+as the root (like creator) using the passphrase as bearer token. It is
+RECOMMENDED that any other endpoint access is done and accepted only with
+a regular trust relationship.</p>
+<p>It is RECOMMENDED that a trustee also establishes a regular relationship
+with the actor (of any type). A mini-application MUST make this a
+requirement before accepting any trustee access with a bearer token as a
+trust relationship allows verification and possibly explicit approval
+through an external process to set a trustee. (Note that if
+trustee_root is set as part of an instantiation, the creator username
+and password can be used to send requests as creator to the new actor
+even before trustee access with passphrase as bearer token is allowed.)</p>
+<p>A typical use of a trustee is automatic creation of a new actor by
+another actor to create an ActingWeb network of actors. Let’s say a bot
+instantiating a new text messaging actor before handing over to the user
+to authenticate the new actor with the 3<sup>rd</sup> party text messaging
+service. The actor instantiating a new actor may then initiate a new
+trust relationship and then use the creator credentials to approve the
+relationship directly.</p>
+</section>
+<section id="authentication">
+<h3>Authentication<a class="headerlink" href="#authentication" title="Permalink to this heading">¶</a></h3>
+<p>Authentication of an actor is necessary when the actor is sending a
+request to another actor where a trust relationship is required to gain
+the required access. At the time of creating a trust relationship, the
+actor receiving and approving the request MUST store the actor’s id,
+base URI, and the relationship’s shared secret in its authentication
+store.</p>
+<p>The authentication method is based on the http Bearer authentication
+method. Please refer to <a class="reference external" href="https://tools.ietf.org/html/rfc6750">https://tools.ietf.org/html/rfc6750</a> for details
+on the use of bearer tokens.</p>
+<p>Note that the passphrase created at actor instantiation time together
+with the (default) username ‘creator’ MUST use http basic
+authentication.</p>
+</section>
+</section>
+<section id="subscriptions-subscriptions-optional">
+<h2>/subscriptions - Subscriptions (OPTIONAL)<a class="headerlink" href="#subscriptions-subscriptions-optional" title="Permalink to this heading">¶</a></h2>
+<section id="establishing-a-subscription">
+<h3>Establishing a Subscription<a class="headerlink" href="#establishing-a-subscription" title="Permalink to this heading">¶</a></h3>
+<p>The subscription model is based on the concept of creating a
+subscription on a specific actor path with three elements: target,
+sub-target, and resource. The most narrow subscription is on a resource.
+Sub-target and target are then mandatory specified in the subscription
+request. If a subscription targets all resources within a sub-target,
+then sub-target and target are specified in the request. Finally, if the
+entire endpoint is targeted in the subscription, only target is
+specified in the request.</p>
+<p>The /properties endpoint allows easy sharing of simple json data, while
+the endpoints /actions, /resources, /methods, and /sessions enable
+sharing of more complex data and execution of procedures. Once an actor
+has a trust relationship, it can use subscriptions to receive updates
+about changes and activities. The main use of a subscription is to make
+sure that one actor gets efficient and near real-time access to changes
+that occur to another actor.</p>
+<p>An actor can establish a new subscription by sending a peer
+authenticated POST request to /subscriptions/&lt;peerid&gt; where peerid is
+the actor id of the requesting actor. A json body MUST as a minimum
+include the attribute “target”. The most common targets are properties,
+resources, actions, methods, and sessions, but a subscription MAY be of
+any target the mini-app will recognise. Additionally, “subtarget” and
+“resource” can be specified, thus identifying a sub-path to subscribe
+to, e.g. /resources/folders/12345.</p>
+<p>The “granularity” attribute controls how the subscribing actor wants to
+be notified. The possible values are “high”, “low”, and “none”, where
+“high” sends a callback to the subscribing actor with a full
+application/json body of the update, “low” sends a notification with an
+application/json body with a single attribute “url” with a URL to where
+a full json body of the update can be retrieved, and “none” suppresses
+all notifications and GET polling on the subscription is necessary to
+retrieve updates. If “granularity” is not present, “none” is assumed.</p>
+<p>The requesting actor MUST have a relationship allowing minimum read
+permissions on the requested path, and the actor receiving the request
+MUST validate the access rights upon receiving the request. It MUST also
+validate that the bearer token is valid for the peer specified in the
+POST URI.</p>
+<p>If approved, a 201 Created MUST be returned with the Location header
+pointing to the relative URI of the newly created subscription in the
+format /&lt;actorid&gt;/subscriptions/&lt;subscriber-actor-id&gt;/&lt;subscription-id&gt;.</p>
+<p>In the below example, a new subscription with id
+9d60853cb4915b699f89d7ae13efb382 is created at actor (requested)
+b373e63030a451b2991c9995438fccf1 from actor (requesting)
+f08ce818ea515526adcbd157eeaf0ab0.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span><span class="p">:</span>
+
+<span class="n">POST</span>
+<span class="o">/</span><span class="n">b373e63030a451b2991c9995438fccf1</span><span class="o">/</span><span class="n">subscriptions</span><span class="o">/</span><span class="n">f08ce818ea515526adcbd157eeaf0ab0</span>
+
+<span class="p">{</span>
+  <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="s2">&quot;resources&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;subtarget&quot;</span><span class="p">:</span> <span class="s2">&quot;folders&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;12345&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;granularity&quot;</span><span class="p">:</span> <span class="s2">&quot;high&quot;</span>
+<span class="p">}</span>
+
+<span class="mi">201</span> <span class="n">Created</span>
+
+<span class="n">Location</span><span class="p">:</span>
+<span class="o">/</span><span class="n">b373e63030a451b2991c9995438fccf1</span><span class="o">/</span><span class="n">subscriptions</span><span class="o">/</span><span class="n">f08ce818ea515526adcbd157eeaf0ab0</span><span class="o">/</span><span class="mi">9</span><span class="n">d60853cb4915b699f89d7ae13efb382</span>
+</pre></div>
+</div>
+<p>An actor is RECOMMENDED to support callbacks, but MUST support polling
+of subscriptions. If a callback is requested by specifying “granularity”
+other than “none”, but it is not supported by the mini-application, a
+501 Not Implemented MUST be returned. The requesting actor may then
+choose to resend the subscription request without a granularity
+attribute or {“granularity”: “none”}.</p>
+<p>When a subscription has been registered, the actor MUST record and act
+upon any changes that are done to the path. The actor MAY reject a
+subscription request to any path on which it does not support
+subscriptions. A subscription to /actions and /methods indicates a wish
+to get updates on any requests to these paths.</p>
+</section>
+<section id="initiating-and-enumerating-subscriptions">
+<h3>Initiating and Enumerating Subscriptions<a class="headerlink" href="#initiating-and-enumerating-subscriptions" title="Permalink to this heading">¶</a></h3>
+<p>Sometimes it can be necessary to request an actor to create a
+subscription with another actor. Actors supporting subscriptions MUST
+support POST requests to /&lt;actorid&gt;/subscriptions with an
+application/json body with “peerid” identifying the peer to send a
+subscription request to, as well as all the attributes to use when
+requesting a subscription.</p>
+<p>It is RECOMMENDED that a mini-application supports GET on /subscriptions
+and /subscriptions/&lt;peerid&gt; with creator or admin rights and peer rights
+respectively. The body returned with 200 Ok MUST contain the below
+elements. See the next section for explanation of the sequence
+attribute.</p>
+<p>The below example is for a GET to subscriptions. A GET to
+subscriptions/&lt;peerid&gt; does not include the “peerid” attributes for
+each data element, but rather on the root level.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">GET</span> <span class="o">/</span><span class="n">b373e63030a451b2991c9995438fccf1</span><span class="o">/</span><span class="n">subscriptions</span>
+
+<span class="p">{</span>
+  <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;b373e63030a451b2991c9995438fccf1&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="p">[</span>
+    <span class="p">{</span>
+      <span class="s2">&quot;peerid&quot;</span><span class="p">:</span> <span class="s2">&quot;f08ce818ea515526adcbd157eeaf0ab0&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+      <span class="s2">&quot;granularity&quot;</span><span class="p">:</span> <span class="s2">&quot;high&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;subtarget&quot;</span><span class="p">:</span> <span class="s2">&quot;data2&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;subscriptionid&quot;</span><span class="p">:</span> <span class="s2">&quot;6f9c496966d35b3b9d3fa2c9efc2934a&quot;</span>
+    <span class="p">},</span>
+    <span class="p">{</span>
+      <span class="s2">&quot;peerid&quot;</span><span class="p">:</span> <span class="s2">&quot;794edccea3705c0c96defb13857374ae&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;45&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+      <span class="s2">&quot;granularity&quot;</span><span class="p">:</span> <span class="s2">&quot;low&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;subtarget&quot;</span><span class="p">:</span> <span class="s2">&quot;data3&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;subscriptionid&quot;</span><span class="p">:</span> <span class="s2">&quot;016edb81538351b0af3034a6a751b003&quot;</span>
+    <span class="p">}</span>
+  <span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>A mini-app MAY support GET search parameters like <em>?target=&lt;value&gt;&amp;subtarget=&lt;value2&gt;&amp;resource=&lt;value3&gt;</em>.</p>
+</section>
+<section id="getting-subscription-updates">
+<h3>Getting Subscription Updates<a class="headerlink" href="#getting-subscription-updates" title="Permalink to this heading">¶</a></h3>
+<p><strong>The Diff and Update Model</strong></p>
+<p>The hierarchy of subscriptions is important for how the subscription
+callbacks and diffs work:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>|… ourtarget |… sub-target1 |… resource1
+             |              |… resource2
+             |              |… resource3
+             |… sub-target2 |… resource1
+                            |… resource2
+</pre></div>
+</div>
+<p>Let’s start with the simplest case, the subscription targets <em>resource1</em>
+of <em>sub-target1</em> in <em>ourtarget</em>. The data in the body of an update MUST
+in this case be the full resource representation (json or other data
+representation) and not a diff. In fact, the data MAY be anything the
+mini-app chooses to send as an update. It can be a blob or a data object
+that has nothing to do with the previous subscription update, as long as
+it communicates a state change on the resource, and the data
+representation is documented by the mini-app.</p>
+<p>This flexibility allows the subscription mechanism to be used for any
+resource state change that is desired to be communicated to another
+actor.</p>
+<p>For subscriptions to a target or a sub-target, the expectation is that
+the changes per update can be found in a json struct following the
+hierarchy relative to the subscription. I.e. If resource2 in sub-target2
+has changed, the diff MUST follow the following example format for a
+subscription to <em>ourtarget</em>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;sub-target2&quot;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s2">&quot;resource2&quot;</span><span class="p">:</span> <span class="s2">&quot;full_representation&quot;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>and the following for a subscription to <em>ourtarget</em>, <em>sub-target2</em>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;resource2&quot;</span><span class="p">:</span> <span class="s2">&quot;full_representation&quot;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>This means that every time something happens on a
+resource/endpoint/path, all subscriptions within scope MUST be processed
+and a specific diff created for each subscription where the json struct
+follows the hierarchy below the subscription. The diff format is simple:
+only sub-targets or resources that have changed are included in a diff,
+and an empty attribute is defined as the same as a non-existent
+attribute, thus an attribute can be deleted by setting it to “”.</p>
+<p>Each diff MUST have a sequence number, where the number is 1 for each
+new subscription and then incremented by 1 for each diff that is created
+for this subscription.</p>
+<p>Further examples with /properties</p>
+<p>Initial data POSTed to /properties:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;data1&quot;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s2">&quot;str1&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;str2&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span>
+  <span class="p">},</span>
+    <span class="s2">&quot;data2&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;test&quot;</span><span class="p">:</span> <span class="p">{</span>
+      <span class="s2">&quot;var1&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;var2&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>If a PUT to /properties/test has the content { “var1”: “hey”}
+(overwriting test), the resulting /properties will be:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;data1&quot;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s2">&quot;str1&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;str2&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span>
+  <span class="p">},</span>
+  <span class="s2">&quot;data2&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;test&quot;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s2">&quot;var1&quot;</span><span class="p">:</span> <span class="s2">&quot;hey&quot;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>and the diff to a subscription on /properties MUST be:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="s2">&quot;test&quot;</span><span class="p">:</span> <span class="p">{</span>
+  <span class="s2">&quot;var1&quot;</span><span class="p">:</span> <span class="s2">&quot;hey&quot;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>And a subscription to /properties/test MUST give the following diff:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;var1&quot;</span><span class="p">:</span> <span class="s2">&quot;hey&quot;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>If instead a PUT is done to /properties/test/var1 to change it to
+“change2”, the subscription diff for a /properties subscription will be:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="s2">&quot;test&quot;</span><span class="p">:</span> <span class="p">{</span>
+  <span class="s2">&quot;var1&quot;</span><span class="p">:</span> <span class="s2">&quot;change2&quot;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Note here that the resource and var2 attributes in the test struct have
+not been touched and are thus still present in test if you do a GET on
+/properties. Compare this to the above example overwriting of the entire
+test sub-target (with { “var1”: “hey” }), and you can see that there is
+no way to determine if resources below test were deleted by just looking
+at the diff. This information can be forced into a diff by doing a
+DELETE on a /properties path (which MUST send a “resource”: “” as a
+diff).</p>
+<p>A mini-app MAY implement more advanced diff methods, but this diff
+method MUST be used for the /properties endpoint.</p>
+<p><strong>Getting the Updates</strong></p>
+<p>There are two ways to get updates on a subscription: polling on the
+subscription URI or receive callbacks on the subscription callback URI
+as specified in the previous section.</p>
+<p>If the granularity is set to high, the callback is a POST with peer
+bearer authentication to the subscription URI with the following format:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;26597c23469e5ab2b3489b786cf553f5&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>
+  <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:47:02.375880Z&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;granularity&quot;</span><span class="p">:</span> <span class="s2">&quot;high&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;subscriptionid&quot;</span><span class="p">:</span> <span class="s2">&quot;552a0d7ec4ab553ea6c912baeb4459eb&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s2">&quot;test&quot;</span><span class="p">:</span> <span class="p">{</span>
+      <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;change5&quot;</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The data attribute contains the actual diff relative to the
+subscription, while the other attributes identifies the actor id
+originating the update, the target (and subtarget and resource if
+relevant), the timestamp in UTC, the granularity of the subscription,
+the subscriptionid, as well as the sequence number of the update. In
+this case, 6 indicates that this is the 6<sup>th</sup> diff produced for
+this specific subscription as identified by subscriptionid.</p>
+<p>A peer bearer token authenticated GET on the subscription id MUST offer
+a similar format, but here an array of data elements MUST represent one
+or more diff updates. In the below example, the first diff was retrieved
+earlier, now diff 2 - 6 are collected.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;subscriptionid&quot;</span><span class="p">:</span> <span class="s2">&quot;26f9bb085fb351c7ba40d395af18a381&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;26597c23469e5ab2b3489b786cf553f5&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;subtarget&quot;</span><span class="p">:</span> <span class="s2">&quot;test&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="p">[</span>
+    <span class="p">{</span>
+      <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:46:51.906980Z&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="s2">&quot;change1&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">2</span>
+    <span class="p">},</span>
+    <span class="p">{</span>
+      <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:46:53.967370Z&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="s2">&quot;change2&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">3</span>
+    <span class="p">},</span>
+    <span class="p">{</span>
+      <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:46:57.012820Z&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="s2">&quot;change3&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">4</span>
+    <span class="p">},</span>
+    <span class="p">{</span>
+      <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:47:00.509530Z&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;some&quot;</span><span class="p">:</span> <span class="s2">&quot;data&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;change4&quot;</span>
+      <span class="p">},</span>
+      <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">5</span>
+    <span class="p">},</span>
+    <span class="p">{</span>
+      <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:47:03.059410Z&quot;</span><span class="p">,</span>
+      <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;change5&quot;</span>
+      <span class="p">},</span>
+      <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">6</span>
+    <span class="p">}</span>
+  <span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>In the case of callbacks to the subscription callback URI, any 2xx
+response from the actor will indicate that the update has been received,
+and it MUST be cleared, i.e. not available anymore when doing a GET on
+the subscription.</p>
+<p>If the callback is not cleared with a 2xx response, the actor SHOULD not
+retry, and it SHOULD be up to the receiving actor to do a GET poll when
+it detects a gap in the sequence or triggered by another event. An actor
+MAY implement a re-try mechanism with an exponential back-off.</p>
+<p><strong>Low Granularity and Polling</strong></p>
+<p>In the case of granulerity = low, the callback to the subscription
+callback URI MUST contain application/json content with the following
+format:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;subscriptionid&quot;</span><span class="p">:</span> <span class="s2">&quot;26f9bb085fb351c7ba40d395af18a381&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;26597c23469e5ab2b3489b786cf553f5&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;subtarget&quot;</span><span class="p">:</span> <span class="s2">&quot;test&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:47:02.915030Z&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;granularity&quot;</span><span class="p">:</span> <span class="s2">&quot;low&quot;</span>
+  <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>
+  <span class="s2">&quot;url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://actingweb.net/myapp/26597c23469e5ab2b3489b786cf553f5/subscriptions/e3c47b6114ec558dade20d6c45855820/26f9bb085fb351c7ba40d395af18a381/6&quot;</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The data element is here replaced by a url attribute identifying where
+the subscribing actor can retrieve a specific diff. It is RECOMMENDED
+that the URL is composed of the subscription URL with the sequence
+number trailing at the end.</p>
+<p>The response content on this URL MUST be similar to a GET on the
+subscription following this example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+  <span class="s2">&quot;subscriptionid&quot;</span><span class="p">:</span> <span class="s2">&quot;26f9bb085fb351c7ba40d395af18a381&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;26597c23469e5ab2b3489b786cf553f5&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="s2">&quot;properties&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;subtarget&quot;</span><span class="p">:</span> <span class="s2">&quot;test&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2016-11-15T13:46:48.893650Z&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;sequence&quot;</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>
+  <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s2">&quot;resource&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;var1&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;var2&quot;</span><span class="p">:</span> <span class="s2">&quot;initial&quot;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Clearing Callback Status</strong></p>
+<p>Subsequent GET requests to the same URL MUST give the same result, both
+requests to the subscription as well as to the specific diff URL, except
+that the subscription URL MUST return new diffs.</p>
+<p>When a GET is done either to the subscription URL or to a specific diff
+and the subscribing actor wants to clear all diffs received, a PUT MUST
+be sent to the subscription URL with an application/json body with one
+attribute “sequence” and the sequence number that was the last sequence
+retrieved. All diffs with lower and equal sequence number than this MUST
+be cleared and no longer appear in GET requests to the subscription URL.
+GET requests to the diff specific URL (subscription URL + ‘/seqnr’) MUST
+return 404 Not found after clearing has been done.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>PUT
+/myapp/26597c23469e5ab2b3489b786cf553f5/subscriptions/e3c47b6114ec558dade20d6c45855820/26f9bb085fb351c7ba40d395af18a381
+
+{
+  “sequence”: 2
+}
+
+204 No content
+</pre></div>
+</div>
+</section>
+</section>
+<section id="security-considerations">
+<h2>Security Considerations<a class="headerlink" href="#security-considerations" title="Permalink to this heading">¶</a></h2>
+<p>There are many security considerations, some are well known for
+any http-based communication, while some are specific to ActingWeb, in
+particular the trust model.</p>
+<p>The use of https is a MANDATORY requirement for any non-trivial implementation.
+Some of the validation of peers MAY be based on validation of server-side
+certificates. This require proper configuration of the web server hosting the
+mini-app.</p>
+<p>Validation and approval of a relationship MAY be based on three elements:
+1. Root host of the requesting actor (confirmed by TLS certificate)
+2. Callback verification
+3. Explicit approval list, static or dynamic, of peer root URL
+4. Manual approval</p>
+<p>The use of a bearer token in the http Authorization header is subject to the
+same security concerns as OAuth2 Bearer tokens.</p>
+<p>Care must be taken to make sure that the bearer token is sufficiently random and
+long enough for the security level required.</p>
+<p>There is no expiry of ActingWeb peer tokens. However, the relationship can be
+terminated at any time and thus offers a revocation method. Also, a mini-app
+MAY enforce automatic expiry of relationships and thus force a new trust
+establishment flow.</p>
+<p><strong>Use of HTTP methods</strong></p>
+<p>Some firewalls and proxies may filter http methods like PUT and DELETE
+and may only allow GET and POST. Also, some application frameworks or
+browsers may not support other methods. Wherever a method other than GET
+and POST is specified in this document, the parameter
+_method=’true_method’ MUST be supported and the http header X-HTTP-Method-Override:
+‘true_method’ MAY be supported as alternative ways to specify the
+intended http method.</p>
+</section>
+<section id="iana-considerations">
+<h2>IANA Considerations<a class="headerlink" href="#iana-considerations" title="Permalink to this heading">¶</a></h2>
+<p>Currently, ActingWeb.org controls the namespaces that IANA might be
+responsible for. Dependent on how this specification is moved forward,
+that may or may not change.</p>
+</section>
+<section id="references-and-endnotes">
+<h2>References and Endnotes<a class="headerlink" href="#references-and-endnotes" title="Permalink to this heading">¶</a></h2>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../index.html">ActingWeb</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../LICENSE.html">License</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../README.html">README - actingweb - an ActingWeb Library</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="developers.html">ActingWeb Developer Interface</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">ActingWeb Specification - version 1.0</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#introduction">Introduction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#the-mini-application-model">The Mini-Application Model</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#the-actor">The Actor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id1">Endpoints</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#trust-trust-relationships-optional">/trust - Trust Relationships (OPTIONAL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#subscriptions-subscriptions-optional">/subscriptions - Subscriptions (OPTIONAL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#security-considerations">Security Considerations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#iana-considerations">IANA Considerations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#references-and-endnotes">References and Endnotes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="actingweb.html">actingweb code</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../CHANGELOG.html">CHANGELOG</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="developers.html" title="previous chapter">ActingWeb Developer Interface</a></li>
+      <li>Next: <a href="actingweb.html" title="next chapter">actingweb code</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2020, Greger Teigre Wedel.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 5.3.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="../_sources/docs/actingweb-spec.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

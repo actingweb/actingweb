@@ -1,0 +1,268 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>actingweb.db_dynamodb.db_actor &#8212; ActingWeb 2.6.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/alabaster.css" />
+    <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
+    <script src="../../../_static/jquery.js"></script>
+    <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for actingweb.db_dynamodb.db_actor</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">pynamodb.attributes</span><span class="w"> </span><span class="kn">import</span> <span class="n">UnicodeAttribute</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pynamodb.indexes</span><span class="w"> </span><span class="kn">import</span> <span class="n">AllProjection</span><span class="p">,</span> <span class="n">GlobalSecondaryIndex</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pynamodb.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Model</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    DbActor handles all db operations for an actor</span>
+<span class="sd">    Google datastore for google is used as a backend.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+
+<div class="viewcode-block" id="CreatorIndex"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.CreatorIndex">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">CreatorIndex</span><span class="p">(</span><span class="n">GlobalSecondaryIndex</span><span class="p">[</span><span class="n">Any</span><span class="p">]):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Secondary index on actor</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="CreatorIndex.Meta"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.CreatorIndex.Meta">[docs]</a>    <span class="k">class</span><span class="w"> </span><span class="nc">Meta</span><span class="p">:</span>
+        <span class="n">index_name</span> <span class="o">=</span> <span class="s2">&quot;creator-index&quot;</span>
+        <span class="n">read_capacity_units</span> <span class="o">=</span> <span class="mi">2</span>
+        <span class="n">write_capacity_units</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">projection</span> <span class="o">=</span> <span class="n">AllProjection</span><span class="p">()</span></div>
+
+    <span class="n">creator</span> <span class="o">=</span> <span class="n">UnicodeAttribute</span><span class="p">(</span><span class="n">hash_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Actor"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.Actor">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">Actor</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    DynamoDB data model for an actor</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="Actor.Meta"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.Actor.Meta">[docs]</a>    <span class="k">class</span><span class="w"> </span><span class="nc">Meta</span><span class="p">:</span>  <span class="c1"># type: ignore[misc]</span>
+        <span class="n">table_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;AWS_DB_PREFIX&quot;</span><span class="p">,</span> <span class="s2">&quot;demo_actingweb&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="s2">&quot;_actors&quot;</span>
+        <span class="n">read_capacity_units</span> <span class="o">=</span> <span class="mi">6</span>
+        <span class="n">write_capacity_units</span> <span class="o">=</span> <span class="mi">2</span>
+        <span class="n">region</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;AWS_DEFAULT_REGION&quot;</span><span class="p">,</span> <span class="s2">&quot;us-west-1&quot;</span><span class="p">)</span>
+        <span class="n">host</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;AWS_DB_HOST&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span></div>
+
+    <span class="nb">id</span> <span class="o">=</span> <span class="n">UnicodeAttribute</span><span class="p">(</span><span class="n">hash_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">creator</span> <span class="o">=</span> <span class="n">UnicodeAttribute</span><span class="p">()</span>
+    <span class="n">passphrase</span> <span class="o">=</span> <span class="n">UnicodeAttribute</span><span class="p">()</span>
+    <span class="n">creator_index</span> <span class="o">=</span> <span class="n">CreatorIndex</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="DbActor"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActor">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">DbActor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    DbActor does all the db operations for actor objects</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="DbActor.get"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActor.get">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">actor_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Retrieves the actor from the database&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">actor_id</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">handle</span> <span class="o">=</span> <span class="n">Actor</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">actor_id</span><span class="p">,</span> <span class="n">consistent_read</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>  <span class="c1"># PynamoDB DoesNotExist exception</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="p">:</span>
+            <span class="n">t</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle</span>
+            <span class="k">return</span> <span class="p">{</span>
+                <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+                <span class="s2">&quot;creator&quot;</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">creator</span><span class="p">,</span>
+                <span class="s2">&quot;passphrase&quot;</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">passphrase</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="DbActor.get_by_creator"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActor.get_by_creator">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_by_creator</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">creator</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Retrieves the actor from db based on creator field</span>
+
+<span class="sd">        Returns None if none was found. If one is found, that one is</span>
+<span class="sd">        loaded in the object. If more, all are returned.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">creator</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">in</span> <span class="n">creator</span><span class="p">:</span>
+            <span class="n">creator</span> <span class="o">=</span> <span class="n">creator</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span> <span class="o">=</span> <span class="n">Actor</span><span class="o">.</span><span class="n">creator_index</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">creator</span><span class="p">)</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;    id (&quot;</span> <span class="o">+</span> <span class="n">c</span><span class="o">.</span><span class="n">id</span> <span class="o">+</span> <span class="s2">&quot;)&quot;</span><span class="p">)</span>
+            <span class="n">ret</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">actor_id</span><span class="o">=</span><span class="n">c</span><span class="o">.</span><span class="n">id</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">ret</span></div>
+
+<div class="viewcode-block" id="DbActor.modify"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActor.modify">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">modify</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">creator</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">passphrase</span><span class="p">:</span> <span class="nb">bytes</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Modify an actor&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Attempted modification of DbActor without db handle&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">creator</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">creator</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="c1"># Email in creator needs to be lower case</span>
+            <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">in</span> <span class="n">creator</span><span class="p">:</span>
+                <span class="n">creator</span> <span class="o">=</span> <span class="n">creator</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="o">.</span><span class="n">creator</span> <span class="o">=</span> <span class="n">creator</span>  <span class="c1"># type: ignore[attr-defined]</span>
+        <span class="k">if</span> <span class="n">passphrase</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">passphrase</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="o">.</span><span class="n">passphrase</span> <span class="o">=</span> <span class="n">passphrase</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span>  <span class="c1"># type: ignore[attr-defined]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>  <span class="c1"># type: ignore[attr-defined]</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="DbActor.create"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActor.create">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">actor_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">creator</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">passphrase</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Create a new actor&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">actor_id</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">creator</span><span class="p">:</span>
+            <span class="n">creator</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="c1"># Email in creator needs to be lower case</span>
+        <span class="k">if</span> <span class="s2">&quot;@&quot;</span> <span class="ow">in</span> <span class="n">creator</span><span class="p">:</span>
+            <span class="n">creator</span> <span class="o">=</span> <span class="n">creator</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">passphrase</span><span class="p">:</span>
+            <span class="n">passphrase</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">actor_id</span><span class="o">=</span><span class="n">actor_id</span><span class="p">):</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Trying to create actor that exists(&quot;</span> <span class="o">+</span> <span class="n">actor_id</span> <span class="o">+</span> <span class="s2">&quot;)&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span> <span class="o">=</span> <span class="n">Actor</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="n">actor_id</span><span class="p">,</span> <span class="n">creator</span><span class="o">=</span><span class="n">creator</span><span class="p">,</span> <span class="n">passphrase</span><span class="o">=</span><span class="n">passphrase</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="DbActor.delete"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActor.delete">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">delete</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Deletes the actor in the database&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Attempted delete of DbActor without db handle&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>  <span class="c1"># type: ignore[attr-defined]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">Actor</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+            <span class="n">Actor</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">wait</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="DbActorList"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActorList">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">DbActorList</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    DbActorList does all the db operations for list of actor objects</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="DbActorList.fetch"><a class="viewcode-back" href="../../../docs/actingweb.db_dynamodb.html#actingweb.db_dynamodb.db_actor.DbActorList.fetch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">fetch</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Retrieves the actors in the database&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span> <span class="o">=</span> <span class="n">Actor</span><span class="o">.</span><span class="n">scan</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="p">:</span>
+            <span class="n">ret</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle</span><span class="p">:</span>
+                <span class="n">ret</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                    <span class="p">{</span>
+                        <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+                        <span class="s2">&quot;creator&quot;</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">creator</span><span class="p">,</span>
+                    <span class="p">}</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="n">ret</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span></div>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">handle</span> <span class="o">=</span> <span class="kc">None</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">ActingWeb</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../LICENSE.html">License</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../README.html">README - actingweb - an ActingWeb Library</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/developers.html">ActingWeb Developer Interface</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/actingweb-spec.html">ActingWeb Specification - version 1.0</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../docs/actingweb.html">actingweb code</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../CHANGELOG.html">CHANGELOG</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2020, Greger Teigre Wedel.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 5.3.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

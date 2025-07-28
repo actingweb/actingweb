@@ -6,4 +6,4 @@ __all__ = [
     "db_subscription",
     "db_subscription_diff",
     "db_peertrustee",
-    ]
+]

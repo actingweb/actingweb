@@ -34,6 +34,7 @@ from ...handlers import (
     factory,
     methods,
     actions,
+    mcp,
 )
 
 if TYPE_CHECKING:
@@ -266,6 +267,12 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/bot")
         async def app_bot(request: Request) -> Response:
             return await self._handle_bot_request(request)
+
+        # MCP endpoint
+        @self.fastapi_app.get("/mcp")
+        @self.fastapi_app.post("/mcp")
+        async def app_mcp(request: Request) -> Response:
+            return await self._handle_mcp_request(request)
 
         # Actor root
         @self.fastapi_app.get("/{actor_id}")
@@ -701,6 +708,43 @@ class FastAPIIntegration:
         await loop.run_in_executor(self.executor, handler.post, "/bot")
 
         return self._create_fastapi_response(webobj, request)
+
+    async def _handle_mcp_request(self, request: Request) -> Response:
+        """Handle MCP requests."""
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        handler = mcp.MCPHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+        
+        # Execute appropriate method based on request method
+        if request.method == "GET":
+            # Run the synchronous handler in a thread pool
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(self.executor, handler.get)
+        elif request.method == "POST":
+            # Parse JSON body for POST requests
+            try:
+                if webobj.request.body:
+                    data = json.loads(webobj.request.body)
+                else:
+                    data = {}
+            except (json.JSONDecodeError, ValueError):
+                data = {}
+            
+            # Run the synchronous handler in a thread pool
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(self.executor, handler.post, data)
+        else:
+            raise HTTPException(status_code=405, detail="Method not allowed")
+
+        # Create JSON response
+        return JSONResponse(content=result, status_code=200)
 
     async def _handle_actor_request(self, request: Request, actor_id: str, endpoint: str, **kwargs: Any) -> Response:
         """Handle actor-specific requests."""

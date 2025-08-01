@@ -5,7 +5,7 @@ Automatically generates FastAPI routes and handles request/response transformati
 with async support.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, List
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, List, Tuple
 from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -204,6 +204,121 @@ async def get_bearer_token(request: Request) -> Optional[str]:
     return auth_header[7:]
 
 
+async def authenticate_google_oauth(request: Request, config) -> Optional[Tuple[Any, str]]:
+    """
+    Authenticate Google OAuth2 Bearer token and return actor.
+    
+    Returns:
+        Tuple of (actor, email) or None if authentication failed
+    """
+    bearer_token = await get_bearer_token(request)
+    if not bearer_token:
+        return None
+    
+    try:
+        from ...google_oauth import GoogleOAuthAuthenticator
+        authenticator = GoogleOAuthAuthenticator(config)
+        return authenticator.authenticate_bearer_token(bearer_token)
+    except Exception as e:
+        logging.error(f"Google OAuth authentication error: {e}")
+        return None
+
+
+def create_oauth_redirect_response(config, redirect_after_auth: str = "", clear_cookie: bool = False) -> RedirectResponse:
+    """
+    Create OAuth2 redirect response to Google.
+    
+    Args:
+        config: ActingWeb configuration
+        redirect_after_auth: URL to redirect to after successful auth
+        clear_cookie: Whether to clear expired oauth_token cookie
+        
+    Returns:
+        RedirectResponse to Google OAuth2
+    """
+    try:
+        from ...google_oauth import GoogleOAuthAuthenticator
+        authenticator = GoogleOAuthAuthenticator(config)
+        if authenticator.is_enabled():
+            auth_url = authenticator.create_authorization_url(redirect_after_auth=redirect_after_auth)
+            if auth_url:
+                redirect_response = RedirectResponse(url=auth_url, status_code=302)
+                if clear_cookie:
+                    # Clear the expired oauth_token cookie
+                    redirect_response.delete_cookie("oauth_token", path="/")
+                    logging.info("Cleared expired oauth_token cookie")
+                return redirect_response
+    except Exception as e:
+        logging.error(f"Error creating OAuth2 redirect: {e}")
+    
+    # Fallback to 401 if OAuth2 not configured
+    response = Response(content="Authentication required", status_code=401)
+    response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
+    return response
+
+
+def add_www_authenticate_header(response: Response, config) -> None:
+    """
+    Add WWW-Authenticate header for OAuth2 authentication.
+    """
+    try:
+        from ...google_oauth import GoogleOAuthAuthenticator
+        authenticator = GoogleOAuthAuthenticator(config)
+        if authenticator.is_enabled():
+            www_auth = authenticator.create_www_authenticate_header()
+            response.headers["WWW-Authenticate"] = www_auth
+    except Exception as e:
+        logging.error(f"Error adding WWW-Authenticate header: {e}")
+        response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
+
+
+async def check_authentication_and_redirect(request: Request, config) -> Optional[RedirectResponse]:
+    """
+    Check if request is authenticated, if not return OAuth2 redirect.
+    
+    Returns:
+        RedirectResponse to Google OAuth2 if not authenticated, None if authenticated
+    """
+    # Check for Basic auth
+    basic_auth = await get_basic_auth(request)
+    if basic_auth:
+        return None  # Has basic auth, let normal flow handle it
+    
+    # Check for Bearer token
+    bearer_token = await get_bearer_token(request)
+    if bearer_token:
+        # Verify the Bearer token
+        auth_result = await authenticate_google_oauth(request, config)
+        if auth_result:
+            return None  # Valid Bearer token
+    
+    # Check for OAuth token cookie (for session-based authentication)
+    oauth_cookie = request.cookies.get("oauth_token")
+    if oauth_cookie:
+        logging.info(f"Found oauth_token cookie with length {len(oauth_cookie)}")
+        # Validate the OAuth cookie token with Google
+        try:
+            from ...google_oauth import GoogleOAuthAuthenticator
+            authenticator = GoogleOAuthAuthenticator(config)
+            if authenticator.is_enabled():
+                email = authenticator.validate_token_and_get_email(oauth_cookie)
+                if email:
+                    logging.info(f"OAuth cookie validation successful for {email}")
+                    return None  # Valid OAuth cookie
+                else:
+                    logging.info("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
+                    # Token expired/invalid - fall through to create redirect response with cookie cleanup
+        except Exception as e:
+            logging.info(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
+            # Validation failed - fall through to redirect
+    
+    # No valid authentication - redirect to Google OAuth2
+    original_url = str(request.url)
+    # Clear cookie if we had an expired token
+    clear_cookie = bool(oauth_cookie)
+    return create_oauth_redirect_response(config, redirect_after_auth=original_url, clear_cookie=clear_cookie)
+
+
 async def validate_content_type(request: Request, expected: str = "application/json") -> bool:
     """
     Dependency to validate request content type.
@@ -249,6 +364,10 @@ class FastAPIIntegration:
         if hasattr(self, 'executor'):
             self.executor.shutdown(wait=True)
 
+    async def _check_auth_or_redirect(self, request: Request) -> Optional[RedirectResponse]:
+        """Helper to check authentication and return redirect if needed."""
+        return await check_authentication_and_redirect(request, self.aw_app.get_config())
+
     def setup_routes(self) -> None:
         """Setup all ActingWeb routes in FastAPI."""
 
@@ -256,12 +375,21 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/")
         @self.fastapi_app.post("/")
         async def app_root(request: Request) -> Response:
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
+            if auth_redirect:
+                return auth_redirect
             return await self._handle_factory_request(request)
 
-        # OAuth callback
+        # OAuth callback (legacy)
         @self.fastapi_app.get("/oauth")
         async def app_oauth_callback(request: Request) -> Response:
             return await self._handle_oauth_callback(request)
+            
+        # Google OAuth callback
+        @self.fastapi_app.get("/oauth/callback")
+        async def app_google_oauth_callback(request: Request) -> Response:
+            return await self._handle_google_oauth_callback(request)
 
         # Bot endpoint
         @self.fastapi_app.post("/bot")
@@ -272,6 +400,10 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/mcp")
         @self.fastapi_app.post("/mcp")
         async def app_mcp(request: Request) -> Response:
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
+            if auth_redirect:
+                return auth_redirect
             return await self._handle_mcp_request(request)
 
         # Actor root
@@ -279,18 +411,30 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}")
         @self.fastapi_app.delete("/{actor_id}")
         async def app_actor_root(actor_id: str, request: Request) -> Response:
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
+            if auth_redirect:
+                return auth_redirect
             return await self._handle_actor_request(request, actor_id, "root")
 
         # Actor meta
         @self.fastapi_app.get("/{actor_id}/meta")
         @self.fastapi_app.get("/{actor_id}/meta/{path:path}")
         async def app_meta(actor_id: str, request: Request, path: str = "") -> Response:
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
+            if auth_redirect:
+                return auth_redirect
             return await self._handle_actor_request(request, actor_id, "meta", path=path)
 
         # Actor OAuth
         @self.fastapi_app.get("/{actor_id}/oauth")
         @self.fastapi_app.get("/{actor_id}/oauth/{path:path}")
         async def app_oauth(actor_id: str, request: Request, path: str = "") -> Response:
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
+            if auth_redirect:
+                return auth_redirect
             return await self._handle_actor_request(request, actor_id, "oauth", path=path)
 
         # Actor www
@@ -301,6 +445,10 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/www/{path:path}")
         @self.fastapi_app.delete("/{actor_id}/www/{path:path}")
         async def app_www(actor_id: str, request: Request, path: str = "") -> Response:
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
             return await self._handle_actor_request(request, actor_id, "www", path=path)
 
         # Actor properties
@@ -313,6 +461,10 @@ class FastAPIIntegration:
         @self.fastapi_app.put("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.delete("/{actor_id}/properties/{name:path}")
         async def app_properties(actor_id: str, request: Request, name: str = "") -> Response:
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
             return await self._handle_actor_request(request, actor_id, "properties", name=name)
 
         # Actor trust
@@ -536,6 +688,48 @@ class FastAPIIntegration:
             cookies=req_data["cookies"],
         )
 
+        # Check if user is already authenticated with Google OAuth2 and redirect to their actor
+        oauth_cookie = request.cookies.get("oauth_token")
+        self.logger.info(f"Factory request: method={request.method}, has_oauth_cookie={bool(oauth_cookie)}")
+        if oauth_cookie and request.method == "GET":
+            self.logger.info(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
+            # User has OAuth session - try to find their actor and redirect
+            try:
+                from ...google_oauth import GoogleOAuthAuthenticator
+                authenticator = GoogleOAuthAuthenticator(self.aw_app.get_config())
+                if authenticator.is_enabled():
+                    self.logger.info("Google OAuth2 is enabled, validating token...")
+                    # Validate the token and get email
+                    email = authenticator.validate_token_and_get_email(oauth_cookie)
+                    if email:
+                        self.logger.info(f"Token validation successful for {email}")
+                        # Look up actor by email
+                        actor_instance = authenticator.lookup_or_create_actor_by_email(email)
+                        if actor_instance and actor_instance.id:
+                            # Redirect to actor's www page
+                            redirect_url = f"/{actor_instance.id}/www"
+                            self.logger.info(f"Redirecting authenticated user {email} to {redirect_url}")
+                            return RedirectResponse(url=redirect_url, status_code=302)
+                    else:
+                        # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
+                        self.logger.info("OAuth token expired or invalid - clearing cookie and redirecting to Google OAuth")
+                        original_url = str(request.url)
+                        oauth_redirect = create_oauth_redirect_response(self.aw_app.get_config(), redirect_after_auth=original_url)
+                        # Clear the expired cookie
+                        oauth_redirect.delete_cookie("oauth_token", path="/")
+                        return oauth_redirect
+                else:
+                    self.logger.warning("Google OAuth2 not enabled in config")
+            except Exception as e:
+                self.logger.error(f"OAuth token validation failed in factory: {e}")
+                # Token validation failed - clear cookie and redirect to fresh OAuth
+                self.logger.info("OAuth token validation error - clearing cookie and redirecting to Google OAuth")
+                original_url = str(request.url)
+                oauth_redirect = create_oauth_redirect_response(self.aw_app.get_config(), redirect_after_auth=original_url)
+                # Clear the invalid cookie
+                oauth_redirect.delete_cookie("oauth_token", path="/")
+                return oauth_redirect
+
         # Check if we have a custom actor factory registered and this is a POST request
         if request.method == "POST" and self.aw_app.get_actor_factory():
             # Use the modern actor factory instead of the legacy handler
@@ -640,7 +834,7 @@ class FastAPIIntegration:
                 return
                 
             # Set trustee_root if provided (mirroring the factory handler behavior)
-            if trustee_root and len(trustee_root) > 0:
+            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
                 # Get the underlying actor from the interface
                 core_actor = actor_interface.core_actor
                 if core_actor and core_actor.store:
@@ -655,7 +849,7 @@ class FastAPIIntegration:
             }
             
             # Add trustee_root to response if set (mirroring factory handler)
-            if trustee_root and len(trustee_root) > 0:
+            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
                 response_data["trustee_root"] = trustee_root
             
             self.logger.debug(f"FastAPI actor creation response: {response_data}")
@@ -687,6 +881,36 @@ class FastAPIIntegration:
         # Run the synchronous handler in a thread pool
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self.executor, handler.get)
+
+        return self._create_fastapi_response(webobj, request)
+
+    async def _handle_google_oauth_callback(self, request: Request) -> Response:
+        """Handle Google OAuth2 callback."""
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.google_oauth_callback import GoogleOAuthCallbackHandler
+        handler = GoogleOAuthCallbackHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+        
+        # Run the synchronous handler in a thread pool
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(self.executor, handler.get)
+        
+        # Handle redirect if needed
+        if isinstance(result, dict) and result.get("redirect_required"):
+            redirect_url = result.get("redirect_url")
+            if redirect_url:
+                webobj.response.set_redirect(redirect_url)
+            else:
+                # Convert result to JSON response
+                webobj.response.body = json.dumps(result)
+                webobj.response.headers["Content-Type"] = "application/json"
 
         return self._create_fastapi_response(webobj, request)
 

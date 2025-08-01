@@ -490,87 +490,49 @@ class MCPHandler(BaseHandler):
         """
         Authenticate request and get actor from OAuth2 Bearer token.
 
-        This method implements OAuth2 authentication flow:
+        This method implements Google OAuth2 authentication flow:
         1. Extracts Bearer token from Authorization header
-        2. If no token, initiates OAuth2 redirect to Google
+        2. If no token, returns None (caller should add WWW-Authenticate header)
         3. Validates token with Google API
         4. Retrieves email from Google user info API
-        5. Looks up actor by email address
+        5. Looks up actor by email address or creates new one
         6. Returns the actor instance or None if not found/authenticated
         """
-        # For Phase 1, we'll create a mock implementation
-        # In Phase 3, this will implement full OAuth2 flow
-
-        # Real implementation will:
-        # 1. Check for Authorization: Bearer <token> header
-        # 2. If missing, return OAuth2 redirect response to Google
-        # 3. Validate Bearer token with Google OAuth2 API
-        # 4. Call Google UserInfo API to get email from token
-        # 5. Look up ActingWeb actor by email
-        # 6. Return actor instance
-
-        # Mock OAuth2 flow - Phase 1 placeholder
-        auth_header = self.get_auth_header()  # Will be implemented
-
+        auth_header = self.get_auth_header()
+        
         if not auth_header or not auth_header.startswith("Bearer "):
-            # In real implementation, return OAuth2 redirect
+            logger.debug("No Bearer token found in Authorization header")
             return None
 
-        # Mock token validation and email retrieval
-        # Real implementation will call Google APIs
         bearer_token = auth_header[7:]  # Remove "Bearer " prefix
-
-        # Return persistent mock actor - use class-level storage for persistence
-        if not hasattr(MCPHandler, '_mock_actor'):
-            MCPHandler._mock_actor = self._create_mock_actor(bearer_token)
         
-        return MCPHandler._mock_actor
-
-    def _create_mock_actor(self, bearer_token: str) -> Any:
-        """Create a persistent mock actor for testing."""
-        class MockActor:
-            def __init__(self, token: str) -> None:
-                self.id = "oauth_actor_123"
-                self.email = "user@gmail.com"  # From Google UserInfo API
-                self.oauth_provider = "google"
-                self.oauth_token = token
-                
-                # Mock properties object that behaves like ActorInterface.properties
-                self.properties = MockProperties()
-
-        class MockProperties:
-            def __init__(self) -> None:
-                self._data: Dict[str, Any] = {
-                    "notifications": [],
-                    "preferences": {},
-                    "mcp_usage_count": 0,
-                    "created_at": "2025-01-01T00:00:00Z",
-                    "notes": [],
-                    "reminders": []
-                }
+        try:
+            from ..google_oauth import GoogleOAuthAuthenticator
+            authenticator = GoogleOAuthAuthenticator(self.config)
             
-            def get(self, key: str, default: Any = None) -> Any:
-                return self._data.get(key, default)
-            
-            def __getattr__(self, name: str) -> Any:
-                if name in self._data:
-                    return self._data[name]
+            if not authenticator.is_enabled():
+                logger.warning("Google OAuth2 not configured")
                 return None
             
-            def __setattr__(self, name: str, value: Any) -> None:
-                if name.startswith('_'):
-                    super().__setattr__(name, value)
-                else:
-                    if not hasattr(self, '_data'):
-                        super().__setattr__('_data', {})
-                    self._data[name] = value
+            # Authenticate token and get actor
+            actor_instance, email = authenticator.authenticate_bearer_token(bearer_token)
+            
+            if actor_instance and email:
+                logger.info(f"Successfully authenticated {email} -> actor {actor_instance.id}")
+                return actor_instance
+            else:
+                logger.warning("Bearer token validation failed")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error during OAuth2 authentication: {e}")
+            return None
 
-        return MockActor(bearer_token)
-
-    def get_auth_header(self) -> str:
-        """Get Authorization header from request (placeholder for Phase 1)."""
-        # This will be implemented in Phase 3 to extract from actual request
-        return "Bearer mock_google_oauth_token_123"
+    def get_auth_header(self) -> Optional[str]:
+        """Get Authorization header from request."""
+        if hasattr(self, 'webobj') and self.webobj and hasattr(self.webobj, 'headers'):
+            return self.webobj.headers.get("Authorization") or self.webobj.headers.get("authorization")
+        return None
 
     def initiate_oauth2_redirect(self) -> Dict[str, Any]:
         """
@@ -622,4 +584,18 @@ class MCPHandler(BaseHandler):
 
     def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
         """Create an error response."""
+        if status_code == 401:
+            # Add WWW-Authenticate header for OAuth2
+            try:
+                from ..google_oauth import GoogleOAuthAuthenticator
+                authenticator = GoogleOAuthAuthenticator(self.config)
+                if authenticator.is_enabled():
+                    www_auth = authenticator.create_www_authenticate_header()
+                    if hasattr(self, 'webobj') and self.webobj:
+                        self.webobj.response.headers["WWW-Authenticate"] = www_auth
+            except Exception as e:
+                logger.error(f"Error adding WWW-Authenticate header: {e}")
+                if hasattr(self, 'webobj') and self.webobj:
+                    self.webobj.response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
+        
         return {"error": True, "status_code": status_code, "message": message}

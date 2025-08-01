@@ -418,13 +418,17 @@ class Auth:
         if not path:
             path = ""
         if not self.actor:
+            logging.info("Cookie auth failed: no actor")
             return False
         if self.token:
             now = time.time()
             if appreq.request.cookies and self.cookie in appreq.request.cookies:
                 authz = appreq.request.cookies[self.cookie]
+                logging.info(f"Cookie auth: found cookie '{self.cookie}' with length {len(authz)}")
             else:
                 authz = ""
+                logging.info(f"Cookie auth: no cookie '{self.cookie}' found in request")
+                logging.info(f"Available cookies: {list(appreq.request.cookies.keys()) if appreq.request.cookies else 'none'}")
             if (
                 appreq.request.get("refresh")
                 and appreq.request.get("refresh").lower() == "true"
@@ -434,7 +438,7 @@ class Auth:
                 if self.actor and self.actor.store:
                     self.actor.store.oauth_token = None
             elif authz == self.token and self.expiry and now < (float(self.expiry) - 20.0):
-                logging.debug("Authorization cookie header matches a valid token")
+                logging.info("Cookie auth SUCCESS: cookie matches token and not expired")
                 self.acl["relationship"] = "creator"
                 self.acl["authenticated"] = True
                 self.response["code"] = 200
@@ -442,6 +446,16 @@ class Auth:
                 self.authn_done = True
                 return True
             elif authz != self.token:
+                logging.info(f"Cookie auth FAILED: token mismatch")
+                logging.info(f"Cookie token length: {len(authz)}, stored token length: {len(self.token)}")
+                logging.info(f"Cookie starts with: {authz[:20]}...")
+                logging.info(f"Stored starts with: {self.token[:20]}...")
+            elif not self.expiry:
+                logging.info("Cookie auth FAILED: no expiry set")
+            elif now >= (float(self.expiry) - 20.0):
+                logging.info(f"Cookie auth FAILED: token expired. Now: {now}, expiry: {self.expiry}")
+            else:
+                logging.info("Cookie auth FAILED: unknown reason")
                 logging.debug(
                     "Authorization cookie header does not match a valid token"
                 )
@@ -540,6 +554,11 @@ class Auth:
         if bearer.lower() != "bearer":
             return False
         self.authn_done = True
+        
+        # First, try Google OAuth2 authentication if configured
+        if self._check_google_oauth_token(token):
+            return True
+        
         trustee = self.actor.store.trustee_root if self.actor and self.actor.store else None
         # If trustee_root is set, creator name is 'trustee' and
         # bit strength of passphrase is > 80, use passphrase as
@@ -579,19 +598,126 @@ class Auth:
         else:
             return False
 
+    def _check_google_oauth_token(self, token):
+        """Check if the Bearer token is a valid Google OAuth2 token and authenticate user."""
+        try:
+            from .google_oauth import GoogleOAuthAuthenticator
+            authenticator = GoogleOAuthAuthenticator(self.config)
+            
+            if not authenticator.is_enabled():
+                return False
+            
+            # Validate token and get email
+            email = authenticator.validate_token_and_get_email(token)
+            if not email:
+                return False
+            
+            # For Google OAuth2, we authenticate users based on their email
+            # The actor lookup is handled at the endpoint level, not here in auth
+            # Here we just validate that the token is valid and get the email
+            
+            # Check if this is the correct actor for this email (when actor_id is provided in URL)
+            if self.actor and self.actor.creator and self.actor.creator.lower() == email.lower():
+                # This is the correct actor for this email
+                self.acl["relationship"] = "creator"
+                self.acl["peerid"] = ""
+                self.acl["approved"] = True
+                self.acl["authenticated"] = True
+                self.response["code"] = 200
+                self.response["text"] = "Ok"
+                self.token = token
+                logging.info(f"Google OAuth2 authentication successful for {email}")
+                return True
+            else:
+                # Email doesn't match this actor - this could be:
+                # 1. Wrong actor for this user
+                # 2. New user (actor creation flow handles this)
+                # 3. Factory endpoint (no specific actor yet)
+                logging.debug(f"Google OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}")
+                
+                # For factory endpoint or when no actor is loaded, we still consider auth successful
+                # The endpoint handler will use get_by_creator() to find/create the right actor
+                if not self.actor:
+                    self.acl["relationship"] = "creator"
+                    self.acl["peerid"] = ""
+                    self.acl["approved"] = True
+                    self.acl["authenticated"] = True
+                    self.response["code"] = 200
+                    self.response["text"] = "Ok"
+                    self.token = token
+                    logging.info(f"Google OAuth2 authentication successful for {email} (no specific actor)")
+                    return True
+                
+                return False
+                
+        except Exception as e:
+            logging.error(f"Error during Google OAuth2 token validation: {e}")
+            return False
+
+    def _should_redirect_to_google_oauth(self, appreq, path):
+        """Check if we should redirect to Google OAuth2 for authentication."""
+        try:
+            from .google_oauth import GoogleOAuthAuthenticator
+            authenticator = GoogleOAuthAuthenticator(self.config)
+            
+            if not authenticator.is_enabled():
+                return False
+            
+            # Don't redirect for OAuth callback URLs to avoid infinite loops
+            if "/oauth/callback" in path:
+                return False
+            
+            # Create redirect to Google OAuth2
+            original_url = self._get_original_url(appreq, path)
+            auth_url = authenticator.create_authorization_url(redirect_after_auth=original_url)
+            
+            if auth_url:
+                self.authn_done = True
+                self.response["code"] = 302
+                self.response["text"] = "Redirecting to Google OAuth2"
+                self.redirect = auth_url
+                logging.info(f"Redirecting to Google OAuth2: {auth_url[:100]}...")
+                return True
+                
+        except Exception as e:
+            logging.error(f"Error creating Google OAuth2 redirect: {e}")
+        
+        return False
+
+    def _get_original_url(self, appreq, path):
+        """Get the original URL being accessed for redirect after auth."""
+        try:
+            # Try to construct the original URL
+            if hasattr(appreq, 'request') and hasattr(appreq.request, 'url'):
+                return str(appreq.request.url)
+            elif hasattr(appreq, 'request') and hasattr(appreq.request, 'uri'):
+                return str(appreq.request.uri)
+            else:
+                # Fallback to constructing from config and path
+                return f"{self.config.proto}{self.config.fqdn}{path}"
+        except:
+            # Last resort fallback
+            return f"{self.config.proto}{self.config.fqdn}{path}"
+
     def check_authentication(self, appreq, path):
         """Checks authentication in appreq, redirecting back to path if oauth is done."""
+        logging.info(f"Checking authentication for path: {path}, auth type: {self.type}")
         logging.debug("Checking authentication, token auth...")
         if self.check_token_auth(appreq):
             return
         elif self.type == "oauth":
-            logging.debug("Checking authentication, oauth cookie...")
+            logging.info("Auth type is 'oauth', checking cookie authentication...")
             self.__check_cookie_auth(appreq=appreq, path=path)
             return
         elif self.type == "basic":
-            logging.debug("Checking authentication, basic auth...")
+            logging.info("Auth type is 'basic', checking basic authentication...")
             self.__check_basic_auth_creator(appreq=appreq)
             return
+        
+        # If all authentication methods fail, try Google OAuth2 redirect if configured
+        if self._should_redirect_to_google_oauth(appreq, path):
+            return
+            
         logging.debug("Authentication done, and failed")
         self.authn_done = True
         self.response["code"] = 403

@@ -380,13 +380,14 @@ class FastAPIIntegration:
 
         # Root factory route
         @self.fastapi_app.get("/")
+        async def app_root_get(request: Request) -> Response:
+            # GET requests don't require authentication - show email form
+            return await self._handle_factory_get_request(request)
+            
         @self.fastapi_app.post("/")
-        async def app_root(request: Request) -> Response:
-            # Check authentication and redirect to Google OAuth2 if needed
-            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
-            if auth_redirect:
-                return auth_redirect
-            return await self._handle_factory_request(request)
+        async def app_root_post(request: Request) -> Response:
+            # For POST requests, extract email and redirect to OAuth2 with email hint
+            return await self._handle_factory_post_with_oauth_redirect(request)
 
         # OAuth callback (legacy)
         @self.fastapi_app.get("/oauth")
@@ -885,6 +886,85 @@ class FastAPIIntegration:
             self.logger.error(f"Error in custom actor creation: {e}")
             webobj.response.set_status(500, "Internal server error")
 
+    async def _handle_factory_get_request(self, request: Request) -> Response:
+        """Handle GET requests to factory route - just show the email form."""
+        # Simply show the factory template without any authentication
+        if self.templates:
+            return self.templates.TemplateResponse("aw-root-factory.html", {"request": request})
+        else:
+            # Fallback for when templates are not available
+            return Response("""
+                <html>
+                <head><title>ActingWeb Demo</title></head>
+                <body>
+                    <h1>Welcome to ActingWeb Demo</h1>
+                    <form action="/" method="post">
+                        <label>Your Email: <input type="email" name="creator" required /></label>
+                        <input type="submit" value="Create Actor" />
+                    </form>
+                </body>
+                </html>
+            """, media_type="text/html")
+
+    async def _handle_factory_post_with_oauth_redirect(self, request: Request) -> Response:
+        """Handle POST to factory route with OAuth2 redirect including email hint."""
+        try:
+            # Parse the form data to extract email
+            req_data = await self._normalize_request(request)
+            email = None
+            
+            # Try to get email from JSON body first
+            if req_data["data"]:
+                try:
+                    data = json.loads(req_data["data"])
+                    email = data.get("creator") or data.get("email")
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            
+            # Fallback to form data
+            if not email:
+                email = req_data["values"].get("creator") or req_data["values"].get("email")
+            
+            if not email:
+                # No email provided - return error or redirect back to form
+                if self.templates:
+                    return self.templates.TemplateResponse(
+                        "aw-root-factory.html", 
+                        {"request": request, "error": "Email is required"}
+                    )
+                else:
+                    raise HTTPException(status_code=400, detail="Email is required")
+            
+            self.logger.info(f"Factory POST with email: {email}")
+            
+            # Create OAuth2 redirect with email hint
+            try:
+                from ...oauth2 import create_oauth2_authenticator
+                authenticator = create_oauth2_authenticator(self.aw_app.get_config())
+                if authenticator.is_enabled():
+                    # Create authorization URL with email hint
+                    redirect_after_auth = str(request.url)  # Redirect back to factory after auth
+                    auth_url = authenticator.create_authorization_url(
+                        redirect_after_auth=redirect_after_auth,
+                        email_hint=email
+                    )
+                    
+                    self.logger.info(f"Redirecting to OAuth2 with email hint: {email}")
+                    return RedirectResponse(url=auth_url, status_code=302)
+                else:
+                    self.logger.warning("OAuth2 not configured")
+                    raise HTTPException(status_code=500, detail="OAuth2 authentication not configured")
+                    
+            except Exception as e:
+                self.logger.error(f"Error creating OAuth2 redirect: {e}")
+                raise HTTPException(status_code=500, detail="Authentication system error")
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error in factory POST handler: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
     async def _handle_oauth_callback(self, request: Request) -> Response:
         """Handle OAuth callback."""
         req_data = await self._normalize_request(request)
@@ -931,6 +1011,14 @@ class FastAPIIntegration:
                 # Convert result to JSON response
                 webobj.response.body = json.dumps(result).encode('utf-8')
                 webobj.response.headers["Content-Type"] = "application/json"
+        
+        # Handle OAuth2 errors with template rendering for better UX
+        elif isinstance(result, dict) and result.get("error") and webobj.response.status_code >= 400:
+            if self.templates and webobj.response.template_values:
+                return self.templates.TemplateResponse("aw-root-failed.html", {
+                    "request": request, 
+                    **webobj.response.template_values
+                })
 
         return self._create_fastapi_response(webobj, request)
 

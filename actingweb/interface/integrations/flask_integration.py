@@ -49,13 +49,15 @@ class FlaskIntegration:
         """Setup all ActingWeb routes in Flask."""
 
         # Root factory route with OAuth2 authentication
-        @self.flask_app.route("/", methods=["GET", "POST"])
-        def app_root() -> Union[Response, WerkzeugResponse, str]:
-            # Check authentication and redirect to OAuth2 if needed
-            auth_redirect = self._check_authentication_and_redirect()
-            if auth_redirect:
-                return auth_redirect
-            return self._handle_factory_request()
+        @self.flask_app.route("/", methods=["GET"])
+        def app_root_get() -> Union[Response, WerkzeugResponse, str]:
+            # GET requests don't require authentication - show email form
+            return self._handle_factory_get_request()
+            
+        @self.flask_app.route("/", methods=["POST"])
+        def app_root_post() -> Union[Response, WerkzeugResponse, str]:
+            # For POST requests, extract email and redirect to OAuth2 with email hint
+            return self._handle_factory_post_with_oauth_redirect()
 
         # OAuth callback (legacy)
         @self.flask_app.route("/oauth", methods=["GET"])
@@ -394,6 +396,82 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
+    def _handle_factory_get_request(self) -> Union[Response, WerkzeugResponse, str]:
+        """Handle GET requests to factory route - just show the email form."""
+        # Simply show the factory template without any authentication
+        try:
+            return Response(render_template("aw-root-factory.html"))
+        except Exception:
+            # Fallback for when templates are not available
+            return Response("""
+                <html>
+                <head><title>ActingWeb Demo</title></head>
+                <body>
+                    <h1>Welcome to ActingWeb Demo</h1>
+                    <form action="/" method="post">
+                        <label>Your Email: <input type="email" name="creator" required /></label>
+                        <input type="submit" value="Create Actor" />
+                    </form>
+                </body>
+                </html>
+            """, mimetype="text/html")
+
+    def _handle_factory_post_with_oauth_redirect(self) -> Union[Response, WerkzeugResponse, str]:
+        """Handle POST to factory route with OAuth2 redirect including email hint."""
+        try:
+            import json
+            
+            # Parse the form data to extract email
+            req_data = self._normalize_request()
+            email = None
+            
+            # Try to get email from JSON body first
+            if req_data["data"]:
+                try:
+                    data = json.loads(req_data["data"])
+                    email = data.get("creator") or data.get("email")
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            
+            # Fallback to form data
+            if not email:
+                email = req_data["values"].get("creator") or req_data["values"].get("email")
+            
+            if not email:
+                # No email provided - return error or redirect back to form
+                try:
+                    return Response(render_template("aw-root-factory.html", error="Email is required"))
+                except Exception:
+                    return Response("Email is required", status=400)
+            
+            logging.info(f"Factory POST with email: {email}")
+            
+            # Create OAuth2 redirect with email hint
+            try:
+                from ...oauth2 import create_oauth2_authenticator
+                authenticator = create_oauth2_authenticator(self.aw_app.get_config())
+                if authenticator.is_enabled():
+                    # Create authorization URL with email hint
+                    redirect_after_auth = request.url  # Redirect back to factory after auth
+                    auth_url = authenticator.create_authorization_url(
+                        redirect_after_auth=redirect_after_auth,
+                        email_hint=email
+                    )
+                    
+                    logging.info(f"Redirecting to OAuth2 with email hint: {email}")
+                    return redirect(auth_url)
+                else:
+                    logging.warning("OAuth2 not configured")
+                    return Response("OAuth2 authentication not configured", status=500)
+                    
+            except Exception as e:
+                logging.error(f"Error creating OAuth2 redirect: {e}")
+                return Response("Authentication system error", status=500)
+                
+        except Exception as e:
+            logging.error(f"Error in factory POST handler: {e}")
+            return Response("Internal server error", status=500)
+
     def _handle_oauth_callback(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle OAuth callback."""
         req_data = self._normalize_request()
@@ -440,7 +518,15 @@ class FlaskIntegration:
         from ...handlers.oauth2_callback import OAuth2CallbackHandler
 
         handler = OAuth2CallbackHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-        handler.get()
+        result = handler.get()
+        
+        # Handle OAuth2 errors with template rendering for better UX
+        if isinstance(result, dict) and result.get("error") and webobj.response.status_code >= 400:
+            if webobj.response.template_values:
+                try:
+                    return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
+                except Exception:
+                    pass  # Fall back to default response
 
         return self._create_flask_response(webobj)
 

@@ -100,13 +100,14 @@ class OAuth2Authenticator:
         """Check if OAuth2 is properly configured."""
         return self.provider.is_enabled()
     
-    def create_authorization_url(self, state: str = "", redirect_after_auth: str = "") -> str:
+    def create_authorization_url(self, state: str = "", redirect_after_auth: str = "", email_hint: str = "") -> str:
         """
         Create OAuth2 authorization URL using oauthlib.
         
         Args:
             state: State parameter to prevent CSRF attacks
             redirect_after_auth: Where to redirect after successful auth
+            email_hint: Email to hint which account to use for authentication
             
         Returns:
             OAuth2 authorization URL
@@ -118,22 +119,33 @@ class OAuth2Authenticator:
         if not state:
             state = generate_token()
             
-        # Encode redirect URL in state if provided
-        if redirect_after_auth:
+        # Encode redirect URL and email hint in state if provided
+        if redirect_after_auth or email_hint:
             state_data = {
                 "csrf": state,
-                "redirect": redirect_after_auth
+                "redirect": redirect_after_auth,
+                "expected_email": email_hint  # Store original email for validation
             }
             state = json.dumps(state_data)
             
+        # Prepare additional parameters for provider-specific features
+        extra_params = {
+            "access_type": "offline",  # For Google to get refresh token
+            "prompt": "consent"  # Force consent to get refresh token
+        }
+        
+        # Add email hint for Google OAuth2
+        if email_hint and self.provider.name == "google":
+            extra_params["login_hint"] = email_hint
+            logger.info(f"Adding login_hint for Google OAuth2: {email_hint}")
+        
         # Use oauthlib to generate the authorization URL
         authorization_url = self.client.prepare_request_uri(
             self.provider.auth_uri,
             redirect_uri=self.provider.redirect_uri,
             scope=self.provider.scope.split(),
             state=state,
-            access_type="offline",  # For Google to get refresh token
-            prompt="consent"  # Force consent to get refresh token
+            **extra_params
         )
         
         logger.info(f"Created OAuth2 authorization URL with state: {state[:50]}...")
@@ -405,6 +417,48 @@ class OAuth2Authenticator:
             logger.error(f"Exception during actor lookup/creation for {email}: {e}")
             return None
     
+    def validate_email_from_state(self, state: str, authenticated_email: str) -> bool:
+        """
+        Validate that the authenticated email matches the expected email from OAuth2 state.
+        
+        Args:
+            state: OAuth2 state parameter containing expected email
+            authenticated_email: Email obtained from OAuth2 authentication
+            
+        Returns:
+            True if emails match or no expected email in state, False otherwise
+        """
+        if not state or not authenticated_email:
+            return False
+            
+        try:
+            # Try to parse state as JSON
+            state_data = json.loads(state)
+            expected_email = state_data.get("expected_email")
+            
+            if not expected_email:
+                # No expected email in state - allow (backward compatibility)
+                return True
+                
+            # Normalize both emails for comparison (lowercase, strip whitespace)
+            expected_email_normalized = expected_email.lower().strip()
+            authenticated_email_normalized = authenticated_email.lower().strip()
+            
+            if expected_email_normalized == authenticated_email_normalized:
+                logger.info(f"Email validation successful: {authenticated_email}")
+                return True
+            else:
+                logger.warning(f"Email mismatch: expected {expected_email_normalized}, got {authenticated_email_normalized}")
+                return False
+                
+        except (json.JSONDecodeError, TypeError):
+            # State is not JSON - treat as simple string (backward compatibility)
+            logger.debug("State is not JSON, skipping email validation")
+            return True
+        except Exception as e:
+            logger.error(f"Error validating email from state: {e}")
+            return False
+
     def authenticate_bearer_token(self, bearer_token: str) -> Tuple[Optional[actor_module.Actor], Optional[str]]:
         """
         Authenticate Bearer token and return associated actor.

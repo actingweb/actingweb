@@ -102,6 +102,11 @@ class OAuth2CallbackHandler(BaseHandler):
             logger.error("Failed to extract email from user info")
             return self.error_response(502, "Email extraction failed")
         
+        # Validate that the authenticated email matches the expected email from the form
+        if not self.authenticator.validate_email_from_state(state, email):
+            logger.error(f"Email validation failed - authenticated as {email} but expected different email from form")
+            return self.error_response(403, "Authentication email does not match the email provided in the form")
+        
         # Use existing actor from state if provided, otherwise lookup/create by email
         actor_instance = None
         if actor_id:
@@ -249,8 +254,16 @@ class OAuth2CallbackHandler(BaseHandler):
             return False
     
     def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
-        """Create error response."""
+        """Create error response with template rendering for user-friendly errors."""
         self.response.set_status(status_code)
+        
+        # For user-facing errors, try to render template
+        if status_code in [403, 400] and hasattr(self.response, 'template_values'):
+            self.response.template_values = {
+                "error": message,
+                "status_code": status_code
+            }
+        
         return {
             "error": True,
             "status_code": status_code,

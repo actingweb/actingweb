@@ -292,7 +292,8 @@ class OAuth:
             if self.config is not None:
                 authenticator = create_oauth2_authenticator(self.config)
                 if authenticator.is_enabled():
-                    return authenticator.create_authorization_url(state=state)
+                    # Use creator as email hint for OAuth2 authentication
+                    return authenticator.create_authorization_url(state=state, email_hint=creator or "")
         except Exception as e:
             logging.error(f"Error creating OAuth2 redirect URI: {e}")
         
@@ -306,6 +307,11 @@ class OAuth:
             "scope": self.config.oauth["scope"],
             "state": state,
         }
+        
+        # Add login_hint for Google OAuth2 if creator (email) is provided
+        if creator and "google" in self.config.oauth.get("auth_uri", ""):
+            params["login_hint"] = creator
+            
         if "oauth_extras" in self.config.oauth:
             oauth_extras = self.config.oauth["oauth_extras"]
             if isinstance(oauth_extras, dict):

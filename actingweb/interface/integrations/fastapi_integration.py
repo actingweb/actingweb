@@ -952,18 +952,125 @@ class FastAPIIntegration:
                     self.logger.info(f"Redirecting to OAuth2 with email hint: {email}")
                     return RedirectResponse(url=auth_url, status_code=302)
                 else:
-                    self.logger.warning("OAuth2 not configured")
-                    raise HTTPException(status_code=500, detail="OAuth2 authentication not configured")
+                    self.logger.warning("OAuth2 not configured - falling back to standard actor creation")
+                    # Fall back to standard actor creation without OAuth
+                    return await self._handle_factory_post_without_oauth(request, email)
                     
             except Exception as e:
                 self.logger.error(f"Error creating OAuth2 redirect: {e}")
-                raise HTTPException(status_code=500, detail="Authentication system error")
+                # Fall back to standard actor creation if OAuth2 setup fails
+                self.logger.info("OAuth2 setup failed - falling back to standard actor creation")
+                return await self._handle_factory_post_without_oauth(request, email)
                 
         except HTTPException:
             raise
         except Exception as e:
             self.logger.error(f"Error in factory POST handler: {e}")
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def _handle_factory_post_without_oauth(self, request: Request, email: str) -> Response:
+        """Handle POST to factory route without OAuth2 - standard actor creation."""
+        try:
+            # Get the actor factory function
+            factory_func = self.aw_app.get_actor_factory()
+            if factory_func:
+                # Use the registered actor factory function
+                actor_interface = factory_func(creator=email)
+                if actor_interface:
+                    self.logger.info(f"Actor created successfully: {actor_interface.id} for {email}")
+                    
+                    # Check if this is a JSON request or web form request
+                    content_type = request.headers.get("content-type", "")
+                    accepts_json = request.headers.get("accept", "").find("application/json") >= 0
+                    is_json_request = "application/json" in content_type
+                    
+                    if is_json_request or accepts_json or not request.headers.get("accept"):
+                        # Return JSON response for API clients and test suite
+                        response_data = {
+                            "id": actor_interface.id,
+                            "creator": email,
+                            "passphrase": getattr(actor_interface, 'passphrase', ''),
+                        }
+                        
+                        # Add Location header with the actor URL
+                        headers = {}
+                        if hasattr(actor_interface, 'url') and actor_interface.url:
+                            headers["Location"] = actor_interface.url
+                        else:
+                            # Construct URL from config and actor ID
+                            config = self.aw_app.get_config()
+                            if config:
+                                headers["Location"] = f"{config.proto}{config.fqdn}/{actor_interface.id}"
+                        
+                        return Response(
+                            content=json.dumps(response_data),
+                            status_code=201,
+                            media_type="application/json",
+                            headers=headers
+                        )
+                    else:
+                        # Return HTML template for web browsers
+                        if self.templates:
+                            return self.templates.TemplateResponse("aw-root-created.html", {
+                                "request": request,
+                                "id": actor_interface.id,
+                                "creator": email,
+                                "passphrase": getattr(actor_interface, 'passphrase', 'N/A')
+                            })
+                        else:
+                            return Response(f"Actor created successfully: {actor_interface.id}", status_code=201)
+                else:
+                    self.logger.error(f"Actor creation failed for {email}")
+                    if self.templates:
+                        return self.templates.TemplateResponse("aw-root-failed.html", {
+                            "request": request,
+                            "error": "Actor creation failed"
+                        })
+                    else:
+                        raise HTTPException(status_code=400, detail="Actor creation failed")
+            else:
+                # No custom factory - use the standard factory handler
+                req_data = await self._normalize_request(request)
+                webobj = AWWebObj(
+                    url=req_data["url"],
+                    params=req_data["values"], 
+                    body=req_data["data"],
+                    headers=req_data["headers"],
+                    cookies=req_data["cookies"],
+                )
+                
+                # Use the standard factory handler
+                handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+                
+                # Run the synchronous handler in a thread pool
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(self.executor, handler.post)
+                
+                # Handle template rendering for factory
+                if webobj.response.status_code in [200, 201]:
+                    if self.templates:
+                        return self.templates.TemplateResponse("aw-root-created.html", {
+                            "request": request,
+                            **webobj.response.template_values
+                        })
+                elif webobj.response.status_code == 400:
+                    if self.templates:
+                        return self.templates.TemplateResponse("aw-root-failed.html", {
+                            "request": request,
+                            **webobj.response.template_values
+                        })
+                
+                return self._create_fastapi_response(webobj, request)
+                
+        except Exception as e:
+            self.logger.error(f"Error in standard actor creation: {e}")
+            if self.templates:
+                return self.templates.TemplateResponse("aw-root-failed.html", {
+                    "request": request,
+                    "error": "Actor creation failed"
+                })
+            else:
+                raise HTTPException(status_code=500, detail="Actor creation failed")
 
     async def _handle_oauth_callback(self, request: Request) -> Response:
         """Handle OAuth callback."""

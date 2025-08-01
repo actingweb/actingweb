@@ -26,14 +26,31 @@ The library follows a micro-services model where each user gets their own "actor
 - **Factory Handler** (`actingweb/handlers/factory.py`): Creates new actor instances
 - **DevTest Handler** (`actingweb/handlers/devtest.py`): Development/testing endpoints (disable in production)
 - **OAuth Handler** (`actingweb/handlers/oauth.py`): OAuth flow management
+- **OAuth2 Callback Handler** (`actingweb/handlers/oauth2_callback.py`): OAuth2 callback processing with email validation
 - **Properties/Trust/Subscription Handlers**: REST endpoints for core ActingWeb protocol
+
+### Authentication System
+- **Legacy OAuth** (`actingweb/oauth.py`): Original OAuth implementation
+- **OAuth2 System** (`actingweb/oauth2.py`): Modern OAuth2 with Google/GitHub support
+  - Email hint parameter support for improved UX
+  - State parameter encryption with CSRF protection
+  - Email validation to prevent identity confusion attacks
+  - Provider auto-detection (Google/GitHub)
+
+### Modern Interface
+- **ActingWebApp** (`actingweb/interface/app.py`): Fluent API for application configuration
+- **Flask Integration** (`actingweb/interface/integrations/flask_integration.py`): Auto Flask route generation
+- **FastAPI Integration** (`actingweb/interface/integrations/fastapi_integration.py`): Async FastAPI support with OpenAPI docs
+- **Actor Interface** (`actingweb/interface/actor_interface.py`): Modern actor management wrapper
+- **Hook Registry** (`actingweb/interface/hook_registry.py`): Decorator-based event handling
 
 ### Key Design Patterns
 - Each actor has a unique root URL: `https://domain.com/{actor_id}`
 - REST endpoints follow ActingWeb specification: `/properties`, `/trust`, `/subscriptions`, `/meta`
 - Database operations are abstracted through `db_*` modules
-- Authentication supports both basic auth and OAuth
-- Configuration-driven feature enabling (UI, devtest, OAuth, etc.)
+- Authentication supports basic auth, legacy OAuth, and modern OAuth2
+- Configuration-driven feature enabling (UI, devtest, OAuth, MCP, etc.)
+- Content negotiation: JSON for APIs, HTML templates for web browsers
 
 ## Development Commands
 
@@ -195,12 +212,80 @@ make help
 
 ## Configuration
 
-Key configuration options in `actingweb/config.py`:
+### Modern Interface Configuration
+
+The modern `ActingWebApp` interface uses fluent API for configuration:
+
+```python
+from actingweb.interface import ActingWebApp
+
+app = (
+    ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com",
+        proto="https://"
+    )
+    .with_oauth(
+        client_id="your-oauth-client-id",
+        client_secret="your-oauth-client-secret",
+        scope="openid email profile",
+        auth_uri="https://accounts.google.com/o/oauth2/v2/auth",
+        token_uri="https://oauth2.googleapis.com/token",
+        redirect_uri="https://myapp.example.com/oauth/callback"
+    )
+    .with_web_ui(enable=True)
+    .with_devtest(enable=False)  # MUST be False in production
+    .with_mcp(enable=True)  # Enable/disable MCP functionality
+    .with_unique_creator(enable=True)
+    .with_email_as_creator(enable=True)
+    .with_bot(
+        token="bot-token",
+        email="bot@example.com",
+        secret="bot-secret"
+    )
+    .add_actor_type(
+        name="myself",
+        factory="https://myapp.example.com/",
+        relationship="friend"
+    )
+)
+```
+
+### Configuration Options
+
+**Core Settings:**
+- `aw_type`: Unique identifier for your ActingWeb application type
+- `database`: Backend database type ('dynamodb' recommended)
+- `fqdn`: Fully qualified domain name where app is hosted
+- `proto`: Protocol ('https://' for production, 'http://' for local dev)
+
+**Feature Toggles:**
+- `.with_web_ui(enable=bool)`: Enable/disable web UI at `/{actor_id}/www`
+- `.with_devtest(enable=bool)`: Enable development/testing endpoints (MUST be False in production)
+- `.with_mcp(enable=bool)`: Enable/disable MCP (Model Context Protocol) functionality
+- `.with_unique_creator(enable=bool)`: Enforce unique creator field across actors
+- `.with_email_as_creator(enable=bool)`: Force email property as creator
+
+**Authentication Configuration:**
+- `.with_oauth()`: Configure OAuth2 authentication with Google/GitHub/custom providers
+- OAuth2 includes email validation, state encryption, and CSRF protection
+- Legacy OAuth still supported for backward compatibility
+
+**Bot Integration:**
+- `.with_bot()`: Configure bot functionality for automated interactions
+- Supports token-based authentication and admin room configuration
+
+### Legacy Configuration
+
+Key configuration options in `actingweb/config.py` (for legacy applications):
 - `database`: Backend database type ('dynamodb' or 'gae')
 - `ui`: Enable/disable web UI at `/www`
 - `devtest`: Enable development/testing endpoints (MUST be False in production)
 - `www_auth`: Authentication method ('basic' or 'oauth')
 - `unique_creator`: Enforce unique creator field across actors
+- `oauth2_provider`: OAuth2 provider name ('google' or 'github')
+- `mcp`: Enable/disable MCP functionality
 - `migrate_*`: Version migration flags
 
 ## Dependencies
@@ -210,13 +295,52 @@ Core dependencies (from setup.py):
 - `boto3`: AWS SDK
 - `urlfetch`: HTTP client library
 
+## API Endpoints and Behavior
+
+### Factory Endpoint (Actor Creation)
+
+The factory endpoint (`POST /`) supports content negotiation:
+
+**For API clients and test suites:**
+- **Request**: `POST /` with `Content-Type: application/json` or `Accept: application/json`
+- **Response**: `201 Created` with JSON body and proper headers:
+  ```json
+  {
+    "id": "actor-id",
+    "creator": "user@example.com", 
+    "passphrase": "generated-passphrase"
+  }
+  ```
+- **Headers**: `Content-Type: application/json`, `Location: https://domain.com/actor-id`
+
+**For web browsers:**
+- **GET** `/`: Shows HTML form for email input
+- **POST** `/` from form: Returns HTML success/error page or redirects to OAuth2
+
+### Testing Configuration
+
+For running the standard ActingWeb test suite, use these settings:
+
+```python
+app = (
+    ActingWebApp(...)
+    .with_devtest(enable=True)  # Enable test endpoints
+    .with_unique_creator(enable=False)  # Allow duplicate emails
+    .with_mcp(enable=False)  # Disable MCP for cleaner testing
+    # Comment out .with_oauth() to disable OAuth2
+)
+```
+
 ## Security Notes
 
 - Always set `devtest = False` in production
 - Use HTTPS in production (`proto = "https://"`)
+- OAuth2 includes email validation to prevent identity confusion attacks
+- State parameter encryption provides CSRF protection
 - OAuth tokens and credentials are stored securely in actor properties
 - Trust relationships must be established before data sharing
 - Each actor maintains its own security boundary
+- Property storage automatically converts non-string values to JSON
 
 ## Code Quality Guidelines
 

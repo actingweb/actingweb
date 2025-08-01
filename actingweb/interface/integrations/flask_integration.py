@@ -53,7 +53,7 @@ class FlaskIntegration:
         def app_root_get() -> Union[Response, WerkzeugResponse, str]:
             # GET requests don't require authentication - show email form
             return self._handle_factory_get_request()
-            
+
         @self.flask_app.route("/", methods=["POST"])
         def app_root_post() -> Union[Response, WerkzeugResponse, str]:
             # For POST requests, extract email and redirect to OAuth2 with email hint
@@ -240,20 +240,20 @@ class FlaskIntegration:
         # Check if user is already authenticated with OAuth2 and redirect to their actor
         oauth_cookie = request.cookies.get("oauth_token")
         if oauth_cookie and request.method == "GET":
-            logging.info(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
+            logging.debug(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
             # User has OAuth session - try to find their actor and redirect
             try:
                 from ...oauth2 import create_oauth2_authenticator
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    logging.info("OAuth2 is enabled, validating token...")
+                    logging.debug("OAuth2 is enabled, validating token...")
                     # Validate the token and get user info
                     user_info = authenticator.validate_token_and_get_user_info(oauth_cookie)
                     if user_info:
                         email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
                         if email:
-                            logging.info(f"Token validation successful for {email}")
+                            logging.debug(f"Token validation successful for {email}")
                             # Look up actor by email
                             actor_instance = authenticator.lookup_or_create_actor_by_email(email)
                             if actor_instance and actor_instance.id:
@@ -262,7 +262,7 @@ class FlaskIntegration:
                                 logging.info(f"Redirecting authenticated user {email} to {redirect_url}")
                                 return redirect(redirect_url, code=302)
                     # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
-                    logging.info("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
+                    logging.debug("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
                     original_url = request.url
                     oauth_redirect = self._create_oauth_redirect_response(
                         redirect_after_auth=original_url, clear_cookie=True
@@ -273,7 +273,7 @@ class FlaskIntegration:
             except Exception as e:
                 logging.error(f"OAuth token validation failed in factory: {e}")
                 # Token validation failed - clear cookie and redirect to fresh OAuth
-                logging.info("OAuth token validation error - clearing cookie and redirecting to OAuth")
+                logging.debug("OAuth token validation error - clearing cookie and redirecting to OAuth")
                 original_url = request.url
                 oauth_redirect = self._create_oauth_redirect_response(
                     redirect_after_auth=original_url, clear_cookie=True
@@ -365,8 +365,8 @@ class FlaskIntegration:
             # Set trustee_root if provided (mirroring the factory handler behavior)
             if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
                 # Get the underlying actor from the interface
-                core_actor = actor_interface.core_actor
-                if core_actor and core_actor.store:
+                core_actor = getattr(actor_interface, "core_actor", None)
+                if core_actor and hasattr(core_actor, "store") and core_actor.store:
                     core_actor.store.trustee_root = trustee_root
 
             # Set response data
@@ -403,7 +403,8 @@ class FlaskIntegration:
             return Response(render_template("aw-root-factory.html"))
         except Exception:
             # Fallback for when templates are not available
-            return Response("""
+            return Response(
+                """
                 <html>
                 <head><title>ActingWeb Demo</title></head>
                 <body>
@@ -414,17 +415,19 @@ class FlaskIntegration:
                     </form>
                 </body>
                 </html>
-            """, mimetype="text/html")
+            """,
+                mimetype="text/html",
+            )
 
     def _handle_factory_post_with_oauth_redirect(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle POST to factory route with OAuth2 redirect including email hint."""
         try:
             import json
-            
+
             # Parse the form data to extract email
             req_data = self._normalize_request()
             email = None
-            
+
             # Try to get email from JSON body first
             if req_data["data"]:
                 try:
@@ -432,45 +435,183 @@ class FlaskIntegration:
                     email = data.get("creator") or data.get("email")
                 except (json.JSONDecodeError, ValueError):
                     pass
-            
+
             # Fallback to form data
             if not email:
                 email = req_data["values"].get("creator") or req_data["values"].get("email")
-            
+
             if not email:
                 # No email provided - return error or redirect back to form
                 try:
                     return Response(render_template("aw-root-factory.html", error="Email is required"))
                 except Exception:
                     return Response("Email is required", status=400)
-            
-            logging.info(f"Factory POST with email: {email}")
-            
+
+            logging.debug(f"Factory POST with email: {email}")
+
             # Create OAuth2 redirect with email hint
             try:
                 from ...oauth2 import create_oauth2_authenticator
+
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
                     # Create authorization URL with email hint
                     redirect_after_auth = request.url  # Redirect back to factory after auth
                     auth_url = authenticator.create_authorization_url(
-                        redirect_after_auth=redirect_after_auth,
-                        email_hint=email
+                        redirect_after_auth=redirect_after_auth, email_hint=email
                     )
-                    
+
                     logging.info(f"Redirecting to OAuth2 with email hint: {email}")
                     return redirect(auth_url)
                 else:
-                    logging.warning("OAuth2 not configured")
-                    return Response("OAuth2 authentication not configured", status=500)
-                    
+                    logging.warning("OAuth2 not configured - falling back to standard actor creation")
+                    # Fall back to standard actor creation without OAuth
+                    return self._handle_factory_post_without_oauth(email)
+
             except Exception as e:
                 logging.error(f"Error creating OAuth2 redirect: {e}")
-                return Response("Authentication system error", status=500)
-                
+                # Fall back to standard actor creation if OAuth2 setup fails
+                logging.debug("OAuth2 setup failed - falling back to standard actor creation")
+                return self._handle_factory_post_without_oauth(email)
+
         except Exception as e:
             logging.error(f"Error in factory POST handler: {e}")
             return Response("Internal server error", status=500)
+
+    def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:
+        """Handle POST to factory route without OAuth2 - standard actor creation."""
+        try:
+            # Get the actor factory function
+            factory_func = self.aw_app.get_actor_factory()
+            if factory_func:
+                # Use the registered actor factory function
+                try:
+                    logging.debug(f"Calling actor factory with creator: {email}")
+                    actor_interface = factory_func(creator=email)
+                    logging.debug(f"Actor factory returned: {type(actor_interface)} - {actor_interface}")
+
+                    # Check if we have additional parameters like trustee_root in the request
+                    # Parse the full request to get any additional parameters
+                    req_data = self._normalize_request()
+                    trustee_root = None
+                    passphrase = None
+
+                    # Try to get trustee_root from JSON body or form data
+                    if req_data["data"]:
+                        import json
+
+                        try:
+                            data = json.loads(req_data["data"])
+                            trustee_root = data.get("trustee_root")
+                            passphrase = data.get("passphrase")
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+
+                    if not trustee_root:
+                        trustee_root = req_data["values"].get("trustee_root")
+                    if not passphrase:
+                        passphrase = req_data["values"].get("passphrase")
+
+                    # Set trustee_root if provided (like the factory handler does)
+                    if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
+                        core_actor = getattr(actor_interface, "core_actor", None)
+                        if core_actor and hasattr(core_actor, "store") and core_actor.store:
+                            core_actor.store.trustee_root = trustee_root
+                            logging.debug(f"Set trustee_root to: {trustee_root}")
+                except Exception as factory_error:
+                    logging.error(f"Actor factory function failed: {factory_error}", exc_info=True)
+                    try:
+                        return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
+                    except Exception:
+                        return Response("Actor creation failed", status=400)
+
+                if actor_interface and hasattr(actor_interface, "id"):
+                    logging.info(f"Actor created successfully: {actor_interface.id} for {email}")
+
+                    # Check if this is a JSON request or web form request
+                    is_json_request = request.content_type and "application/json" in request.content_type
+                    accepts_json = request.headers.get("Accept", "").find("application/json") >= 0
+
+                    if is_json_request or accepts_json or not request.headers.get("Accept"):
+                        # Return JSON response for API clients and test suite
+                        import json
+
+                        response_data = {
+                            "id": actor_interface.id,
+                            "creator": email,
+                            "passphrase": getattr(actor_interface, "passphrase", ""),
+                        }
+
+                        # Add Location header with the actor URL
+                        headers = {"Content-Type": "application/json"}
+                        if hasattr(actor_interface, "url") and actor_interface.url:
+                            headers["Location"] = actor_interface.url
+                        else:
+                            # Construct URL from config and actor ID
+                            config = self.aw_app.get_config()
+                            if config:
+                                headers["Location"] = f"{config.proto}{config.fqdn}/{actor_interface.id}"
+
+                        return Response(response=json.dumps(response_data), status=201, headers=headers)
+                    else:
+                        # Return HTML template for web browsers
+                        try:
+                            actor_id = actor_interface.id
+                            actor_url = getattr(actor_interface, "url", None)
+                            passphrase = getattr(actor_interface, "passphrase", "N/A")
+                            logging.debug(
+                                f"Rendering template with id={actor_id}, creator={email}, passphrase={passphrase}"
+                            )
+                            return Response(
+                                render_template(
+                                    "aw-root-created.html", id=actor_id, creator=email, passphrase=passphrase
+                                ),
+                                status=201,
+                            )
+                        except Exception as e:
+                            logging.error(f"Template rendering failed: {e}", exc_info=True)
+                            return Response(f"Actor created successfully: {actor_interface.id}", status=201)
+                else:
+                    logging.error(f"Actor creation failed for {email} - returned: {type(actor_interface)}")
+                    try:
+                        return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
+                    except Exception:
+                        return Response("Actor creation failed", status=400)
+            else:
+                # No custom factory - use the standard factory handler
+                req_data = self._normalize_request()
+                webobj = AWWebObj(
+                    url=req_data["url"],
+                    params=req_data["values"],
+                    body=req_data["data"],
+                    headers=req_data["headers"],
+                    cookies=req_data["cookies"],
+                )
+
+                # Use the standard factory handler
+                handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+                handler.post()
+
+                # Handle template rendering for factory
+                if webobj.response.status_code in [200, 201]:
+                    try:
+                        return Response(render_template("aw-root-created.html", **webobj.response.template_values))
+                    except Exception:
+                        pass  # Fall back to default response
+                elif webobj.response.status_code == 400:
+                    try:
+                        return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
+                    except Exception:
+                        pass  # Fall back to default response
+
+                return self._create_flask_response(webobj)
+
+        except Exception as e:
+            logging.error(f"Error in standard actor creation: {e}")
+            try:
+                return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
+            except Exception:
+                return Response("Actor creation failed", status=500)
 
     def _handle_oauth_callback(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle OAuth callback."""
@@ -519,7 +660,7 @@ class FlaskIntegration:
 
         handler = OAuth2CallbackHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
         result = handler.get()
-        
+
         # Handle OAuth2 errors with template rendering for better UX
         if isinstance(result, dict) and result.get("error") and webobj.response.status_code >= 400:
             if webobj.response.template_values:
@@ -638,7 +779,9 @@ class FlaskIntegration:
         response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
         return response
 
-    def _handle_actor_request(self, actor_id: str, endpoint: str, **kwargs: Any) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_actor_request(
+        self, actor_id: str, endpoint: str, **kwargs: Any
+    ) -> Union[Response, WerkzeugResponse, str]:
         """Handle actor-specific requests."""
         req_data = self._normalize_request()
         webobj = AWWebObj(

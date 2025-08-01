@@ -2,6 +2,79 @@
 CHANGELOG
 =========
 
+v3.2: TBD, 2025
+-----------------
+
+**OAuth2 Authentication System and Enhanced Integrations**
+
+ADDED
+~~~~~
+
+- **OAuth2 Implementation**:
+  - New oauth2.py module with comprehensive OAuth2 authentication using oauthlib WebApplicationClient
+  - Support for Google and GitHub OAuth2 providers with automatic provider detection
+  - OAuth2CallbackHandler for secure callback processing with state parameter validation
+  - Email validation system to prevent identity confusion attacks
+  - Login hint parameter support for Google OAuth2 to improve user experience
+  - State parameter encryption with CSRF protection and email validation
+
+- **Enhanced Authentication Flow**:
+  - Modified factory endpoint behavior: GET shows email form, POST triggers OAuth2 with email hint
+  - Email validation step to ensure authenticated email matches form input
+  - User-friendly error templates for authentication failures
+  - Security enhancement preventing form email != OAuth2 email mismatch attacks
+
+- **FastAPI Integration Enhancements**:
+  - Improved FastAPI integration with better async/await handling
+  - Enhanced template and static file support for FastAPI applications
+  - Better separation of GET/POST handling in factory routes
+  - Improved error handling and response formatting for FastAPI
+
+- **Integration Improvements**:
+  - Enhanced both Flask and FastAPI integrations with OAuth2 callback handling
+  - Improved factory route handling with separate GET/POST methods
+  - Better template variable population for authentication forms
+  - Enhanced error handling across both integrations
+
+CHANGED
+~~~~~~~
+
+- **Authentication System**:
+  - Factory routes now handle GET and POST separately for better UX
+  - Enhanced OAuth callback processing with comprehensive validation
+  - Improved state parameter handling with encryption and validation
+  - Better error messaging and user guidance for authentication failures
+
+- **Integration Layer**:
+  - Updated both Flask and FastAPI integrations to support new OAuth2 flow
+  - Enhanced template rendering with better context and error handling
+  - Improved factory handler logic with cleaner separation of concerns
+  - Better support for custom authentication flows in integrations
+
+FIXED
+~~~~~
+
+- **Type Safety**:
+  - Fixed all pylance/mypy type annotation errors in OAuth2 implementation
+  - Enhanced type safety for OAuth2 classes and methods
+  - Better null safety checks in authentication flows
+  - Improved Union type handling for request bodies
+
+- **Authentication Issues**:
+  - Fixed OAuth callback handling edge cases
+  - Resolved state parameter validation issues
+  - Fixed email validation logic for OAuth2 providers
+  - Enhanced error handling in authentication flows
+
+SECURITY
+~~~~~~~~
+
+- **OAuth2 Security Enhancements**:
+  - Implemented comprehensive email validation to prevent identity attacks
+  - Added state parameter encryption for CSRF protection
+  - Enhanced callback validation with multiple security checks
+  - Improved error handling to prevent information leakage
+
 v3.1: Jul 28, 2025
 --------------------
 

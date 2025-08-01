@@ -54,6 +54,55 @@ It has implemented a simple sign-up page as a front-end to a REST-based factory 
 new actor with a guid to identify the actor. The guid is then embedded in the actor's root URL, e.g.
 ``https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54``.
 
+**Modern Interface (v3.2+)**
+
+The library now provides a modern fluent API interface that simplifies application development:
+
+::
+
+    from actingweb.interface import ActingWebApp, ActorInterface
+
+    # Modern fluent configuration API
+    app = (
+        ActingWebApp(
+            aw_type="urn:actingweb:example.com:myapp",
+            database="dynamodb",
+            fqdn="myapp.example.com"
+        )
+        .with_oauth(
+            client_id="your-oauth-client-id",
+            client_secret="your-oauth-client-secret"
+        )
+        .with_web_ui(enable=True)
+        .with_mcp(enable=True)  # Enable Model Context Protocol
+    )
+
+    # Decorator-based hooks instead of classes
+    @app.actor_factory
+    def create_actor(creator: str, **kwargs) -> ActorInterface:
+        actor = ActorInterface.create(creator=creator, config=app.get_config())
+        actor.properties.email = creator
+        return actor
+
+    @app.property_hook("email")
+    def handle_email_property(actor, operation, value, path):
+        if operation == "get":
+            return None  # Hide email from external access
+        return value
+
+    # Automatic Flask/FastAPI integration
+    from flask import Flask
+    flask_app = Flask(__name__)
+    app.integrate_flask(flask_app)  # Auto-generates all routes
+
+**Key Modern Features:**
+- **OAuth2 Authentication**: Modern OAuth2 with Google/GitHub support, email validation, and CSRF protection
+- **Flask/FastAPI Integration**: Automatic route generation with async support for FastAPI
+- **MCP Support**: Model Context Protocol integration for AI language model interactions
+- **Content Negotiation**: Automatic JSON/HTML responses based on client preferences
+- **Type Safety**: Comprehensive type hints and mypy support
+- **90% Less Boilerplate**: Fluent API eliminates repetitive configuration code
+
 If you try to create an actor, you will get to a simple web front-end where you can set the actor's data
 (properties) and delete the actor. You can later access the actor (both /www and REST) by using the Creator
 you set as username and the passphrase you get when creating the actor and log in.
@@ -68,7 +117,7 @@ functionality can be accessed through the actor's root URL (e.g.
 - ``/subscriptions``: once a trust relationship is set up, this path allows access to establishing, retrieving, and managing subscriptions that are based on paths and identified with target, sub-target, and resource, e.g. ``/resources/folders/12345``
 - ``/callbacks``: used for verification when establishing trust/subscriptions, to receive callbacks on subscriptions, as well as a programming hook to process webhooks from 3rd party services
 - ``/resources``: a skeleton to simplify exposure of any type of resource (where /properties is not suited)
-- ``/oauth``: used to initiate a www-based oauth flow to tie the actor to a specific OAuth user and service. Available if OAuth is turned on and a 3rd party OAuth service has been configured in config.py. /www will also be redirected to /oauth (*OAuth is not enabled in the online actingwebdemo mini-application*)
+- ``/oauth``: used to initiate a www-based oauth flow to tie the actor to a specific OAuth user and service. Available if OAuth is turned on and a 3rd party OAuth service has been configured. The modern interface supports both legacy OAuth and OAuth2 with enhanced security features including email validation and CSRF protection
 
 **Sidenote**: The **actingweb  library** also implements a simple mechanism for protecting the /www path with oauth
 (not in the specification). On successful OAuth authorisation, it will set a browser cookie to the oauth
@@ -130,9 +179,17 @@ sharing), but could be a location sharing actor establishing a trust relationshi
 allow emergency services to always be able to look you up.
 
 There are currently two ways of establishing trust between actors: either through an explicit OAuth flow where an
-actor is tied to somebody's account somewhere else (like Google, Box.com, etc) or through a flow where one actor
+actor is tied to somebody's account somewhere else (like Google, GitHub, Box.com, etc) or through a flow where one actor
 requests a trust relationship with another, which then needs to be approved either interactively by a user or
 programatically through the REST interface.
+
+**Enhanced OAuth2 Security (v3.2+):**
+The modern interface includes an enhanced OAuth2 system with additional security measures:
+
+- **Email Validation**: Prevents identity confusion attacks by validating that the OAuth2 email matches the form input
+- **State Parameter Encryption**: CSRF protection through encrypted state parameters
+- **Login Hint Support**: Improved user experience by pre-selecting the correct account during OAuth2 flow
+- **Provider Auto-detection**: Supports Google and GitHub with automatic configuration
 
 See `http://actingweb.org/ <http://actingweb.org/>`_ for more information.
 

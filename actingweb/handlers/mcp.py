@@ -507,11 +507,11 @@ class MCPHandler(BaseHandler):
         bearer_token = auth_header[7:]  # Remove "Bearer " prefix
         
         try:
-            from ..google_oauth import GoogleOAuthAuthenticator
-            authenticator = GoogleOAuthAuthenticator(self.config)
+            from ..oauth2 import create_oauth2_authenticator
+            authenticator = create_oauth2_authenticator(self.config)
             
             if not authenticator.is_enabled():
-                logger.warning("Google OAuth2 not configured")
+                logger.warning("OAuth2 not configured")
                 return None
             
             # Authenticate token and get actor
@@ -530,8 +530,9 @@ class MCPHandler(BaseHandler):
 
     def get_auth_header(self) -> Optional[str]:
         """Get Authorization header from request."""
-        if hasattr(self, 'webobj') and self.webobj and hasattr(self.webobj, 'headers'):
-            return self.webobj.headers.get("Authorization") or self.webobj.headers.get("authorization")
+        if hasattr(self, 'request') and self.request and hasattr(self.request, 'headers') and self.request.headers:
+            auth_header = self.request.headers.get("Authorization") or self.request.headers.get("authorization")
+            return str(auth_header) if auth_header is not None else None
         return None
 
     def initiate_oauth2_redirect(self) -> Dict[str, Any]:
@@ -587,15 +588,15 @@ class MCPHandler(BaseHandler):
         if status_code == 401:
             # Add WWW-Authenticate header for OAuth2
             try:
-                from ..google_oauth import GoogleOAuthAuthenticator
-                authenticator = GoogleOAuthAuthenticator(self.config)
+                from ..oauth2 import create_oauth2_authenticator
+                authenticator = create_oauth2_authenticator(self.config)
                 if authenticator.is_enabled():
                     www_auth = authenticator.create_www_authenticate_header()
-                    if hasattr(self, 'webobj') and self.webobj:
-                        self.webobj.response.headers["WWW-Authenticate"] = www_auth
+                    if hasattr(self, 'response') and self.response:
+                        self.response.headers["WWW-Authenticate"] = www_auth
             except Exception as e:
                 logger.error(f"Error adding WWW-Authenticate header: {e}")
-                if hasattr(self, 'webobj') and self.webobj:
-                    self.webobj.response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
+                if hasattr(self, 'response') and self.response:
+                    self.response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
         
         return {"error": True, "status_code": status_code, "message": message}

@@ -8,6 +8,8 @@ import base64
 import json
 import logging
 import urlfetch
+from typing import Optional, Dict, Any
+from . import config as config_class
 
 # This function code is from latest urlfetch. For some reason the
 # Appengine version of urlfetch does not include links()
@@ -38,7 +40,7 @@ def pagination_links(self):
 
 class OAuth:
 
-    def __init__(self, token=None, config=None):
+    def __init__(self, token: Optional[str] = None, config: Optional[config_class.Config] = None):
         self.config = config
         self.token = token
         self.first = None
@@ -283,7 +285,18 @@ class OAuth:
             return {}
         return ret
 
-    def oauth_redirect_uri(self, state="", creator=None):
+    def oauth_redirect_uri(self, state: str = "", creator: Optional[str] = None) -> str:
+        # Use the new OAuth2 module for redirect URI generation
+        try:
+            from .oauth2 import create_oauth2_authenticator
+            if self.config is not None:
+                authenticator = create_oauth2_authenticator(self.config)
+                if authenticator.is_enabled():
+                    return authenticator.create_authorization_url(state=state)
+        except Exception as e:
+            logging.error(f"Error creating OAuth2 redirect URI: {e}")
+        
+        # Fallback to legacy implementation
         if not self.config or not self.config.oauth:
             return ""
         params = {
@@ -294,16 +307,32 @@ class OAuth:
             "state": state,
         }
         if "oauth_extras" in self.config.oauth:
-            for k, v in self.config.oauth["oauth_extras"].items():
-                if isinstance(v, str) and "dynamic:" in v:
-                    if v[8:] == "creator" and creator:
-                        v = creator
-                params[k] = v
+            oauth_extras = self.config.oauth["oauth_extras"]
+            if isinstance(oauth_extras, dict):
+                for k, v in oauth_extras.items():
+                    if isinstance(v, str) and "dynamic:" in v:
+                        if v[8:] == "creator" and creator:
+                            v = creator
+                    params[k] = v
         uri = self.config.oauth["auth_uri"] + "?" + urllib_urlencode(params)
         logging.debug("OAuth redirect with url: " + uri + " and state:" + state)
         return uri
 
     def oauth_request_token(self, code=None):
+        # Use the new OAuth2 module for token exchange
+        try:
+            from .oauth2 import create_oauth2_authenticator
+            if self.config is not None:
+                authenticator = create_oauth2_authenticator(self.config)
+                if authenticator.is_enabled() and code:
+                    result = authenticator.exchange_code_for_token(code)
+                    if result and "access_token" in result:
+                        self.token = result["access_token"]
+                    return result
+        except Exception as e:
+            logging.error(f"Error exchanging OAuth2 code for token: {e}")
+        
+        # Fallback to legacy implementation
         if not code:
             return None
         if not self.config or not self.config.oauth:
@@ -330,6 +359,20 @@ class OAuth:
         return result
 
     def oauth_refresh_token(self, refresh_token):
+        # Use the new OAuth2 module for token refresh
+        try:
+            from .oauth2 import create_oauth2_authenticator
+            if self.config is not None:
+                authenticator = create_oauth2_authenticator(self.config)
+                if authenticator.is_enabled() and refresh_token:
+                    result = authenticator.refresh_access_token(refresh_token)
+                    if result and "access_token" in result:
+                        self.token = result["access_token"]
+                    return result
+        except Exception as e:
+            logging.error(f"Error refreshing OAuth2 token: {e}")
+        
+        # Fallback to legacy implementation
         if not refresh_token:
             return None
         if not self.config or not self.config.oauth:

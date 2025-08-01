@@ -204,7 +204,7 @@ async def get_bearer_token(request: Request) -> Optional[str]:
     return auth_header[7:]
 
 
-async def authenticate_google_oauth(request: Request, config) -> Optional[Tuple[Any, str]]:
+async def authenticate_google_oauth(request: Request, config: Any) -> Optional[Tuple[Any, str]]:
     """
     Authenticate Google OAuth2 Bearer token and return actor.
     
@@ -216,17 +216,20 @@ async def authenticate_google_oauth(request: Request, config) -> Optional[Tuple[
         return None
     
     try:
-        from ...google_oauth import GoogleOAuthAuthenticator
-        authenticator = GoogleOAuthAuthenticator(config)
-        return authenticator.authenticate_bearer_token(bearer_token)
+        from ...oauth2 import create_oauth2_authenticator
+        authenticator = create_oauth2_authenticator(config)
+        result = authenticator.authenticate_bearer_token(bearer_token)
+        if result and len(result) == 2 and result[0] is not None and result[1] is not None:
+            return result  # type: ignore
+        return None
     except Exception as e:
-        logging.error(f"Google OAuth authentication error: {e}")
+        logging.error(f"OAuth2 authentication error: {e}")
         return None
 
 
-def create_oauth_redirect_response(config, redirect_after_auth: str = "", clear_cookie: bool = False) -> RedirectResponse:
+def create_oauth_redirect_response(config: Any, redirect_after_auth: str = "", clear_cookie: bool = False) -> Union[RedirectResponse, Response]:
     """
-    Create OAuth2 redirect response to Google.
+    Create OAuth2 redirect response to configured OAuth2 provider.
     
     Args:
         config: ActingWeb configuration
@@ -234,11 +237,11 @@ def create_oauth_redirect_response(config, redirect_after_auth: str = "", clear_
         clear_cookie: Whether to clear expired oauth_token cookie
         
     Returns:
-        RedirectResponse to Google OAuth2
+        RedirectResponse to configured OAuth2 provider
     """
     try:
-        from ...google_oauth import GoogleOAuthAuthenticator
-        authenticator = GoogleOAuthAuthenticator(config)
+        from ...oauth2 import create_oauth2_authenticator
+        authenticator = create_oauth2_authenticator(config)
         if authenticator.is_enabled():
             auth_url = authenticator.create_authorization_url(redirect_after_auth=redirect_after_auth)
             if auth_url:
@@ -257,13 +260,13 @@ def create_oauth_redirect_response(config, redirect_after_auth: str = "", clear_
     return response
 
 
-def add_www_authenticate_header(response: Response, config) -> None:
+def add_www_authenticate_header(response: Response, config: Any) -> None:
     """
     Add WWW-Authenticate header for OAuth2 authentication.
     """
     try:
-        from ...google_oauth import GoogleOAuthAuthenticator
-        authenticator = GoogleOAuthAuthenticator(config)
+        from ...oauth2 import create_oauth2_authenticator
+        authenticator = create_oauth2_authenticator(config)
         if authenticator.is_enabled():
             www_auth = authenticator.create_www_authenticate_header()
             response.headers["WWW-Authenticate"] = www_auth
@@ -272,7 +275,7 @@ def add_www_authenticate_header(response: Response, config) -> None:
         response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
 
 
-async def check_authentication_and_redirect(request: Request, config) -> Optional[RedirectResponse]:
+async def check_authentication_and_redirect(request: Request, config: Any) -> Optional[RedirectResponse]:
     """
     Check if request is authenticated, if not return OAuth2 redirect.
     
@@ -296,27 +299,31 @@ async def check_authentication_and_redirect(request: Request, config) -> Optiona
     oauth_cookie = request.cookies.get("oauth_token")
     if oauth_cookie:
         logging.info(f"Found oauth_token cookie with length {len(oauth_cookie)}")
-        # Validate the OAuth cookie token with Google
+        # Validate the OAuth cookie token
         try:
-            from ...google_oauth import GoogleOAuthAuthenticator
-            authenticator = GoogleOAuthAuthenticator(config)
+            from ...oauth2 import create_oauth2_authenticator
+            authenticator = create_oauth2_authenticator(config)
             if authenticator.is_enabled():
-                email = authenticator.validate_token_and_get_email(oauth_cookie)
-                if email:
-                    logging.info(f"OAuth cookie validation successful for {email}")
-                    return None  # Valid OAuth cookie
-                else:
-                    logging.info("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
-                    # Token expired/invalid - fall through to create redirect response with cookie cleanup
+                user_info = authenticator.validate_token_and_get_user_info(oauth_cookie)
+                if user_info:
+                    email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
+                    if email:
+                        logging.info(f"OAuth cookie validation successful for {email}")
+                        return None  # Valid OAuth cookie
+                logging.info("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
+                # Token expired/invalid - fall through to create redirect response with cookie cleanup
         except Exception as e:
             logging.info(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
             # Validation failed - fall through to redirect
     
-    # No valid authentication - redirect to Google OAuth2
+    # No valid authentication - redirect to OAuth2 provider
     original_url = str(request.url)
     # Clear cookie if we had an expired token
     clear_cookie = bool(oauth_cookie)
-    return create_oauth_redirect_response(config, redirect_after_auth=original_url, clear_cookie=clear_cookie)
+    result = create_oauth_redirect_response(config, redirect_after_auth=original_url, clear_cookie=clear_cookie)
+    if isinstance(result, RedirectResponse):
+        return result
+    return None
 
 
 async def validate_content_type(request: Request, expected: str = "application/json") -> bool:
@@ -405,6 +412,18 @@ class FastAPIIntegration:
             if auth_redirect:
                 return auth_redirect
             return await self._handle_mcp_request(request)
+
+        # OAuth2 Authorization Server Discovery endpoint (RFC 8414)
+        @self.fastapi_app.get("/.well-known/oauth-authorization-server")
+        async def oauth_discovery() -> Dict[str, Any]:
+            """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
+            return self._create_oauth_discovery_response()
+
+        # MCP information endpoint
+        @self.fastapi_app.get("/mcp/info")
+        async def mcp_info() -> Dict[str, Any]:
+            """MCP information endpoint."""
+            return self._create_mcp_info_response()
 
         # Actor root
         @self.fastapi_app.get("/{actor_id}")
@@ -695,35 +714,36 @@ class FastAPIIntegration:
             self.logger.info(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
             # User has OAuth session - try to find their actor and redirect
             try:
-                from ...google_oauth import GoogleOAuthAuthenticator
-                authenticator = GoogleOAuthAuthenticator(self.aw_app.get_config())
+                from ...oauth2 import create_oauth2_authenticator
+                authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    self.logger.info("Google OAuth2 is enabled, validating token...")
-                    # Validate the token and get email
-                    email = authenticator.validate_token_and_get_email(oauth_cookie)
-                    if email:
-                        self.logger.info(f"Token validation successful for {email}")
-                        # Look up actor by email
-                        actor_instance = authenticator.lookup_or_create_actor_by_email(email)
-                        if actor_instance and actor_instance.id:
-                            # Redirect to actor's www page
-                            redirect_url = f"/{actor_instance.id}/www"
-                            self.logger.info(f"Redirecting authenticated user {email} to {redirect_url}")
-                            return RedirectResponse(url=redirect_url, status_code=302)
-                    else:
-                        # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
-                        self.logger.info("OAuth token expired or invalid - clearing cookie and redirecting to Google OAuth")
-                        original_url = str(request.url)
-                        oauth_redirect = create_oauth_redirect_response(self.aw_app.get_config(), redirect_after_auth=original_url)
-                        # Clear the expired cookie
-                        oauth_redirect.delete_cookie("oauth_token", path="/")
-                        return oauth_redirect
+                    self.logger.info("OAuth2 is enabled, validating token...")
+                    # Validate the token and get user info
+                    user_info = authenticator.validate_token_and_get_user_info(oauth_cookie)
+                    if user_info:
+                        email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
+                        if email:
+                            self.logger.info(f"Token validation successful for {email}")
+                            # Look up actor by email
+                            actor_instance = authenticator.lookup_or_create_actor_by_email(email)
+                            if actor_instance and actor_instance.id:
+                                # Redirect to actor's www page
+                                redirect_url = f"/{actor_instance.id}/www"
+                                self.logger.info(f"Redirecting authenticated user {email} to {redirect_url}")
+                                return RedirectResponse(url=redirect_url, status_code=302)
+                    # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
+                    self.logger.info("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
+                    original_url = str(request.url)
+                    oauth_redirect = create_oauth_redirect_response(self.aw_app.get_config(), redirect_after_auth=original_url)
+                    # Clear the expired cookie
+                    oauth_redirect.delete_cookie("oauth_token", path="/")
+                    return oauth_redirect
                 else:
-                    self.logger.warning("Google OAuth2 not enabled in config")
+                    self.logger.warning("OAuth2 not enabled in config")
             except Exception as e:
                 self.logger.error(f"OAuth token validation failed in factory: {e}")
                 # Token validation failed - clear cookie and redirect to fresh OAuth
-                self.logger.info("OAuth token validation error - clearing cookie and redirecting to Google OAuth")
+                self.logger.info("OAuth token validation error - clearing cookie and redirecting to OAuth")
                 original_url = str(request.url)
                 oauth_redirect = create_oauth_redirect_response(self.aw_app.get_config(), redirect_after_auth=original_url)
                 # Clear the invalid cookie
@@ -854,7 +874,7 @@ class FastAPIIntegration:
             
             self.logger.debug(f"FastAPI actor creation response: {response_data}")
                 
-            webobj.response.body = json.dumps(response_data)
+            webobj.response.body = json.dumps(response_data).encode('utf-8')
             webobj.response.headers["Content-Type"] = "application/json"
             
             # Add Location header with the actor URL
@@ -895,8 +915,8 @@ class FastAPIIntegration:
             cookies=req_data["cookies"],
         )
 
-        from ...handlers.google_oauth_callback import GoogleOAuthCallbackHandler
-        handler = GoogleOAuthCallbackHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+        from ...handlers.oauth2_callback import OAuth2CallbackHandler
+        handler = OAuth2CallbackHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
         
         # Run the synchronous handler in a thread pool
         loop = asyncio.get_running_loop()
@@ -909,7 +929,7 @@ class FastAPIIntegration:
                 webobj.response.set_redirect(redirect_url)
             else:
                 # Convert result to JSON response
-                webobj.response.body = json.dumps(result)
+                webobj.response.body = json.dumps(result).encode('utf-8')
                 webobj.response.headers["Content-Type"] = "application/json"
 
         return self._create_fastapi_response(webobj, request)
@@ -1125,3 +1145,70 @@ class FastAPIIntegration:
             return handlers[endpoint]()
 
         return None
+
+    def _create_oauth_discovery_response(self) -> Dict[str, Any]:
+        """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
+        import os
+        config = self.aw_app.get_config()
+        base_url = f"{config.proto}{config.fqdn}"
+        oauth_provider = getattr(config, 'oauth2_provider', 'google')
+        
+        if oauth_provider == "google":
+            return {
+                "issuer": base_url,
+                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "userinfo_endpoint": "https://www.googleapis.com/oauth2/v2/userinfo",
+                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "scopes_supported": ["openid", "email", "profile"],
+                "response_types_supported": ["code"],
+                "grant_types_supported": ["authorization_code", "refresh_token"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"],
+                "code_challenge_methods_supported": ["S256"],
+                "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            }
+        elif oauth_provider == "github":
+            return {
+                "issuer": base_url,
+                "authorization_endpoint": "https://github.com/login/oauth/authorize",
+                "token_endpoint": "https://github.com/login/oauth/access_token",
+                "userinfo_endpoint": "https://api.github.com/user",
+                "scopes_supported": ["user:email"],
+                "response_types_supported": ["code"],
+                "grant_types_supported": ["authorization_code"],
+                "subject_types_supported": ["public"],
+                "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            }
+        else:
+            return {"error": "Unknown OAuth provider"}
+
+    def _create_mcp_info_response(self) -> Dict[str, Any]:
+        """Create MCP information response."""
+        import os
+        config = self.aw_app.get_config()
+        base_url = f"{config.proto}{config.fqdn}"
+        oauth_provider = getattr(config, 'oauth2_provider', 'google')
+        oauth_config = getattr(config, 'oauth', {})
+        oauth_client_id = oauth_config.get('client_id') if oauth_config else None
+        oauth_client_secret = oauth_config.get('client_secret') if oauth_config else None
+        
+        return {
+            "mcp_enabled": True,
+            "mcp_endpoint": "/mcp",
+            "authentication": {
+                "type": "oauth2",
+                "provider": oauth_provider,
+                "required_scopes": ["openid", "email", "profile"] if oauth_provider == "google" else ["user:email"],
+                "flow": "authorization_code",
+                "auth_url": "https://accounts.google.com/o/oauth2/v2/auth" if oauth_provider == "google" else "https://github.com/login/oauth/authorize",
+                "token_url": "https://oauth2.googleapis.com/token" if oauth_provider == "google" else "https://github.com/login/oauth/access_token",
+                "callback_url": f"{base_url}/oauth/callback",
+                "enabled": bool(oauth_client_id and oauth_client_secret),
+            },
+            "supported_features": ["tools", "prompts"],
+            "tools_count": 4,  # search, fetch, create_note, create_reminder
+            "prompts_count": 3,  # analyze_notes, create_learning_prompt, create_meeting_prep
+            "actor_lookup": "email_based",
+            "description": f"ActingWeb MCP Demo - AI can interact with actors through MCP protocol using {oauth_provider.title()} OAuth2",
+        }

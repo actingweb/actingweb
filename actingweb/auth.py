@@ -550,13 +550,14 @@ class Auth:
         if "Authorization" not in appreq.request.headers:
             return False
         auth = appreq.request.headers["Authorization"]
-        (bearer, token) = auth.split(" ")
-        if bearer.lower() != "bearer":
+        auth_parts = auth.split(" ")
+        if len(auth_parts) != 2 or auth_parts[0].lower() != "bearer":
             return False
+        token = auth_parts[1]
         self.authn_done = True
         
-        # First, try Google OAuth2 authentication if configured
-        if self._check_google_oauth_token(token):
+        # First, try OAuth2 authentication if configured
+        if self._check_oauth2_token(token):
             return True
         
         trustee = self.actor.store.trustee_root if self.actor and self.actor.store else None
@@ -598,21 +599,26 @@ class Auth:
         else:
             return False
 
-    def _check_google_oauth_token(self, token):
-        """Check if the Bearer token is a valid Google OAuth2 token and authenticate user."""
+    def _check_oauth2_token(self, token):
+        """Check if the Bearer token is a valid OAuth2 token and authenticate user."""
         try:
-            from .google_oauth import GoogleOAuthAuthenticator
-            authenticator = GoogleOAuthAuthenticator(self.config)
+            from .oauth2 import create_oauth2_authenticator
+            authenticator = create_oauth2_authenticator(self.config)
             
             if not authenticator.is_enabled():
                 return False
             
-            # Validate token and get email
-            email = authenticator.validate_token_and_get_email(token)
+            # Validate token and get user info
+            user_info = authenticator.validate_token_and_get_user_info(token)
+            if not user_info:
+                return False
+                
+            # Extract email from user info
+            email = authenticator.get_email_from_user_info(user_info)
             if not email:
                 return False
             
-            # For Google OAuth2, we authenticate users based on their email
+            # For OAuth2, we authenticate users based on their email
             # The actor lookup is handled at the endpoint level, not here in auth
             # Here we just validate that the token is valid and get the email
             
@@ -626,14 +632,14 @@ class Auth:
                 self.response["code"] = 200
                 self.response["text"] = "Ok"
                 self.token = token
-                logging.info(f"Google OAuth2 authentication successful for {email}")
+                logging.info(f"OAuth2 authentication successful for {email}")
                 return True
             else:
                 # Email doesn't match this actor - this could be:
                 # 1. Wrong actor for this user
                 # 2. New user (actor creation flow handles this)
                 # 3. Factory endpoint (no specific actor yet)
-                logging.debug(f"Google OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}")
+                logging.debug(f"OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}")
                 
                 # For factory endpoint or when no actor is loaded, we still consider auth successful
                 # The endpoint handler will use get_by_creator() to find/create the right actor
@@ -645,20 +651,20 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = token
-                    logging.info(f"Google OAuth2 authentication successful for {email} (no specific actor)")
+                    logging.info(f"OAuth2 authentication successful for {email} (no specific actor)")
                     return True
                 
                 return False
                 
         except Exception as e:
-            logging.error(f"Error during Google OAuth2 token validation: {e}")
+            logging.error(f"Error during OAuth2 token validation: {e}")
             return False
 
-    def _should_redirect_to_google_oauth(self, appreq, path):
-        """Check if we should redirect to Google OAuth2 for authentication."""
+    def _should_redirect_to_oauth2(self, appreq, path):
+        """Check if we should redirect to OAuth2 for authentication."""
         try:
-            from .google_oauth import GoogleOAuthAuthenticator
-            authenticator = GoogleOAuthAuthenticator(self.config)
+            from .oauth2 import create_oauth2_authenticator
+            authenticator = create_oauth2_authenticator(self.config)
             
             if not authenticator.is_enabled():
                 return False
@@ -667,20 +673,20 @@ class Auth:
             if "/oauth/callback" in path:
                 return False
             
-            # Create redirect to Google OAuth2
+            # Create redirect to OAuth2
             original_url = self._get_original_url(appreq, path)
             auth_url = authenticator.create_authorization_url(redirect_after_auth=original_url)
             
             if auth_url:
                 self.authn_done = True
                 self.response["code"] = 302
-                self.response["text"] = "Redirecting to Google OAuth2"
+                self.response["text"] = "Redirecting to OAuth2"
                 self.redirect = auth_url
-                logging.info(f"Redirecting to Google OAuth2: {auth_url[:100]}...")
+                logging.info(f"Redirecting to OAuth2: {auth_url[:100]}...")
                 return True
                 
         except Exception as e:
-            logging.error(f"Error creating Google OAuth2 redirect: {e}")
+            logging.error(f"Error creating OAuth2 redirect: {e}")
         
         return False
 
@@ -714,8 +720,8 @@ class Auth:
             self.__check_basic_auth_creator(appreq=appreq)
             return
         
-        # If all authentication methods fail, try Google OAuth2 redirect if configured
-        if self._should_redirect_to_google_oauth(appreq, path):
+        # If all authentication methods fail, try OAuth2 redirect if configured
+        if self._should_redirect_to_oauth2(appreq, path):
             return
             
         logging.debug("Authentication done, and failed")

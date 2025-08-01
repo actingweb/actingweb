@@ -1,42 +1,53 @@
 """
-Google OAuth2 callback handler for ActingWeb.
+OAuth2 callback handler for ActingWeb.
 
-This handler processes the OAuth2 callback from Google after user authentication,
+This handler processes OAuth2 callbacks from various providers after user authentication,
 exchanges the authorization code for an access token, and sets up the user session.
+Uses the consolidated oauth2 module for provider-agnostic OAuth2 handling.
 """
 
 import logging
-from typing import Dict, Any, Optional
+import time
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from urllib.parse import urlparse
 
 from .base_handler import BaseHandler
-from ..google_oauth import GoogleOAuthAuthenticator, parse_state_parameter
-from .. import config as config_class
 
+if TYPE_CHECKING:
+    from ..interface.hooks import HookRegistry
+    from .. import aw_web_request
+from ..oauth2 import create_oauth2_authenticator, parse_state_parameter
+from .. import config as config_class
 
 logger = logging.getLogger(__name__)
 
 
-class GoogleOAuthCallbackHandler(BaseHandler):
+class OAuth2CallbackHandler(BaseHandler):
     """
-    Handles Google OAuth2 callbacks at /oauth/callback.
+    Handles OAuth2 callbacks at /oauth/callback.
     
-    This endpoint is called by Google after user authentication with:
+    This endpoint is called by OAuth2 providers after user authentication with:
     - code: Authorization code to exchange for access token
     - state: CSRF protection and optional redirect URL
     - error: Error code if authentication failed
     """
     
-    def __init__(self, webobj=None, config: Optional[config_class.Config] = None, hooks=None):
+    def __init__(self, webobj: Optional['aw_web_request.AWWebObj'] = None, config: Optional[config_class.Config] = None, hooks: Optional['HookRegistry'] = None) -> None:
+        if config is None:
+            raise RuntimeError("Config is required for OAuth2CallbackHandler")
+        if webobj is None:
+            from .. import aw_web_request
+            webobj = aw_web_request.AWWebObj()
         super().__init__(webobj, config, hooks)
-        self.authenticator = GoogleOAuthAuthenticator(config) if config else None
+        # Use generic OAuth2 authenticator (configurable provider)
+        self.authenticator = create_oauth2_authenticator(config) if config else None
         
     def get(self) -> Dict[str, Any]:
         """
-        Handle GET request to /oauth/callback from Google.
+        Handle GET request to /oauth/callback from OAuth2 provider.
         
         Expected parameters:
-        - code: Authorization code from Google
+        - code: Authorization code from OAuth2 provider
         - state: State parameter for CSRF protection
         - error: Error code if authentication failed
         
@@ -44,7 +55,7 @@ class GoogleOAuthCallbackHandler(BaseHandler):
             Response dict with success/error status
         """
         if not self.authenticator or not self.authenticator.is_enabled():
-            logger.error("Google OAuth2 not configured")
+            logger.error("OAuth2 not configured")
             return self.error_response(500, "OAuth2 not configured")
         
         # Check for error parameter
@@ -53,7 +64,7 @@ class GoogleOAuthCallbackHandler(BaseHandler):
             error_description = self.request.get("error_description")
             if not error_description:
                 error_description = ""
-            logger.warning(f"Google OAuth2 error: {error} - {error_description}")
+            logger.warning(f"OAuth2 error: {error} - {error_description}")
             return self.error_response(400, f"Authentication failed: {error}")
         
         # Get authorization code
@@ -66,10 +77,11 @@ class GoogleOAuthCallbackHandler(BaseHandler):
         state = self.request.get("state")
         if not state:
             state = ""
-        csrf_token, redirect_url = parse_state_parameter(state)
+        _, redirect_url, actor_id = parse_state_parameter(state)
+        logger.debug(f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}'")
         
         # Exchange code for access token
-        token_data = self.authenticator.exchange_code_for_token(code)
+        token_data = self.authenticator.exchange_code_for_token(code, state)
         if not token_data or "access_token" not in token_data:
             logger.error("Failed to exchange authorization code for access token")
             return self.error_response(502, "Token exchange failed")
@@ -78,17 +90,40 @@ class GoogleOAuthCallbackHandler(BaseHandler):
         refresh_token = token_data.get("refresh_token")
         expires_in = token_data.get("expires_in", 3600)
         
-        # Validate token and get user email
-        email = self.authenticator.validate_token_and_get_email(access_token)
-        if not email:
-            logger.error("Failed to validate token or extract email")
+        # Validate token and get user info
+        user_info = self.authenticator.validate_token_and_get_user_info(access_token)
+        if not user_info:
+            logger.error("Failed to validate token or extract user info")
             return self.error_response(502, "Token validation failed")
         
-        # Look up or create actor by email
-        actor_instance = self.authenticator.lookup_or_create_actor_by_email(email)
+        # Extract email from user info
+        email = self.authenticator.get_email_from_user_info(user_info, access_token)
+        if not email:
+            logger.error("Failed to extract email from user info")
+            return self.error_response(502, "Email extraction failed")
+        
+        # Use existing actor from state if provided, otherwise lookup/create by email
+        actor_instance = None
+        if actor_id:
+            # Try to use the existing actor from the state parameter
+            from .. import actor as actor_module
+            try:
+                actor_instance = actor_module.Actor(config=self.config)
+                if not actor_instance.get(actor_id):
+                    logger.warning(f"Actor {actor_id} from state not found, will lookup/create by email")
+                    actor_instance = None
+                else:
+                    logger.info(f"Using existing actor {actor_id} from state parameter")
+            except Exception as e:
+                logger.warning(f"Failed to load actor {actor_id} from state: {e}, will lookup/create by email")
+                actor_instance = None
+        
+        # If no actor from state or loading failed, lookup/create by email
         if not actor_instance:
-            logger.error(f"Failed to lookup or create actor for email {email}")
-            return self.error_response(502, "Actor creation failed")
+            actor_instance = self.authenticator.lookup_or_create_actor_by_email(email)
+            if not actor_instance:
+                logger.error(f"Failed to lookup or create actor for email {email}")
+                return self.error_response(502, "Actor creation failed")
         
         # Store OAuth tokens in actor properties
         # The auth system expects oauth_token (not oauth_access_token)
@@ -144,7 +179,7 @@ class GoogleOAuthCallbackHandler(BaseHandler):
         # Set session cookie so user stays authenticated after redirect
         # The cookie should match the token stored in the actor (oauth_token)
         stored_token = actor_instance.store.oauth_token if actor_instance.store else access_token
-        # Set a longer cookie expiry (2 weeks like ActingWeb default) since Google tokens are usually valid for 1 hour
+        # Set a longer cookie expiry (2 weeks like ActingWeb default) since OAuth tokens are usually valid for 1 hour
         # but we want the session to persist longer than that
         cookie_max_age = 1209600  # 2 weeks, matching ActingWeb's default
         
@@ -221,6 +256,3 @@ class GoogleOAuthCallbackHandler(BaseHandler):
             "status_code": status_code,
             "message": message
         }
-
-
-import time  # Import moved here to avoid circular imports

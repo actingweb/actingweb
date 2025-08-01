@@ -74,6 +74,8 @@ class Config:
             "grant_type": "authorization_code",
             "refresh_type": "refresh_token",
         }
+        # OAuth2 provider name (google, github, or custom provider name)
+        self.oauth2_provider = "google"
         self.bot = {
             "token": "",
             "email": "",

@@ -64,30 +64,75 @@ class FlaskIntegration:
         def app_oauth_callback() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth_callback()
 
-        # OAuth2 callback
+        # OAuth2 callback - handles both ActingWeb and MCP OAuth2 flows
         @self.flask_app.route("/oauth/callback", methods=["GET"])
         def app_oauth2_callback() -> Union[Response, WerkzeugResponse, str]:
+            # Handle both Google OAuth2 callback (for ActingWeb) and MCP OAuth2 callback
+            # Determine which flow based on state parameter
+            from flask import request
+            state = request.args.get("state", "")
+            
+            # Check if this is an MCP OAuth2 callback (encrypted state)
+            try:
+                from ...oauth2_server.state_manager import get_oauth2_state_manager
+                state_manager = get_oauth2_state_manager(self.aw_app.get_config())
+                mcp_context = state_manager.extract_mcp_context(state)
+                
+                if mcp_context:
+                    # This is an MCP OAuth2 callback
+                    return self._handle_oauth2_endpoint("callback")
+            except Exception:
+                # Not an MCP callback or state manager not available
+                pass
+            
+            # Default to Google OAuth2 callback for ActingWeb
             return self._handle_oauth2_callback()
+
+        # OAuth2 server endpoints for MCP clients
+        @self.flask_app.route("/oauth/register", methods=["POST"])
+        def oauth2_register() -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_oauth2_endpoint("register")
+
+        @self.flask_app.route("/oauth/authorize", methods=["GET", "POST"])
+        def oauth2_authorize() -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_oauth2_endpoint("authorize")
+
+        @self.flask_app.route("/oauth/token", methods=["POST"])
+        def oauth2_token() -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_oauth2_endpoint("token")
+        
+        # OAuth2 discovery endpoint
+        @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET"])
+        def oauth2_discovery() -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_oauth2_endpoint(".well-known/oauth-authorization-server")
 
         # Bot endpoint
         @self.flask_app.route("/bot", methods=["POST"])
         def app_bot() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_bot_request()
 
-        # MCP endpoint with OAuth2 authentication
+        # MCP endpoint
         @self.flask_app.route("/mcp", methods=["GET", "POST"])
         def app_mcp() -> Union[Response, WerkzeugResponse, str]:
-            # Check authentication and redirect to OAuth2 if needed
-            auth_redirect = self._check_authentication_and_redirect()
-            if auth_redirect:
-                return auth_redirect
+            # For MCP, allow initial handshake without authentication
+            # Authentication will be handled within the MCP protocol
             return self._handle_mcp_request()
 
-        # OAuth2 Authorization Server Discovery endpoint (RFC 8414)
-        @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET"])
-        def oauth_discovery() -> Dict[str, Any]:
+        # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
+        @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"])
+        def oauth_discovery() -> Response:
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
-            return self._create_oauth_discovery_response()
+            return self._handle_oauth2_endpoint(".well-known/oauth-authorization-server")
+
+        @self.flask_app.route("/.well-known/oauth-protected-resource", methods=["GET", "OPTIONS"])
+        def oauth_protected_resource_discovery() -> Response:
+            """OAuth2 Protected Resource discovery endpoint."""
+            return self._handle_oauth2_endpoint(".well-known/oauth-protected-resource")
+
+        @self.flask_app.route("/.well-known/oauth-protected-resource/mcp", methods=["GET", "OPTIONS"])
+        def oauth_protected_resource_mcp_discovery() -> Response:
+            """OAuth2 Protected Resource discovery endpoint for MCP."""
+            return self._handle_oauth2_endpoint(".well-known/oauth-protected-resource/mcp")
 
         # MCP information endpoint
         @self.flask_app.route("/mcp/info", methods=["GET"])
@@ -671,6 +716,47 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
+    def _handle_oauth2_endpoint(self, endpoint: str) -> Response:
+        """Handle OAuth2 endpoints (register, authorize, token)."""
+        req_data = self._normalize_request()
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_endpoints import OAuth2EndpointsHandler
+
+        handler = OAuth2EndpointsHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        if request.method == "POST":
+            result = handler.post(endpoint)
+        elif request.method == "OPTIONS":
+            result = handler.options(endpoint)
+        else:
+            result = handler.get(endpoint)
+
+        # Check if handler set template values (for HTML response)
+        if hasattr(webobj.response, 'template_values') and webobj.response.template_values:
+            # This is an HTML template response
+            template_name = "aw-oauth-authorization-form.html"  # Default OAuth2 template
+            try:
+                return Response(render_template(template_name, **webobj.response.template_values))
+            except Exception as e:
+                # Template not found or rendering error - fall back to JSON
+                from flask import jsonify
+                return jsonify({
+                    "error": "template_error", 
+                    "error_description": f"Failed to render template: {str(e)}",
+                    "template_values": webobj.response.template_values
+                })
+        
+        # Return the OAuth2 result as JSON
+        from flask import jsonify
+        return jsonify(result)
+
     def _handle_mcp_request(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle MCP requests."""
         req_data = self._normalize_request()
@@ -988,6 +1074,9 @@ class FlaskIntegration:
                 if oauth_provider == "google"
                 else "https://github.com/login/oauth/access_token",
                 "callback_url": f"{base_url}/oauth/callback",
+                "registration_endpoint": f"{base_url}/oauth/register",
+                "authorization_endpoint": f"{base_url}/oauth/authorize",
+                "token_endpoint": f"{base_url}/oauth/token",
                 "enabled": bool(oauth_client_id and oauth_client_secret),
             },
             "supported_features": ["tools", "prompts"],

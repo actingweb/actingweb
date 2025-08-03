@@ -9,6 +9,7 @@ functionality into a single, maintainable module.
 import json
 import logging
 import time
+import secrets
 from typing import Optional, Dict, Any, Tuple
 from urllib.parse import urlparse
 import urlfetch
@@ -122,9 +123,10 @@ class OAuth2Authenticator:
             state = generate_token()
 
         # Encode redirect URL and email hint in state if provided
-        if redirect_after_auth or email_hint:
+        # IMPORTANT: Don't overwrite encrypted MCP state (which is base64 encoded)
+        if (redirect_after_auth or email_hint) and not self._looks_like_encrypted_state(state):
             state_data = {
-                "csrf": state,
+                "csrf": state, 
                 "redirect": redirect_after_auth,
                 "expected_email": email_hint,  # Store original email for validation
             }
@@ -152,6 +154,34 @@ class OAuth2Authenticator:
 
         logger.info(f"Created OAuth2 authorization URL with state: {state[:50]}...")
         return str(authorization_url)
+
+    def _looks_like_encrypted_state(self, state: str) -> bool:
+        """
+        Check if state parameter looks like an encrypted MCP state.
+        
+        MCP states are base64-encoded encrypted data and won't be valid JSON.
+        Standard ActingWeb states are JSON strings.
+        
+        Args:
+            state: State parameter to check
+            
+        Returns:
+            True if this looks like an encrypted MCP state
+        """
+        if not state:
+            return False
+            
+        # If it starts with '{' it's likely JSON (standard ActingWeb state)
+        if state.strip().startswith('{'):
+            return False
+            
+        # If it contains only base64-safe characters and is reasonably long,
+        # it's likely an encrypted MCP state
+        import re
+        if len(state) > 50 and re.match(r'^[A-Za-z0-9+/_=-]+$', state):
+            return True
+            
+        return False
 
     def exchange_code_for_token(self, code: str, state: str = "") -> Optional[Dict[str, Any]]:
         """
@@ -519,16 +549,10 @@ def create_oauth2_authenticator(config: config_class.Config, provider_name: str 
     elif provider_name == "github":
         return OAuth2Authenticator(config, GitHubOAuth2Provider(config))
     else:
-        # For other providers, expect provider config in config.oauth2_providers[provider_name]
-        oauth2_providers = getattr(config, "oauth2_providers", {})
-        if oauth2_providers and provider_name in oauth2_providers:
-            provider_config = oauth2_providers[provider_name]
-            provider = OAuth2Provider(provider_name, provider_config)
-            return OAuth2Authenticator(config, provider)
-        else:
-            # Fallback to Google if no specific provider config found
-            logger.warning(f"Unknown OAuth2 provider '{provider_name}', falling back to Google")
-            return OAuth2Authenticator(config, GoogleOAuth2Provider(config))
+        # Default to Google if provider not recognized
+        return OAuth2Authenticator(config, GoogleOAuth2Provider(config))
+
+
 
 
 def create_google_authenticator(config: config_class.Config) -> OAuth2Authenticator:

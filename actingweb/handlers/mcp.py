@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 import logging
 
 from .base_handler import BaseHandler
-from ..mcp.server import get_server_manager
+from ..mcp.sdk_server import get_server_manager
 from .. import aw_web_request
 from .. import config as config_class
 from ..interface.hooks import HookRegistry
@@ -48,28 +48,26 @@ class MCPHandler(BaseHandler):
         """
         Handle GET requests to /mcp endpoint.
 
-        For Phase 1, this returns basic information about the MCP server.
-        In later phases, this will handle WebSocket upgrades.
+        For initial discovery, this returns basic information about the MCP server.
+        Authentication will be handled during the MCP protocol negotiation.
         """
         try:
-            # Authenticate and get actor from auth context
-            actor = self.authenticate_and_get_actor()
-            if not actor:
-                return self.error_response(401, "Authentication required")
-
-            # Get or create MCP server for this actor
-            mcp_server = self.server_manager.get_server(actor.id, self.hooks, actor)  # type: ignore
-
-            # Return basic server information
+            # For initial discovery, don't require authentication
+            # Return basic server information that MCP clients can use
             return {
-                "version": "1.0.0",
-                "actor_id": actor.id,
+                "version": "2024-11-05",
+                "server_name": "actingweb-mcp",
                 "capabilities": {
-                    "tools": self._has_mcp_tools(),
-                    "resources": self._has_mcp_resources(),
-                    "prompts": self._has_mcp_prompts(),
+                    "tools": True,  # We support tools
+                    "resources": True,  # We support resources
+                    "prompts": True,  # We support prompts
                 },
-                "transport": {"type": "websocket", "endpoint": "/mcp"},
+                "transport": {"type": "http", "endpoint": "/mcp", "supported_versions": ["2024-11-05"]},
+                "authentication": {
+                    "required": True,
+                    "type": "oauth2",
+                    "discovery_url": f"{self.config.proto}{self.config.fqdn}/.well-known/oauth-protected-resource",
+                },
             }
 
         except Exception as e:
@@ -80,29 +78,29 @@ class MCPHandler(BaseHandler):
         """
         Handle POST requests to /mcp endpoint.
 
-        For Phase 1, this provides a simple JSON-RPC interface.
-        In later phases, WebSocket will be the primary transport.
+        Handles MCP JSON-RPC protocol. The initialize method doesn't require authentication,
+        but all other methods do.
         """
         try:
-            # Authenticate and get actor from auth context
-            actor = self.authenticate_and_get_actor()
-            if not actor:
-                return self.error_response(401, "Authentication required")
-
-            # Get MCP server for this actor
-            mcp_server = self.server_manager.get_server(actor.id, self.hooks, actor)  # type: ignore
-
-            # For Phase 1, we'll implement basic JSON-RPC handling
-            # This is a simplified implementation - full MCP protocol handling
-            # will be implemented in Phase 2
-
             method = data.get("method")
             params = data.get("params", {})
             request_id = data.get("id")
 
+            # Handle initialize method without authentication (part of MCP handshake)
             if method == "initialize":
                 return self._handle_initialize(request_id, params)
-            elif method == "tools/list":
+            elif method == "notifications/initialized":
+                return self._handle_notifications_initialized(request_id, params)
+
+            # All other methods require authentication
+            actor = self.authenticate_and_get_actor()
+            if not actor:
+                return self._create_jsonrpc_error(request_id, -32002, "Authentication required for this method")
+
+            # Get MCP server for this actor
+            mcp_server = self.server_manager.get_server(actor.id, self.hooks, actor)  # type: ignore
+
+            if method == "tools/list":
                 return self._handle_tools_list(request_id, actor.id)
             elif method == "resources/list":
                 return self._handle_resources_list(request_id, actor.id)
@@ -114,8 +112,6 @@ class MCPHandler(BaseHandler):
                 return self._handle_prompt_get(request_id, params, actor)
             elif method == "resources/read":
                 return self._handle_resource_read(request_id, params, actor)
-            elif method == "notifications/initialized":
-                return self._handle_notifications_initialized(request_id, params)
             else:
                 return self._create_jsonrpc_error(request_id, -32601, f"Method not found: {method}")
 
@@ -127,9 +123,10 @@ class MCPHandler(BaseHandler):
         """Check if server has any MCP-exposed tools."""
         if not self.hooks:
             return False
-        
+
         # Check if any action hooks are MCP-exposed
         from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+
         for action_name, hooks in self.hooks._action_hooks.items():
             for hook in hooks:
                 if is_mcp_exposed(hook):
@@ -148,9 +145,10 @@ class MCPHandler(BaseHandler):
         """Check if server has any MCP-exposed prompts."""
         if not self.hooks:
             return False
-            
+
         # Check if any method hooks are MCP-exposed
         from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+
         for method_name, hooks in self.hooks._method_hooks.items():
             for hook in hooks:
                 if is_mcp_exposed(hook):
@@ -163,46 +161,39 @@ class MCPHandler(BaseHandler):
         """Handle MCP initialize request."""
         # Build capabilities based on what's actually available
         capabilities: Dict[str, Any] = {}
-        
+
         # Tools capability
         if self._has_mcp_tools():
-            capabilities["tools"] = {
-                "listChanged": True  # Indicates tools can be dynamically discovered
-            }
-        
+            capabilities["tools"] = {"listChanged": True}  # Indicates tools can be dynamically discovered
+
         # Resources capability
         if self._has_mcp_resources():
             capabilities["resources"] = {
                 "subscribe": False,  # We don't support resource subscriptions yet
-                "listChanged": True  # Resources can be dynamically discovered
+                "listChanged": True,  # Resources can be dynamically discovered
             }
-        
+
         # Prompts capability
         if self._has_mcp_prompts():
-            capabilities["prompts"] = {
-                "listChanged": True  # Prompts can be dynamically discovered
-            }
-        
+            capabilities["prompts"] = {"listChanged": True}  # Prompts can be dynamically discovered
+
         return {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": capabilities,
-                "serverInfo": {
-                    "name": "ActingWeb MCP Server", 
-                    "version": "1.0.0"
-                },
+                "serverInfo": {"name": "ActingWeb MCP Server", "version": "1.0.0"},
             },
         }
 
     def _handle_tools_list(self, request_id: Any, actor_id: str) -> Dict[str, Any]:
         """Handle MCP tools/list request."""
         tools = []
-        
+
         if self.hooks:
             from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-            
+
             # Discover MCP tools from action hooks
             for action_name, hooks in self.hooks._action_hooks.items():
                 for hook in hooks:
@@ -211,16 +202,16 @@ class MCPHandler(BaseHandler):
                         if metadata and metadata.get("type") == "tool":
                             tool_def = {
                                 "name": metadata.get("name") or action_name,
-                                "description": metadata.get("description") or f"Execute {action_name} action"
+                                "description": metadata.get("description") or f"Execute {action_name} action",
                             }
-                            
+
                             # Add input schema if provided
                             input_schema = metadata.get("input_schema")
                             if input_schema:
                                 tool_def["inputSchema"] = input_schema
-                            
+
                             tools.append(tool_def)
-        
+
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools}}
 
     def _handle_resources_list(self, request_id: Any, actor_id: str) -> Dict[str, Any]:
@@ -231,31 +222,31 @@ class MCPHandler(BaseHandler):
                 "uri": "actingweb://notes/all",
                 "name": "All Notes",
                 "description": "Access all stored notes for the current user",
-                "mimeType": "application/json"
+                "mimeType": "application/json",
             },
             {
                 "uri": "actingweb://reminders/pending",
-                "name": "Pending Reminders", 
+                "name": "Pending Reminders",
                 "description": "List of all pending/incomplete reminders",
-                "mimeType": "application/json"
+                "mimeType": "application/json",
             },
             {
                 "uri": "actingweb://usage/stats",
                 "name": "Usage Statistics",
                 "description": "Statistics about MCP tool usage and activity",
-                "mimeType": "application/json"
-            }
+                "mimeType": "application/json",
+            },
         ]
-        
+
         return {"jsonrpc": "2.0", "id": request_id, "result": {"resources": resources}}
 
     def _handle_prompts_list(self, request_id: Any, actor_id: str) -> Dict[str, Any]:
         """Handle MCP prompts/list request."""
         prompts = []
-        
+
         if self.hooks:
             from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-            
+
             # Discover MCP prompts from method hooks
             for method_name, hooks in self.hooks._method_hooks.items():
                 for hook in hooks:
@@ -264,32 +255,32 @@ class MCPHandler(BaseHandler):
                         if metadata and metadata.get("type") == "prompt":
                             prompt_def = {
                                 "name": metadata.get("name") or method_name,
-                                "description": metadata.get("description") or f"Generate prompt for {method_name}"
+                                "description": metadata.get("description") or f"Generate prompt for {method_name}",
                             }
-                            
+
                             # Add arguments if provided
                             arguments = metadata.get("arguments")
                             if arguments:
                                 prompt_def["arguments"] = arguments
-                            
+
                             prompts.append(prompt_def)
-        
+
         return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": prompts}}
 
     def _handle_tool_call(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
         """Handle MCP tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
-        
+
         if not tool_name:
             return self._create_jsonrpc_error(request_id, -32602, "Missing tool name")
-        
+
         if not self.hooks:
             return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
-        
+
         # Find the corresponding action hook
         from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-        
+
         for action_name, hooks in self.hooks._action_hooks.items():
             for hook in hooks:
                 if is_mcp_exposed(hook):
@@ -300,43 +291,38 @@ class MCPHandler(BaseHandler):
                             try:
                                 # Execute the action hook
                                 result = hook(actor, action_name, arguments)
-                                
+
                                 # Ensure result is JSON serializable
                                 if not isinstance(result, dict):
                                     result = {"result": result}
-                                
+
                                 return {
                                     "jsonrpc": "2.0",
                                     "id": request_id,
-                                    "result": {
-                                        "content": [
-                                            {
-                                                "type": "text",
-                                                "text": str(result)
-                                            }
-                                        ]
-                                    }
+                                    "result": {"content": [{"type": "text", "text": str(result)}]},
                                 }
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
-                                return self._create_jsonrpc_error(request_id, -32603, f"Tool execution failed: {str(e)}")
-        
+                                return self._create_jsonrpc_error(
+                                    request_id, -32603, f"Tool execution failed: {str(e)}"
+                                )
+
         return self._create_jsonrpc_error(request_id, -32601, f"Tool not found: {tool_name}")
 
     def _handle_prompt_get(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
         """Handle MCP prompts/get request."""
         prompt_name = params.get("name")
         arguments = params.get("arguments", {})
-        
+
         if not prompt_name:
             return self._create_jsonrpc_error(request_id, -32602, "Missing prompt name")
-        
+
         if not self.hooks:
             return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
-        
+
         # Find the corresponding method hook
         from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-        
+
         for method_name, hooks in self.hooks._method_hooks.items():
             for hook in hooks:
                 if is_mcp_exposed(hook):
@@ -347,124 +333,92 @@ class MCPHandler(BaseHandler):
                             try:
                                 # Execute the method hook
                                 result = hook(actor, method_name, arguments)
-                                
+
                                 # Convert result to string for prompt
                                 if isinstance(result, dict):
-                                    if 'prompt' in result:
-                                        prompt_text = str(result['prompt'])
+                                    if "prompt" in result:
+                                        prompt_text = str(result["prompt"])
                                     else:
                                         prompt_text = str(result)
                                 else:
                                     prompt_text = str(result)
-                                
+
                                 return {
                                     "jsonrpc": "2.0",
                                     "id": request_id,
                                     "result": {
-                                        "description": metadata.get("description", f"Generated prompt for {method_name}"),
+                                        "description": metadata.get(
+                                            "description", f"Generated prompt for {method_name}"
+                                        ),
                                         "messages": [
-                                            {
-                                                "role": "user",
-                                                "content": {
-                                                    "type": "text",
-                                                    "text": prompt_text
-                                                }
-                                            }
-                                        ]
-                                    }
+                                            {"role": "user", "content": {"type": "text", "text": prompt_text}}
+                                        ],
+                                    },
                                 }
                             except Exception as e:
                                 logger.error(f"Error generating prompt {prompt_name}: {e}")
-                                return self._create_jsonrpc_error(request_id, -32603, f"Prompt generation failed: {str(e)}")
-        
+                                return self._create_jsonrpc_error(
+                                    request_id, -32603, f"Prompt generation failed: {str(e)}"
+                                )
+
         return self._create_jsonrpc_error(request_id, -32601, f"Prompt not found: {prompt_name}")
 
     def _handle_resource_read(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
         """Handle MCP resources/read request."""
         uri = params.get("uri")
-        
+
         if not uri:
             return self._create_jsonrpc_error(request_id, -32602, "Missing resource URI")
-        
+
         try:
             # Handle different resource types
             if uri == "actingweb://notes/all":
                 notes = actor.properties.get("notes", [])
-                content = {
-                    "total_notes": len(notes),
-                    "notes": notes
-                }
+                content = {"total_notes": len(notes), "notes": notes}
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": {
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "application/json",
-                                "text": str(content)
-                            }
-                        ]
-                    }
+                    "result": {"contents": [{"uri": uri, "mimeType": "application/json", "text": str(content)}]},
                 }
-            
+
             elif uri == "actingweb://reminders/pending":
                 reminders = actor.properties.get("reminders", [])
                 pending_reminders = [r for r in reminders if not r.get("completed", False)]
-                content = {
-                    "total_pending": len(pending_reminders),
-                    "reminders": pending_reminders
-                }
+                content = {"total_pending": len(pending_reminders), "reminders": pending_reminders}
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": {
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "application/json", 
-                                "text": str(content)
-                            }
-                        ]
-                    }
+                    "result": {"contents": [{"uri": uri, "mimeType": "application/json", "text": str(content)}]},
                 }
-            
+
             elif uri == "actingweb://usage/stats":
                 notes = actor.properties.get("notes", [])
                 reminders = actor.properties.get("reminders", [])
                 mcp_usage = actor.properties.get("mcp_usage_count", 0)
-                
+
                 # Calculate tag usage
                 tag_counts: Dict[str, int] = {}
                 for note in notes:
                     for tag in note.get("tags", []):
                         tag_counts[tag] = tag_counts.get(tag, 0) + 1
-                
+
                 content = {
                     "mcp_usage_count": mcp_usage,
                     "total_notes": len(notes),
                     "total_reminders": len(reminders),
                     "pending_reminders": len([r for r in reminders if not r.get("completed", False)]),
                     "most_used_tags": dict(sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
-                    "created_at": actor.properties.get("created_at", "unknown")
+                    "created_at": actor.properties.get("created_at", "unknown"),
                 }
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": {
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "application/json",
-                                "text": str(content)
-                            }
-                        ]
-                    }
+                    "result": {"contents": [{"uri": uri, "mimeType": "application/json", "text": str(content)}]},
                 }
-            
+
             else:
                 return self._create_jsonrpc_error(request_id, -32601, f"Resource not found: {uri}")
-                
+
         except Exception as e:
             logger.error(f"Error reading resource {uri}: {e}")
             return self._create_jsonrpc_error(request_id, -32603, f"Resource read failed: {str(e)}")
@@ -475,12 +429,8 @@ class MCPHandler(BaseHandler):
         # According to MCP spec, this is a notification (no response expected)
         # However, some clients may send it as a request, so we respond
         logger.info("MCP client initialization completed")
-        
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {}
-        }
+
+        return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 
     def _create_jsonrpc_error(self, request_id: Any, code: int, message: str) -> Dict[str, Any]:
         """Create a JSON-RPC error response."""
@@ -488,49 +438,48 @@ class MCPHandler(BaseHandler):
 
     def authenticate_and_get_actor(self) -> Any:
         """
-        Authenticate request and get actor from OAuth2 Bearer token.
+        Authenticate request and get actor from ActingWeb Bearer token.
 
-        This method implements Google OAuth2 authentication flow:
+        This method validates ActingWeb tokens issued by our OAuth2 server:
         1. Extracts Bearer token from Authorization header
-        2. If no token, returns None (caller should add WWW-Authenticate header)
-        3. Validates token with Google API
-        4. Retrieves email from Google user info API
-        5. Looks up actor by email address or creates new one
-        6. Returns the actor instance or None if not found/authenticated
+        2. Validates token using ActingWeb OAuth2 server
+        3. Returns the associated actor instance
         """
         auth_header = self.get_auth_header()
-        
+
         if not auth_header or not auth_header.startswith("Bearer "):
             logger.debug("No Bearer token found in Authorization header")
             return None
 
         bearer_token = auth_header[7:]  # Remove "Bearer " prefix
-        
+
         try:
-            from ..oauth2 import create_oauth2_authenticator
-            authenticator = create_oauth2_authenticator(self.config)
-            
-            if not authenticator.is_enabled():
-                logger.warning("OAuth2 not configured")
+            from ..oauth2_server.oauth2_server import get_actingweb_oauth2_server
+
+            oauth2_server = get_actingweb_oauth2_server(self.config)
+
+            # Validate ActingWeb token (not Google token)
+            token_validation = oauth2_server.validate_mcp_token(bearer_token)
+            if not token_validation:
+                logger.debug("ActingWeb token validation failed")
                 return None
-            
-            # Authenticate token and get actor
-            actor_instance, email = authenticator.authenticate_bearer_token(bearer_token)
-            
-            if actor_instance and email:
-                logger.info(f"Successfully authenticated {email} -> actor {actor_instance.id}")
-                return actor_instance
-            else:
-                logger.warning("Bearer token validation failed")
-                return None
-                
+
+            actor_id, client_id, token_data = token_validation
+
+            # Get actor instance
+            from .. import actor as actor_module
+            actor_instance = actor_module.Actor(actor_id, self.config)
+
+            logger.info(f"Successfully authenticated MCP client {client_id} -> actor {actor_id}")
+            return actor_instance
+
         except Exception as e:
-            logger.error(f"Error during OAuth2 authentication: {e}")
+            logger.error(f"Error during ActingWeb token authentication: {e}")
             return None
 
     def get_auth_header(self) -> Optional[str]:
         """Get Authorization header from request."""
-        if hasattr(self, 'request') and self.request and hasattr(self.request, 'headers') and self.request.headers:
+        if hasattr(self, "request") and self.request and hasattr(self.request, "headers") and self.request.headers:
             auth_header = self.request.headers.get("Authorization") or self.request.headers.get("authorization")
             return str(auth_header) if auth_header is not None else None
         return None
@@ -586,17 +535,15 @@ class MCPHandler(BaseHandler):
     def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
         """Create an error response."""
         if status_code == 401:
-            # Add WWW-Authenticate header for OAuth2
+            # Add WWW-Authenticate header for ActingWeb OAuth2 server
             try:
-                from ..oauth2 import create_oauth2_authenticator
-                authenticator = create_oauth2_authenticator(self.config)
-                if authenticator.is_enabled():
-                    www_auth = authenticator.create_www_authenticate_header()
-                    if hasattr(self, 'response') and self.response:
-                        self.response.headers["WWW-Authenticate"] = www_auth
+                base_url = f"{self.config.proto}{self.config.fqdn}"
+                www_auth = f'Bearer realm="ActingWeb MCP", authorization_uri="{base_url}/oauth/authorize"'
+                if hasattr(self, "response") and self.response:
+                    self.response.headers["WWW-Authenticate"] = www_auth
             except Exception as e:
                 logger.error(f"Error adding WWW-Authenticate header: {e}")
-                if hasattr(self, 'response') and self.response:
-                    self.response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
-        
+                if hasattr(self, "response") and self.response:
+                    self.response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb MCP"'
+
         return {"error": True, "status_code": status_code, "message": message}

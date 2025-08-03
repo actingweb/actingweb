@@ -222,6 +222,7 @@ class OAuth2CallbackHandler(BaseHandler):
         logger.info(f"OAuth2 authentication completed successfully for {email} -> {actor_instance.id}")
         return response_data
     
+    
     def _is_safe_redirect(self, url: str) -> bool:
         """
         Check if redirect URL is safe (same domain).

@@ -11,12 +11,12 @@ applications.
 """
 
 from .decorators import mcp_tool, mcp_resource, mcp_prompt
-from .server import create_mcp_server, MCPServerManager
+from .sdk_server import MCPServerManager, get_server_manager
 
 __all__ = [
     "mcp_tool",
     "mcp_resource", 
     "mcp_prompt",
-    "create_mcp_server",
-    "MCPServerManager"
+    "MCPServerManager",
+    "get_server_manager"
 ]

@@ -41,9 +41,14 @@ def add_auth_response(appreq=None, auth_obj=None):
     if auth_obj.response["code"] == 302:
         appreq.response.set_redirect(url=auth_obj.redirect)
     elif auth_obj.response["code"] == 401:
-        appreq.write("Authentication required")
+        if hasattr(appreq, 'response') and appreq.response:
+            if hasattr(appreq.response, 'write'):
+                appreq.response.write("Authentication required")
+            else:
+                appreq.response.body = "Authentication required"
     for h, v in list(auth_obj.response["headers"].items()):
-        appreq.headers[h] = v
+        if hasattr(appreq, 'response') and appreq.response:
+            appreq.response.headers[h] = v
     return True
 
 

@@ -30,7 +30,7 @@ boto3 = "^1.26.0"
 urlfetch = "^1.0.2"
 typing-extensions = "^4.0.0"
 oauthlib = "^3.2.0"
-cryptography = "^41.0.0"
+cryptography = ">=41,<45"
 mcp = { version = "^1.12.3", optional = true }
 
 [tool.poetry.extras]

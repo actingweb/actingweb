@@ -15,10 +15,6 @@ if TYPE_CHECKING:
     from .actor_interface import ActorInterface
     from .integrations.flask_integration import FlaskIntegration
     from .integrations.fastapi_integration import FastAPIIntegration
-    try:
-        from fastapi import FastAPI
-    except ImportError:
-        FastAPI = Any
 
 
 class ActingWebApp:
@@ -58,6 +54,7 @@ class ActingWebApp:
         self._www_auth = "basic"
         self._unique_creator = False
         self._force_email_prop_as_creator = False
+        self._enable_mcp = True  # MCP enabled by default
         
         # Hook registry
         self.hooks = HookRegistry()
@@ -115,6 +112,11 @@ class ActingWebApp:
     def with_email_as_creator(self, enable: bool = True) -> 'ActingWebApp':
         """Force email property as creator."""
         self._force_email_prop_as_creator = enable
+        return self
+        
+    def with_mcp(self, enable: bool = True) -> 'ActingWebApp':
+        """Enable or disable MCP (Model Context Protocol) functionality."""
+        self._enable_mcp = enable
         return self
         
     def add_actor_type(self, name: str, factory: str = "", relationship: str = "friend") -> 'ActingWebApp':
@@ -201,12 +203,17 @@ class ActingWebApp:
                 ui=self._enable_ui,
                 bot=self._bot_config or {},
                 oauth=self._oauth_config or {},
+                mcp=self._enable_mcp,
             )
         return self._config
         
     def get_actor_factory(self) -> Optional[Callable[..., 'ActorInterface']]:
         """Get the registered actor factory function."""
         return self._actor_factory_func
+        
+    def is_mcp_enabled(self) -> bool:
+        """Check if MCP functionality is enabled."""
+        return self._enable_mcp
         
     def integrate_flask(self, flask_app: Flask) -> 'FlaskIntegration':
         """Integrate with Flask application."""
@@ -215,7 +222,7 @@ class ActingWebApp:
         integration.setup_routes()
         return integration
         
-    def integrate_fastapi(self, fastapi_app: 'FastAPI', templates_dir: Optional[str] = None, **options: Any) -> 'FastAPIIntegration':
+    def integrate_fastapi(self, fastapi_app: Any, templates_dir: Optional[str] = None, **options: Any) -> 'FastAPIIntegration':
         """
         Integrate ActingWeb with FastAPI application.
         

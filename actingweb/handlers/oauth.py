@@ -3,11 +3,13 @@ from typing import Any, Dict, Optional
 
 from actingweb import auth
 from actingweb.handlers import base_handler
+from actingweb import config as config_class
 
 
 class OauthHandler(base_handler.BaseHandler):
+    config: config_class.Config  # Explicit type annotation for pylance
 
-    def get(self, actor_id, path):
+    def get(self, actor_id: str, path: str = "") -> None:
         (myself, check) = auth.init_actingweb(
             appreq=self,
             actor_id=actor_id,

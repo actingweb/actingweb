@@ -65,7 +65,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
             if actor_interface:
                 self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
         
-        if len(trustee_root) > 0 and myself.store:
+        if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0 and myself.store:
             myself.store.trustee_root = trustee_root
         self.response.headers["Location"] = str(self.config.root + (myself.id or ""))
         if self.config.www_auth == "oauth" and not is_json:
@@ -76,7 +76,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
             "creator": myself.creator,
             "passphrase": str(myself.passphrase),
         }
-        if len(trustee_root) > 0:
+        if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
             pair["trustee_root"] = trustee_root
         if self.config.ui and not is_json:
             self.response.template_values = pair

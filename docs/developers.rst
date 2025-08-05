@@ -852,6 +852,299 @@ The new interface provides better error handling:
             print(f"Error in email hook: {e}")
             return None
 
+Global Data Storage with Attributes and Buckets
+===============================================
+
+ActingWeb provides a flexible attribute and bucket system for storing global data that needs to be shared across actors or persisted at the application level. This is particularly useful for storing configuration data, client registrations, indexes, and other shared state.
+
+Attributes API
+--------------
+
+The ``Attributes`` class provides a bucket-based storage system:
+
+.. code-block:: python
+
+    from actingweb import attribute
+    
+    # Create a bucket for a specific actor
+    bucket = attribute.Attributes(
+        actor_id="actor123", 
+        bucket="user_preferences", 
+        config=config
+    )
+    
+    # Store data in the bucket
+    bucket.set_attr(name="theme", data="dark")
+    bucket.set_attr(name="language", data="en")
+    bucket.set_attr(name="notifications", data={"email": True, "push": False})
+    
+    # Retrieve individual attributes
+    theme_attr = bucket.get_attr(name="theme")
+    if theme_attr and "data" in theme_attr:
+        theme = theme_attr["data"]  # "dark"
+    
+    # Retrieve the entire bucket
+    all_preferences = bucket.get_bucket()
+    if all_preferences:
+        for attr_name, attr_data in all_preferences.items():
+            if attr_data and "data" in attr_data:
+                print(f"{attr_name}: {attr_data['data']}")
+
+Global Storage Pattern
+----------------------
+
+For global data that isn't associated with a specific actor, use a special global actor ID:
+
+.. code-block:: python
+
+    # Store global application configuration
+    global_config = attribute.Attributes(
+        actor_id="_global_config", 
+        bucket="app_settings", 
+        config=config
+    )
+    
+    # Store application-wide settings
+    global_config.set_attr(name="max_users", data=1000)
+    global_config.set_attr(name="maintenance_mode", data=False)
+    global_config.set_attr(name="api_keys", data={"service_a": "key123", "service_b": "key456"})
+    
+    # Create a global index (e.g., for client registrations)
+    client_index = attribute.Attributes(
+        actor_id="_mcp_global", 
+        bucket="client_index", 
+        config=config
+    )
+    
+    # Store client_id -> actor_id mappings
+    client_index.set_attr(name="client_abc123", data="actor_user456")
+    client_index.set_attr(name="client_def789", data="actor_user789")
+
+Attribute Data Structure
+------------------------
+
+Each attribute stored in the system has this structure:
+
+.. code-block:: python
+
+    {
+        "data": <your_actual_data>,
+        "timestamp": <optional_timestamp>
+    }
+
+When storing data, only provide the actual data - the attribute system handles the structure:
+
+.. code-block:: python
+
+    # Store simple data
+    bucket.set_attr(name="username", data="john_doe")
+    
+    # Store complex data
+    bucket.set_attr(name="user_profile", data={
+        "name": "John Doe",
+        "email": "john@example.com",
+        "preferences": {"theme": "dark", "lang": "en"}
+    })
+    
+    # Retrieve and extract data
+    profile_attr = bucket.get_attr(name="user_profile")
+    if profile_attr and "data" in profile_attr:
+        profile = profile_attr["data"]  # The actual dictionary
+
+Bucket Operations
+-----------------
+
+.. py:method:: set_attr(name, data, timestamp=None)
+
+    Store an attribute in the bucket.
+
+    :param name: Attribute name
+    :param data: Data to store (any JSON-serializable type)
+    :param timestamp: Optional timestamp (auto-generated if not provided)
+    :return: True if successful
+
+.. py:method:: get_attr(name)
+
+    Retrieve a single attribute from the bucket.
+
+    :param name: Attribute name
+    :return: Attribute dictionary with "data" and "timestamp" keys, or None
+
+.. py:method:: get_bucket()
+
+    Retrieve all attributes in the bucket.
+
+    :return: Dictionary mapping attribute names to attribute dictionaries
+
+.. py:method:: delete_attr(name)
+
+    Delete an attribute from the bucket.
+
+    :param name: Attribute name
+    :return: True if successful
+
+.. py:method:: delete_bucket()
+
+    Delete the entire bucket and all its attributes.
+
+    :return: True if successful
+
+Use Cases
+---------
+
+**Client Registry (OAuth2/MCP clients)**:
+
+.. code-block:: python
+
+    # Store client data per actor
+    client_bucket = attribute.Attributes(
+        actor_id=actor_id, 
+        bucket="mcp_clients", 
+        config=config
+    )
+    client_bucket.set_attr(name=client_id, data=client_data)
+    
+    # Global index for client lookup
+    global_index = attribute.Attributes(
+        actor_id="_mcp_global", 
+        bucket="client_index", 
+        config=config
+    )
+    global_index.set_attr(name=client_id, data=actor_id)
+
+**Feature Flags and Configuration**:
+
+.. code-block:: python
+
+    # Application-wide feature flags
+    features = attribute.Attributes(
+        actor_id="_global_app", 
+        bucket="feature_flags", 
+        config=config
+    )
+    features.set_attr(name="new_ui_enabled", data=True)
+    features.set_attr(name="beta_features", data=["advanced_search", "ai_chat"])
+
+**User Session Management**:
+
+.. code-block:: python
+
+    # Per-actor session data
+    sessions = attribute.Attributes(
+        actor_id=actor_id, 
+        bucket="sessions", 
+        config=config
+    )
+    sessions.set_attr(name=session_id, data={
+        "created_at": "2024-01-01T12:00:00Z",
+        "last_activity": "2024-01-01T12:30:00Z",
+        "user_agent": "Mozilla/5.0..."
+    })
+
+**Cache and Temporary Data**:
+
+.. code-block:: python
+
+    # Temporary cache data
+    cache = attribute.Attributes(
+        actor_id="_global_cache", 
+        bucket="api_responses", 
+        config=config
+    )
+    cache.set_attr(name=cache_key, data={
+        "response": api_response_data,
+        "expires_at": "2024-01-01T13:00:00Z"
+    })
+
+Best Practices
+--------------
+
+1. **Use Descriptive Bucket Names**: Choose bucket names that clearly indicate their purpose.
+
+2. **Consistent Global Actor IDs**: Use a consistent naming pattern for global actor IDs (e.g., ``_global_*``, ``_app_*``).
+
+3. **Handle Missing Data**: Always check if attribute data exists before using it.
+
+4. **Avoid Large Objects**: The attribute system is designed for metadata and configuration, not large binary data.
+
+5. **Use JSON-Serializable Data**: Store only data that can be serialized to JSON.
+
+Example: Complete Client Registry Implementation
+-----------------------------------------------
+
+Here's a complete example of using the attribute system for a client registry:
+
+.. code-block:: python
+
+    class ClientRegistry:
+        def __init__(self, config):
+            self.config = config
+        
+        def register_client(self, actor_id: str, client_data: dict) -> None:
+            """Register a client for a specific actor."""
+            # Store client data in actor's bucket
+            client_bucket = attribute.Attributes(
+                actor_id=actor_id, 
+                bucket="clients", 
+                config=self.config
+            )
+            client_bucket.set_attr(name=client_data["client_id"], data=client_data)
+            
+            # Update global index for fast lookup
+            global_index = attribute.Attributes(
+                actor_id="_global_registry", 
+                bucket="client_index", 
+                config=self.config
+            )
+            global_index.set_attr(name=client_data["client_id"], data=actor_id)
+        
+        def find_client(self, client_id: str) -> dict:
+            """Find a client by ID using the global index."""
+            # Look up actor ID from global index
+            global_index = attribute.Attributes(
+                actor_id="_global_registry", 
+                bucket="client_index", 
+                config=self.config
+            )
+            
+            actor_id_attr = global_index.get_attr(name=client_id)
+            if not actor_id_attr or "data" not in actor_id_attr:
+                return None
+            
+            actor_id = actor_id_attr["data"]
+            
+            # Get client data from actor's bucket
+            client_bucket = attribute.Attributes(
+                actor_id=actor_id, 
+                bucket="clients", 
+                config=self.config
+            )
+            
+            client_attr = client_bucket.get_attr(name=client_id)
+            if client_attr and "data" in client_attr:
+                return client_attr["data"]
+            
+            return None
+        
+        def list_clients_for_actor(self, actor_id: str) -> list:
+            """List all clients for a specific actor."""
+            client_bucket = attribute.Attributes(
+                actor_id=actor_id, 
+                bucket="clients", 
+                config=self.config
+            )
+            
+            bucket_data = client_bucket.get_bucket()
+            if not bucket_data:
+                return []
+            
+            clients = []
+            for attr_data in bucket_data.values():
+                if attr_data and "data" in attr_data:
+                    clients.append(attr_data["data"])
+            
+            return clients
+
 Testing
 =======
 
@@ -883,3 +1176,20 @@ The new interface makes testing much easier:
             actor = ActorInterface.create(creator="test@example.com", config=self.app.get_config())
             self.assertIsNotNone(actor.id)
             self.assertEqual(actor.creator, "test@example.com")
+        
+        def test_attribute_storage(self):
+            from actingweb import attribute
+            
+            # Test bucket operations
+            bucket = attribute.Attributes(
+                actor_id="_test_global", 
+                bucket="test_data", 
+                config=self.app.get_config()
+            )
+            
+            # Store and retrieve data
+            bucket.set_attr(name="test_key", data={"value": 42})
+            
+            result = bucket.get_attr(name="test_key")
+            self.assertIsNotNone(result)
+            self.assertEqual(result["data"]["value"], 42)

@@ -1025,6 +1025,201 @@ actingweb.net/myapp/<actor-id>/oauth?code=… where processing of the code
 can be done and the final token request to the 3\ :sup:`rd` party
 service can be done.
 
+/mcp - Model Context Protocol (OPTIONAL)
+========================================
+
+Overview
+-----------------------------
+
+The /mcp endpoint enables ActingWeb actors to expose their functionality
+through the Model Context Protocol (MCP), allowing them to be accessed by
+AI language models and MCP-compatible clients. This provides a standardized
+way for AI systems to interact with actors' resources, execute actions, and
+use actor methods as prompts.
+
+The mapping between ActingWeb and MCP concepts is as follows:
+
+- **ActingWeb Actions** (/actions) → **MCP Tools** (functions with side effects)
+- **ActingWeb Resources** (/resources) → **MCP Resources** (data retrieval)
+- **ActingWeb Methods** (/methods) → **MCP Prompts** (templated interactions)
+
+MCP Integration Model
+-----------------------------
+
+When the MCP endpoint is enabled, an actor MUST expose an MCP server at the
+/mcp endpoint that translates between the ActingWeb REST protocol and the MCP
+JSON-RPC protocol. The MCP server acts as a bridge, allowing MCP clients to
+discover and interact with the actor's capabilities without needing to understand
+the ActingWeb protocol directly.
+
+The integration follows these principles:
+
+1. **Selective Exposure**: Not all actions, resources, or methods need to be
+   exposed through MCP. Actors use the hook system to explicitly mark which
+   endpoints should be available via MCP.
+
+2. **OAuth2 Authentication**: MCP endpoints use OAuth2 with an external
+   authentication provider. The server validates Bearer tokens with the
+   provider's APIs and retrieves the user's email address to look up the
+   corresponding ActingWeb actor.
+
+3. **Protocol Translation**: The MCP server translates between MCP's JSON-RPC
+   messages and ActingWeb's RESTful endpoints, handling data transformation
+   and error mapping.
+
+4. **Web-Only Transport**: The MCP server is exposed as a web service endpoint,
+   not via stdio or other transports. Clients connect via HTTP/HTTPS using
+   standard web protocols (WebSocket or Server-Sent Events).
+
+MCP Endpoint Structure
+-----------------------------
+
+The /mcp endpoint MUST be exposed at the application root level (similar to /bot)
+and use authentication to determine the actor context:
+
+**/mcp**
+  The /mcp endpoint serves as the MCP server connection point. It MUST:
+  
+  - Be accessible at the root level without requiring an actor ID in the path
+  - Use OAuth2 Bearer tokens from an external authentication provider
+  - Validate Bearer tokens with the provider's token validation API
+  - Retrieve user email from the provider's user information API
+  - Look up the ActingWeb actor based on the authenticated email address
+  - Return OAuth2 redirect response if no valid Bearer token is provided
+  - Accept WebSocket connections for bidirectional MCP communication
+  - Alternatively support Server-Sent Events (SSE) for server-to-client messages
+    with a separate POST endpoint for client-to-server messages
+  - Handle MCP JSON-RPC messages according to the MCP specification
+  - Provide proper CORS headers for browser-based clients
+
+  OAuth2 authentication and actor resolution:
+  
+  ::
+
+    # OAuth2 Bearer token authentication
+    GET /mcp HTTP/1.1
+    Authorization: Bearer <oauth2-access-token>
+    Upgrade: websocket
+    Connection: Upgrade
+    
+    # The server:
+    # 1. Validates the Bearer token with the provider's token validation API
+    # 2. Retrieves user email from the provider's user information API  
+    # 3. Looks up the corresponding ActingWeb actor by email
+    # 4. Establishes MCP session for that actor
+
+  If no valid Bearer token is provided, the server MUST return an OAuth2
+  redirect response:
+  
+  ::
+
+    HTTP/1.1 401 Unauthorized
+    Content-Type: application/json
+    
+    {
+      "error": "authentication_required",
+      "auth_url": "https://provider.example.com/oauth2/auth?client_id=...&redirect_uri=...&scope=openid+email+profile&response_type=code",
+      "message": "Please authenticate with the configured OAuth2 provider to access MCP"
+    }
+
+  Connection negotiation with OAuth2:
+  
+  ::
+
+    # WebSocket connection with OAuth2
+    GET /mcp HTTP/1.1
+    Authorization: Bearer <oauth2-access-token>
+    Upgrade: websocket
+    Connection: Upgrade
+    
+    # Or SSE connection with OAuth2
+    GET /mcp HTTP/1.1
+    Authorization: Bearer <oauth2-access-token>
+    Accept: text/event-stream
+
+Hook-based MCP Exposure
+-----------------------------
+
+Actors control which functionality is exposed through MCP using decorators
+or configuration. The following attributes on hooks indicate MCP exposure:
+
+::
+
+  @action_hook("send_notification")
+  @mcp_tool(description="Send a notification to the user")
+  def handle_notification(actor, action_name, data):
+      # Implementation
+      return {"status": "sent"}
+
+  @resource_hook("config")
+  @mcp_resource(uri_template="config://{path}")
+  def get_config(actor, path):
+      # Implementation
+      return config_data
+
+  @method_hook("generate_report")
+  @mcp_prompt(title="Generate Report", 
+              arguments=["report_type", "date_range"])
+  def generate_report_prompt(actor, method_name, data):
+      # Implementation
+      return prompt_template
+
+MCP Feature Mapping
+-----------------------------
+
+**Tools (from Actions)**
+
+ActingWeb actions that trigger external effects map naturally to MCP tools.
+The MCP server MUST:
+
+- Generate tool schemas from action definitions
+- Handle parameter validation and type conversion
+- Execute actions through the standard /actions endpoint
+- Return structured results in MCP format
+
+**Resources (from Resources)**
+
+ActingWeb resources provide data access, mapping to MCP resources. The
+MCP server MUST:
+
+- Create resource URIs following MCP conventions
+- Support resource discovery and listing
+- Transform ActingWeb resource responses to MCP format
+- Handle resource subscriptions if supported
+
+**Prompts (from Methods)**
+
+ActingWeb methods that generate templated responses or interactions map
+to MCP prompts. The MCP server MUST:
+
+- Extract prompt templates from method implementations
+- Support argument substitution
+- Return formatted prompt content
+
+Security Considerations
+-----------------------------
+
+MCP integration introduces additional security considerations:
+
+1. **Consent**: Actors MUST NOT expose any functionality through MCP without
+   explicit configuration or user consent.
+
+2. **Access Control**: The MCP server MUST respect ActingWeb's trust model,
+   only exposing functionality appropriate to the authenticated client's
+   trust level.
+
+3. **Rate Limiting**: MCP endpoints SHOULD implement rate limiting to prevent
+   abuse by AI systems making excessive requests.
+
+4. **Audit Trail**: All MCP interactions SHOULD be logged for security and
+   debugging purposes.
+
+Option Tag
+-----------------------------
+
+Actors supporting MCP MUST include "mcp" in their supported option tags
+returned by /meta/actingweb/supported.
+
 /trust - Trust Relationships (OPTIONAL)
 =======================================
 

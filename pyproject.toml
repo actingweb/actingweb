@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.1"
+version = "3.2"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@greger.io>"]
 maintainers = ["Greger Wedel <support@greger.io>"]
@@ -29,6 +29,12 @@ pynamodb = "^6.0.0"
 boto3 = "^1.26.0"
 urlfetch = "^1.0.2"
 typing-extensions = "^4.0.0"
+oauthlib = "^3.2.0"
+cryptography = "^41.0.0"
+mcp = { version = "^1.12.3", optional = true }
+
+[tool.poetry.extras]
+mcp = ["mcp"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"
@@ -106,7 +112,7 @@ warn_unreachable = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = ["urlfetch.*", "pynamodb.*", "boto3.*", "botocore.*"]
+module = ["urlfetch.*", "pynamodb.*", "boto3.*", "botocore.*", "mcp.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

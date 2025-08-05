@@ -2,6 +2,112 @@
 CHANGELOG
 =========
 
+v3.2: TBD, 2025
+-----------------
+
+**OAuth2 Authentication System and Enhanced Integrations**
+
+ADDED
+~~~~~
+
+- **OAuth2 Implementation**:
+  - New oauth2.py module with comprehensive OAuth2 authentication using oauthlib WebApplicationClient
+  - Support for Google and GitHub OAuth2 providers with automatic provider detection
+  - OAuth2CallbackHandler for secure callback processing with state parameter validation
+  - Email validation system to prevent identity confusion attacks
+  - Login hint parameter support for Google OAuth2 to improve user experience
+  - State parameter encryption with CSRF protection and email validation
+
+- **MCP OAuth2 Authorization Server**:
+  - Complete RFC 7591/RFC 8414 compliant OAuth2 authorization server for MCP (Model Context Protocol) clients
+  - Dynamic Client Registration (DCR) endpoint for MCP client registration
+  - OAuth2 authorization and token endpoints with proper scope handling
+  - Separate token management system for ActingWeb tokens vs Google tokens
+  - Per-actor MCP client credential storage using ActingWeb attribute bucket pattern
+  - State parameter encryption with MCP context preservation for OAuth2 flows
+  - Global index buckets for efficient MCP client lookup across actors
+  - Integration with existing Google OAuth2 for user authentication proxying
+
+- **Enhanced Authentication Flow**:
+  - Modified factory endpoint behavior: GET shows email form, POST triggers OAuth2 with email hint
+  - Email validation step to ensure authenticated email matches form input
+  - User-friendly error templates for authentication failures
+  - Security enhancement preventing form email != OAuth2 email mismatch attacks
+  - Dual OAuth2 callback handling supporting both ActingWeb and MCP flows
+
+- **FastAPI Integration Enhancements**:
+  - Improved FastAPI integration with better async/await handling
+  - Enhanced template and static file support for FastAPI applications
+  - Better separation of GET/POST handling in factory routes
+  - Improved error handling and response formatting for FastAPI
+
+- **Integration Improvements**:
+  - Enhanced both Flask and FastAPI integrations with OAuth2 callback handling
+  - Improved factory route handling with separate GET/POST methods
+  - Better template variable population for authentication forms
+  - Enhanced error handling across both integrations
+
+CHANGED
+~~~~~~~
+
+- **Authentication System**:
+  - Factory routes now handle GET and POST separately for better UX
+  - Enhanced OAuth callback processing with comprehensive validation
+  - Improved state parameter handling with encryption and validation
+  - Better error messaging and user guidance for authentication failures
+
+- **Integration Layer**:
+  - Updated both Flask and FastAPI integrations to support new OAuth2 flow
+  - Enhanced template rendering with better context and error handling
+  - Improved factory handler logic with cleaner separation of concerns
+  - Better support for custom authentication flows in integrations
+
+FIXED
+~~~~~
+
+- **Type Safety**:
+  - Fixed all pylance/mypy type annotation errors in OAuth2 implementation
+  - Enhanced type safety for OAuth2 classes and methods
+  - Better null safety checks in authentication flows
+  - Improved Union type handling for request bodies
+
+- **Authentication Issues**:
+  - Fixed OAuth callback handling edge cases
+  - Resolved state parameter validation issues
+  - Fixed email validation logic for OAuth2 providers
+  - Enhanced error handling in authentication flows
+
+- **Handler Integration Issues**:
+  - Fixed critical auth.py bug where handler objects were incorrectly treated as response objects
+  - Resolved AttributeError: 'SubscriptionRootHandler' object has no attribute 'write'
+  - Resolved AttributeError: 'SubscriptionRootHandler' object has no attribute 'headers'
+  - Updated auth.init_actingweb() to properly access appreq.response.write() and appreq.response.headers
+  - Added defensive checks for response object availability in authentication flows
+
+- **DynamoDB Storage Issues**:
+  - Fixed DynamoDB ValidationException for authorization codes exceeding 2KB index key size limit
+  - Fixed DynamoDB ValidationException for access tokens exceeding size limits
+  - Implemented individual property storage pattern for large data structures
+  - Separated Google token data storage from index keys to prevent size limit violations
+  - Added reference key pattern for efficient lookup of separated token data
+
+SECURITY
+~~~~~~~~
+
+- **OAuth2 Security Enhancements**:
+  - Implemented comprehensive email validation to prevent identity attacks
+  - Added state parameter encryption for CSRF protection
+  - Enhanced callback validation with multiple security checks
+  - Improved error handling to prevent information leakage
+
+- **MCP Authorization Server Security**:
+  - RFC 7591 compliant Dynamic Client Registration with proper client credential generation
+  - Per-actor client isolation using ActingWeb security boundary model
+  - State parameter encryption with MCP context preservation prevents CSRF attacks
+  - Secure token separation between ActingWeb internal tokens and Google OAuth2 tokens
+  - Proper scope validation and authorization code flow implementation
+  - Client credential storage encrypted at rest using ActingWeb property system
+
 v3.1: Jul 28, 2025
 --------------------
 

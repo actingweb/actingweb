@@ -17,6 +17,7 @@ try:
     from cryptography.fernet import Fernet  # type: ignore[import-not-found]
 except ImportError:
     Fernet = None
+from .. import attribute
 from .. import config as config_class
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,21 @@ class OAuth2StateManager:
         # 2. Rotate keys periodically
         # 3. Support multiple keys for graceful rotation
 
+        # Try to get key from attribute bucket
+        key_bucket: Optional[attribute.Attributes] = None
+        try:
+            key_bucket = attribute.Attributes(
+                actor_id="_mcp_system", bucket="oauth2_state", config=self.config
+            )
+            key_attr = key_bucket.get_attr("state_encryption_key")
+            if key_attr and "data" in key_attr:
+                try:
+                    return base64.urlsafe_b64decode(key_attr["data"].encode("utf-8"))
+                except Exception:
+                    logger.warning("Invalid OAuth2 state encryption key in attribute store")
+        except Exception:
+            logger.warning("Could not access attribute store for OAuth2 state key")
+
         # Try to get key from config or environment
         if hasattr(self.config, "oauth2_state_encryption_key"):
             key_str = getattr(self.config, "oauth2_state_encryption_key")
@@ -172,19 +188,24 @@ class OAuth2StateManager:
                 try:
                     return base64.urlsafe_b64decode(key_str.encode("utf-8"))
                 except Exception:
-                    pass
+                    logger.warning("Invalid OAuth2 state encryption key in config")
 
         # Generate new key (this should be persistent in production)
         if Fernet is None:
             raise ImportError("cryptography package is required")
         key: bytes = Fernet.generate_key()
 
-        # Log warning about key generation
-        logger.warning(
-            "Generated new OAuth2 state encryption key. " "In production, store this key persistently: %s",
-            base64.urlsafe_b64encode(key).decode("utf-8"),
-        )
+        # Persist key in attribute bucket if available
+        if key_bucket:
+            try:
+                key_bucket.set_attr(
+                    name="state_encryption_key",
+                    data=base64.urlsafe_b64encode(key).decode("utf-8"),
+                )
+            except Exception:
+                logger.warning("Failed to store OAuth2 state encryption key in attribute store")
 
+        logger.warning("Generated new OAuth2 state encryption key")
         return key
 
 

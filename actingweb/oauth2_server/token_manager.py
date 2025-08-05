@@ -29,6 +29,7 @@ class ActingWebTokenManager:
         self.config = config
         self.tokens_property = "_mcp_tokens"  # Actor property to store tokens
         self.auth_codes_property = "_mcp_auth_codes"  # Temporary auth codes
+        self.refresh_tokens_property = "_mcp_refresh_tokens"  # Actor property for refresh tokens
         self.token_prefix = "aw_"  # Prefix to distinguish from Google tokens
         self.default_expires_in = 3600  # 1 hour
         self.refresh_token_expires_in = 2592000  # 30 days
@@ -587,23 +588,148 @@ class ActingWebTokenManager:
     def _store_refresh_token(self, actor_id: str, token: str, refresh_data: Dict[str, Any]) -> None:
         """Store refresh token."""
         # Similar to access token storage
-        pass  # Placeholder
+        try:
+            actor_obj = actor_module.Actor(actor_id, self.config)
+            actor_data = actor_obj.get(actor_id)
+            if not actor_data or not actor_obj.property:
+                logger.error(f"Actor {actor_id} not found or has no properties")
+                raise RuntimeError(f"Actor {actor_id} not found")
+
+            token_property = f"{self.refresh_tokens_property}_{token}"
+            actor_obj.property[token_property] = json.dumps(refresh_data)
+
+            # Also store in global index for efficient lookup
+            from .. import attribute
+
+            index_bucket = attribute.Attributes(
+                actor_id="_mcp_system",
+                bucket="refresh_token_index",
+                config=self.config,
+            )
+            index_bucket.set_attr(name=token, data=actor_id)
+
+            logger.debug(f"Stored refresh token for actor {actor_id}")
+
+        except Exception as e:
+            logger.error(f"Error storing refresh token for actor {actor_id}: {e}")
+            raise
 
     def _load_refresh_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Load refresh token data."""
-        return None  # Placeholder
+        try:
+            from .. import attribute
+
+            index_bucket = attribute.Attributes(
+                actor_id="_mcp_system",
+                bucket="refresh_token_index",
+                config=self.config,
+            )
+
+            found_actor_data = index_bucket.get_attr(name=token)
+            if not found_actor_data or "data" not in found_actor_data:
+                logger.debug(f"Refresh token {token} not found in global index")
+                return None
+
+            actor_id = found_actor_data["data"]
+            actor_obj = actor_module.Actor(actor_id, self.config)
+            actor_data = actor_obj.get(actor_id)
+            if not actor_data or not actor_obj.property:
+                logger.error(f"Actor {actor_id} not found or has no properties")
+                return None
+
+            token_property = f"{self.refresh_tokens_property}_{token}"
+            token_json = actor_obj.property[token_property] if actor_obj.property else None
+            if token_json is None:
+                logger.warning(
+                    f"Refresh token {token} found in index but not in actor {actor_id}"
+                )
+                index_bucket.delete_attr(name=token)
+                return None
+
+            token_data = json.loads(token_json)
+            if isinstance(token_data, dict):
+                logger.debug(f"Found refresh token {token} in actor {actor_id}")
+                return token_data
+            logger.warning(f"Invalid refresh token data format for {token}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error loading refresh token {token}: {e}")
+            return None
 
     def _remove_refresh_token(self, token: str) -> None:
         """Remove refresh token."""
-        pass  # Placeholder
+        try:
+            from .. import attribute
+
+            index_bucket = attribute.Attributes(
+                actor_id="_mcp_system",
+                bucket="refresh_token_index",
+                config=self.config,
+            )
+
+            found_actor_data = index_bucket.get_attr(name=token)
+            if found_actor_data and "data" in found_actor_data:
+                actor_id = found_actor_data["data"]
+                actor_obj = actor_module.Actor(actor_id, self.config)
+                if actor_obj.property:
+                    token_property = f"{self.refresh_tokens_property}_{token}"
+                    actor_obj.property[token_property] = None
+                logger.debug(f"Removed refresh token {token} from actor {actor_id}")
+
+            index_bucket.delete_attr(name=token)
+
+        except Exception as e:
+            logger.error(f"Error removing refresh token {token}: {e}")
 
     def _revoke_access_token_by_id(self, token_id: str) -> None:
         """Revoke access token by ID."""
-        pass  # Placeholder
+        try:
+            from .. import attribute
+
+            index_bucket = attribute.Attributes(
+                actor_id="_mcp_system",
+                bucket="access_token_index",
+                config=self.config,
+            )
+
+            bucket_data = index_bucket.get_bucket()
+            if not bucket_data:
+                return
+
+            for token, data in list(bucket_data.items()):
+                token_data = self._load_access_token(token)
+                if token_data and token_data.get("token_id") == token_id:
+                    self._remove_access_token(token)
+                    break
+
+        except Exception as e:
+            logger.error(f"Error revoking access token id {token_id}: {e}")
 
     def _revoke_refresh_tokens_for_access_token(self, token_id: str) -> None:
         """Revoke refresh tokens associated with access token."""
-        pass  # Placeholder
+        try:
+            from .. import attribute
+
+            index_bucket = attribute.Attributes(
+                actor_id="_mcp_system",
+                bucket="refresh_token_index",
+                config=self.config,
+            )
+
+            bucket_data = index_bucket.get_bucket()
+            if not bucket_data:
+                return
+
+            for token in list(bucket_data.keys()):
+                refresh_data = self._load_refresh_token(token)
+                if refresh_data and refresh_data.get("access_token_id") == token_id:
+                    self._remove_refresh_token(token)
+
+        except Exception as e:
+            logger.error(
+                f"Error revoking refresh tokens for access token id {token_id}: {e}"
+            )
 
 
 # Global token manager

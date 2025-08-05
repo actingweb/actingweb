@@ -920,6 +920,14 @@ For global data that isn't associated with a specific actor, use a special globa
     client_index.set_attr(name="client_abc123", data="actor_user456")
     client_index.set_attr(name="client_def789", data="actor_user789")
 
+    # Persist OAuth2 state encryption key
+    oauth2_state = attribute.Attributes(
+        actor_id="_mcp_system",
+        bucket="oauth2_state",
+        config=config
+    )
+    oauth2_state.set_attr(name="state_encryption_key", data="base64-key")
+
 Attribute Data Structure
 ------------------------
 

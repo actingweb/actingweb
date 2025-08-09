@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.2: TBD, 2025
+v3.2.1: TBD, 2025
 -----------------
 
 **OAuth2 Authentication System and Enhanced Integrations**
@@ -61,6 +61,15 @@ CHANGED
   - Enhanced template rendering with better context and error handling
   - Improved factory handler logic with cleaner separation of concerns
   - Better support for custom authentication flows in integrations
+
+- **Dependency Management**:
+  - Updated all dependencies to latest stable versions
+  - Major version updates: Flask ^2.0.0 → ^3.1.1, Werkzeug ^2.0.0 → ^3.1.3
+  - FastAPI ^0.100.0 → ^0.116.1, uvicorn ^0.23.1 → ^0.35.0
+  - Core dependencies: boto3 ^1.26.0 → ^1.40.6, urlfetch ^1.0.2 → ^2.0.1, cryptography ^41.0.0 → ^45.0.6
+  - Development tools: pytest ^7.0.0 → ^8.4.1, black ^22.0.0 → ^25.1.0, ruff ^0.1.0 → ^0.12.8
+  - Documentation: sphinx ^5.0.0 → ^8.2.3, sphinx-rtd-theme ^1.0.0 → ^3.0.2
+  - Restructured optional dependencies into independent extras: flask, fastapi, mcp, and all
 
 FIXED
 ~~~~~

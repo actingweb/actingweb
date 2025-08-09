@@ -5,7 +5,6 @@ Main ActingWebApp class providing fluent API for application configuration.
 import os
 import logging
 from typing import Optional, Dict, Any, Callable, Union, TYPE_CHECKING
-from flask import Flask
 
 from ..config import Config
 from ..actor import Actor as CoreActor
@@ -215,9 +214,15 @@ class ActingWebApp:
         """Check if MCP functionality is enabled."""
         return self._enable_mcp
         
-    def integrate_flask(self, flask_app: Flask) -> 'FlaskIntegration':
+    def integrate_flask(self, flask_app: Any) -> 'FlaskIntegration':
         """Integrate with Flask application."""
-        from .integrations.flask_integration import FlaskIntegration
+        try:
+            from .integrations.flask_integration import FlaskIntegration
+        except ImportError as e:
+            raise ImportError(
+                "Flask integration requires Flask to be installed. "
+                "Install with: pip install 'actingweb[flask]'"
+            ) from e
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
         return integration
@@ -240,12 +245,10 @@ class ActingWebApp:
         try:
             from .integrations.fastapi_integration import FastAPIIntegration
         except ImportError as e:
-            if "fastapi" in str(e).lower():
-                raise ImportError(
-                    "FastAPI is required for FastAPI integration. "
-                    "Install with: pip install fastapi"
-                ) from e
-            raise
+            raise ImportError(
+                "FastAPI integration requires FastAPI to be installed. "
+                "Install with: pip install 'actingweb[fastapi]'"
+            ) from e
             
         integration = FastAPIIntegration(self, fastapi_app, templates_dir=templates_dir)
         integration.setup_routes()
@@ -253,6 +256,13 @@ class ActingWebApp:
         
     def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False) -> None:
         """Run as standalone application with Flask."""
+        try:
+            from flask import Flask
+        except ImportError as e:
+            raise ImportError(
+                "Flask is required for standalone mode. "
+                "Install with: pip install 'actingweb[flask]'"
+            ) from e
         flask_app = Flask(__name__)
         self.integrate_flask(flask_app)
         flask_app.run(host=host, port=port, debug=debug)

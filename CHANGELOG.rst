@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.2.1: TBD, 2025
+v3.2.1: Aug 9, 2025
 -----------------
 
 **OAuth2 Authentication System and Enhanced Integrations**

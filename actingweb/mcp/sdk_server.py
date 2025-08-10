@@ -64,7 +64,7 @@ class ActingWebMCPServer:
         # Set up MCP handlers
         self._setup_handlers()
 
-        logger.info(f"Created ActingWeb MCP server for actor {actor_id}")
+        logger.debug(f"Created ActingWeb MCP server for actor {actor_id}")
 
     def _setup_handlers(self) -> None:
         """Set up MCP protocol handlers."""
@@ -335,7 +335,7 @@ class MCPServerManager:
         """
         if actor_id not in self._servers:
             self._servers[actor_id] = ActingWebMCPServer(actor_id, hook_registry, actor)
-            logger.info(f"Created MCP server for actor {actor_id}")
+            logger.debug(f"Created MCP server for actor {actor_id}")
 
         return self._servers[actor_id]
 
@@ -343,7 +343,7 @@ class MCPServerManager:
         """Remove and cleanup MCP server for an actor."""
         if actor_id in self._servers:
             del self._servers[actor_id]
-            logger.info(f"Removed MCP server for actor {actor_id}")
+            logger.debug(f"Removed MCP server for actor {actor_id}")
 
     def has_server(self, actor_id: str) -> bool:
         """Check if a server exists for the given actor."""

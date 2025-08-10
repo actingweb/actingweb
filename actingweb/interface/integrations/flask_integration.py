@@ -304,7 +304,7 @@ class FlaskIntegration:
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
                                 redirect_url = f"/{actor_instance.id}/www"
-                                logging.info(f"Redirecting authenticated user {email} to {redirect_url}")
+                                logging.debug(f"Redirecting authenticated user {email} to {redirect_url}")
                                 return redirect(redirect_url, code=302)
                     # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
                     logging.debug("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
@@ -506,7 +506,7 @@ class FlaskIntegration:
                         redirect_after_auth=redirect_after_auth, email_hint=email
                     )
 
-                    logging.info(f"Redirecting to OAuth2 with email hint: {email}")
+                    logging.debug(f"Redirecting to OAuth2 with email hint: {email}")
                     return redirect(auth_url)
                 else:
                     logging.warning("OAuth2 not configured - falling back to standard actor creation")
@@ -571,7 +571,7 @@ class FlaskIntegration:
                         return Response("Actor creation failed", status=400)
 
                 if actor_interface and hasattr(actor_interface, "id"):
-                    logging.info(f"Actor created successfully: {actor_interface.id} for {email}")
+                    logging.debug(f"Actor created successfully: {actor_interface.id} for {email}")
 
                     # Check if this is a JSON request or web form request
                     is_json_request = request.content_type and "application/json" in request.content_type
@@ -819,7 +819,7 @@ class FlaskIntegration:
         # Check for OAuth token cookie (for session-based authentication)
         oauth_cookie = request.cookies.get("oauth_token")
         if oauth_cookie:
-            logging.info(f"Found oauth_token cookie with length {len(oauth_cookie)}")
+            logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
             # Validate the OAuth cookie token
             try:
                 from ...oauth2 import create_oauth2_authenticator
@@ -830,11 +830,11 @@ class FlaskIntegration:
                     if user_info:
                         email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
                         if email:
-                            logging.info(f"OAuth cookie validation successful for {email}")
+                            logging.debug(f"OAuth cookie validation successful for {email}")
                             return None  # Valid OAuth cookie
-                    logging.info("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
+                    logging.debug("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
             except Exception as e:
-                logging.info(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
+                logging.debug(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
 
         # No valid authentication - redirect to OAuth2
         original_url = request.url
@@ -855,7 +855,7 @@ class FlaskIntegration:
                     if clear_cookie:
                         # Clear the expired oauth_token cookie
                         response.delete_cookie("oauth_token", path="/")
-                        logging.info("Cleared expired oauth_token cookie")
+                        logging.debug("Cleared expired oauth_token cookie")
                     return response
         except Exception as e:
             logging.error(f"Error creating OAuth2 redirect: {e}")

@@ -65,7 +65,7 @@ class ActingWebTokenManager:
 
         self._store_auth_code(actor_id, auth_code, auth_data)
 
-        logger.info(f"Created authorization code for client {client_id}, actor {actor_id}")
+        logger.debug(f"Created authorization code for client {client_id}, actor {actor_id}")
         return auth_code
 
     def exchange_authorization_code(
@@ -319,7 +319,7 @@ class ActingWebTokenManager:
             index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="auth_code_index", config=self.config)
             index_bucket.set_attr(name=code, data=actor_id)
 
-            logger.info(f"Successfully stored auth code for actor {actor_id}")
+            logger.debug(f"Successfully stored auth code for actor {actor_id}")
 
         except Exception as e:
             logger.error(f"Error storing auth code for actor {actor_id}: {e}")

@@ -135,21 +135,21 @@ class OAuth2StateManager:
         Returns:
             MCP context or None if invalid
         """
-        logger.info(f"Extracting MCP context from state: {state_param[:50]}... (truncated)")
+        logger.debug(f"Extracting MCP context from state: {state_param[:50]}... (truncated)")
         state_data = self.validate_and_extract_state(state_param)
-        logger.info(f"Validated state data: {state_data}")
+        logger.debug(f"Validated state data: {state_data}")
         if not state_data:
             logger.warning("State validation failed")
             return None
 
         # Validate this is an MCP flow
         flow_type = state_data.get("flow_type")
-        logger.info(f"Flow type from state: {flow_type}")
+        logger.debug(f"Flow type from state: {flow_type}")
         if flow_type != "mcp_oauth2":
             logger.warning(f"State parameter is not for MCP OAuth2 flow, got: {flow_type}")
             return None
 
-        logger.info("Successfully extracted MCP context")
+        logger.debug("Successfully extracted MCP context")
         return state_data
 
     def _get_or_create_encryption_key(self) -> bytes:

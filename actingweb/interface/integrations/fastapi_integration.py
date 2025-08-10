@@ -302,7 +302,7 @@ async def check_authentication_and_redirect(request: Request, config: Any) -> Op
     # Check for OAuth token cookie (for session-based authentication)
     oauth_cookie = request.cookies.get("oauth_token")
     if oauth_cookie:
-        logging.info(f"Found oauth_token cookie with length {len(oauth_cookie)}")
+        logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
         # Validate the OAuth cookie token
         try:
             from ...oauth2 import create_oauth2_authenticator
@@ -313,12 +313,12 @@ async def check_authentication_and_redirect(request: Request, config: Any) -> Op
                 if user_info:
                     email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
                     if email:
-                        logging.info(f"OAuth cookie validation successful for {email}")
+                        logging.debug(f"OAuth cookie validation successful for {email}")
                         return None  # Valid OAuth cookie
-                logging.info("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
+                logging.debug("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
                 # Token expired/invalid - fall through to create redirect response with cookie cleanup
         except Exception as e:
-            logging.info(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
+            logging.debug(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
             # Validation failed - fall through to redirect
 
     # No valid authentication - redirect to OAuth2 provider
@@ -409,30 +409,30 @@ class FastAPIIntegration:
             error = request.query_params.get("error", "")
 
             # Check if this is an MCP OAuth2 callback (encrypted state)
-            self.logger.info(
+            self.logger.debug(
                 f"OAuth callback received - code: {bool(code)}, error: {error}, state: {state[:100]}..."
             )  # Log first 100 chars
 
             # Debug: Check if MCP is enabled
             config = self.aw_app.get_config()
             mcp_enabled = getattr(config, "mcp", False)
-            self.logger.info(f"MCP enabled in config: {mcp_enabled}")
+            self.logger.debug(f"MCP enabled in config: {mcp_enabled}")
 
             try:
                 from ...oauth2_server.state_manager import get_oauth2_state_manager
 
                 state_manager = get_oauth2_state_manager(self.aw_app.get_config())
-                self.logger.info(f"State manager created successfully")
+                self.logger.debug(f"State manager created successfully")
 
                 mcp_context = state_manager.extract_mcp_context(state)
-                self.logger.info(f"MCP context extraction result: {mcp_context is not None}")
+                self.logger.debug(f"MCP context extraction result: {mcp_context is not None}")
 
                 if mcp_context:
-                    self.logger.info(f"Using MCP OAuth2 callback handler with context: {mcp_context}")
+                    self.logger.debug(f"Using MCP OAuth2 callback handler with context: {mcp_context}")
                     # This is an MCP OAuth2 callback
                     return await self._handle_oauth2_endpoint(request, "callback")
                 else:
-                    self.logger.info("No MCP context found, using standard OAuth2 callback")
+                    self.logger.debug("No MCP context found, using standard OAuth2 callback")
             except Exception as e:
                 # Not an MCP callback or state manager not available
                 self.logger.error(f"Error checking MCP context: {e}")
@@ -442,7 +442,7 @@ class FastAPIIntegration:
                 pass
 
             # Default to Google OAuth2 callback for ActingWeb
-            self.logger.info("Using standard Google OAuth2 callback handler")
+            self.logger.debug("Using standard Google OAuth2 callback handler")
             return await self._handle_google_oauth_callback(request)
 
         # OAuth2 server endpoints for MCP clients
@@ -790,31 +790,31 @@ class FastAPIIntegration:
 
         # Check if user is already authenticated with Google OAuth2 and redirect to their actor
         oauth_cookie = request.cookies.get("oauth_token")
-        self.logger.info(f"Factory request: method={request.method}, has_oauth_cookie={bool(oauth_cookie)}")
+        self.logger.debug(f"Factory request: method={request.method}, has_oauth_cookie={bool(oauth_cookie)}")
         if oauth_cookie and request.method == "GET":
-            self.logger.info(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
+            self.logger.debug(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
             # User has OAuth session - try to find their actor and redirect
             try:
                 from ...oauth2 import create_oauth2_authenticator
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    self.logger.info("OAuth2 is enabled, validating token...")
+                    self.logger.debug("OAuth2 is enabled, validating token...")
                     # Validate the token and get user info
                     user_info = authenticator.validate_token_and_get_user_info(oauth_cookie)
                     if user_info:
                         email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
                         if email:
-                            self.logger.info(f"Token validation successful for {email}")
+                            self.logger.debug(f"Token validation successful for {email}")
                             # Look up actor by email
                             actor_instance = authenticator.lookup_or_create_actor_by_email(email)
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
                                 redirect_url = f"/{actor_instance.id}/www"
-                                self.logger.info(f"Redirecting authenticated user {email} to {redirect_url}")
+                                self.logger.debug(f"Redirecting authenticated user {email} to {redirect_url}")
                                 return RedirectResponse(url=redirect_url, status_code=302)
                     # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
-                    self.logger.info("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
+                    self.logger.debug("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
                     original_url = str(request.url)
                     oauth_redirect = create_oauth_redirect_response(
                         self.aw_app.get_config(), redirect_after_auth=original_url
@@ -827,7 +827,7 @@ class FastAPIIntegration:
             except Exception as e:
                 self.logger.error(f"OAuth token validation failed in factory: {e}")
                 # Token validation failed - clear cookie and redirect to fresh OAuth
-                self.logger.info("OAuth token validation error - clearing cookie and redirecting to OAuth")
+                self.logger.debug("OAuth token validation error - clearing cookie and redirecting to OAuth")
                 original_url = str(request.url)
                 oauth_redirect = create_oauth_redirect_response(
                     self.aw_app.get_config(), redirect_after_auth=original_url
@@ -1021,7 +1021,7 @@ class FastAPIIntegration:
                 else:
                     raise HTTPException(status_code=400, detail="Email is required")
 
-            self.logger.info(f"Factory POST with email: {email}")
+            self.logger.debug(f"Factory POST with email: {email}")
 
             # Create OAuth2 redirect with email hint
             try:
@@ -1035,7 +1035,7 @@ class FastAPIIntegration:
                         redirect_after_auth=redirect_after_auth, email_hint=email
                     )
 
-                    self.logger.info(f"Redirecting to OAuth2 with email hint: {email}")
+                    self.logger.debug(f"Redirecting to OAuth2 with email hint: {email}")
                     return RedirectResponse(url=auth_url, status_code=302)
                 else:
                     self.logger.warning("OAuth2 not configured - falling back to standard actor creation")
@@ -1045,7 +1045,7 @@ class FastAPIIntegration:
             except Exception as e:
                 self.logger.error(f"Error creating OAuth2 redirect: {e}")
                 # Fall back to standard actor creation if OAuth2 setup fails
-                self.logger.info("OAuth2 setup failed - falling back to standard actor creation")
+                self.logger.debug("OAuth2 setup failed - falling back to standard actor creation")
                 return await self._handle_factory_post_without_oauth(request, email)
 
         except HTTPException:
@@ -1063,7 +1063,7 @@ class FastAPIIntegration:
                 # Use the registered actor factory function
                 actor_interface = factory_func(creator=email)
                 if actor_interface:
-                    self.logger.info(f"Actor created successfully: {actor_interface.id} for {email}")
+                    self.logger.debug(f"Actor created successfully: {actor_interface.id} for {email}")
 
                     # Check if this is a JSON request or web form request
                     content_type = request.headers.get("content-type", "")
@@ -1238,12 +1238,12 @@ class FastAPIIntegration:
 
         # Check if handler set template values (for HTML response)
         if hasattr(webobj.response, "template_values") and webobj.response.template_values:
-            self.logger.info(f"OAuth2 template values found: {webobj.response.template_values}")
+            self.logger.debug(f"OAuth2 template values found: {webobj.response.template_values}")
             if self.templates:
                 # This is an HTML template response
                 template_name = "aw-oauth-authorization-form.html"  # Default OAuth2 template
                 try:
-                    self.logger.info(f"Attempting to render template: {template_name}")
+                    self.logger.debug(f"Attempting to render template: {template_name}")
                     return self.templates.TemplateResponse(
                         template_name, {"request": request, **webobj.response.template_values}
                     )

@@ -9,6 +9,7 @@ FIXED
 ~~~~~
 
 - Flask was always loaded as part of also fastapi integration requiring flask as a dependency
+- trust handler forcing 404 instead of returning empty list for graceful handling
 
 v3.2.1: Aug 9, 2025
 -----------------

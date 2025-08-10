@@ -151,7 +151,7 @@ class OAuth2EndpointsHandler(BaseHandler):
             # Register the client using OAuth2 server
             try:
                 client_response = self.oauth2_server.handle_client_registration(registration_data)
-                logger.info(f"Registered MCP client: {client_response['client_id']}")
+                logger.debug(f"Registered MCP client: {client_response['client_id']}")
                 return client_response
 
             except ValueError as e:
@@ -215,12 +215,12 @@ class OAuth2EndpointsHandler(BaseHandler):
                 }
 
             # Debug logging for MCP OAuth2 flow
-            logger.info(f"OAuth2 authorization {method} request with params: {dict(params)}")
+            logger.debug(f"OAuth2 authorization {method} request with params: {dict(params)}")
 
             # Handle using OAuth2 server
             server_response = self.oauth2_server.handle_authorization_request(params, method)
 
-            logger.info(f"OAuth2 server response: {server_response}")
+            logger.debug(f"OAuth2 server response: {server_response}")
 
             if server_response.get("action") == "show_form":
                 # Show email form (preserve existing UX)
@@ -310,7 +310,7 @@ class OAuth2EndpointsHandler(BaseHandler):
 
                 return self.error_response(status, f"{error}: {description}")
 
-            logger.info(f"Token request successful for client {params.get('client_id', 'unknown')}")
+            logger.debug(f"Token request successful for client {params.get('client_id', 'unknown')}")
             return token_response
 
         except Exception as e:

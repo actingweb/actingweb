@@ -86,7 +86,7 @@ class MCPClientRegistry:
             "issuer": base_url,
         }
 
-        logger.info(f"Registered MCP client {client_id} for actor {actor_id}")
+        logger.debug(f"Registered MCP client {client_id} for actor {actor_id}")
         return response
 
     def validate_client(self, client_id: str, client_secret: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -180,9 +180,9 @@ class MCPClientRegistry:
             bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
 
             # Store client data in the bucket
-            logger.info(f"Storing client {client_id} in mcp_clients bucket for actor {actor_id}")
+            logger.debug(f"Storing client {client_id} in mcp_clients bucket for actor {actor_id}")
             bucket.set_attr(name=client_id, data=client_data)
-            logger.info(f"Successfully stored client data")
+            logger.debug(f"Successfully stored client data")
 
         except Exception as e:
             logger.error(f"Error storing client {client_id} for actor {actor_id}: {e}")
@@ -269,7 +269,7 @@ class MCPClientRegistry:
             
             # Store the client_id -> actor_id mapping
             global_bucket.set_attr(name=client_id, data=actor_id)
-            logger.info(f"Updated global index: {client_id} -> {actor_id}")
+            logger.debug(f"Updated global index: {client_id} -> {actor_id}")
             
         except Exception as e:
             logger.error(f"Error updating global client index: {e}")

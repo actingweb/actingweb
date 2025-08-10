@@ -423,17 +423,17 @@ class Auth:
         if not path:
             path = ""
         if not self.actor:
-            logging.info("Cookie auth failed: no actor")
+            logging.debug("Cookie auth failed: no actor")
             return False
         if self.token:
             now = time.time()
             if appreq.request.cookies and self.cookie in appreq.request.cookies:
                 authz = appreq.request.cookies[self.cookie]
-                logging.info(f"Cookie auth: found cookie '{self.cookie}' with length {len(authz)}")
+                logging.debug(f"Cookie auth: found cookie '{self.cookie}' with length {len(authz)}")
             else:
                 authz = ""
-                logging.info(f"Cookie auth: no cookie '{self.cookie}' found in request")
-                logging.info(f"Available cookies: {list(appreq.request.cookies.keys()) if appreq.request.cookies else 'none'}")
+                logging.debug(f"Cookie auth: no cookie '{self.cookie}' found in request")
+                logging.debug(f"Available cookies: {list(appreq.request.cookies.keys()) if appreq.request.cookies else 'none'}")
             if (
                 appreq.request.get("refresh")
                 and appreq.request.get("refresh").lower() == "true"
@@ -443,7 +443,7 @@ class Auth:
                 if self.actor and self.actor.store:
                     self.actor.store.oauth_token = None
             elif authz == self.token and self.expiry and now < (float(self.expiry) - 20.0):
-                logging.info("Cookie auth SUCCESS: cookie matches token and not expired")
+                logging.debug("Cookie auth SUCCESS: cookie matches token and not expired")
                 self.acl["relationship"] = "creator"
                 self.acl["authenticated"] = True
                 self.response["code"] = 200
@@ -451,16 +451,16 @@ class Auth:
                 self.authn_done = True
                 return True
             elif authz != self.token:
-                logging.info(f"Cookie auth FAILED: token mismatch")
-                logging.info(f"Cookie token length: {len(authz)}, stored token length: {len(self.token)}")
-                logging.info(f"Cookie starts with: {authz[:20]}...")
-                logging.info(f"Stored starts with: {self.token[:20]}...")
+                logging.debug(f"Cookie auth FAILED: token mismatch")
+                logging.debug(f"Cookie token length: {len(authz)}, stored token length: {len(self.token)}")
+                logging.debug(f"Cookie starts with: {authz[:20]}...")
+                logging.debug(f"Stored starts with: {self.token[:20]}...")
             elif not self.expiry:
-                logging.info("Cookie auth FAILED: no expiry set")
+                logging.debug("Cookie auth FAILED: no expiry set")
             elif now >= (float(self.expiry) - 20.0):
-                logging.info(f"Cookie auth FAILED: token expired. Now: {now}, expiry: {self.expiry}")
+                logging.debug(f"Cookie auth FAILED: token expired. Now: {now}, expiry: {self.expiry}")
             else:
-                logging.info("Cookie auth FAILED: unknown reason")
+                logging.debug("Cookie auth FAILED: unknown reason")
                 logging.debug(
                     "Authorization cookie header does not match a valid token"
                 )
@@ -637,7 +637,7 @@ class Auth:
                 self.response["code"] = 200
                 self.response["text"] = "Ok"
                 self.token = token
-                logging.info(f"OAuth2 authentication successful for {email}")
+                logging.debug(f"OAuth2 authentication successful for {email}")
                 return True
             else:
                 # Email doesn't match this actor - this could be:
@@ -656,7 +656,7 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = token
-                    logging.info(f"OAuth2 authentication successful for {email} (no specific actor)")
+                    logging.debug(f"OAuth2 authentication successful for {email} (no specific actor)")
                     return True
                 
                 return False
@@ -687,7 +687,7 @@ class Auth:
                 self.response["code"] = 302
                 self.response["text"] = "Redirecting to OAuth2"
                 self.redirect = auth_url
-                logging.info(f"Redirecting to OAuth2: {auth_url[:100]}...")
+                logging.debug(f"Redirecting to OAuth2: {auth_url[:100]}...")
                 return True
                 
         except Exception as e:
@@ -712,16 +712,16 @@ class Auth:
 
     def check_authentication(self, appreq, path):
         """Checks authentication in appreq, redirecting back to path if oauth is done."""
-        logging.info(f"Checking authentication for path: {path}, auth type: {self.type}")
+        logging.debug(f"Checking authentication for path: {path}, auth type: {self.type}")
         logging.debug("Checking authentication, token auth...")
         if self.check_token_auth(appreq):
             return
         elif self.type == "oauth":
-            logging.info("Auth type is 'oauth', checking cookie authentication...")
+            logging.debug("Auth type is 'oauth', checking cookie authentication...")
             self.__check_cookie_auth(appreq=appreq, path=path)
             return
         elif self.type == "basic":
-            logging.info("Auth type is 'basic', checking basic authentication...")
+            logging.debug("Auth type is 'basic', checking basic authentication...")
             self.__check_basic_auth_creator(appreq=appreq)
             return
         

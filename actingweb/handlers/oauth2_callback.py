@@ -118,7 +118,7 @@ class OAuth2CallbackHandler(BaseHandler):
                     logger.warning(f"Actor {actor_id} from state not found, will lookup/create by email")
                     actor_instance = None
                 else:
-                    logger.info(f"Using existing actor {actor_id} from state parameter")
+                    logger.debug(f"Using existing actor {actor_id} from state parameter")
             except Exception as e:
                 logger.warning(f"Failed to load actor {actor_id} from state: {e}, will lookup/create by email")
                 actor_instance = None
@@ -175,11 +175,11 @@ class OAuth2CallbackHandler(BaseHandler):
         # For interactive authentication, always redirect to actor's www page
         # This avoids authentication loops with the original URL
         final_redirect = f"/{actor_instance.id}/www"
-        logger.info(f"Redirecting to actor www page: {final_redirect}")
+        logger.debug(f"Redirecting to actor www page: {final_redirect}")
         
         # Log the original URL for reference but don't use it
         if redirect_url:
-            logger.info(f"Original URL was: {redirect_url} (redirecting to www page instead)")
+            logger.debug(f"Original URL was: {redirect_url} (redirecting to www page instead)")
         
         # Set session cookie so user stays authenticated after redirect
         # The cookie should match the token stored in the actor (oauth_token)
@@ -196,7 +196,7 @@ class OAuth2CallbackHandler(BaseHandler):
             secure=True
         )
         
-        logger.info(f"Set oauth_token cookie with token length {len(str(stored_token))} and max_age {cookie_max_age}")
+        logger.debug(f"Set oauth_token cookie with token length {len(str(stored_token))} and max_age {cookie_max_age}")
         
         # Perform the redirect for interactive authentication
         self.response.set_status(302, "Found")
@@ -219,7 +219,7 @@ class OAuth2CallbackHandler(BaseHandler):
             except Exception as e:
                 logger.error(f"Error executing oauth_completed hook: {e}")
         
-        logger.info(f"OAuth2 authentication completed successfully for {email} -> {actor_instance.id}")
+        logger.debug(f"OAuth2 authentication completed successfully for {email} -> {actor_instance.id}")
         return response_data
     
     

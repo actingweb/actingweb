@@ -252,7 +252,7 @@ def create_oauth_redirect_response(
                 if clear_cookie:
                     # Clear the expired oauth_token cookie
                     redirect_response.delete_cookie("oauth_token", path="/")
-                    logging.info("Cleared expired oauth_token cookie")
+                    logging.debug("Cleared expired oauth_token cookie")
                 return redirect_response
     except Exception as e:
         logging.error(f"Error creating OAuth2 redirect: {e}")

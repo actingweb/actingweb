@@ -141,7 +141,7 @@ class OAuth2Authenticator:
         # Add email hint for Google OAuth2
         if email_hint and self.provider.name == "google":
             extra_params["login_hint"] = email_hint
-            logger.info(f"Adding login_hint for Google OAuth2: {email_hint}")
+            logger.debug(f"Adding login_hint for Google OAuth2: {email_hint}")
 
         # Use oauthlib to generate the authorization URL
         authorization_url = self.client.prepare_request_uri(
@@ -152,7 +152,7 @@ class OAuth2Authenticator:
             **extra_params,
         )
 
-        logger.info(f"Created OAuth2 authorization URL with state: {state[:50]}...")
+        logger.debug(f"Created OAuth2 authorization URL with state: {state[:50]}...")
         return str(authorization_url)
 
     def _looks_like_encrypted_state(self, state: str) -> bool:
@@ -224,7 +224,7 @@ class OAuth2Authenticator:
             # Parse token response using oauthlib
             self.client.parse_request_body_response(response.content.decode("utf-8"))
 
-            logger.info("Successfully exchanged authorization code for access token")
+            logger.debug("Successfully exchanged authorization code for access token")
             return dict(token_data)
 
         except Exception as e:
@@ -268,7 +268,7 @@ class OAuth2Authenticator:
             # Parse token response using oauthlib
             self.client.parse_request_body_response(response.content.decode("utf-8"))
 
-            logger.info("Successfully refreshed access token")
+            logger.debug("Successfully refreshed access token")
             return dict(token_data)
 
         except Exception as e:
@@ -302,7 +302,7 @@ class OAuth2Authenticator:
                 return None
 
             userinfo = json.loads(response.content.decode("utf-8"))
-            logger.info(f"Successfully validated token and extracted user info")
+            logger.debug(f"Successfully validated token and extracted user info")
             return dict(userinfo)
 
         except Exception as e:
@@ -394,7 +394,7 @@ class OAuth2Authenticator:
             existing_actor = actor_module.Actor(config=self.config)
             logger.debug(f"Looking up existing actor for email: {email}")
             if existing_actor.get_from_creator(email):
-                logger.info(f"Found existing actor {existing_actor.id} for email {email}")
+                logger.debug(f"Found existing actor {existing_actor.id} for email {email}")
                 return existing_actor
             else:
                 logger.debug(f"No existing actor found for email {email}, will create new one")
@@ -414,7 +414,7 @@ class OAuth2Authenticator:
                     new_actor.store.created_at = str(int(time.time()))
                     new_actor.store.oauth_provider = self.provider.name
 
-                logger.info(f"Created new actor {new_actor.id} for {self.provider.name} user {email}")
+                logger.debug(f"Created new actor {new_actor.id} for {self.provider.name} user {email}")
                 return new_actor
             else:
                 logger.error(f"Failed to create actor for email {email}")
@@ -452,7 +452,7 @@ class OAuth2Authenticator:
             authenticated_email_normalized = authenticated_email.lower().strip()
 
             if expected_email_normalized == authenticated_email_normalized:
-                logger.info(f"Email validation successful: {authenticated_email}")
+                logger.debug(f"Email validation successful: {authenticated_email}")
                 return True
             else:
                 logger.warning(

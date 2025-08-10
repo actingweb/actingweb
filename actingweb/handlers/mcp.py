@@ -289,8 +289,11 @@ class MCPHandler(BaseHandler):
                         mcp_tool_name = metadata.get("name") or action_name
                         if mcp_tool_name == tool_name:
                             try:
+                                # Wrap actor with interface for hook execution
+                                actor_interface = self._get_actor_interface(actor)
+                                
                                 # Execute the action hook
-                                result = hook(actor, action_name, arguments)
+                                result = hook(actor_interface, action_name, arguments)
 
                                 # Ensure result is JSON serializable
                                 if not isinstance(result, dict):
@@ -331,8 +334,11 @@ class MCPHandler(BaseHandler):
                         mcp_prompt_name = metadata.get("name") or method_name
                         if mcp_prompt_name == prompt_name:
                             try:
+                                # Wrap actor with interface for hook execution
+                                actor_interface = self._get_actor_interface(actor)
+                                
                                 # Execute the method hook
-                                result = hook(actor, method_name, arguments)
+                                result = hook(actor_interface, method_name, arguments)
 
                                 # Convert result to string for prompt
                                 if isinstance(result, dict):
@@ -428,7 +434,7 @@ class MCPHandler(BaseHandler):
         # This is a notification that the client has finished initialization
         # According to MCP spec, this is a notification (no response expected)
         # However, some clients may send it as a request, so we respond
-        logger.info("MCP client initialization completed")
+        logger.debug("MCP client initialization completed")
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 
@@ -470,7 +476,7 @@ class MCPHandler(BaseHandler):
             from .. import actor as actor_module
             actor_instance = actor_module.Actor(actor_id, self.config)
 
-            logger.info(f"Successfully authenticated MCP client {client_id} -> actor {actor_id}")
+            logger.debug(f"Successfully authenticated MCP client {client_id} -> actor {actor_id}")
             return actor_instance
 
         except Exception as e:

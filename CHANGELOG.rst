@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.2.2: TBD, 2025
+-----------------
+
+FIXED
+~~~~~
+
+- Flask was always loaded as part of also fastapi integration requiring flask as a dependency
+
 v3.2.1: Aug 9, 2025
 -----------------
 

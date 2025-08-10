@@ -77,9 +77,8 @@ class WwwHandler(base_handler.BaseHandler):
             return
         if path == "trust":
             relationships = myself.get_trust_relationships()
-            if not relationships or len(relationships) == 0:
-                self.response.set_status(404, "Not found")
-                return
+            if not relationships:
+                relationships = []
             for t in relationships:
                 t["approveuri"] = (
                     self.config.root
@@ -89,10 +88,10 @@ class WwwHandler(base_handler.BaseHandler):
                     + "/"
                     + (t.peerid or "")
                 )
-                self.response.template_values = {
-                    "id": myself.id,
-                    "trusts": relationships,
-                }
+            self.response.template_values = {
+                "id": myself.id,
+                "trusts": relationships,
+            }
             return
         # Execute callback hook for custom web paths
         output = None

@@ -100,16 +100,17 @@ class DbProperty:
         """Sets a new value for the property name"""
         if not name:
             return False
-            
+
         # Convert non-string values to JSON strings for storage
         import json
+
         if value is not None and not isinstance(value, str):
             try:
                 value = json.dumps(value)
             except (TypeError, ValueError):
                 value = str(value)
-        
-        if not value or (hasattr(value, '__len__') and len(value) == 0):
+
+        if not value or (hasattr(value, "__len__") and len(value) == 0):
             if self.get(actor_id=actor_id, name=name):
                 self.delete()
             return True
@@ -142,6 +143,8 @@ class DbPropertyList:
         self.handle: Optional[Any] = None
         self.actor_id: Optional[str] = None
         self.props: Optional[Dict[str, str]] = None
+        if not Property.exists():
+            Property.create_table(wait=True)
 
     def fetch(self, actor_id: Optional[str] = None) -> Optional[Dict[str, str]]:
         """Retrieves the properties of an actor_id from the database"""

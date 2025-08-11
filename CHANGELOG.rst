@@ -10,6 +10,9 @@ FIXED
 
 - Flask was always loaded as part of also fastapi integration requiring flask as a dependency
 - trust handler forcing 404 instead of returning empty list for graceful handling
+- Moved lots of INFO logging statements to DEBUG to reduce chatterness
+- Made the actor.get_config() use the dynamic global actingweb __version__
+- Fixed error in DbPropertyList that caused an error id the properties table was not found in DynamoDB
 
 v3.2.1: Aug 9, 2025
 -----------------

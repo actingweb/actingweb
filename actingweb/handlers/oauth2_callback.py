@@ -124,7 +124,14 @@ class OAuth2CallbackHandler(BaseHandler):
                 actor_instance = None
         
         # If no actor from state or loading failed, lookup/create by email
+        is_new_actor = False
         if not actor_instance:
+            # Check if actor exists before attempting creation (same logic as in authenticator)
+            from actingweb.actor import Actor as CoreActor
+            existing_check_actor = CoreActor(config=self.config)
+            actor_exists = existing_check_actor.get_from_creator(email)
+            is_new_actor = not actor_exists
+            
             actor_instance = self.authenticator.lookup_or_create_actor_by_email(email)
             if not actor_instance:
                 logger.error(f"Failed to lookup or create actor for email {email}")
@@ -139,20 +146,34 @@ class OAuth2CallbackHandler(BaseHandler):
                 actor_instance.store.oauth_refresh_token = refresh_token
             actor_instance.store.oauth_token_timestamp = str(int(time.time()))
         
+        # Execute actor_created lifecycle hook for new actors
+        if is_new_actor and self.hooks:
+            try:
+                # Convert core Actor to ActorInterface for hook consistency
+                from actingweb.interface.actor_interface import ActorInterface
+                actor_interface = ActorInterface(core_actor=actor_instance)
+                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for actor_created: {e}")
+        
         # Execute OAuth success lifecycle hook
         oauth_valid = True
         if self.hooks:
             try:
+                # Convert core Actor to ActorInterface for hook consistency
+                from actingweb.interface.actor_interface import ActorInterface
+                actor_interface = ActorInterface(core_actor=actor_instance)
+                
                 result = self.hooks.execute_lifecycle_hooks(
                     "oauth_success", 
-                    actor_instance, 
+                    actor_interface, 
                     email=email,
                     access_token=access_token,
                     token_data=token_data
                 )
                 oauth_valid = bool(result) if result is not None else True
             except Exception as e:
-                logger.error(f"Error executing oauth_success hook: {e}")
+                logger.error(f"Error in lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
         
         if not oauth_valid:

@@ -15,6 +15,7 @@ FIXED
 - Fixed error in DbPropertyList that caused an error id the properties table was not found in DynamoDB
 - Fixed create_actor lifecycle hook and removed actor_factory
 - Fix handling of POST to /<actor_id>/www/properties (including _method=DELETE)
+- Fix base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
 
 v3.2.1: Aug 9, 2025
 -----------------

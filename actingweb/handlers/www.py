@@ -22,8 +22,20 @@ class WwwHandler(base_handler.BaseHandler):
             return
 
         if not path or path == "":
+            # Extract base path from request URL to handle base paths like /mcp-server
+            # The request URL might be like: https://domain.com/mcp-server/actor_id/www
+            # We want the base URL up to and including /www: /mcp-server/actor_id/www
+            if hasattr(self.request, 'url') and self.request.url:
+                # Parse the URL to extract the path part
+                from urllib.parse import urlparse
+                parsed = urlparse(self.request.url)
+                base_path = parsed.path  # This gives us /mcp-server/actor_id/www
+            else:
+                # Fallback if no request URL available
+                base_path = f"/{actor_id}/www"
+
             self.response.template_values = {
-                "url": self.request.url,
+                "url": base_path,
                 "id": actor_id,
                 "creator": myself.creator,
                 "passphrase": myself.passphrase,
@@ -82,13 +94,29 @@ class WwwHandler(base_handler.BaseHandler):
                     )
                     if hook_result is not None:
                         lookup = hook_result
+            # Extract actor base path from request URL to handle base paths like /mcp-server
+            # Request URL is like: https://domain.com/mcp-server/actor_id/www/properties/prop_name
+            # We want: /mcp-server/actor_id
+            if hasattr(self.request, 'url') and self.request.url:
+                from urllib.parse import urlparse
+                parsed = urlparse(self.request.url)
+                # Remove /www/properties/prop_name to get /mcp-server/actor_id
+                path_parts = parsed.path.strip('/').split('/')
+                try:
+                    actor_index = path_parts.index(actor_id)
+                    actor_base_path = '/' + '/'.join(path_parts[:actor_index + 1])
+                except (ValueError, IndexError):
+                    actor_base_path = f"/{actor_id}"
+            else:
+                actor_base_path = f"/{actor_id}"
+
             if lookup:
                 self.response.template_values = {
                     "id": myself.id,
                     "property": prop_name,
                     "value": lookup,
                     "qual": "a",
-                    "url": f"/{actor_id}/",
+                    "url": actor_base_path,
                 }
             else:
                 self.response.template_values = {
@@ -96,7 +124,7 @@ class WwwHandler(base_handler.BaseHandler):
                     "property": prop_name,
                     "value": "",
                     "qual": "n",
-                    "url": f"/{actor_id}/",
+                    "url": actor_base_path,
                 }
             return
         if path == "trust":

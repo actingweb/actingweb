@@ -14,6 +14,7 @@ FIXED
 - Made the actor.get_config() use the dynamic global actingweb __version__
 - Fixed error in DbPropertyList that caused an error id the properties table was not found in DynamoDB
 - Fixed create_actor lifecycle hook and removed actor_factory
+- Fix handling of POST to /<actor_id>/www/properties (including _method=DELETE)
 
 v3.2.1: Aug 9, 2025
 -----------------

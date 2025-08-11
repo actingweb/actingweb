@@ -1437,6 +1437,12 @@ class FastAPIIntegration:
                 "trust": "aw-actor-www-trust.html",
             }
             template_name = template_map.get(path)
+            
+            # Handle individual property pages like "properties/notes", "properties/demo_version"
+            if not template_name and path.startswith("properties/"):
+                # This is an individual property page
+                template_name = "aw-actor-www-property.html"
+            
             if template_name:
                 return self.templates.TemplateResponse(
                     template_name, {"request": request, **webobj.response.template_values}

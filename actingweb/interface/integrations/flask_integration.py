@@ -955,6 +955,9 @@ class FlaskIntegration:
                     return Response(render_template("aw-actor-www-properties.html", **template_values))
                 elif path == "property":
                     return Response(render_template("aw-actor-www-property.html", **template_values))
+                elif path.startswith("properties/"):
+                    # Handle individual property pages like "properties/notes", "properties/demo_version"
+                    return Response(render_template("aw-actor-www-property.html", **template_values))
                 elif path == "trust":
                     return Response(render_template("aw-actor-www-trust.html", **template_values))
             except Exception:

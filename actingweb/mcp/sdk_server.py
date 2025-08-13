@@ -8,6 +8,7 @@ protocol handling.
 
 import logging
 import asyncio
+import re
 from typing import Dict, Any, List, Optional, Union
 
 from typing import TYPE_CHECKING
@@ -16,17 +17,20 @@ if TYPE_CHECKING:
     from mcp.server import Server
     from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage, TextResourceContents
     from pydantic import AnyUrl
+
     MCP_AVAILABLE = True
 else:
     try:
         from mcp.server import Server
         from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage, TextResourceContents
         from pydantic import AnyUrl
+
         MCP_AVAILABLE = True
     except ImportError:
         # Official MCP SDK not available
         MCP_AVAILABLE = False
         from typing import Any
+
         Server = Any
         Tool = Any
         Resource = Any
@@ -138,37 +142,27 @@ class ActingWebMCPServer:
             """List available resources."""
             resources = []
 
-            # Static resources that are useful for MCP clients
-            static_resources = [
-                Resource(
-                    uri="actingweb://notes/all",  # type: ignore[arg-type]
-                    name="All Notes",
-                    description="Access all stored notes for the current user",
-                    mimeType="application/json",
-                ),
-                Resource(
-                    uri="actingweb://reminders/pending",  # type: ignore[arg-type]
-                    name="Pending Reminders",
-                    description="List of all pending/incomplete reminders",
-                    mimeType="application/json",
-                ),
-                Resource(
-                    uri="actingweb://usage/stats",  # type: ignore[arg-type]
-                    name="Usage Statistics",
-                    description="Statistics about MCP tool usage and activity",
-                    mimeType="application/json",
-                ),
-                Resource(
-                    uri="actingweb://properties/all",  # type: ignore[arg-type]
-                    name="Actor Properties",
-                    description="All properties for this actor",
-                    mimeType="application/json",
-                ),
-            ]
-
-            resources.extend(static_resources)
-
-            # TODO: Add dynamic resources from resource hooks when implemented
+            # Dynamic resources from method hooks decorated with @mcp_resource
+            if self.hooks and hasattr(self.hooks, "_method_hooks"):
+                for method_name, hook_list in self.hooks._method_hooks.items():
+                    for hook in hook_list:
+                        if is_mcp_exposed(hook):
+                            metadata = get_mcp_metadata(hook)
+                            if metadata and metadata.get("type") == "resource":
+                                uri_template = metadata.get("uri_template") or f"actingweb://{method_name}"
+                                # Create a resource entry using the template
+                                try:
+                                    res = Resource(
+                                        uri=uri_template,  # type: ignore[arg-type]
+                                        name=metadata.get("name", method_name),
+                                        description=metadata.get("description", f"Resource provided by {method_name}"),
+                                        mimeType=metadata.get("mime_type", "application/json"),
+                                    )
+                                    resources.append(res)
+                                except Exception as e:
+                                    logger.debug(
+                                        f"Skipping resource for method {method_name} due to error building descriptor: {e}"
+                                    )
 
             logger.debug(f"Listed {len(resources)} resources for actor {self.actor_id}")
             return resources
@@ -178,47 +172,7 @@ class ActingWebMCPServer:
             """Read a resource by URI."""
             try:
                 uri_str = str(uri)
-                if uri_str == "actingweb://notes/all":
-                    notes = self.actor.properties.get("notes", [])
-                    import json
-
-                    return json.dumps({"total_notes": len(notes), "notes": notes}, indent=2)
-
-                elif uri_str == "actingweb://reminders/pending":
-                    reminders = self.actor.properties.get("reminders", [])
-                    pending_reminders = [r for r in reminders if not r.get("completed", False)]
-                    import json
-
-                    return json.dumps(
-                        {"total_pending": len(pending_reminders), "reminders": pending_reminders}, indent=2
-                    )
-
-                elif uri_str == "actingweb://usage/stats":
-                    notes = self.actor.properties.get("notes", [])
-                    reminders = self.actor.properties.get("reminders", [])
-                    mcp_usage = self.actor.properties.get("mcp_usage_count", 0)
-
-                    # Calculate tag usage
-                    tag_counts: Dict[str, int] = {}
-                    for note in notes:
-                        for tag in note.get("tags", []):
-                            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
-                    import json
-
-                    return json.dumps(
-                        {
-                            "mcp_usage_count": mcp_usage,
-                            "total_notes": len(notes),
-                            "total_reminders": len(reminders),
-                            "pending_reminders": len([r for r in reminders if not r.get("completed", False)]),
-                            "most_used_tags": dict(sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
-                            "created_at": self.actor.properties.get("created_at", "unknown"),
-                        },
-                        indent=2,
-                    )
-
-                elif uri_str == "actingweb://properties/all":
+                if uri_str == "actingweb://properties/all":
                     # Get all non-sensitive properties
                     props = {}
                     if hasattr(self.actor, "properties") and self.actor.properties:
@@ -238,6 +192,44 @@ class ActingWebMCPServer:
                     return json.dumps({"actor_id": self.actor_id, "properties": props}, indent=2)
 
                 else:
+                    # Try dynamic resource hooks from @mcp_resource-decorated method hooks
+                    if self.hooks and hasattr(self.hooks, "_method_hooks"):
+                        for method_name, hook_list in self.hooks._method_hooks.items():
+                            for hook in hook_list:
+                                if is_mcp_exposed(hook):
+                                    metadata = get_mcp_metadata(hook)
+                                    if metadata and metadata.get("type") == "resource":
+                                        template = metadata.get("uri_template") or f"actingweb://{method_name}"
+
+                                        # Convert template to regex and attempt a match
+                                        variables: Dict[str, str] | None = None
+                                        try:
+                                            variables = _match_uri_template(template, uri_str)
+                                        except Exception:
+                                            variables = None
+
+                                        if variables is not None:
+                                            # Execute the method hook with extracted variables
+                                            try:
+                                                result = hook(self.actor, method_name, variables)
+                                                if asyncio.iscoroutine(result):
+                                                    result = await result
+
+                                                if isinstance(result, dict):
+                                                    import json
+
+                                                    return json.dumps(result, indent=2)
+                                                else:
+                                                    return str(result)
+                                            except Exception as e:
+                                                logger.error(
+                                                    f"Error reading dynamic resource via {method_name} for URI {uri_str}: {e}"
+                                                )
+                                                raise ValueError(
+                                                    f"Error reading dynamic resource for {uri_str}: {str(e)}"
+                                                )
+
+                    # If no dynamic handler matched, not found
                     raise ValueError(f"Resource not found: {uri_str}")
 
             except Exception as e:
@@ -301,7 +293,14 @@ class ActingWebMCPServer:
 
                                     logger.debug(f"Prompt {name} generated successfully for actor {self.actor_id}")
                                     # Return as GetPromptResult - typically contains the prompt text
-                                    return GetPromptResult(description=f"Generated prompt for {name}", messages=[PromptMessage(role="user", content=TextContent(type="text", text=prompt_text))])
+                                    return GetPromptResult(
+                                        description=f"Generated prompt for {name}",
+                                        messages=[
+                                            PromptMessage(
+                                                role="user", content=TextContent(type="text", text=prompt_text)
+                                            )
+                                        ],
+                                    )
 
                                 except Exception as e:
                                     logger.error(f"Error generating prompt {name}: {e}")
@@ -360,3 +359,30 @@ def get_server_manager() -> MCPServerManager:
     if _server_manager is None:
         _server_manager = MCPServerManager()
     return _server_manager
+
+
+def _match_uri_template(template: str, uri: str) -> Optional[Dict[str, str]]:
+    """
+    Match a URI against a simple template with {variables}.
+
+    Returns a dict of variables if match, otherwise None.
+    """
+    # Build a regex from the template, replacing {var} with named groups
+    pattern_parts: List[str] = []
+    last_index = 0
+    for m in re.finditer(r"{(\w+)}", template):
+        start, end = m.span()
+        var_name = m.group(1)
+        # Escape static part
+        pattern_parts.append(re.escape(template[last_index:start]))
+        # Insert a conservative matcher for the variable (no slashes)
+        pattern_parts.append(f"(?P<{var_name}>[^/]+)")
+        last_index = end
+    # Remainder of template
+    pattern_parts.append(re.escape(template[last_index:]))
+    pattern = "^" + "".join(pattern_parts) + "$"
+
+    match = re.match(pattern, uri)
+    if not match:
+        return None
+    return {k: v for k, v in match.groupdict().items() if v is not None}

@@ -485,6 +485,28 @@ Handle property operations:
                 return None
         return value
 
+    # Wildcard hook for access control
+    @app.property_hook("*")
+    def handle_all_properties(actor, operation, value, path):
+        if not path:
+            return value
+            
+        property_name = path[0]
+        
+        # Hidden properties (not visible in web interface or API)
+        if property_name in ["email", "auth_token"] and operation == "get":
+            return None
+            
+        # Read-only properties (visible but not editable)
+        if property_name in ["created_at", "actor_type"] and operation in ["put", "post"]:
+            return None
+            
+        # Protected from deletion
+        if property_name in ["email", "created_at"] and operation == "delete":
+            return None
+            
+        return value
+
 Hook Function Signature
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -497,6 +519,71 @@ Hook Function Signature
     :param value: Property value
     :param path: Property path as list
     :return: Transformed value or None to reject operation
+
+Property Hook Patterns and Web Interface Effects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Property hooks directly control how properties appear and behave in the web interface:
+
+**Hidden Properties**
+    When a property hook returns ``None`` for GET operations, the property is completely hidden:
+    
+    - Not displayed in properties list
+    - Returns 404 when accessed directly via ``/<actor_id>/www/properties/name``
+    - Not accessible via API endpoints
+
+**Read-Only Properties**
+    When a property hook returns ``None`` for PUT/POST operations, the property becomes read-only:
+    
+    - Shows "Read-only" badge in properties list
+    - Edit/Delete buttons replaced with "View Only" button
+    - Individual property page shows value in styled display box
+    - Edit form and delete functionality disabled
+    - Returns 403 when modification is attempted
+
+**Protected from Deletion**
+    When a property hook returns ``None`` for DELETE operations:
+    
+    - Delete button is disabled or hidden
+    - Returns 403 when deletion is attempted
+    - Property remains visible and may be editable
+
+**Common Patterns**
+    
+.. code-block:: python
+
+    # System properties: visible but not editable or deletable
+    @app.property_hook("*")
+    def protect_system_properties(actor, operation, value, path):
+        property_name = path[0] if path else ""
+        
+        if property_name.startswith("system_") or property_name in ["created_at", "actor_type"]:
+            if operation in ["put", "post", "delete"]:
+                return None  # Read-only
+        
+        return value
+
+    # Sensitive properties: completely hidden
+    @app.property_hook("*") 
+    def hide_sensitive_properties(actor, operation, value, path):
+        property_name = path[0] if path else ""
+        
+        if property_name in ["password", "auth_token", "private_key"]:
+            if operation == "get":
+                return None  # Hidden
+                
+        return value
+
+    # User properties: owner can edit, others can view
+    @app.property_hook("*")
+    def user_property_access(actor, operation, value, path):
+        property_name = path[0] if path else ""
+        
+        if property_name.startswith("user_"):
+            if operation in ["put", "post", "delete"] and not actor.is_owner():
+                return None  # Read-only for non-owners
+                
+        return value
 
 Callback Hooks
 --------------

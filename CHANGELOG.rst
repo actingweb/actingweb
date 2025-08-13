@@ -16,6 +16,14 @@ FIXED
 - Fixed create_actor lifecycle hook and removed actor_factory
 - Fix handling of POST to /<actor_id>/www/properties (including _method=DELETE)
 - Fix base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
+- Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
+
+ADDED
+~~~~~
+
+- Added proper execution of property_hooks in the handler of www/*
+- Added support for list of hidden properties as variable to www/properties* templates
+- Added support for dynamic generation of resources in MCP based on hooks
 
 v3.2.1: Aug 9, 2025
 -----------------

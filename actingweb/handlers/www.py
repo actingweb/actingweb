@@ -50,16 +50,35 @@ class WwwHandler(base_handler.BaseHandler):
         if path == "properties":
             properties = myself.get_properties()
 
-            # Execute property hook for web interface
-            if self.hooks:
+            # Execute property hooks for each individual property to filter hidden ones
+            # and determine which are read-only (protected from editing)
+            read_only_properties = set()
+            if self.hooks and properties:
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface:
-                    hook_result = self.hooks.execute_property_hooks("*", "get", actor_interface, properties, [])
-                    if hook_result is not None:
-                        properties = hook_result
+                    filtered_properties = {}
+                    for prop_name, prop_value in properties.items():
+                        # Check GET access
+                        hook_result = self.hooks.execute_property_hooks(
+                            prop_name, "get", actor_interface, prop_value, [prop_name]
+                        )
+                        if hook_result is not None:
+                            # Property is visible, now check if it's read-only
+                            filtered_properties[prop_name] = hook_result
+                            
+                            # Test if property allows PUT operations (editing)
+                            put_test = self.hooks.execute_property_hooks(
+                                prop_name, "put", actor_interface, prop_value, [prop_name]
+                            )
+                            if put_test is None:
+                                # PUT operation is blocked, so this property is read-only
+                                read_only_properties.add(prop_name)
+                    properties = filtered_properties
+                    
             self.response.template_values = {
                 "id": myself.id,
                 "properties": properties,
+                "read_only_properties": read_only_properties,
             }
             return
         elif "properties/" in path:
@@ -67,14 +86,21 @@ class WwwHandler(base_handler.BaseHandler):
             lookup = myself.property[prop_name] if prop_name and myself.property else None
             method_override = self.request.params.get("_method", None) if self.request.params else None
             if method_override and method_override.upper() == "DELETE":
-                # Delete property
+                # Execute property delete hook first to check if deletion is allowed
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        hook_result = self.hooks.execute_property_hooks(
+                            prop_name, "delete", actor_interface, lookup or {}, [prop_name]
+                        )
+                        if hook_result is None:
+                            # Hook rejected the deletion - return 403 Forbidden
+                            self.response.set_status(403, "Property deletion not allowed")
+                            return
+
+                # Delete property if hooks allow it
                 if lookup and myself.property:
                     myself.property[prop_name] = None
-                    # Execute property delete hook
-                    if self.hooks:
-                        actor_interface = self._get_actor_interface(myself)
-                        if actor_interface:
-                            self.hooks.execute_property_hooks(prop_name, "delete", actor_interface, None, [prop_name])
 
                     # Redirect back to properties page
                     self.response.set_status(302, "Found")
@@ -92,7 +118,11 @@ class WwwHandler(base_handler.BaseHandler):
                     hook_result = self.hooks.execute_property_hooks(
                         prop_name or "*", "get", actor_interface, lookup or {}, prop_path
                     )
-                    if hook_result is not None:
+                    if hook_result is None:
+                        # Hook indicates property should not be accessible (hidden)
+                        self.response.set_status(404, "Property not found")
+                        return
+                    else:
                         lookup = hook_result
             # Extract actor base path from request URL to handle base paths like /mcp-server
             # Request URL is like: https://domain.com/mcp-server/actor_id/www/properties/prop_name
@@ -110,6 +140,18 @@ class WwwHandler(base_handler.BaseHandler):
             else:
                 actor_base_path = f"/{actor_id}"
 
+            # Check if this property is read-only (protected from editing)
+            is_read_only = False
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    # Test if property allows PUT operations (editing)
+                    put_test = self.hooks.execute_property_hooks(
+                        prop_name, "put", actor_interface, lookup or {}, [prop_name]
+                    )
+                    if put_test is None:
+                        is_read_only = True
+
             if lookup:
                 self.response.template_values = {
                     "id": myself.id,
@@ -117,6 +159,7 @@ class WwwHandler(base_handler.BaseHandler):
                     "value": lookup,
                     "qual": "a",
                     "url": actor_base_path,
+                    "is_read_only": is_read_only,
                 }
             else:
                 self.response.template_values = {
@@ -125,6 +168,7 @@ class WwwHandler(base_handler.BaseHandler):
                     "value": "",
                     "qual": "n",
                     "url": actor_base_path,
+                    "is_read_only": is_read_only,
                 }
             return
         if path == "trust":
@@ -192,20 +236,25 @@ class WwwHandler(base_handler.BaseHandler):
                     old_value = myself.property[property_name] if myself.property else None
                     is_new_property = old_value is None
 
-                    # Set the property
-                    if not myself.property:
-                        self.response.set_status(500, "PropertyStore is not initialized")
-                        return
-                    myself.property[property_name] = property_value
-
-                    # Execute property hooks
+                    # Execute property hooks before setting the property
+                    final_value = property_value
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
-                            hook_action = "create" if is_new_property else "update"
-                            self.hooks.execute_property_hooks(
+                            hook_action = "post" if is_new_property else "put"
+                            hook_result = self.hooks.execute_property_hooks(
                                 property_name, hook_action, actor_interface, property_value, [property_name]
                             )
+                            if hook_result is None:
+                                self.response.set_status(403, "Property value not accepted by hooks")
+                                return
+                            final_value = hook_result
+
+                    # Set the property with the potentially transformed value
+                    if not myself.property:
+                        self.response.set_status(500, "PropertyStore is not initialized")
+                        return
+                    myself.property[property_name] = final_value
 
                     # Redirect back to properties page or init page
                     self.response.set_status(302, "Found")

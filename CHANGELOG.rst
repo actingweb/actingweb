@@ -17,6 +17,7 @@ FIXED
 - Fix handling of POST to /<actor_id>/www/properties (including _method=DELETE)
 - Fix base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
 - Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
+- Removed notes and usage as static resource in the llibrary, leave this to the implementing application
 
 ADDED
 ~~~~~

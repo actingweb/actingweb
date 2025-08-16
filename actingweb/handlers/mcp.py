@@ -13,6 +13,8 @@ MCP is not available at all.
 
 from typing import Optional, Dict, Any
 import logging
+import json
+import re
 
 from .base_handler import BaseHandler
 from ..mcp.sdk_server import get_server_manager
@@ -86,11 +88,13 @@ class MCPHandler(BaseHandler):
             params = data.get("params", {})
             request_id = data.get("id")
 
-            # Handle initialize method without authentication (part of MCP handshake)
+            # Handle methods that don't require authentication
             if method == "initialize":
                 return self._handle_initialize(request_id, params)
             elif method == "notifications/initialized":
                 return self._handle_notifications_initialized(request_id, params)
+            elif method == "ping":
+                return self._handle_ping(request_id, params)
 
             # All other methods require authentication
             actor = self.authenticate_and_get_actor()
@@ -137,9 +141,19 @@ class MCPHandler(BaseHandler):
 
     def _has_mcp_resources(self) -> bool:
         """Check if server has any MCP-exposed resources."""
-        # For now, we'll return True since we implement some basic resources
-        # In a full implementation, this would check decorated resource functions
-        return True
+        if not self.hooks:
+            return False
+
+        # Check if any method hooks are MCP-exposed as resources
+        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+
+        for method_name, hooks in self.hooks._method_hooks.items():
+            for hook in hooks:
+                if is_mcp_exposed(hook):
+                    metadata = get_mcp_metadata(hook)
+                    if metadata and metadata.get("type") == "resource":
+                        return True
+        return False
 
     def _has_mcp_prompts(self) -> bool:
         """Check if server has any MCP-exposed prompts."""
@@ -216,27 +230,24 @@ class MCPHandler(BaseHandler):
 
     def _handle_resources_list(self, request_id: Any, actor_id: str) -> Dict[str, Any]:
         """Handle MCP resources/list request."""
-        # Define static resources that are useful for ChatGPT integration
-        resources = [
-            {
-                "uri": "actingweb://notes/all",
-                "name": "All Notes",
-                "description": "Access all stored notes for the current user",
-                "mimeType": "application/json",
-            },
-            {
-                "uri": "actingweb://reminders/pending",
-                "name": "Pending Reminders",
-                "description": "List of all pending/incomplete reminders",
-                "mimeType": "application/json",
-            },
-            {
-                "uri": "actingweb://usage/stats",
-                "name": "Usage Statistics",
-                "description": "Statistics about MCP tool usage and activity",
-                "mimeType": "application/json",
-            },
-        ]
+        resources = []
+
+        if self.hooks:
+            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+
+            # Discover MCP resources from method hooks
+            for method_name, hooks in self.hooks._method_hooks.items():
+                for hook in hooks:
+                    if is_mcp_exposed(hook):
+                        metadata = get_mcp_metadata(hook)
+                        if metadata and metadata.get("type") == "resource":
+                            resource_def = {
+                                "uri": metadata.get("uri") or f"actingweb://{method_name}",
+                                "name": metadata.get("name") or method_name.replace("_", " ").title(),
+                                "description": metadata.get("description") or f"Access {method_name} resource",
+                                "mimeType": metadata.get("mimeType", "application/json"),
+                            }
+                            resources.append(resource_def)
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {"resources": resources}}
 
@@ -267,6 +278,7 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": prompts}}
 
+
     def _handle_tool_call(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
         """Handle MCP tools/call request."""
         tool_name = params.get("name")
@@ -295,15 +307,24 @@ class MCPHandler(BaseHandler):
                                 # Execute the action hook
                                 result = hook(actor_interface, action_name, arguments)
 
-                                # Ensure result is JSON serializable
-                                if not isinstance(result, dict):
-                                    result = {"result": result}
+                                # Check if result is already properly structured MCP content
+                                if isinstance(result, dict) and "content" in result:
+                                    # Result is already MCP-formatted, use it directly
+                                    return {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": result,
+                                    }
+                                else:
+                                    # Legacy handling: wrap in text item
+                                    if not isinstance(result, dict):
+                                        result = {"result": result}
 
-                                return {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "result": {"content": [{"type": "text", "text": str(result)}]},
-                                }
+                                    return {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": {"content": [{"type": "text", "text": str(result)}]},
+                                    }
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
                                 return self._create_jsonrpc_error(
@@ -376,54 +397,76 @@ class MCPHandler(BaseHandler):
         if not uri:
             return self._create_jsonrpc_error(request_id, -32602, "Missing resource URI")
 
+        if not self.hooks:
+            return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
+
         try:
-            # Handle different resource types
-            if uri == "actingweb://notes/all":
-                notes = actor.properties.get("notes", [])
-                content = {"total_notes": len(notes), "notes": notes}
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"contents": [{"uri": uri, "mimeType": "application/json", "text": str(content)}]},
-                }
+            # Find the corresponding resource hook
+            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
 
-            elif uri == "actingweb://reminders/pending":
-                reminders = actor.properties.get("reminders", [])
-                pending_reminders = [r for r in reminders if not r.get("completed", False)]
-                content = {"total_pending": len(pending_reminders), "reminders": pending_reminders}
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"contents": [{"uri": uri, "mimeType": "application/json", "text": str(content)}]},
-                }
+            for method_name, hooks in self.hooks._method_hooks.items():
+                for hook in hooks:
+                    if is_mcp_exposed(hook):
+                        metadata = get_mcp_metadata(hook)
+                        if metadata and metadata.get("type") == "resource":
+                            resource_uri = metadata.get("uri") or f"actingweb://{method_name}"
+                            uri_pattern = metadata.get("uri_pattern")
+                            
+                            # Check for exact URI match or pattern match
+                            uri_matches = False
+                            if resource_uri == uri:
+                                uri_matches = True
+                            elif uri_pattern:
+                                try:
+                                    if re.match(uri_pattern, uri):
+                                        uri_matches = True
+                                except re.error:
+                                    logger.warning(f"Invalid URI pattern in resource metadata: {uri_pattern}")
+                            
+                            if uri_matches:
+                                try:
+                                    # Wrap actor with interface for hook execution
+                                    actor_interface = self._get_actor_interface(actor)
+                                    
+                                    # Execute the resource hook
+                                    result = hook(actor_interface, method_name, params)
 
-            elif uri == "actingweb://usage/stats":
-                notes = actor.properties.get("notes", [])
-                reminders = actor.properties.get("reminders", [])
-                mcp_usage = actor.properties.get("mcp_usage_count", 0)
+                                    # Handle different result formats
+                                    if isinstance(result, dict):
+                                        if "contents" in result:
+                                            # Result is already MCP-formatted
+                                            return {
+                                                "jsonrpc": "2.0",
+                                                "id": request_id,
+                                                "result": result,
+                                            }
+                                        else:
+                                            # Convert dict to JSON content
+                                            content_text = json.dumps(result, indent=2)
+                                    else:
+                                        # Convert other types to string
+                                        content_text = str(result)
 
-                # Calculate tag usage
-                tag_counts: Dict[str, int] = {}
-                for note in notes:
-                    for tag in note.get("tags", []):
-                        tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                                    return {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": {
+                                            "contents": [
+                                                {
+                                                    "uri": uri,
+                                                    "mimeType": metadata.get("mimeType", "application/json"),
+                                                    "text": content_text,
+                                                }
+                                            ]
+                                        },
+                                    }
+                                except Exception as e:
+                                    logger.error(f"Error executing resource {uri}: {e}")
+                                    return self._create_jsonrpc_error(
+                                        request_id, -32603, f"Resource execution failed: {str(e)}"
+                                    )
 
-                content = {
-                    "mcp_usage_count": mcp_usage,
-                    "total_notes": len(notes),
-                    "total_reminders": len(reminders),
-                    "pending_reminders": len([r for r in reminders if not r.get("completed", False)]),
-                    "most_used_tags": dict(sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
-                    "created_at": actor.properties.get("created_at", "unknown"),
-                }
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"contents": [{"uri": uri, "mimeType": "application/json", "text": str(content)}]},
-                }
-
-            else:
-                return self._create_jsonrpc_error(request_id, -32601, f"Resource not found: {uri}")
+            return self._create_jsonrpc_error(request_id, -32601, f"Resource not found: {uri}")
 
         except Exception as e:
             logger.error(f"Error reading resource {uri}: {e}")
@@ -436,6 +479,14 @@ class MCPHandler(BaseHandler):
         # However, some clients may send it as a request, so we respond
         logger.debug("MCP client initialization completed")
 
+        return {"jsonrpc": "2.0", "id": request_id, "result": {}}
+
+    def _handle_ping(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle MCP ping request."""
+        # Ping is used for keepalive/connectivity testing
+        # Return empty result to confirm server is alive
+        logger.debug("MCP ping received")
+        
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 
     def _create_jsonrpc_error(self, request_id: Any, code: int, message: str) -> Dict[str, Any]:

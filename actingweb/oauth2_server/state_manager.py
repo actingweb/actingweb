@@ -101,7 +101,8 @@ class OAuth2StateManager:
             return None
 
     def create_mcp_state(
-        self, client_id: str, original_state: Optional[str], redirect_uri: str, email_hint: Optional[str] = None
+        self, client_id: str, original_state: Optional[str], redirect_uri: str, email_hint: Optional[str] = None,
+        code_challenge: Optional[str] = None, code_challenge_method: Optional[str] = None
     ) -> str:
         """
         Create state parameter for MCP OAuth2 flow.
@@ -111,6 +112,8 @@ class OAuth2StateManager:
             original_state: Original state from MCP client
             redirect_uri: MCP client redirect URI
             email_hint: Email hint for Google OAuth2
+            code_challenge: PKCE code challenge
+            code_challenge_method: PKCE code challenge method
 
         Returns:
             Encrypted state parameter
@@ -121,6 +124,8 @@ class OAuth2StateManager:
             "redirect_uri": redirect_uri,
             "email_hint": email_hint,
             "flow_type": "mcp_oauth2",
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
         }
 
         return self.create_state(mcp_context)

@@ -24,6 +24,9 @@ ADDED
 - Added proper execution of property_hooks in the handler of www/*
 - Added support for list of hidden properties as variable to www/properties* templates
 - Added support for dynamic generation of resources in MCP based on hooks
+- Support for CORS in oauth2 flows
+- PKCE support in oauth2 flows
+- Support for OPTIONS method on discovery endpoints
 
 v3.2.1: Aug 9, 2025
 -----------------

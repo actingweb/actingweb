@@ -93,7 +93,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         # Set CORS headers
         self.response.headers["Access-Control-Allow-Origin"] = "*"
         self.response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
         self.response.headers["Access-Control-Max-Age"] = "86400"  # 24 hours
 
         return {"status": "ok"}
@@ -119,6 +119,10 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._handle_oauth_callback()
         elif path == ".well-known/oauth-authorization-server":
             return self._handle_authorization_server_discovery()
+        elif path == ".well-known/oauth-protected-resource":
+            return self._handle_protected_resource_discovery()
+        elif path == ".well-known/oauth-protected-resource/mcp":
+            return self._handle_protected_resource_mcp_discovery()
         else:
             return self.error_response(404, f"Unknown OAuth2 endpoint: {path}")
 
@@ -283,6 +287,10 @@ class OAuth2EndpointsHandler(BaseHandler):
 
             form_data = parse_qs(body_str)
 
+            # Debug: log received form data
+            logger.debug(f"Token request form data keys: {list(form_data.keys())}")
+            logger.debug(f"Token request body: {body_str[:200]}...")  # First 200 chars
+
             # Extract parameters (parse_qs returns lists)
             params = {
                 "grant_type": form_data.get("grant_type", [""])[0],
@@ -291,7 +299,30 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "redirect_uri": form_data.get("redirect_uri", [""])[0],
                 "client_id": form_data.get("client_id", [""])[0],
                 "client_secret": form_data.get("client_secret", [""])[0],
+                "code_verifier": form_data.get("code_verifier", [""])[0],
             }
+
+            # Check for client_id in Authorization header if not in form data
+            if not params["client_id"]:
+                if not self.request.headers:
+                    return self.error_response(400, f"invalid_request: No Authorization headsers")
+                auth_header = self.request.headers.get("Authorization", "") or self.request.headers.get(
+                    "authorization", ""
+                )
+                if auth_header.startswith("Basic "):
+                    try:
+                        import base64
+
+                        encoded_creds = auth_header[6:]  # Remove "Basic "
+                        decoded_creds = base64.b64decode(encoded_creds).decode("utf-8")
+                        if ":" in decoded_creds:
+                            client_id, client_secret = decoded_creds.split(":", 1)
+                            params["client_id"] = client_id
+                            if not params["client_secret"]:
+                                params["client_secret"] = client_secret
+                            logger.debug(f"Extracted client_id from Authorization header: {client_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse Authorization header: {e}")
 
             # Handle using OAuth2 server
             token_response = self.oauth2_server.handle_token_request(params)
@@ -324,6 +355,11 @@ class OAuth2EndpointsHandler(BaseHandler):
         Returns:
             ActingWeb OAuth2 authorization server metadata
         """
+        # Set CORS headers for discovery endpoint
+        self.response.headers["Access-Control-Allow-Origin"] = "*"
+        self.response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+
         return self.oauth2_server.handle_discovery_request()
 
     def _handle_oauth_callback(self) -> Dict[str, Any]:
@@ -411,6 +447,59 @@ class OAuth2EndpointsHandler(BaseHandler):
             },
             "template": "oauth_authorization_form",  # Template to render
             "message": f"Authorize {form_data.get('client_name', 'MCP Client')} to access your ActingWeb data",
+        }
+
+    def _handle_protected_resource_discovery(self) -> Dict[str, Any]:
+        """
+        Handle OAuth2 Protected Resource Discovery (RFC 8705).
+
+        Returns:
+            Protected resource metadata
+        """
+        # Set CORS headers for discovery endpoint
+        self.response.headers["Access-Control-Allow-Origin"] = "*"
+        self.response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+
+        base_url = f"{self.config.proto}{self.config.fqdn}"
+
+        return {
+            "resource": base_url,
+            "authorization_servers": [base_url],
+            "scopes_supported": ["mcp"],
+            "bearer_methods_supported": ["header"],
+            "resource_documentation": f"{base_url}/mcp/info",
+            "resource_policy_uri": f"{base_url}",
+        }
+
+    def _handle_protected_resource_mcp_discovery(self) -> Dict[str, Any]:
+        """
+        Handle OAuth2 Protected Resource Discovery for MCP-specific metadata.
+
+        Returns:
+            MCP-specific protected resource metadata
+        """
+        # Set CORS headers for discovery endpoint
+        self.response.headers["Access-Control-Allow-Origin"] = "*"
+        self.response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+
+        base_url = f"{self.config.proto}{self.config.fqdn}"
+
+        return {
+            "resource": f"{base_url}/mcp",
+            "authorization_servers": [base_url],
+            "scopes_supported": ["mcp"],
+            "bearer_methods_supported": ["header"],
+            "resource_documentation": f"{base_url}/mcp/info",
+            "resource_policy_uri": f"{base_url}",
+            "mcp_version": "2024-11-05",
+            "capabilities": {
+                "tools": True,
+                "prompts": True,
+                "resources": False,
+                "roots": False,
+            },
         }
 
     def error_response(self, status_code: int, message: str) -> Dict[str, Any]:

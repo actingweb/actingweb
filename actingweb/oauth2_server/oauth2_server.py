@@ -100,6 +100,8 @@ class ActingWebOAuth2Server:
             response_type = params.get("response_type", "code")
             scope = params.get("scope", "")
             state = params.get("state", "")
+            code_challenge = params.get("code_challenge")
+            code_challenge_method = params.get("code_challenge_method", "plain")
 
             # Validate required parameters
             if not client_id:
@@ -119,6 +121,16 @@ class ActingWebOAuth2Server:
             if not self.client_registry.validate_redirect_uri(client_id, redirect_uri):
                 return self._error_response("invalid_request", "Invalid redirect_uri")
 
+            # PKCE validation
+            if code_challenge:
+                if code_challenge_method not in ["plain", "S256"]:
+                    return self._error_response("invalid_request", "Unsupported code_challenge_method")
+                if code_challenge_method == "S256" and len(code_challenge) < 43:
+                    return self._error_response("invalid_request", "code_challenge too short for S256")
+            elif client_data.get("token_endpoint_auth_method") == "none":
+                # For public clients (auth method "none"), PKCE is required
+                return self._error_response("invalid_request", "code_challenge required for public clients")
+
             if method == "GET":
                 # Show email form (same UX as GET /)
                 return {
@@ -135,10 +147,15 @@ class ActingWebOAuth2Server:
                 if not email:
                     return self._error_response("invalid_request", "Email is required")
 
-                # Create state with MCP context
+                # Create state with MCP context including PKCE parameters
                 logger.debug(f"Creating MCP state for client_id={client_id}, redirect_uri={redirect_uri}, state={state}, email={email}")
                 mcp_state = self.state_manager.create_mcp_state(
-                    client_id=client_id, original_state=state, redirect_uri=redirect_uri, email_hint=email
+                    client_id=client_id, 
+                    original_state=state, 
+                    redirect_uri=redirect_uri, 
+                    email_hint=email,
+                    code_challenge=code_challenge,
+                    code_challenge_method=code_challenge_method
                 )
                 logger.debug(f"Created MCP state: {mcp_state[:50]}... (truncated)")
 
@@ -210,6 +227,8 @@ class ActingWebOAuth2Server:
             client_id = mcp_context.get("client_id")
             redirect_uri = mcp_context.get("redirect_uri")
             original_state = mcp_context.get("original_state")
+            code_challenge = mcp_context.get("code_challenge")
+            code_challenge_method = mcp_context.get("code_challenge_method")
 
             if not client_id or not redirect_uri:
                 return self._error_response("invalid_request", "Invalid MCP context in state")
@@ -236,7 +255,8 @@ class ActingWebOAuth2Server:
 
             # Create authorization code for MCP client
             auth_code = self.token_manager.create_authorization_code(
-                actor_id=actor_obj.id, client_id=client_id, google_token_data=google_token_data
+                actor_id=actor_obj.id, client_id=client_id, google_token_data=google_token_data,
+                code_challenge=code_challenge, code_challenge_method=code_challenge_method
             )
 
             # Build redirect URL back to MCP client
@@ -280,26 +300,40 @@ class ActingWebOAuth2Server:
 
     def _handle_authorization_code_grant(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle authorization_code grant type."""
+        # Debug: log all received parameters
+        logger.debug(f"Token request parameters: {list(params.keys())}")
+        logger.debug(f"Token request values: {params}")
+        
         code = params.get("code")
         client_id = params.get("client_id")
         client_secret = params.get("client_secret")
         redirect_uri = params.get("redirect_uri")  # Must match authorization request
+        code_verifier = params.get("code_verifier")
 
         if not code:
             return self._error_response("invalid_request", "code is required")
         if not client_id:
+            logger.warning(f"Missing client_id in token request. Available params: {list(params.keys())}")
             return self._error_response("invalid_request", "client_id is required")
         if not redirect_uri:
             return self._error_response("invalid_request", "redirect_uri is required")
 
-        # Validate client credentials
+        # Validate client credentials (allow both secret-based and PKCE-based auth)
         client_data = self.client_registry.validate_client(client_id, client_secret)
         if not client_data:
-            return self._error_response("invalid_client", "Invalid client credentials")
+            # For PKCE clients, allow validation without client_secret
+            client_data = self.client_registry.validate_client(client_id)
+            if not client_data or client_data.get("token_endpoint_auth_method") != "none":
+                return self._error_response("invalid_client", "Invalid client credentials")
+
+        # PKCE validation for public clients
+        if client_data.get("token_endpoint_auth_method") == "none":
+            if not code_verifier:
+                return self._error_response("invalid_request", "code_verifier required for public clients")
 
         # Exchange authorization code for ActingWeb token
         token_response = self.token_manager.exchange_authorization_code(
-            code=code, client_id=client_id, client_secret=client_secret
+            code=code, client_id=client_id, client_secret=client_secret, code_verifier=code_verifier
         )
 
         if not token_response:
@@ -352,8 +386,8 @@ class ActingWebOAuth2Server:
             "scopes_supported": ["mcp"],
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-            "code_challenge_methods_supported": [],  # PKCE not implemented yet
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+            "code_challenge_methods_supported": ["S256"],
             "service_documentation": f"{base_url}/mcp/info",
             "mcp_resource": f"{base_url}/mcp",
         }

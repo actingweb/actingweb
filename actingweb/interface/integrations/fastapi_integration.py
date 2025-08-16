@@ -447,10 +447,12 @@ class FastAPIIntegration:
 
         # OAuth2 server endpoints for MCP clients
         @self.fastapi_app.post("/oauth/register")
+        @self.fastapi_app.options("/oauth/register")
         async def oauth2_register(request: Request) -> Response:
             return await self._handle_oauth2_endpoint(request, "register")
 
         @self.fastapi_app.get("/oauth/authorize")
+        @self.fastapi_app.options("/oauth/authorize")
         async def oauth2_authorize_get(request: Request) -> Response:
             return await self._handle_oauth2_endpoint(request, "authorize")
 
@@ -459,13 +461,11 @@ class FastAPIIntegration:
             return await self._handle_oauth2_endpoint(request, "authorize")
 
         @self.fastapi_app.post("/oauth/token")
+        @self.fastapi_app.options("/oauth/token")
         async def oauth2_token(request: Request) -> Response:
             return await self._handle_oauth2_endpoint(request, "token")
 
-        # OAuth2 discovery endpoint
-        @self.fastapi_app.get("/.well-known/oauth-authorization-server")
-        async def oauth2_discovery(request: Request) -> Response:
-            return await self._handle_oauth2_endpoint(request, ".well-known/oauth-authorization-server")
+        # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
 
         # Bot endpoint
         @self.fastapi_app.post("/bot")
@@ -483,19 +483,19 @@ class FastAPIIntegration:
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
         @self.fastapi_app.get("/.well-known/oauth-authorization-server")
         @self.fastapi_app.options("/.well-known/oauth-authorization-server")
-        async def oauth_discovery(request: Request) -> Dict[str, Any]:
+        async def oauth_discovery(request: Request) -> JSONResponse:
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-authorization-server")
 
         @self.fastapi_app.get("/.well-known/oauth-protected-resource")
         @self.fastapi_app.options("/.well-known/oauth-protected-resource")
-        async def oauth_protected_resource_discovery(request: Request) -> Dict[str, Any]:
+        async def oauth_protected_resource_discovery(request: Request) -> JSONResponse:
             """OAuth2 Protected Resource discovery endpoint."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-protected-resource")
 
         @self.fastapi_app.get("/.well-known/oauth-protected-resource/mcp")
         @self.fastapi_app.options("/.well-known/oauth-protected-resource/mcp")
-        async def oauth_protected_resource_mcp_discovery(request: Request) -> Dict[str, Any]:
+        async def oauth_protected_resource_mcp_discovery(request: Request) -> JSONResponse:
             """OAuth2 Protected Resource discovery endpoint for MCP."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-protected-resource/mcp")
 
@@ -900,14 +900,12 @@ class FastAPIIntegration:
             # Parse request data
             creator = None
             passphrase = None
-            trustee_root = None
 
             if webobj.request.body:
                 try:
                     data = json.loads(webobj.request.body)
                     creator = data.get("creator")
                     passphrase = data.get("passphrase", "")
-                    trustee_root = data.get("trustee_root", "")
                 except (json.JSONDecodeError, ValueError):
                     pass
 
@@ -915,7 +913,6 @@ class FastAPIIntegration:
             if not creator:
                 creator = webobj.request.get("creator")
                 passphrase = webobj.request.get("passphrase")
-                trustee_root = webobj.request.get("trustee_root")
 
             if not creator:
                 webobj.response.set_status(400, "Missing creator")
@@ -938,13 +935,6 @@ class FastAPIIntegration:
                 webobj.response.set_status(400, "Actor creation failed")
                 return
 
-            # Set trustee_root if provided (mirroring the factory handler behavior)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                # Get the underlying actor from the interface
-                core_actor = actor_interface.core_actor
-                if core_actor and core_actor.store:
-                    core_actor.store.trustee_root = trustee_root
-
             # Set response data
             webobj.response.set_status(201, "Created")
             response_data = {
@@ -952,10 +942,6 @@ class FastAPIIntegration:
                 "creator": creator,
                 "passphrase": actor_interface.passphrase or passphrase,
             }
-
-            # Add trustee_root to response if set (mirroring factory handler)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                response_data["trustee_root"] = trustee_root
 
             self.logger.debug(f"FastAPI actor creation response: {response_data}")
 
@@ -1267,13 +1253,28 @@ class FastAPIIntegration:
             redirect_url = result.get("location")
             if redirect_url:
                 from fastapi.responses import RedirectResponse
+                
+                # Add CORS headers for OAuth2 redirect responses
+                cors_headers = {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+                }
 
-                return RedirectResponse(url=redirect_url, status_code=302)
+                return RedirectResponse(url=redirect_url, status_code=302, headers=cors_headers)
 
-        # Return the OAuth2 result as JSON
+        # Return the OAuth2 result as JSON with CORS headers
         from fastapi.responses import JSONResponse
+        
+        # Add CORS headers for OAuth2 endpoints
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+            "Access-Control-Max-Age": "86400"
+        }
 
-        return JSONResponse(content=result)
+        return JSONResponse(content=result, headers=cors_headers)
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""
@@ -1331,7 +1332,7 @@ class FastAPIIntegration:
         # Create JSON response
         return JSONResponse(content=result, status_code=200)
 
-    async def _handle_oauth2_discovery_endpoint(self, request: Request, endpoint: str) -> Dict[str, Any]:
+    async def _handle_oauth2_discovery_endpoint(self, request: Request, endpoint: str) -> JSONResponse:
         """Handle OAuth2 discovery endpoints that return JSON directly."""
         req_data = await self._normalize_request(request)
         webobj = AWWebObj(
@@ -1354,7 +1355,15 @@ class FastAPIIntegration:
         else:
             result = await loop.run_in_executor(self.executor, handler.get, endpoint)
 
-        return result
+        # Add CORS headers directly for OAuth2 discovery endpoints
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+            "Access-Control-Max-Age": "86400"
+        }
+
+        return JSONResponse(content=result, headers=cors_headers)
 
     async def _handle_actor_request(self, request: Request, actor_id: str, endpoint: str, **kwargs: Any) -> Response:
         """Handle actor-specific requests."""
@@ -1574,20 +1583,18 @@ class FastAPIIntegration:
             "mcp_endpoint": "/mcp",
             "authentication": {
                 "type": "oauth2",
-                "provider": oauth_provider,
-                "required_scopes": ["openid", "email", "profile"] if oauth_provider == "google" else ["user:email"],
+                "provider": "actingweb",
+                "required_scopes": ["mcp"],
                 "flow": "authorization_code",
-                "auth_url": "https://accounts.google.com/o/oauth2/v2/auth"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/authorize",
-                "token_url": "https://oauth2.googleapis.com/token"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/access_token",
+                "auth_url": f"{base_url}/oauth/authorize",
+                "token_url": f"{base_url}/oauth/token",
                 "callback_url": f"{base_url}/oauth/callback",
                 "registration_endpoint": f"{base_url}/oauth/register",
                 "authorization_endpoint": f"{base_url}/oauth/authorize",
                 "token_endpoint": f"{base_url}/oauth/token",
-                "enabled": bool(oauth_client_id and oauth_client_secret),
+                "discovery_url": f"{base_url}/.well-known/oauth-authorization-server",
+                "resource_discovery_url": f"{base_url}/.well-known/oauth-protected-resource",
+                "enabled": True,
             },
             "supported_features": ["tools", "prompts"],
             "tools_count": 4,  # search, fetch, create_note, create_reminder

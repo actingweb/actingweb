@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.2.2: TBD, 2025
+v3.3: TBD, 2025
 -----------------
 
 FIXED
@@ -14,10 +14,15 @@ FIXED
 - Made the actor.get_config() use the dynamic global actingweb __version__
 - Fixed error in DbPropertyList that caused an error id the properties table was not found in DynamoDB
 - Fixed create_actor lifecycle hook and removed actor_factory
-- Fix handling of POST to /<actor_id>/www/properties (including _method=DELETE)
-- Fix base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
+- Fixed handling of POST to /<actor_id>/www/properties (including _method=DELETE)
+- Fixed base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
+- Fixed www/ hook not triggered
+
+CHANGED
+~~~~~
+
 - Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
-- Removed notes and usage as static resource in the llibrary, leave this to the implementing application
+- Removed notes and usage as static resource in the library, leave this to the implementing application
 
 ADDED
 ~~~~~

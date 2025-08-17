@@ -190,7 +190,7 @@ class WwwHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(
-                    f"www_{path}", actor_interface, {"path": path, "method": "GET"}
+                    "www", actor_interface, {"path": path, "method": "GET"}
                 )
                 if hook_result is not None:
                     output = str(hook_result) if not isinstance(hook_result, str) else hook_result
@@ -275,7 +275,7 @@ class WwwHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(
-                    f"www_{path}", actor_interface, {"path": path, "method": "POST"}
+                    "www", actor_interface, {"path": path, "method": "POST"}
                 )
                 if hook_result is not None:
                     output = str(hook_result) if not isinstance(hook_result, str) else hook_result

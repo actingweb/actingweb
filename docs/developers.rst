@@ -1143,6 +1143,61 @@ Use Cases
         "expires_at": "2024-01-01T13:00:00Z"
     })
 
+Private Data Storage
+--------------------
+
+The Attributes system is the preferred way to store sensitive or private data that should not be exposed through the public ``/properties`` API endpoint. Unlike regular actor properties, data stored in attribute buckets is completely isolated from the public API:
+
+.. code-block:: python
+
+    # WRONG: Storing sensitive data in regular properties (exposed via /properties API)
+    actor.properties["_oauth_token"] = "sensitive_token"  # Exposed in API!
+    
+    # CORRECT: Using Attributes for private storage (not exposed)
+    from actingweb import attribute
+    
+    private_bucket = attribute.Attributes(
+        actor_id=actor.id, 
+        bucket="oauth_tokens",  # Private bucket, not exposed
+        config=config
+    )
+    private_bucket.set_attr(name="access_token", data="sensitive_token")
+
+**Security Benefits**:
+
+- **API Isolation**: Attribute data is never exposed through ``/<actor_id>/properties`` endpoints
+- **Access Control**: Only application code with direct access to the Attributes API can read the data
+- **Clean Separation**: Keeps sensitive data completely separate from user-visible properties
+
+**Example: OAuth2 Token Storage**:
+
+.. code-block:: python
+
+    class OAuth2TokenManager:
+        def __init__(self, config):
+            self.config = config
+            self.tokens_bucket = "oauth_tokens"
+            self.refresh_bucket = "refresh_tokens"
+        
+        def store_access_token(self, actor_id: str, token_data: dict):
+            """Store access token in private attributes."""
+            tokens = attribute.Attributes(
+                actor_id=actor_id, 
+                bucket=self.tokens_bucket, 
+                config=self.config
+            )
+            tokens.set_attr(name=token_data["token"], data=token_data)
+        
+        def get_access_token(self, actor_id: str, token: str) -> dict:
+            """Retrieve access token from private attributes."""
+            tokens = attribute.Attributes(
+                actor_id=actor_id, 
+                bucket=self.tokens_bucket, 
+                config=self.config
+            )
+            token_attr = tokens.get_attr(name=token)
+            return token_attr["data"] if token_attr and "data" in token_attr else None
+
 Best Practices
 --------------
 
@@ -1155,6 +1210,8 @@ Best Practices
 4. **Avoid Large Objects**: The attribute system is designed for metadata and configuration, not large binary data.
 
 5. **Use JSON-Serializable Data**: Store only data that can be serialized to JSON.
+
+6. **Private Data Security**: Always use Attributes (not regular properties) for sensitive data like tokens, passwords, and private keys.
 
 Example: Complete Client Registry Implementation
 -----------------------------------------------

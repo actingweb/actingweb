@@ -6,12 +6,10 @@ credentials to authenticate with ActingWeb. Client credentials are stored
 per-actor but clients are not treated as actors themselves.
 """
 
-import json
 import logging
 import secrets
 import time
 from typing import Dict, Any, Optional, List
-from .. import actor as actor_module
 from .. import attribute
 from .. import config as config_class
 
@@ -28,7 +26,8 @@ class MCPClientRegistry:
 
     def __init__(self, config: config_class.Config):
         self.config = config
-        self.clients_property = "_mcp_clients"  # Actor property to store clients
+        # Use Attributes system for private storage instead of underscore properties
+        self.clients_bucket = "mcp_clients"  # Private attribute bucket for client data
 
     def register_client(self, actor_id: str, registration_data: Dict[str, Any]) -> Dict[str, Any]:
         """

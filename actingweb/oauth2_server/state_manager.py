@@ -14,9 +14,9 @@ import time
 from typing import Dict, Any, Optional
 
 try:
-    from cryptography.fernet import Fernet  # type: ignore[import-not-found]
+    from cryptography.fernet import Fernet
 except ImportError:
-    Fernet = None
+    Fernet = None  # type: ignore[misc,assignment]
 from .. import config as config_class
 
 logger = logging.getLogger(__name__)

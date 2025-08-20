@@ -1,4 +1,59 @@
 from typing import Any
+from .property_list import ListProperty
+
+
+class PropertyListStore:
+    """
+    Explicit interface for managing list properties.
+    
+    Used when the application knows it's working with list data.
+    """
+    
+    def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
+        self._actor_id = actor_id
+        self._config = config
+        self.__initialised = True
+    
+    def exists(self, name: str) -> bool:
+        """Check if a list property exists without creating it."""
+        try:
+            if self._config:
+                db = self._config.DbProperty.DbProperty()
+                meta = db.get(actor_id=self._actor_id, name=f"list:{name}-meta")
+                return meta is not None
+        except Exception:
+            pass
+        return False
+    
+    def list_all(self) -> list[str]:
+        """List all existing list property names."""
+        list_names = []
+        try:
+            if self._config:
+                db_list = self._config.DbProperty.DbPropertyList()
+                all_props = db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
+                for prop_name in all_props.keys():
+                    if prop_name.startswith('list:') and prop_name.endswith('-meta'):
+                        # Extract list name: "list:name-meta" -> "name"
+                        list_name = prop_name[5:-5]  # Remove 'list:' prefix and '-meta' suffix
+                        list_names.append(list_name)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in list_all(): {e}")
+        return list_names
+    
+    def __getattr__(self, k: str) -> ListProperty:
+        """Return a ListProperty for the requested list name."""
+        if k.startswith('_'):
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{k}'")
+        
+        # Validate actor_id is not None before creating ListProperty
+        if self._actor_id is None:
+            raise RuntimeError("Cannot create ListProperty without a valid actor_id")
+        
+        # Always return a ListProperty for explicit list access with "list:" prefix
+        return ListProperty(self._actor_id, f"list:{k}", self._config)
 
 
 class PropertyStore:

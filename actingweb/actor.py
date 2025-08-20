@@ -72,9 +72,11 @@ class Actor:
         if actor_id and config:
             self.store = attribute.InternalStore(actor_id=actor_id, config=config)
             self.property = property.PropertyStore(actor_id=actor_id, config=config)
+            self.property_lists = property.PropertyListStore(actor_id=actor_id, config=config)
         else:
             self.store = None
             self.property = None
+            self.property_lists = None
         self.get(actor_id=actor_id)
 
     def get_peer_info(self, url: str) -> dict[str, Any]:
@@ -124,6 +126,7 @@ class Actor:
             self.passphrase = self.actor["passphrase"]
             self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
             self.property = property.PropertyStore(actor_id=self.id, config=self.config)
+            self.property_lists = property.PropertyListStore(actor_id=self.id, config=self.config)
             if self.config and self.config.force_email_prop_as_creator:
                 em = self.store.email
                 if em and em.lower() != self.creator:

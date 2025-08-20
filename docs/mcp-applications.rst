@@ -666,8 +666,8 @@ Here's a complete example of a specialized MCP application for note-taking:
         actor = ActorInterface.create(creator=creator, config=aw_app.get_config())
         actor.properties.email = creator
         actor.properties.created_at = datetime.now().isoformat()
-        actor.properties.note_count = 0
         return actor
+        actor.properties.note_count = 0
 
     # Property hooks
     @aw_app.property_hook("email")

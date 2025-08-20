@@ -13,7 +13,8 @@ FIXED
 - Moved lots of INFO logging statements to DEBUG to reduce chatterness
 - Made the actor.get_config() use the dynamic global actingweb __version__
 - Fixed error in DbPropertyList that caused an error id the properties table was not found in DynamoDB
-- Fixed create_actor lifecycle hook and removed actor_factory
+- Fixed trustee_root JSON response to return stored value instead of input parameter
+- Fixed missing trustee_root returned on actor creation through REST API
 - Fixed handling of POST to /<actor_id>/www/properties (including _method=DELETE)
 - Fixed base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
 - Fixed www/ hook not triggered
@@ -34,6 +35,10 @@ ADDED
 - Support for CORS in oauth2 flows
 - PKCE support in oauth2 flows
 - Support for OPTIONS method on discovery endpoints
+- **PropertyListStore**: New explicit interface for managing list properties with `actor.property_lists.listname` syntax
+- **ListProperty**: Distributed list storage bypassing DynamoDB 400KB item limits by storing individual list items as separate properties
+- **Enhanced Property Management**: Added `property_lists` attribute to Actor class for list-specific operations
+- **List Property Iteration**: Lazy-loading iterator for efficient list traversal without loading entire lists into memory
 
 v3.2.1: Aug 9, 2025
 -----------------

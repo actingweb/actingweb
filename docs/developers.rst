@@ -4,6 +4,28 @@ ActingWeb Developer Interface
 
 This document describes the modern developer interface for the ActingWeb library. It replaces the complex ``OnAWBase`` callback system with a clean, fluent API and decorator-based hooks.
 
+Actor vs ActorInterface - Important Distinction
+===============================================
+
+ActingWeb provides two actor classes that serve different purposes:
+
+**Actor (Core/Internal)**
+  - Low-level, internal implementation class
+  - Used by the ActingWeb framework itself
+  - Handles database operations, internal state management
+  - **NOT intended for application developers**
+  - Located in ``actingweb.actor.Actor``
+
+**ActorInterface (Application/Public)**
+  - High-level, developer-friendly interface
+  - **This is what applications should use**
+  - Provides clean, intuitive API for actor operations
+  - Wraps the core Actor class with safety and convenience methods
+  - Located in ``actingweb.interface.ActorInterface``
+
+.. important::
+   **Always use ActorInterface in your applications.** The core Actor class is an internal implementation detail and may change between versions. ActorInterface provides a stable, documented API with proper error handling and type safety.
+
 Key Features
 ============
 
@@ -220,6 +242,10 @@ Properties
 
     PropertyStore instance for property management
 
+.. py:attribute:: property_lists
+
+    PropertyListStore instance for list property management
+
 .. py:attribute:: trust
 
     TrustManager instance for trust relationship management
@@ -287,6 +313,623 @@ Methods
     Convert to dictionary.
 
     :return: Dictionary representation of all properties
+
+PropertyListStore
+-----------------
+
+Specialized interface for managing list properties that can grow beyond DynamoDB's 400KB item limit. List properties are stored as individual items with metadata, providing efficient operations on large lists.
+
+.. code-block:: python
+
+    # Access list properties through actor interface
+    notes_list = actor.property_lists.notes
+    
+    # Add items to list
+    notes_list.append("First note")
+    notes_list.append({"title": "Meeting", "content": "Team sync at 2pm"})
+    
+    # Access items by index
+    first_note = notes_list[0]
+    second_note = notes_list[1]
+    
+    # Get list length
+    count = len(notes_list)
+    
+    # Iterate through items
+    for note in notes_list:
+        print(note)
+    
+    # Convert to regular Python list
+    all_notes = notes_list.to_list()
+    
+    # Set metadata for UI and LLM context
+    notes_list.set_description("User's personal notes and reminders")
+    notes_list.set_explanation("This list contains user-generated notes, meeting reminders, and task items for personal organization")
+    
+    # Get metadata
+    description = notes_list.get_description()
+    explanation = notes_list.get_explanation()
+
+Creating List Properties
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+List properties can be created through the web interface, API, or programmatically:
+
+**Web Interface (Form-based)**:
+
+.. code-block:: html
+
+    <form method="POST" action="/actor_id/www/properties">
+        <input name="property_name" value="shopping_list">
+        <input name="property_type" value="list">
+        <input name="description" value="Weekly grocery shopping list">
+        <input name="explanation" value="Items to buy during weekly grocery trips, organized by store sections">
+        <input type="submit" value="Create List">
+    </form>
+
+**API (JSON-based)**:
+
+.. code-block:: python
+
+    import requests
+    
+    # Create list property with metadata via POST to /properties
+    response = requests.post(f"https://domain.com/{actor_id}/properties", json={
+        "shopping_list": {
+            "_type": "list",
+            "description": "Weekly grocery shopping list",
+            "explanation": "Items to buy during weekly grocery trips, organized by store sections"
+        }
+    })
+
+**Programmatically**:
+
+.. code-block:: python
+
+    # Access creates the list automatically
+    shopping_list = actor.property_lists.shopping_list
+    
+    # Set metadata
+    shopping_list.set_description("Weekly grocery shopping list")
+    shopping_list.set_explanation("Items to buy during weekly grocery trips")
+    
+    # Add initial items
+    shopping_list.append("Milk")
+    shopping_list.append("Bread")
+    shopping_list.extend(["Eggs", "Cheese", "Apples"])
+
+List Operations
+~~~~~~~~~~~~~~~
+
+.. py:method:: append(item)
+
+    Add an item to the end of the list.
+    
+    :param item: Item to add (any JSON-serializable type)
+
+.. py:method:: extend(items)
+
+    Add multiple items to the end of the list.
+    
+    :param items: Iterable of items to add
+
+.. py:method:: insert(index, item)
+
+    Insert an item at the specified index.
+    
+    :param index: Index position for insertion
+    :param item: Item to insert
+
+.. py:method:: pop(index=-1)
+
+    Remove and return item at index (default last).
+    
+    :param index: Index of item to remove (optional, defaults to -1)
+    :return: Removed item
+
+.. py:method:: remove(value)
+
+    Remove first occurrence of value.
+    
+    :param value: Value to remove from list
+
+.. py:method:: clear()
+
+    Remove all items from the list.
+
+.. py:method:: delete()
+
+    Delete the entire list including metadata.
+
+.. py:method:: to_list()
+
+    Load entire list into memory as a Python list.
+    
+    :return: Python list containing all items
+
+.. py:method:: slice(start, end)
+
+    Load a range of items efficiently.
+    
+    :param start: Start index
+    :param end: End index
+    :return: List of items in the specified range
+
+.. py:method:: index(value, start=0, stop=None)
+
+    Return index of first occurrence of value.
+    
+    :param value: Value to search for
+    :param start: Start search position (optional)
+    :param stop: Stop search position (optional)
+    :return: Index of value
+
+.. py:method:: count(value)
+
+    Return number of occurrences of value.
+    
+    :param value: Value to count
+    :return: Number of occurrences
+
+Metadata Operations
+~~~~~~~~~~~~~~~~~~~
+
+Each list property includes metadata fields for UI display and LLM context:
+
+.. py:method:: set_description(description)
+
+    Set the description field for UI info about the list.
+    
+    :param description: Human-readable description for UI display
+
+.. py:method:: get_description()
+
+    Get the description field.
+    
+    :return: Description string
+
+.. py:method:: set_explanation(explanation)
+
+    Set the explanation field for LLM context.
+    
+    :param explanation: Detailed explanation for LLM understanding
+
+.. py:method:: get_explanation()
+
+    Get the explanation field.
+    
+    :return: Explanation string
+
+List Properties in Web Interface
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+List properties have specialized web interface support:
+
+- **Properties Page**: Lists show "[List with N items]" summary
+- **Individual List Page**: Shows all items with add/edit/delete controls
+- **Metadata Editing**: Form fields for updating description and explanation
+- **Item Management**: Add, update, delete individual items via web forms
+
+The web interface supports these operations:
+
+.. code-block:: python
+
+    # Add item via POST to /<actor_id>/www/properties/<list_name>/items
+    # POST data: action=add&item_value={"new": "item"}
+    
+    # Update item via POST 
+    # POST data: action=update&item_index=0&item_value={"updated": "item"}
+    
+    # Delete item via POST
+    # POST data: action=delete&item_index=0
+    
+    # Update metadata via POST to /<actor_id>/www/properties/<list_name>/metadata
+    # POST data: action=update&description=new_desc&explanation=new_explanation
+
+Key Features and Benefits
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Scalability**:
+- Bypasses DynamoDB's 400KB item limit by storing items individually
+- Efficient operations on large lists without loading everything into memory
+- Lazy-loading iterator minimizes database queries
+
+**Type Safety**:
+- Automatic JSON serialization/deserialization for complex objects
+- Graceful handling of serialization errors
+- Consistent data types across operations
+
+**Metadata Support**:
+- Description field for UI display and user understanding
+- Explanation field for LLM context and automated processing
+- Metadata persisted independently of list items
+
+**Web Integration**:
+- Specialized web interface for list management
+- Form-based item addition, editing, and deletion
+- Metadata editing through web forms
+
+**API Compatibility**:
+- Standard Python list interface (``[index]``, ``len()``, ``iter()``)
+- RESTful API support through properties handlers
+- JSON-RPC method support for automated clients
+
+Use Cases
+~~~~~~~~~
+
+**User Content Lists**:
+
+.. code-block:: python
+
+    # Blog posts, notes, bookmarks
+    blog_posts = actor.property_lists.blog_posts
+    blog_posts.set_description("Published blog articles")
+    blog_posts.set_explanation("User-authored blog posts with titles, content, tags, and publication dates")
+    
+    blog_posts.append({
+        "title": "Getting Started with ActingWeb",
+        "content": "ActingWeb is a powerful framework...",
+        "tags": ["tutorial", "web", "python"],
+        "published_at": "2024-01-15T10:00:00Z"
+    })
+
+**Configuration Collections**:
+
+.. code-block:: python
+
+    # API endpoints, webhook URLs, integration settings
+    webhooks = actor.property_lists.webhook_endpoints
+    webhooks.set_description("Configured webhook endpoints")
+    webhooks.set_explanation("External URLs that receive notifications when actor data changes")
+    
+    webhooks.append({
+        "url": "https://api.example.com/webhook",
+        "events": ["property_change", "trust_approved"],
+        "active": True
+    })
+
+**Activity Logs**:
+
+.. code-block:: python
+
+    # Audit trails, event logs, user actions
+    activity_log = actor.property_lists.activity_log
+    activity_log.set_description("User activity history")
+    activity_log.set_explanation("Chronological log of user actions, API calls, and system events for audit and debugging")
+    
+    activity_log.append({
+        "timestamp": "2024-01-15T14:30:00Z",
+        "action": "property_updated",
+        "details": {"property": "email", "old_value": "old@example.com", "new_value": "new@example.com"}
+    })
+
+**Data Collections**:
+
+.. code-block:: python
+
+    # Sensor readings, measurements, collected data
+    sensor_data = actor.property_lists.temperature_readings
+    sensor_data.set_description("Temperature sensor measurements")
+    sensor_data.set_explanation("Historical temperature readings from IoT sensors with timestamps and location data")
+    
+    sensor_data.append({
+        "timestamp": "2024-01-15T12:00:00Z",
+        "temperature": 22.5,
+        "sensor_id": "temp_001",
+        "location": "living_room"
+    })
+
+Property Lists vs Regular Properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Use Regular Properties When**:
+- Data is simple key-value pairs
+- Values are relatively small (under 50KB)
+- You need direct REST API access to individual fields
+- Data structure is flat and doesn't grow significantly
+
+**Use Property Lists When**:
+- You need to store ordered collections of items
+- Data might grow beyond DynamoDB limits (400KB)
+- You need list operations (append, insert, remove)
+- Items are complex objects with multiple fields
+- You need efficient iteration over large datasets
+
+**Migration Example**:
+
+.. code-block:: python
+
+    # Old approach (limited by 400KB, inefficient for large data)
+    actor.properties.user_notes = json.dumps([
+        "Note 1", "Note 2", "Note 3"  # This grows and hits limits
+    ])
+    
+    # New approach (scalable, efficient)
+    notes_list = actor.property_lists.user_notes
+    notes_list.set_description("User's personal notes")
+    for note in ["Note 1", "Note 2", "Note 3"]:
+        notes_list.append(note)
+
+REST API for List Properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+List properties have specialized REST API endpoints that extend the standard properties API:
+
+**GET Operations**:
+
+.. code-block:: bash
+
+    # Get all items in a list
+    GET /<actor_id>/properties/shopping_list
+    # Returns: ["Milk", "Bread", "Eggs"]
+    
+    # Get specific item by index
+    GET /<actor_id>/properties/shopping_list?index=0
+    # Returns: "Milk"
+    
+    # Get item by index (out of range returns 404)
+    GET /<actor_id>/properties/shopping_list?index=10
+    # Returns: 404 Not Found
+
+**POST Operations - Bulk Updates**:
+
+.. code-block:: bash
+
+    # Bulk update specific items using items array
+    POST /<actor_id>/properties/shopping_list
+    Content-Type: application/json
+    
+    {
+        "shopping_list": {
+            "items": [
+                {"index": 0, "name": "Organic Milk", "category": "dairy", "price": 4.99},
+                {"index": 2, "name": "Free-range Eggs", "category": "dairy", "quantity": 12},
+                {"index": 5, "name": "Apples", "category": "produce", "variety": "Honeycrisp"}
+            ]
+        }
+    }
+
+**POST Operations - Item Deletion**:
+
+.. code-block:: bash
+
+    # Delete specific items using empty item data
+    POST /<actor_id>/properties/shopping_list
+    Content-Type: application/json
+    
+    {
+        "shopping_list": {
+            "items": [
+                {"index": 1},   # Delete item at index 1 (empty item = delete)
+                {"index": 3}    # Delete item at index 3
+            ]
+        }
+    }
+
+**POST Operations - Mixed Updates**:
+
+.. code-block:: bash
+
+    # Combine updates and deletions in one request
+    POST /<actor_id>/properties/shopping_list
+    Content-Type: application/json
+    
+    {
+        "shopping_list": {
+            "items": [
+                {"index": 0, "name": "Updated item", "category": "other"},  # Update
+                {"index": 1},                                                # Delete
+                {"index": 3, "name": "New item", "urgent": true}            # Add/Update
+            ]
+        }
+    }
+
+**DELETE Operations**:
+
+.. code-block:: bash
+
+    # Delete entire list property (including metadata)
+    DELETE /<actor_id>/properties/shopping_list
+    # Returns: 204 No Content
+
+**Response Formats**:
+
+.. code-block:: python
+
+    # GET responses return JSON arrays or individual items
+    ["Milk", "Bread", "Eggs"]  # All items
+    "Milk"                     # Single item
+    
+    # POST bulk update responses
+    {
+        "shopping_list": "[Bulk update: 2 items updated, 1 items deleted]"
+    }
+    
+    # Error responses for GET operations
+    {"error": "List item not found"}           # 404 for invalid index
+    {"error": "Property 'x' is not a list"}   # 400 for non-list property
+    
+    # Error responses for POST bulk updates
+    {"error": "Missing 'index' field in item at position 0"}                           # 400
+    {"error": "Invalid index type in item at position 1: expected integer, got str"}   # 400
+    {"error": "Invalid index value in item at position 2: -1 (must be >= 0)"}         # 400
+    {"error": "Invalid item at position 0: must be a dictionary, got str"}             # 400
+    {"error": "Invalid 'items' field for property 'list': expected list, got str"}     # 400
+
+**Error Handling and Validation**:
+
+The bulk update API performs comprehensive validation and provides detailed error messages:
+
+.. code-block:: python
+
+    # Required field validation
+    {
+        "list_name": {
+            "items": [
+                {"name": "Missing index"}  # ERROR: Missing 'index' field
+            ]
+        }
+    }
+    # Returns: 400 "Missing 'index' field in item at position 0"
+    
+    # Type validation
+    {
+        "list_name": {
+            "items": [
+                {"index": "0", "name": "String index"}  # ERROR: Wrong type
+            ]
+        }
+    }
+    # Returns: 400 "Invalid index type in item at position 0: expected integer, got str"
+    
+    # Value validation
+    {
+        "list_name": {
+            "items": [
+                {"index": -1, "name": "Negative index"}  # ERROR: Negative value
+            ]
+        }
+    }
+    # Returns: 400 "Invalid index value in item at position 0: -1 (must be >= 0)"
+    
+    # Structure validation
+    {
+        "list_name": {
+            "items": [
+                "not_a_dict"  # ERROR: Items must be dictionaries
+            ]
+        }
+    }
+    # Returns: 400 "Invalid item at position 0: must be a dictionary, got str"
+    
+    # Array validation
+    {
+        "list_name": {
+            "items": "not_an_array"  # ERROR: items must be array
+        }
+    }
+    # Returns: 400 "Invalid 'items' field for property 'list_name': expected list, got str"
+
+**Validation Rules**:
+
+1. **items** field must be a list/array
+2. Each item in the array must be a dictionary/object
+3. Each item must have an **index** field
+4. **index** must be an integer (not string, float, etc.)
+5. **index** must be non-negative (>= 0)
+6. All other fields in the item become the stored data
+
+**Error Behavior**:
+
+- Validation errors return **HTTP 400 Bad Request**
+- Error messages include the problematic item's position in the array
+- Operations are **atomic** - if any item fails validation, no changes are made
+- Delete operations that target non-existent indices are logged as warnings but don't fail the operation
+
+**Hook Integration**:
+
+Property hooks work seamlessly with the new list API operations:
+
+.. code-block:: python
+
+    @app.property_hook("shopping_list")
+    def validate_shopping_list(actor, operation, value, path):
+        if operation == "get":
+            # Filter items based on user permissions
+            if len(path) > 1:  # Specific item access
+                item_index = int(path[1])
+                return value if item_index < 10 else None  # Limit access
+            return value  # Allow access to all items
+            
+        elif operation == "post":
+            # Validate bulk updates
+            if isinstance(value, list):
+                # Validate each item in bulk update
+                for item in value:
+                    if not isinstance(item, str) or len(item) > 100:
+                        return None  # Reject invalid items
+            return value
+            
+        elif operation == "delete":
+            # Allow deletion only by owner
+            return value if actor.is_owner() else None
+            
+        return value
+
+**API Usage Examples**:
+
+.. code-block:: python
+
+    import requests
+    
+    # Get all items
+    response = requests.get(f"https://domain.com/{actor_id}/properties/notes")
+    all_notes = response.json()
+    
+    # Get specific item
+    response = requests.get(f"https://domain.com/{actor_id}/properties/notes?index=0")
+    first_note = response.json()
+    
+    # Bulk update items
+    response = requests.post(f"https://domain.com/{actor_id}/properties", json={
+        "notes": {
+            "items": [
+                {"index": 0, "title": "Updated Note", "content": "New content", "tags": ["work", "important"]},
+                {"index": 2, "title": "Another Note", "content": "More content", "priority": "high"},
+                {"index": 1}  # Delete item at index 1
+            ]
+        }
+    })
+    
+    # Delete entire list
+    response = requests.delete(f"https://domain.com/{actor_id}/properties/notes")
+
+**Complex Object Examples**:
+
+The items array supports complex nested objects with any structure:
+
+.. code-block:: python
+
+    # Example: Update a complex configuration list
+    response = requests.post(f"https://domain.com/{actor_id}/properties", json={
+        "server_configs": {
+            "items": [
+                {
+                    "index": 0,
+                    "var1": 3,
+                    "var2": "some text",
+                    "var3": ["item1", "item2", "item3"],
+                    "var4": {
+                        "nested_key": "nested_value",
+                        "another_nested": {
+                            "deep_key": "deep_value"
+                        }
+                    },
+                    "var5": "some text"
+                },
+                {
+                    "index": 1,
+                    "server_name": "production-db",
+                    "config": {
+                        "host": "db.example.com",
+                        "port": 5432,
+                        "ssl": True,
+                        "pools": {
+                            "min": 5,
+                            "max": 20
+                        }
+                    },
+                    "tags": ["production", "database", "critical"],
+                    "metadata": {
+                        "created_by": "admin",
+                        "created_at": "2024-01-15T10:00:00Z",
+                        "version": "1.2.3"
+                    }
+                },
+                {"index": 2}  # Delete item at index 2
+            ]
+        }
+    })
 
 TrustManager
 ------------

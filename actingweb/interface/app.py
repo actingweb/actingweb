@@ -60,6 +60,7 @@ class ActingWebApp:
         # Actor factory function
         self._actor_factory_func: Optional[Callable[..., "ActorInterface"]] = None
 
+
         # Internal config object (lazy initialized)
         self._config: Optional[Config] = None
 
@@ -133,10 +134,6 @@ class ActingWebApp:
         }
         return self
 
-    def actor_factory(self, func: Callable[..., "ActorInterface"]) -> Callable[..., "ActorInterface"]:
-        """Decorator to register actor factory function."""
-        self._actor_factory_func = func
-        return func
 
     def property_hook(self, property_name: str = "*") -> Callable[..., Any]:
         """Decorator to register property hooks."""
@@ -168,6 +165,11 @@ class ActingWebApp:
     def subscription_hook(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """Decorator to register subscription hooks."""
         self.hooks.register_subscription_hook(func)
+        return func
+
+    def actor_factory(self, func: Callable[..., "ActorInterface"]) -> Callable[..., "ActorInterface"]:
+        """Decorator to register actor factory function."""
+        self._actor_factory_func = func
         return func
 
     def lifecycle_hook(self, event: str) -> Callable[..., Any]:

@@ -74,6 +74,75 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not name:
             self.listall(myself)
             return
+            
+        # Check if this is a list property first
+        if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None 
+            and myself.property_lists.exists(name)):
+            # This is a list property - handle index parameter
+            index_param = self.request.get("index")
+            try:
+                list_prop = getattr(myself.property_lists, name)
+                
+                if index_param is not None:
+                    # Get specific item by index
+                    try:
+                        index = int(index_param)
+                        item = list_prop[index]
+                        
+                        # Execute property hook if available
+                        if self.hooks:
+                            actor_interface = self._get_actor_interface(myself)
+                            if actor_interface:
+                                hook_path = [name, str(index)]
+                                transformed = self.hooks.execute_property_hooks(
+                                    name, "get", actor_interface, item, hook_path
+                                )
+                                if transformed is not None:
+                                    item = transformed
+                                else:
+                                    if self.response:
+                                        self.response.set_status(404)
+                                    return
+                        
+                        out = json.dumps(item)
+                    except (IndexError, ValueError):
+                        if self.response:
+                            self.response.set_status(404, "List item not found")
+                        return
+                else:
+                    # Get all items
+                    all_items = list_prop.to_list()
+                    
+                    # Execute property hook if available
+                    if self.hooks:
+                        actor_interface = self._get_actor_interface(myself)
+                        if actor_interface:
+                            hook_path = [name]
+                            transformed = self.hooks.execute_property_hooks(
+                                name, "get", actor_interface, all_items, hook_path
+                            )
+                            if transformed is not None:
+                                all_items = transformed
+                            else:
+                                if self.response:
+                                    self.response.set_status(404)
+                                return
+                    
+                    out = json.dumps(all_items)
+                    
+                if self.response:
+                    self.response.set_status(200, "Ok")
+                    self.response.headers["Content-Type"] = "application/json"
+                    self.response.write(out)
+                return
+                
+            except Exception as e:
+                logging.error(f"Error accessing list property '{name}': {e}")
+                if self.response:
+                    self.response.set_status(500, "Error accessing list property")
+                return
+        
+        # Regular property handling
         lookup = myself.property[name] if myself and myself.property else None
         if not lookup:
             if self.response:
@@ -270,26 +339,71 @@ class PropertiesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400)
         pair = dict()
-        # Handle the simple form
-        if self.request.get("property") and self.request.get("value"):
-            # Execute property post hook if available
-            val = self.request.get("value")
-            if self.hooks:
-                actor_interface = self._get_actor_interface(myself)
-                if actor_interface:
-                    prop_name = self.request.get("property")
-                    transformed = self.hooks.execute_property_hooks(
-                        prop_name, "post", actor_interface, val, [prop_name]
-                    )
-                    if transformed is not None:
-                        val = transformed
-                    else:
-                        if self.response:
-                            self.response.set_status(403)
-                        return
-            pair[self.request.get("property")] = val
-            if myself and myself.property:
-                myself.property[self.request.get("property")] = self.request.get("value")
+        # Handle the form with property type support
+        if self.request.get("property"):
+            prop_name = self.request.get("property")
+            prop_type = self.request.get("property_type") or "simple"  # Default to simple
+
+            # Handle list property creation
+            if prop_type == "list":
+                # Create empty list property
+                if myself and hasattr(myself, "property_lists"):
+                    # Create empty list by accessing it (this initializes the ListProperty)
+                    list_prop = getattr(myself.property_lists, prop_name)
+                    # The ListProperty is now created with metadata, but no items
+
+                    # Set description and explanation if provided
+                    description = self.request.get("description") or ""
+                    explanation = self.request.get("explanation") or ""
+                    
+                    if description:
+                        list_prop.set_description(description)
+                    if explanation:
+                        list_prop.set_explanation(explanation)
+
+                    # Execute property post hook if available for list creation
+                    if self.hooks:
+                        actor_interface = self._get_actor_interface(myself)
+                        if actor_interface:
+                            transformed = self.hooks.execute_property_hooks(
+                                prop_name, "post", actor_interface, [], [prop_name]
+                            )
+                            if transformed is None:
+                                if self.response:
+                                    self.response.set_status(403)
+                                return
+
+                    pair[prop_name] = f"[Empty list property created]"
+                else:
+                    if self.response:
+                        self.response.set_status(500, "List properties not supported")
+                    return
+
+            # Handle simple property creation
+            elif prop_type == "simple" and self.request.get("value"):
+                # Execute property post hook if available
+                val = self.request.get("value")
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        transformed = self.hooks.execute_property_hooks(
+                            prop_name, "post", actor_interface, val, [prop_name]
+                        )
+                        if transformed is not None:
+                            val = transformed
+                        else:
+                            if self.response:
+                                self.response.set_status(403)
+                            return
+                pair[prop_name] = val
+                if myself and myself.property:
+                    myself.property[prop_name] = val
+
+            else:
+                # Missing value for simple property
+                if self.response:
+                    self.response.set_status(400, "Value required for simple property")
+                return
         elif len(self.request.arguments()) > 0:
             for name in self.request.arguments():
                 # Execute property post hook if available
@@ -318,23 +432,157 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(400, "Error in json body")
                 return
             for key in params:
-                # Execute property post hook if available
                 val = params[key]
-                if self.hooks:
-                    actor_interface = self._get_actor_interface(myself)
-                    if actor_interface:
-                        transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, val, [key])
-                        if transformed is not None:
-                            val = transformed
+                # Handle special list property creation with metadata
+                if isinstance(val, dict) and val.get("_type") == "list":
+                    # This is a list property creation with metadata
+                    if myself and hasattr(myself, "property_lists"):
+                        list_prop = getattr(myself.property_lists, key)
+                        
+                        # Set description and explanation if provided
+                        if "description" in val:
+                            list_prop.set_description(val["description"])
+                        if "explanation" in val:
+                            list_prop.set_explanation(val["explanation"])
+                            
+                        # Execute property post hook if available for list creation
+                        if self.hooks:
+                            actor_interface = self._get_actor_interface(myself)
+                            if actor_interface:
+                                transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, [], [key])
+                                if transformed is not None:
+                                    pair[key] = f"[Empty list property created with metadata]"
+                                else:
+                                    continue
                         else:
-                            continue
-                pair[key] = val
-                if isinstance(val, dict):
-                    text = json.dumps(val)
+                            pair[key] = f"[Empty list property created with metadata]"
+                    else:
+                        # List properties not supported
+                        continue
+                        
+                # Handle items array for bulk list updates
+                elif isinstance(val, dict) and "items" in val:
+                    # Validate items array structure
+                    if not isinstance(val["items"], list):
+                        logging.error(f"Invalid 'items' field for property '{key}': expected list, got {type(val['items']).__name__}")
+                        if self.response:
+                            self.response.set_status(400, f"Invalid 'items' field for property '{key}': expected list, got {type(val['items']).__name__}")
+                        return
+                    
+                    if len(val["items"]) == 0:
+                        logging.warning(f"Empty 'items' array for property '{key}': no updates to perform")
+                        pair[key] = "[No items to update]"
+                        continue
+                    
+                    # This is a bulk update for a list property
+                    if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None 
+                        and myself.property_lists.exists(key)):
+                        try:
+                            list_prop = getattr(myself.property_lists, key)
+                            items_updated = 0
+                            items_deleted = 0
+                            
+                            for i, item_spec in enumerate(val["items"]):
+                                # Validate item structure
+                                if not isinstance(item_spec, dict):
+                                    logging.error(f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}")
+                                    if self.response:
+                                        self.response.set_status(400, f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}")
+                                    return
+                                
+                                # Check for required "index" field
+                                if "index" not in item_spec:
+                                    logging.error(f"Missing 'index' field in item at position {i}: {item_spec}")
+                                    if self.response:
+                                        self.response.set_status(400, f"Missing 'index' field in item at position {i}")
+                                    return
+                                
+                                index = item_spec["index"]
+                                
+                                # Validate index type and value
+                                if not isinstance(index, int):
+                                    logging.error(f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}")
+                                    if self.response:
+                                        self.response.set_status(400, f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}")
+                                    return
+                                
+                                if index < 0:
+                                    logging.error(f"Invalid index value in item at position {i}: {index} (must be >= 0)")
+                                    if self.response:
+                                        self.response.set_status(400, f"Invalid index value in item at position {i}: {index} (must be >= 0)")
+                                    return
+                                
+                                # Check if this is a deletion (empty item data)
+                                if len(item_spec) == 1:  # Only has "index" key, means delete
+                                    try:
+                                        if index < len(list_prop):
+                                            del list_prop[index]
+                                            items_deleted += 1
+                                        else:
+                                            logging.warning(f"Cannot delete item at index {index}: index out of range (list length: {len(list_prop)})")
+                                            # Don't fail the entire operation, just log warning
+                                    except IndexError as e:
+                                        logging.error(f"Error deleting item at index {index}: {e}")
+                                        # Don't fail the entire operation for delete errors
+                                else:
+                                    # Update/set item - the entire item_spec except "index" is the item data
+                                    item_data = {k: v for k, v in item_spec.items() if k != "index"}
+                                    try:
+                                        # Extend list if needed
+                                        while len(list_prop) <= index:
+                                            list_prop.append(None)
+                                        # Store the complete object
+                                        list_prop[index] = item_data
+                                        items_updated += 1
+                                    except (IndexError, ValueError) as e:
+                                        logging.error(f"Error updating item at index {index}: {e}")
+                                        if self.response:
+                                            self.response.set_status(500, f"Error updating item at index {index}: {str(e)}")
+                                        return
+                            
+                            # Execute property post hook if available
+                            if self.hooks:
+                                actor_interface = self._get_actor_interface(myself)
+                                if actor_interface:
+                                    # Pass the entire list for hook validation
+                                    current_items = list_prop.to_list()
+                                    transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, current_items, [key])
+                                    if transformed is None:
+                                        # Hook rejected the update - need to revert changes
+                                        if self.response:
+                                            self.response.set_status(403, "Bulk update rejected by hooks")
+                                        return
+                            
+                            pair[key] = f"[Bulk update: {items_updated} items updated, {items_deleted} items deleted]"
+                            
+                        except Exception as e:
+                            logging.error(f"Error in bulk update for list property '{key}': {e}")
+                            if self.response:
+                                self.response.set_status(500, f"Error in bulk update: {str(e)}")
+                            return
+                    else:
+                        # Not a list property or doesn't exist
+                        if self.response:
+                            self.response.set_status(400, f"Property '{key}' is not a list property")
+                        return
                 else:
-                    text = val
-                if myself and myself.property:
-                    myself.property[key] = text
+                    # Regular property handling
+                    # Execute property post hook if available
+                    if self.hooks:
+                        actor_interface = self._get_actor_interface(myself)
+                        if actor_interface:
+                            transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, val, [key])
+                            if transformed is not None:
+                                val = transformed
+                            else:
+                                continue
+                    pair[key] = val
+                    if isinstance(val, dict):
+                        text = json.dumps(val)
+                    else:
+                        text = val
+                    if myself and myself.property:
+                        myself.property[key] = text
         if not pair:
             if self.response:
                 self.response.set_status(403, "No attributes accepted")
@@ -383,6 +631,38 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(204)
             return
         if len(path) == 1:
+            # Check if this is a list property first
+            if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None 
+                and myself.property_lists.exists(name)):
+                # This is a list property - delete the entire list
+                try:
+                    list_prop = getattr(myself.property_lists, name)
+                    
+                    # Execute property delete hook if available
+                    if self.hooks:
+                        actor_interface = self._get_actor_interface(myself)
+                        if actor_interface:
+                            # Pass current list data for hook validation
+                            current_items = list_prop.to_list()
+                            result = self.hooks.execute_property_hooks(
+                                name, "delete", actor_interface, current_items, path
+                            )
+                            if result is None:
+                                self.response.set_status(403)
+                                return
+                    
+                    # Delete the entire list including metadata
+                    list_prop.delete()
+                    myself.register_diffs(target="properties", subtarget=name, blob="")
+                    self.response.set_status(204)
+                    return
+                    
+                except Exception as e:
+                    logging.error(f"Error deleting list property '{name}': {e}")
+                    self.response.set_status(500, f"Error deleting list property: {str(e)}")
+                    return
+            
+            # Regular property handling
             old_prop = myself.property[name] if myself and myself.property else None
             # Execute property delete hook if available
             if self.hooks:

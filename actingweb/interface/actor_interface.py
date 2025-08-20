@@ -55,6 +55,7 @@ class ActorInterface:
     def __init__(self, core_actor: CoreActor):
         self._core_actor = core_actor
         self._property_store: Optional[PropertyStore] = None
+        self._property_list_store = None  # Will be initialized on first access
         self._trust_manager: Optional[TrustManager] = None
         self._subscription_manager: Optional[SubscriptionManager] = None
         
@@ -175,6 +176,15 @@ class ActorInterface:
                 raise RuntimeError("Actor properties not available - actor may not be properly initialized")
             self._property_store = PropertyStore(self._core_actor.property)
         return self._property_store
+        
+    @property
+    def property_lists(self):
+        """Actor property lists for distributed storage."""
+        if self._property_list_store is None:
+            # Import here to avoid circular imports
+            from ..property import PropertyListStore
+            self._property_list_store = PropertyListStore(actor_id=self.id, config=self._core_actor.config)
+        return self._property_list_store
         
     @property
     def trust(self) -> TrustManager:

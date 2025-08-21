@@ -18,6 +18,7 @@ from oauthlib.common import generate_token  # type: ignore[import-untyped]
 
 from . import actor as actor_module
 from . import config as config_class
+from .interface.actor_interface import ActorInterface
 
 logger = logging.getLogger(__name__)
 
@@ -399,23 +400,27 @@ class OAuth2Authenticator:
             else:
                 logger.debug(f"No existing actor found for email {email}, will create new one")
 
-            # Create new actor with email as creator
-            new_actor = actor_module.Actor(config=self.config)
-
-            # Create actor URL - let ActingWeb generate the unique ID
-            actor_url = f"{self.config.proto}{self.config.fqdn}/oauth-{email}"
-
-            # For OAuth users, we don't need a passphrase - ActingWeb will auto-generate one
-            if new_actor.create(url=actor_url, creator=email, passphrase=""):
+            # Create new actor with email as creator using ActorInterface
+            try:
+                actor_interface = ActorInterface.create(
+                    creator=email,
+                    config=self.config,
+                    passphrase="",  # ActingWeb will auto-generate
+                    hooks=getattr(self.config, '_hooks', None)  # Pass hooks if available for lifecycle events
+                )
+                
                 # Set up initial properties for OAuth actor
-                if new_actor.store:
-                    new_actor.store.email = email
-                    new_actor.store.auth_method = f"{self.provider.name}_oauth2"
-                    new_actor.store.created_at = str(int(time.time()))
-                    new_actor.store.oauth_provider = self.provider.name
+                if actor_interface.core_actor.store:
+                    actor_interface.core_actor.store.email = email
+                    actor_interface.core_actor.store.auth_method = f"{self.provider.name}_oauth2"
+                    actor_interface.core_actor.store.created_at = str(int(time.time()))
+                    actor_interface.core_actor.store.oauth_provider = self.provider.name
 
-                logger.debug(f"Created new actor {new_actor.id} for {self.provider.name} user {email}")
-                return new_actor
+                logger.debug(f"Created new actor {actor_interface.id} for {self.provider.name} user {email}")
+                return actor_interface.core_actor  # Return the core actor for backward compatibility
+            except Exception as create_error:
+                logger.error(f"Failed to create actor for email {email}: {create_error}")
+                return None
             else:
                 logger.error(f"Failed to create actor for email {email}")
                 return None

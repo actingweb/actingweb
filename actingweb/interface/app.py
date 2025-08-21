@@ -29,11 +29,10 @@ class ActingWebApp:
             client_secret="..."
         ).with_web_ui().with_devtest()
 
-        @app.actor_factory
-        def create_actor(creator: str, **kwargs) -> 'ActorInterface':
-            from .actor_interface import ActorInterface
-            actor = ActorInterface.create(creator=creator, config=app.get_config())
-            return actor
+        @app.lifecycle_hook("actor_created")
+        def handle_actor_created(actor: 'ActorInterface') -> None:
+            # Custom logic after actor creation
+            pass
     """
 
     def __init__(self, aw_type: str, database: str = "dynamodb", fqdn: str = "", proto: str = "https://"):
@@ -56,10 +55,6 @@ class ActingWebApp:
 
         # Hook registry
         self.hooks = HookRegistry()
-
-        # Actor factory function
-        self._actor_factory_func: Optional[Callable[..., "ActorInterface"]] = None
-
 
         # Internal config object (lazy initialized)
         self._config: Optional[Config] = None
@@ -167,11 +162,6 @@ class ActingWebApp:
         self.hooks.register_subscription_hook(func)
         return func
 
-    def actor_factory(self, func: Callable[..., "ActorInterface"]) -> Callable[..., "ActorInterface"]:
-        """Decorator to register actor factory function."""
-        self._actor_factory_func = func
-        return func
-
     def lifecycle_hook(self, event: str) -> Callable[..., Any]:
         """Decorator to register lifecycle hooks."""
 
@@ -225,10 +215,6 @@ class ActingWebApp:
                 mcp=self._enable_mcp,
             )
         return self._config
-
-    def get_actor_factory(self) -> Optional[Callable[..., "ActorInterface"]]:
-        """Get the registered actor factory function."""
-        return self._actor_factory_func
 
     def is_mcp_enabled(self) -> bool:
         """Check if MCP functionality is enabled."""

@@ -19,12 +19,11 @@ Create a basic ActingWeb application:
         fqdn="myapp.example.com"
     ).with_web_ui().with_devtest()
 
-    # Define actor factory
-    @app.actor_factory
-    def create_actor(creator: str, **kwargs) -> ActorInterface:
-        actor = ActorInterface.create(creator=creator, config=app.get_config())
-        actor.properties.email = creator
-        return actor
+    # Initialize actors after creation
+    @app.lifecycle_hook("actor_created")
+    def on_actor_created(actor: ActorInterface, **kwargs):
+        # Set the creator email as a property
+        actor.properties.email = actor.creator
 
     # Add property hooks
     @app.property_hook("email")

@@ -22,9 +22,10 @@ FIXED
 CHANGED
 ~~~~~
 
-- **OAuth2 Security Enhancement**: Refactored OAuth2 server implementation to use Attributes system instead of underscore-prefixed properties for storing sensitive data (tokens, authorization codes, Google OAuth2 tokens)
+- Refactored OAuth2 server implementation to use Attributes system instead of underscore-prefixed properties for storing sensitive data (tokens, authorization codes, Google OAuth2 tokens)
 - Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
 - Removed notes and usage as static resource in the library, leave this to the implementing application
+- Cleaned up the actor creation interfaces, ActorInterface.create() is now the only factory to be used.
 
 ADDED
 ~~~~~
@@ -35,10 +36,10 @@ ADDED
 - Support for CORS in oauth2 flows
 - PKCE support in oauth2 flows
 - Support for OPTIONS method on discovery endpoints
-- **PropertyListStore**: New explicit interface for managing list properties with `actor.property_lists.listname` syntax
-- **ListProperty**: Distributed list storage bypassing DynamoDB 400KB item limits by storing individual list items as separate properties
-- **Enhanced Property Management**: Added `property_lists` attribute to Actor class for list-specific operations
-- **List Property Iteration**: Lazy-loading iterator for efficient list traversal without loading entire lists into memory
+- New explicit interface for managing list properties with `actor.property_lists.listname` syntax
+- Distributed list storage bypassing DynamoDB 400KB item limits by storing individual list items as separate properties
+- Added `property_lists` attribute to Actor class for list-specific operations
+- Lazy-loading iterator for efficient list traversal without loading entire lists into memory
 
 v3.2.1: Aug 9, 2025
 -----------------

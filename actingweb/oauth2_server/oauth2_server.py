@@ -414,6 +414,7 @@ class ActingWebOAuth2Server:
         """Get or create actor for email address."""
         try:
             from .. import actor as actor_module
+            from ..interface.actor_interface import ActorInterface
 
             # First check if actor already exists with this email as creator
             if self.config.unique_creator:
@@ -439,27 +440,26 @@ class ActingWebOAuth2Server:
                         actor_obj.get(actor_id)
                         return actor_obj
 
-            # Create new actor using standard ActingWeb pattern
-            actor_obj = actor_module.Actor(config=self.config)
-            
-            # Create the actor with proper URL (let Actor generate its own ID)
-            actor_url = f"{self.config.proto}{self.config.fqdn}/" if self.config else "http://localhost/"
-            passphrase = self.config.new_token() if self.config else ""
-            
-            success = actor_obj.create(
-                url=actor_url,
-                creator=email,
-                passphrase=passphrase
-                # actor_id is intentionally not set - let Actor generate it
-            )
-            
-            if not success:
-                logger.error(f"Failed to create actor for email {email}")
-                return None
+            # Create new actor using ActorInterface for proper lifecycle hook execution
+            try:
+                passphrase = self.config.new_token() if self.config else ""
+                actor_interface = ActorInterface.create(
+                    creator=email,
+                    config=self.config,
+                    passphrase=passphrase,
+                    hooks=getattr(self.config, '_hooks', None)  # Pass hooks if available for lifecycle events
+                )
                 
-            # The actor should now have its ID set from the create() method
-            if not actor_obj.id:
-                logger.error(f"Actor creation succeeded but ID is not set")
+                # Get the core actor for backward compatibility
+                actor_obj = actor_interface.core_actor
+                
+                # The actor should now have its ID set from the create() method
+                if not actor_obj.id:
+                    logger.error(f"Actor creation succeeded but ID is not set")
+                    return None
+                    
+            except Exception as create_error:
+                logger.error(f"Failed to create actor for email {email}: {create_error}")
                 return None
                 
             logger.debug(f"Successfully created actor {actor_obj.id} for email {email}")

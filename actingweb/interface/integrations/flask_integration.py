@@ -56,8 +56,16 @@ class FlaskIntegration:
 
         @self.flask_app.route("/", methods=["POST"])
         def app_root_post() -> Union[Response, WerkzeugResponse, str]:
-            # For POST requests, extract email and redirect to OAuth2 with email hint
-            return self._handle_factory_post_with_oauth_redirect()
+            # Check if this is a JSON API request or web form request
+            is_json_request = request.content_type and "application/json" in request.content_type
+            accepts_json = request.headers.get("Accept", "").find("application/json") >= 0
+            
+            if is_json_request or accepts_json:
+                # Handle JSON API requests with the standard factory handler
+                return self._handle_factory_request()
+            else:
+                # For web form requests, extract email and redirect to OAuth2 with email hint
+                return self._handle_factory_post_with_oauth_redirect()
 
         # OAuth callback (legacy)
         @self.flask_app.route("/oauth", methods=["GET"])
@@ -325,23 +333,19 @@ class FlaskIntegration:
                 )
                 return oauth_redirect
 
-        # Check if we have a custom actor factory registered and this is a POST request
-        if request.method == "POST" and self.aw_app.get_actor_factory():
-            # Use the modern actor factory instead of the legacy handler
-            return self._handle_custom_actor_creation(webobj)
-        else:
-            handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+        # Use the standard factory handler
+        handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
 
-            try:
-                method_name = request.method.lower()
-                handler_method = getattr(handler, method_name, None)
-                if handler_method and callable(handler_method):
-                    handler_method()
-                else:
-                    return Response(status=405)
-            except Exception as e:
-                logging.error(f"Error in factory handler: {e}")
-                return Response(status=500)
+        try:
+            method_name = request.method.lower()
+            handler_method = getattr(handler, method_name, None)
+            if handler_method and callable(handler_method):
+                handler_method()
+            else:
+                return Response(status=405)
+        except Exception as e:
+            logging.error(f"Error in factory handler: {e}")
+            return Response(status=500)
 
         # Handle template rendering for factory
         if request.method == "GET" and webobj.response.status_code == 200:
@@ -365,81 +369,6 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_custom_actor_creation(self, webobj: AWWebObj) -> Union[Response, WerkzeugResponse, str]:
-        """Handle actor creation using registered actor factory function."""
-        try:
-            import json
-
-            # Parse request data
-            creator = None
-            passphrase = None
-            trustee_root = None
-
-            if webobj.request.body:
-                try:
-                    data = json.loads(webobj.request.body)
-                    creator = data.get("creator")
-                    passphrase = data.get("passphrase", "")
-                    trustee_root = data.get("trustee_root", "")
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-            # Fallback to form data
-            if not creator:
-                creator = webobj.request.get("creator")
-                passphrase = webobj.request.get("passphrase")
-                trustee_root = webobj.request.get("trustee_root")
-
-            if not creator:
-                webobj.response.set_status(400, "Missing creator")
-                return self._create_flask_response(webobj)
-
-            # Get the actor factory function
-            factory_func = self.aw_app.get_actor_factory()
-            if not factory_func:
-                webobj.response.set_status(500, "No actor factory registered")
-                return self._create_flask_response(webobj)
-
-            # Call the registered actor factory function
-            actor_interface = factory_func(creator=creator, passphrase=passphrase)
-
-            if not actor_interface:
-                webobj.response.set_status(400, "Actor creation failed")
-                return self._create_flask_response(webobj)
-
-            # Set trustee_root if provided (mirroring the factory handler behavior)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                # Get the underlying actor from the interface
-                core_actor = getattr(actor_interface, "core_actor", None)
-                if core_actor and hasattr(core_actor, "store") and core_actor.store:
-                    core_actor.store.trustee_root = trustee_root
-
-            # Set response data
-            webobj.response.set_status(201, "Created")
-            response_data = {
-                "id": actor_interface.id,
-                "creator": creator,
-                "passphrase": actor_interface.passphrase or passphrase,
-            }
-
-            # Add trustee_root to response if set (mirroring factory handler)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                response_data["trustee_root"] = trustee_root
-
-            logging.debug(f"Flask actor creation response: {response_data}")
-
-            webobj.response.body = json.dumps(response_data).encode("utf-8")
-            webobj.response.headers["Content-Type"] = "application/json"
-
-            # Add Location header with the actor URL
-            if actor_interface.url:
-                webobj.response.headers["Location"] = actor_interface.url
-
-        except Exception as e:
-            logging.error(f"Error in custom actor creation: {e}")
-            webobj.response.set_status(500, "Internal server error")
-
-        return self._create_flask_response(webobj)
 
     def _handle_factory_get_request(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle GET requests to factory route - just show the email form."""
@@ -526,130 +455,33 @@ class FlaskIntegration:
     def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:
         """Handle POST to factory route without OAuth2 - standard actor creation."""
         try:
-            # Get the actor factory function
-            factory_func = self.aw_app.get_actor_factory()
-            if factory_func:
-                # Use the registered actor factory function
+            # Always use the standard factory handler
+            req_data = self._normalize_request()
+            webobj = AWWebObj(
+                url=req_data["url"],
+                params=req_data["values"],
+                body=req_data["data"],
+                headers=req_data["headers"],
+                cookies=req_data["cookies"],
+            )
+
+            # Use the standard factory handler
+            handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+            handler.post()
+
+            # Handle template rendering for factory
+            if webobj.response.status_code in [200, 201]:
                 try:
-                    logging.debug(f"Calling actor factory with creator: {email}")
-                    actor_interface = factory_func(creator=email)
-                    logging.debug(f"Actor factory returned: {type(actor_interface)} - {actor_interface}")
+                    return Response(render_template("aw-root-created.html", **webobj.response.template_values))
+                except Exception:
+                    pass  # Fall back to default response
+            elif webobj.response.status_code == 400:
+                try:
+                    return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
+                except Exception:
+                    pass  # Fall back to default response
 
-                    # Check if we have additional parameters like trustee_root in the request
-                    # Parse the full request to get any additional parameters
-                    req_data = self._normalize_request()
-                    trustee_root = None
-                    passphrase = None
-
-                    # Try to get trustee_root from JSON body or form data
-                    if req_data["data"]:
-                        import json
-
-                        try:
-                            data = json.loads(req_data["data"])
-                            trustee_root = data.get("trustee_root")
-                            passphrase = data.get("passphrase")
-                        except (json.JSONDecodeError, ValueError):
-                            pass
-
-                    if not trustee_root:
-                        trustee_root = req_data["values"].get("trustee_root")
-                    if not passphrase:
-                        passphrase = req_data["values"].get("passphrase")
-
-                    # Set trustee_root if provided (like the factory handler does)
-                    if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                        core_actor = getattr(actor_interface, "core_actor", None)
-                        if core_actor and hasattr(core_actor, "store") and core_actor.store:
-                            core_actor.store.trustee_root = trustee_root
-                            logging.debug(f"Set trustee_root to: {trustee_root}")
-                except Exception as factory_error:
-                    logging.error(f"Actor factory function failed: {factory_error}", exc_info=True)
-                    try:
-                        return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
-                    except Exception:
-                        return Response("Actor creation failed", status=400)
-
-                if actor_interface and hasattr(actor_interface, "id"):
-                    logging.debug(f"Actor created successfully: {actor_interface.id} for {email}")
-
-                    # Check if this is a JSON request or web form request
-                    is_json_request = request.content_type and "application/json" in request.content_type
-                    accepts_json = request.headers.get("Accept", "").find("application/json") >= 0
-
-                    if is_json_request or accepts_json or not request.headers.get("Accept"):
-                        # Return JSON response for API clients and test suite
-                        import json
-
-                        response_data = {
-                            "id": actor_interface.id,
-                            "creator": email,
-                            "passphrase": getattr(actor_interface, "passphrase", ""),
-                        }
-
-                        # Add Location header with the actor URL
-                        headers = {"Content-Type": "application/json"}
-                        if hasattr(actor_interface, "url") and actor_interface.url:
-                            headers["Location"] = actor_interface.url
-                        else:
-                            # Construct URL from config and actor ID
-                            config = self.aw_app.get_config()
-                            if config:
-                                headers["Location"] = f"{config.proto}{config.fqdn}/{actor_interface.id}"
-
-                        return Response(response=json.dumps(response_data), status=201, headers=headers)
-                    else:
-                        # Return HTML template for web browsers
-                        try:
-                            actor_id = actor_interface.id
-                            actor_url = getattr(actor_interface, "url", None)
-                            passphrase = getattr(actor_interface, "passphrase", "N/A")
-                            logging.debug(
-                                f"Rendering template with id={actor_id}, creator={email}, passphrase={passphrase}"
-                            )
-                            return Response(
-                                render_template(
-                                    "aw-root-created.html", id=actor_id, creator=email, passphrase=passphrase
-                                ),
-                                status=201,
-                            )
-                        except Exception as e:
-                            logging.error(f"Template rendering failed: {e}", exc_info=True)
-                            return Response(f"Actor created successfully: {actor_interface.id}", status=201)
-                else:
-                    logging.error(f"Actor creation failed for {email} - returned: {type(actor_interface)}")
-                    try:
-                        return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
-                    except Exception:
-                        return Response("Actor creation failed", status=400)
-            else:
-                # No custom factory - use the standard factory handler
-                req_data = self._normalize_request()
-                webobj = AWWebObj(
-                    url=req_data["url"],
-                    params=req_data["values"],
-                    body=req_data["data"],
-                    headers=req_data["headers"],
-                    cookies=req_data["cookies"],
-                )
-
-                # Use the standard factory handler
-                handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-                handler.post()
-
-                # Handle template rendering for factory
-                if webobj.response.status_code in [200, 201]:
-                    try:
-                        return Response(render_template("aw-root-created.html", **webobj.response.template_values))
-                    except Exception:
-                        pass  # Fall back to default response
-                elif webobj.response.status_code == 400:
-                    try:
-                        return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
-                    except Exception:
-                        pass  # Fall back to default response
-
-                return self._create_flask_response(webobj)
+            return self._create_flask_response(webobj)
 
         except Exception as e:
             logging.error(f"Error in standard actor creation: {e}")

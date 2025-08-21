@@ -179,6 +179,8 @@ class Actor:
         passphrase: str,
         actor_id: str | None = None,
         delete: bool = False,
+        trustee_root: str | None = None,
+        hooks: Any = None,
     ) -> bool:
         """ "Creates a new actor and persists it.
 
@@ -233,6 +235,18 @@ class Actor:
             self.handle.create(creator=self.creator, passphrase=self.passphrase, actor_id=self.id)
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
+        self.property_lists = property.PropertyListStore(actor_id=self.id, config=self.config)
+        
+        # Set trustee_root if provided
+        if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0 and self.store:
+            self.store.trustee_root = trustee_root
+        
+        # Execute actor_created lifecycle hook if hooks are provided
+        if hooks:
+            from actingweb.interface.actor_interface import ActorInterface
+            actor_interface = ActorInterface(self)
+            hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+        
         return True
 
     def modify(self, creator: str | None = None) -> bool:

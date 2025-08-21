@@ -44,10 +44,14 @@ class RootFactoryHandler(base_handler.BaseHandler):
             trustee_root = self.request.get("trustee_root")
             passphrase = self.request.get("passphrase")
             
-        # Create actor using direct method
+        # Create actor using enhanced method with hooks and trustee_root
         myself = actor.Actor(config=self.config)
         if not myself.create(
-            url=self.request.url or "", creator=creator, passphrase=passphrase
+            url=self.request.url or "", 
+            creator=creator, 
+            passphrase=passphrase,
+            trustee_root=trustee_root,
+            hooks=self.hooks
         ):
             self.response.set_status(400, "Not created")
             logging.warning(
@@ -58,15 +62,6 @@ class RootFactoryHandler(base_handler.BaseHandler):
                 + ")"
             )
             return
-        
-        # Execute actor_created lifecycle hook if hooks are available
-        if self.hooks:
-            actor_interface = self._get_actor_interface(myself)
-            if actor_interface:
-                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-        
-        if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0 and myself.store:
-            myself.store.trustee_root = trustee_root
         self.response.headers["Location"] = str(self.config.root + (myself.id or ""))
         if self.config.www_auth == "oauth" and not is_json:
             self.response.set_redirect(self.config.root + (myself.id or "") + "/www")

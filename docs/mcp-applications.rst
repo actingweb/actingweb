@@ -94,13 +94,12 @@ Basic MCP Application
     # Register hooks
     register_property_hooks(aw_app)
 
-    # Actor factory
-    @aw_app.actor_factory
-    def create_actor(creator: str, **kwargs) -> ActorInterface:
-        actor = ActorInterface.create(creator=creator, config=aw_app.get_config())
-        actor.properties.email = creator
+    # Initialize actors after creation
+    @aw_app.lifecycle_hook("actor_created")
+    def on_actor_created(actor: ActorInterface, **kwargs):
+        # Set initial properties
+        actor.properties.email = actor.creator
         actor.properties.created_at = datetime.now().isoformat()
-        return actor
 
     # Integrate with FastAPI
     aw_app.integrate_fastapi(fastapi_app)
@@ -660,13 +659,12 @@ Here's a complete example of a specialized MCP application for note-taking:
         client_secret=os.getenv("OAUTH_CLIENT_SECRET")
     ).with_web_ui()
 
-    # Actor factory
-    @aw_app.actor_factory
-    def create_actor(creator: str, **kwargs) -> ActorInterface:
-        actor = ActorInterface.create(creator=creator, config=aw_app.get_config())
-        actor.properties.email = creator
+    # Initialize actors after creation
+    @aw_app.lifecycle_hook("actor_created")
+    def on_actor_created(actor: ActorInterface, **kwargs):
+        # Set initial properties
+        actor.properties.email = actor.creator
         actor.properties.created_at = datetime.now().isoformat()
-        return actor
         actor.properties.note_count = 0
 
     # Property hooks

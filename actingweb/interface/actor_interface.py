@@ -61,7 +61,8 @@ class ActorInterface:
         
     @classmethod
     def create(cls, creator: str, config: 'Config', actor_id: Optional[str] = None, 
-               passphrase: Optional[str] = None, delete_existing: bool = False) -> 'ActorInterface':
+               passphrase: Optional[str] = None, delete_existing: bool = False,
+               trustee_root: Optional[str] = None, hooks: Any = None) -> 'ActorInterface':
         """
         Create a new actor.
         
@@ -71,6 +72,8 @@ class ActorInterface:
             actor_id: Optional custom actor ID
             passphrase: Optional custom passphrase
             delete_existing: Whether to delete existing actor with same creator
+            trustee_root: Optional trustee root URL to set on the actor
+            hooks: Optional hook registry for executing lifecycle hooks
             
         Returns:
             New ActorInterface instance
@@ -85,7 +88,9 @@ class ActorInterface:
             creator=creator,
             passphrase=passphrase,
             actor_id=actor_id,
-            delete=delete_existing
+            delete=delete_existing,
+            trustee_root=trustee_root,
+            hooks=hooks
         )
         
         if not success:

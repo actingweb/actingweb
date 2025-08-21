@@ -78,11 +78,10 @@ The library now provides a modern fluent API interface that simplifies applicati
     )
 
     # Decorator-based hooks instead of classes
-    @app.actor_factory
-    def create_actor(creator: str, **kwargs) -> ActorInterface:
-        actor = ActorInterface.create(creator=creator, config=app.get_config())
-        actor.properties.email = creator
-        return actor
+    @app.lifecycle_hook("actor_created")
+    def on_actor_created(actor: ActorInterface, **kwargs):
+        # Initialize new actors
+        actor.properties.email = actor.creator
 
     @app.property_hook("email")
     def handle_email_property(actor, operation, value, path):

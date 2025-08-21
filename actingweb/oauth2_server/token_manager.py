@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, Tuple
 import hashlib
 import base64
 from .. import config as config_class
+from ..constants import OAUTH2_SYSTEM_ACTOR, AUTH_CODE_INDEX_BUCKET, ACCESS_TOKEN_INDEX_BUCKET, REFRESH_TOKEN_INDEX_BUCKET
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +349,7 @@ class ActingWebTokenManager:
             auth_bucket.set_attr(name=code, data=auth_data)
 
             # Also store in global index for efficient lookup
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="auth_code_index", config=self.config)
+            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config)
             index_bucket.set_attr(name=code, data=actor_id)
 
             logger.debug(f"Successfully stored auth code for actor {actor_id}")
@@ -373,7 +374,7 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Create a global index bucket for auth codes
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="auth_code_index", config=self.config)
+            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config)
 
             # Look up which actor has this code
             found_actor_data = index_bucket.get_attr(name=code)
@@ -414,7 +415,7 @@ class ActingWebTokenManager:
             # First find which actor has this code
             from .. import attribute
 
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="auth_code_index", config=self.config)
+            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config)
 
             found_actor_data = index_bucket.get_attr(name=code)
             if found_actor_data and "data" in found_actor_data:
@@ -487,7 +488,7 @@ class ActingWebTokenManager:
             tokens_bucket.set_attr(name=token, data=token_data)
 
             # Also store in global index for efficient lookup
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="access_token_index", config=self.config)
+            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
             index_bucket.set_attr(name=token, data=actor_id)
 
             logger.debug(f"Stored access token for actor {actor_id}")
@@ -508,7 +509,7 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Create a global index bucket for access tokens
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="access_token_index", config=self.config)
+            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
 
             # Look up which actor has this token
             found_actor_data = index_bucket.get_attr(name=token)
@@ -551,7 +552,7 @@ class ActingWebTokenManager:
 
             # Create a global index bucket for refresh tokens
             index_bucket = attribute.Attributes(
-                actor_id="_mcp_system", bucket="refresh_token_index", config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
             )
 
             # Look up which actor has this token
@@ -596,7 +597,7 @@ class ActingWebTokenManager:
             # First find which actor has this token
             from .. import attribute
 
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="access_token_index", config=self.config)
+            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
 
             found_actor_data = index_bucket.get_attr(name=token)
             if found_actor_data and "data" in found_actor_data:
@@ -628,7 +629,7 @@ class ActingWebTokenManager:
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
-                actor_id="_mcp_system", bucket="refresh_token_index", config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
             )
             index_bucket.set_attr(name=token, data=actor_id)
 
@@ -650,7 +651,7 @@ class ActingWebTokenManager:
             from .. import attribute
 
             index_bucket = attribute.Attributes(
-                actor_id="_mcp_system", bucket="refresh_token_index", config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
             )
 
             found_actor_data = index_bucket.get_attr(name=token)
@@ -676,7 +677,7 @@ class ActingWebTokenManager:
 
             # We need to search through all access tokens to find the one with this token_id
             # This is inefficient but necessary given the current storage structure
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="access_token_index", config=self.config)
+            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
 
             # Get all tokens from the index (this could be optimized with a reverse index)
             # For now, we'll search through actors' tokens

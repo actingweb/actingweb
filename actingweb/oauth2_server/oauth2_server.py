@@ -16,6 +16,7 @@ from .client_registry import get_mcp_client_registry
 from .token_manager import get_actingweb_token_manager
 from .state_manager import get_oauth2_state_manager
 from ..oauth2 import create_oauth2_authenticator
+from ..constants import OAUTH2_SYSTEM_ACTOR
 
 if TYPE_CHECKING:
     from .. import config as config_class
@@ -408,7 +409,7 @@ class ActingWebOAuth2Server:
         """Get or create a system actor for MCP clients."""
         # For now, use a fixed system actor ID
         # In production, you might want per-client actors or other strategies
-        return "_mcp_system"
+        return OAUTH2_SYSTEM_ACTOR
 
     def _get_or_create_actor_for_email(self, email: str) -> Optional[Any]:
         """Get or create actor for email address."""

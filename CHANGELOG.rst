@@ -26,6 +26,7 @@ CHANGED
 - Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
 - Removed notes and usage as static resource in the library, leave this to the implementing application
 - Cleaned up the actor creation interfaces, ActorInterface.create() is now the only factory to be used.
+- Standardized global Attribute buckets for cross-actor data.
 
 ADDED
 ~~~~~

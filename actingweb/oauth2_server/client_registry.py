@@ -12,6 +12,7 @@ import time
 from typing import Dict, Any, Optional, List
 from .. import attribute
 from .. import config as config_class
+from ..constants import OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,7 @@ class MCPClientRegistry:
         try:
             # Use global attribute bucket for client index
             # This stores client_id -> actor_id mapping
-            global_bucket = attribute.Attributes(actor_id="_mcp_global", bucket="client_index", config=self.config)
+            global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
             
             # Get the actor ID for this client
             actor_id_attr = global_bucket.get_attr(name=client_id)
@@ -264,7 +265,7 @@ class MCPClientRegistry:
         try:
             # Use global attribute bucket for client index
             # This stores client_id -> actor_id mapping
-            global_bucket = attribute.Attributes(actor_id="_mcp_global", bucket="client_index", config=self.config)
+            global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
             
             # Store the client_id -> actor_id mapping
             global_bucket.set_attr(name=client_id, data=actor_id)

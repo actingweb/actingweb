@@ -15,32 +15,37 @@ class TrustRelationship:
     @property
     def peer_id(self) -> str:
         """ID of the peer actor."""
-        return self._data.get("peerid", "")
+        return str(self._data.get("peerid", ""))
         
     @property
     def base_uri(self) -> str:
         """Base URI of the peer actor."""
-        return self._data.get("baseuri", "")
+        return str(self._data.get("baseuri", ""))
+        
+    @property
+    def peerid(self) -> str:
+        """Peer actor ID."""
+        return str(self._data.get("peerid", ""))
         
     @property
     def relationship(self) -> str:
         """Type of relationship (friend, partner, etc.)."""
-        return self._data.get("relationship", "")
+        return str(self._data.get("relationship", ""))
         
     @property
     def approved(self) -> bool:
         """Whether this side has approved the relationship."""
-        return self._data.get("approved", False)
+        return bool(self._data.get("approved", False))
         
     @property
     def peer_approved(self) -> bool:
         """Whether the peer has approved the relationship."""
-        return self._data.get("peer_approved", False)
+        return bool(self._data.get("peer_approved", False))
         
     @property
     def verified(self) -> bool:
         """Whether the relationship has been verified."""
-        return self._data.get("verified", False)
+        return bool(self._data.get("verified", False))
         
     @property
     def is_active(self) -> bool:
@@ -50,12 +55,32 @@ class TrustRelationship:
     @property
     def description(self) -> str:
         """Description of the relationship."""
-        return self._data.get("desc", "")
+        return str(self._data.get("desc", ""))
         
     @property
     def peer_type(self) -> str:
         """Type of the peer actor."""
-        return self._data.get("type", "")
+        return str(self._data.get("type", ""))
+        
+    @property
+    def established_via(self) -> Optional[str]:
+        """How this trust relationship was established (actingweb, oauth2, mcp)."""
+        return self._data.get("established_via")
+        
+    @property
+    def peer_identifier(self) -> Optional[str]:
+        """Generic peer identifier (email, username, UUID, etc.)."""
+        return self._data.get("peer_identifier")
+        
+    @property
+    def created_at(self) -> Optional[str]:
+        """When this trust relationship was created."""
+        return self._data.get("created_at")
+        
+    @property
+    def last_accessed(self) -> Optional[str]:
+        """When this trust relationship was last accessed."""
+        return self._data.get("last_accessed")
         
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -174,3 +199,114 @@ class TrustManager:
         """Check if peer is trusted (has active relationship)."""
         relationship = self.get_relationship(peer_id)
         return relationship is not None and relationship.is_active
+
+    # --- OAuth2/MCP unified helpers ---
+    def _standardize_peer_id(self, source: str, identifier: str) -> str:
+        """Create a standardized peer_id for non-actor peers (e.g., oauth2/mcp)."""
+        normalized = identifier.replace('@', '_at_').replace('.', '_dot_')
+        return f"{source}:{normalized}"
+
+    def create_or_update_oauth_trust(
+        self,
+        email: str,
+        trust_type: str,
+        oauth_tokens: Dict[str, Any] | None = None,
+        established_via: str | None = None,
+    ) -> bool:
+        """
+        Create or update a trust established via OAuth2 or MCP using an email identity.
+        - Does not run remote reciprocal flows.
+        - Idempotent on peer identifier.
+        """
+        if not email:
+            return False
+
+        # Resolve trust_type via registry if available; fall back to provided name
+        try:
+            from ..trust_type_registry import get_registry
+            cfg = getattr(self._core_actor, 'config', None)
+            if cfg is not None:
+                registry = get_registry(cfg)
+                tt = registry.get_type(trust_type)
+                if not tt:
+                    # Fallback to a conservative default if available
+                    fallback = "mcp_client" if established_via == "mcp" else "web_user"
+                    tt_fb = registry.get_type(fallback)
+                    if tt_fb:
+                        trust_type = fallback
+        except Exception:
+            pass
+
+        # Standardize peer id and check existing
+        source = established_via or "oauth2"
+        peer_id = self._standardize_peer_id(source, email)
+        existing = self.get_relationship(peer_id)
+
+        now_epoch = None
+        try:
+            import time
+            now_epoch = int(time.time())
+        except Exception:
+            now_epoch = None
+
+        if existing:
+            # Update last accessed via DB layer without notifying peers
+            try:
+                from ..db_dynamodb.db_trust import DbTrust
+                db = DbTrust()
+                if db.get(actor_id=self._core_actor.id, peerid=peer_id):
+                    from datetime import datetime
+                    db.modify(last_accessed=datetime.utcnow().isoformat())
+            except Exception:
+                pass
+        else:
+            # Create a local trust record directly via DbTrust (no remote handshake)
+            try:
+                from ..db_dynamodb.db_trust import DbTrust
+                db = DbTrust()
+                secret = self._core_actor.config.new_token() if self._core_actor.config else ""
+                baseuri = ""
+                try:
+                    if self._core_actor.config and self._core_actor.id:
+                        baseuri = f"{self._core_actor.config.root}{self._core_actor.id}"
+                except Exception:
+                    baseuri = ""
+
+                created = db.create(
+                    actor_id=self._core_actor.id,
+                    peerid=peer_id,
+                    baseuri=baseuri,
+                    peer_type=source,
+                    relationship=trust_type,
+                    secret=secret,
+                    approved=True,
+                    verified=True,
+                    peer_approved=True,
+                    verification_token="",
+                    desc=f"OAuth trust for {email}",
+                    peer_identifier=email,
+                    established_via=source,
+                )
+                if not created:
+                    return False
+            except Exception:
+                return False
+
+        # Store tokens in a consistent internal attribute namespace
+        if oauth_tokens and hasattr(self._core_actor, 'store'):
+            try:
+                from ..constants import OAUTH_TOKENS_PREFIX
+                token_key = f"{OAUTH_TOKENS_PREFIX}{peer_id}"
+                # Ensure store exists and is a mapping
+                store = getattr(self._core_actor, 'store', None)
+                if store is not None:
+                    store[token_key] = {
+                        "access_token": oauth_tokens.get("access_token", ""),
+                        "refresh_token": oauth_tokens.get("refresh_token", ""),
+                        "expires_at": oauth_tokens.get("expires_at", 0),
+                        "token_type": oauth_tokens.get("token_type", "Bearer"),
+                    }
+            except Exception:
+                pass
+
+        return True

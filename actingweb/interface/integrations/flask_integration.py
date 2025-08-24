@@ -59,7 +59,7 @@ class FlaskIntegration:
             # Check if this is a JSON API request or web form request
             is_json_request = request.content_type and "application/json" in request.content_type
             accepts_json = request.headers.get("Accept", "").find("application/json") >= 0
-            
+
             if is_json_request or accepts_json:
                 # Handle JSON API requests with the standard factory handler
                 return self._handle_factory_request()
@@ -67,32 +67,29 @@ class FlaskIntegration:
                 # For web form requests, extract email and redirect to OAuth2 with email hint
                 return self._handle_factory_post_with_oauth_redirect()
 
-        # OAuth callback (legacy)
-        @self.flask_app.route("/oauth", methods=["GET"])
-        def app_oauth_callback() -> Union[Response, WerkzeugResponse, str]:
-            return self._handle_oauth_callback()
-
         # OAuth2 callback - handles both ActingWeb and MCP OAuth2 flows
         @self.flask_app.route("/oauth/callback", methods=["GET"])
         def app_oauth2_callback() -> Union[Response, WerkzeugResponse, str]:
             # Handle both Google OAuth2 callback (for ActingWeb) and MCP OAuth2 callback
             # Determine which flow based on state parameter
             from flask import request
+
             state = request.args.get("state", "")
-            
+
             # Check if this is an MCP OAuth2 callback (encrypted state)
             try:
                 from ...oauth2_server.state_manager import get_oauth2_state_manager
+
                 state_manager = get_oauth2_state_manager(self.aw_app.get_config())
                 mcp_context = state_manager.extract_mcp_context(state)
-                
+
                 if mcp_context:
                     # This is an MCP OAuth2 callback
                     return self._handle_oauth2_endpoint("callback")
             except Exception:
                 # Not an MCP callback or state manager not available
                 pass
-            
+
             # Default to Google OAuth2 callback for ActingWeb
             return self._handle_oauth2_callback()
 
@@ -108,7 +105,7 @@ class FlaskIntegration:
         @self.flask_app.route("/oauth/token", methods=["POST"])
         def oauth2_token() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("token")
-        
+
         # OAuth2 discovery endpoint
         @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET"])
         def oauth2_discovery() -> Union[Response, WerkzeugResponse, str]:
@@ -369,7 +366,6 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-
     def _handle_factory_get_request(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle GET requests to factory route - just show the email form."""
         # Simply show the factory template without any authentication
@@ -490,22 +486,6 @@ class FlaskIntegration:
             except Exception:
                 return Response("Actor creation failed", status=500)
 
-    def _handle_oauth_callback(self) -> Union[Response, WerkzeugResponse, str]:
-        """Handle OAuth callback."""
-        req_data = self._normalize_request()
-        webobj = AWWebObj(
-            url=req_data["url"],
-            params=req_data["values"],
-            body=req_data["data"],
-            headers=req_data["headers"],
-            cookies=req_data["cookies"],
-        )
-
-        handler = callback_oauth.CallbackOauthHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-        handler.get()
-
-        return self._create_flask_response(webobj)
-
     def _handle_bot_request(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle bot requests."""
         req_data = self._normalize_request()
@@ -571,7 +551,7 @@ class FlaskIntegration:
             result = handler.get(endpoint)
 
         # Check if handler set template values (for HTML response)
-        if hasattr(webobj.response, 'template_values') and webobj.response.template_values:
+        if hasattr(webobj.response, "template_values") and webobj.response.template_values:
             # This is an HTML template response
             template_name = "aw-oauth-authorization-form.html"  # Default OAuth2 template
             try:
@@ -579,14 +559,18 @@ class FlaskIntegration:
             except Exception as e:
                 # Template not found or rendering error - fall back to JSON
                 from flask import jsonify
-                return jsonify({
-                    "error": "template_error", 
-                    "error_description": f"Failed to render template: {str(e)}",
-                    "template_values": webobj.response.template_values
-                })
-        
+
+                return jsonify(
+                    {
+                        "error": "template_error",
+                        "error_description": f"Failed to render template: {str(e)}",
+                        "template_values": webobj.response.template_values,
+                    }
+                )
+
         # Return the OAuth2 result as JSON
         from flask import jsonify
+
         return jsonify(result)
 
     def _handle_mcp_request(self) -> Union[Response, WerkzeugResponse, str]:
@@ -902,12 +886,16 @@ class FlaskIntegration:
                 "provider": oauth_provider,
                 "required_scopes": ["openid", "email", "profile"] if oauth_provider == "google" else ["user:email"],
                 "flow": "authorization_code",
-                "auth_url": "https://accounts.google.com/o/oauth2/v2/auth"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/authorize",
-                "token_url": "https://oauth2.googleapis.com/token"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/access_token",
+                "auth_url": (
+                    "https://accounts.google.com/o/oauth2/v2/auth"
+                    if oauth_provider == "google"
+                    else "https://github.com/login/oauth/authorize"
+                ),
+                "token_url": (
+                    "https://oauth2.googleapis.com/token"
+                    if oauth_provider == "google"
+                    else "https://github.com/login/oauth/access_token"
+                ),
                 "callback_url": f"{base_url}/oauth/callback",
                 "registration_endpoint": f"{base_url}/oauth/register",
                 "authorization_endpoint": f"{base_url}/oauth/authorize",

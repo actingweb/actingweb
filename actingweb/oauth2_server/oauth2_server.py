@@ -147,14 +147,18 @@ class ActingWebOAuth2Server:
                 email = params.get("email", "").strip()
                 if not email:
                     return self._error_response("invalid_request", "Email is required")
+                
+                # Get trust type from form submission
+                trust_type = params.get("trust_type", "mcp_client").strip()
 
-                # Create state with MCP context including PKCE parameters
-                logger.debug(f"Creating MCP state for client_id={client_id}, redirect_uri={redirect_uri}, state={state}, email={email}")
+                # Create state with MCP context including PKCE parameters and trust type
+                logger.debug(f"Creating MCP state for client_id={client_id}, redirect_uri={redirect_uri}, state={state}, email={email}, trust_type={trust_type}")
                 mcp_state = self.state_manager.create_mcp_state(
                     client_id=client_id, 
                     original_state=state, 
                     redirect_uri=redirect_uri, 
                     email_hint=email,
+                    trust_type=trust_type,  # Add trust type to state
                     code_challenge=code_challenge,
                     code_challenge_method=code_challenge_method
                 )
@@ -254,10 +258,18 @@ class ActingWebOAuth2Server:
             if not actor_obj:
                 return self._error_response("server_error", "Failed to create or retrieve user actor")
 
-            # Create authorization code for MCP client
+            # Extract trust_type from MCP context if present
+            trust_type = mcp_context.get("trust_type", "mcp_client")
+
+            # Create authorization code for MCP client (store email and trust_type for later token exchange)
             auth_code = self.token_manager.create_authorization_code(
-                actor_id=actor_obj.id, client_id=client_id, google_token_data=google_token_data,
-                code_challenge=code_challenge, code_challenge_method=code_challenge_method
+                actor_id=actor_obj.id,
+                client_id=client_id,
+                google_token_data=google_token_data,
+                user_email=email,
+                trust_type=trust_type,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
             )
 
             # Build redirect URL back to MCP client
@@ -339,6 +351,29 @@ class ActingWebOAuth2Server:
 
         if not token_response:
             return self._error_response("invalid_grant", "Invalid or expired authorization code")
+
+        # Create or refresh MCP trust at token issuance
+        try:
+            actor_id = token_response.get("actor_id")
+            email = token_response.get("email")
+            # Prefer trust_type from state if carried through token manager
+            trust_type = token_response.get("trust_type", "mcp_client")
+            if actor_id and email:
+                from .. import actor as actor_module
+                from ..interface.actor_interface import ActorInterface
+                from ..interface.trust_manager import TrustManager
+                actor_obj = actor_module.Actor(actor_id, self.config)
+                if actor_obj and actor_obj.id:
+                    actor_interface = ActorInterface(actor_obj)
+                    tm = TrustManager(actor_interface.core_actor)
+                    tm.create_or_update_oauth_trust(
+                        email=email,
+                        trust_type=trust_type,
+                        oauth_tokens=None,
+                        established_via="mcp",
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to create MCP trust at token issuance: {e}")
 
         logger.debug(f"Issued ActingWeb access token for client {client_id}")
         return token_response

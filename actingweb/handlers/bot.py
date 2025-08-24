@@ -8,13 +8,21 @@ class BotHandler(base_handler.BaseHandler):
 
     def post(self, path):
         """Handles POST callbacks for bots."""
-
-        if not self.config.bot["token"] or len(self.config.bot["token"]) == 0:
-            self.response.set_status(404)
+        # If bot is not configured, return 404 (do not raise)
+        token = ""
+        try:
+            bot_cfg = getattr(self.config, "bot", None)
+            if isinstance(bot_cfg, dict):
+                token = bot_cfg.get("token", "") or ""
+        except Exception:
+            token = ""
+        if not token:
+            if self.response:
+                self.response.set_status(404)
             return
         check = auth.Auth(actor_id=None, config=self.config)
         if check.oauth:
-            check.oauth.token = self.config.bot["token"]
+            check.oauth.token = token
             
         # Execute application-level bot callback hook
         ret = None

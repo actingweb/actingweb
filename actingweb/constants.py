@@ -94,15 +94,27 @@ DEFAULT_REFRESH_TOKEN_EXPIRY = 365 * 24 * 3600  # 1 year in seconds
 # Primary system actor for core ActingWeb functionality
 ACTINGWEB_SYSTEM_ACTOR = "_actingweb_system"
 
-# OAuth2/MCP system actor for authentication-related data  
+# OAuth2/MCP system actor for authentication-related data
 OAUTH2_SYSTEM_ACTOR = "_actingweb_oauth2"
 
 # Standard Bucket Names for Global Data
 # =====================================
 # These bucket names are used consistently across the system
+
+# Trust and relationship management
+TRUST_TYPES_BUCKET = "trust_types"
+TRUST_PERMISSIONS_BUCKET = "trust_permissions"
+
 # OAuth2 and authentication indexes
 AUTH_CODE_INDEX_BUCKET = "auth_code_index"
-ACCESS_TOKEN_INDEX_BUCKET = "access_token_index" 
+ACCESS_TOKEN_INDEX_BUCKET = "access_token_index"
 REFRESH_TOKEN_INDEX_BUCKET = "refresh_token_index"
 CLIENT_INDEX_BUCKET = "client_index"
 
+# OAuth2 token storage (per-trust)
+OAUTH_TOKENS_PREFIX = "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREFIX + peer_id]
+
+# Establishment methods for trust relationships
+ESTABLISHED_VIA_ACTINGWEB = "actingweb"  # Traditional ActingWeb protocol
+ESTABLISHED_VIA_OAUTH2 = "oauth2"  # OAuth2 authentication flow
+ESTABLISHED_VIA_MCP = "mcp"  # MCP client registration

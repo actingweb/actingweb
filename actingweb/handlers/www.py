@@ -324,13 +324,40 @@ class WwwHandler(base_handler.BaseHandler):
             relationships = myself.get_trust_relationships()
             if not relationships:
                 relationships = []
+
+            # Build approve URIs safely for dict-based relationships
             for t in relationships:
-                t["approveuri"] = (
-                    self.config.root + (myself.id or "") + "/trust/" + (t.relationship or "") + "/" + (t.peerid or "")
-                )
+                if isinstance(t, dict):
+                    rel = t.get("relationship", "")
+                    peerid = t.get("peerid", "")
+                    t["approveuri"] = f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
+                else:
+                    # Fallback for object-like items
+                    rel = getattr(t, "relationship", "")
+                    peerid = getattr(t, "peerid", "")
+                    try:
+                        t.approveuri = f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
+                    except Exception:
+                        pass
+
+            # Compute actor base path for links (e.g., /<actor_id>)
+            if hasattr(self.request, "url") and self.request.url:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(self.request.url)
+                path_parts = parsed.path.strip("/").split("/")
+                try:
+                    actor_index = path_parts.index(actor_id)
+                    actor_base_path = "/" + "/".join(path_parts[: actor_index + 1])
+                except (ValueError, IndexError):
+                    actor_base_path = f"/{actor_id}"
+            else:
+                actor_base_path = f"/{actor_id}"
+
             self.response.template_values = {
                 "id": myself.id,
                 "trusts": relationships,
+                "url": f"{actor_base_path}/",
             }
             return
         # Execute callback hook for custom web paths

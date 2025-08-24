@@ -16,7 +16,8 @@ from .base_handler import BaseHandler
 if TYPE_CHECKING:
     from ..interface.hooks import HookRegistry
     from .. import aw_web_request
-from ..oauth2 import create_oauth2_authenticator, parse_state_parameter
+from ..oauth2 import create_oauth2_authenticator, create_oauth2_trust_relationship
+from ..oauth_state import decode_state, validate_expected_email
 from .. import config as config_class
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,14 @@ class OAuth2CallbackHandler(BaseHandler):
         state = self.request.get("state")
         if not state:
             state = ""
-        _, redirect_url, actor_id = parse_state_parameter(state)
-        logger.debug(f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}'")
+        _, redirect_url, actor_id, trust_type, expected_email = decode_state(state)
+        logger.debug(f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}'")
+        
+        # Critical debug: Check if trust_type was parsed correctly
+        if trust_type:
+            logger.debug(f"Trust type '{trust_type}' found in state - will create trust relationship")
+        else:
+            logger.warning(f"No trust_type found in parsed state - trust relationship will NOT be created")
         
         # Exchange code for access token
         token_data = self.authenticator.exchange_code_for_token(code, state)
@@ -103,7 +110,7 @@ class OAuth2CallbackHandler(BaseHandler):
             return self.error_response(502, "Email extraction failed")
         
         # Validate that the authenticated email matches the expected email from the form
-        if not self.authenticator.validate_email_from_state(state, email):
+        if not validate_expected_email(state, email):
             logger.error(f"Email validation failed - authenticated as {email} but expected different email from form")
             return self.error_response(403, "Authentication email does not match the email provided in the form")
         
@@ -145,6 +152,39 @@ class OAuth2CallbackHandler(BaseHandler):
             if refresh_token:
                 actor_instance.store.oauth_refresh_token = refresh_token
             actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+        
+        # Create trust relationship if trust_type was specified in state
+        logger.debug(f"About to check trust_type for relationship creation: trust_type='{trust_type}'")
+        if trust_type:
+            logger.info(f"Creating trust relationship for trust_type='{trust_type}' and email='{email}'")
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+                actor_interface = ActorInterface(core_actor=actor_instance)
+                
+                # Prepare OAuth tokens for secure storage
+                oauth_tokens = {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires_at": int(time.time()) + expires_in if expires_in else 0,
+                    "token_type": token_data.get("token_type", "Bearer")
+                }
+                
+                # Create trust relationship with automatic approval
+                trust_created = create_oauth2_trust_relationship(
+                    actor_interface, 
+                    email, 
+                    trust_type, 
+                    oauth_tokens
+                )
+                
+                if trust_created:
+                    logger.info(f"Successfully created trust relationship: {email} -> {trust_type}")
+                else:
+                    logger.warning(f"Failed to create trust relationship for {email} with type {trust_type}")
+                    
+            except Exception as e:
+                logger.error(f"Error creating OAuth2 trust relationship: {e}")
+                # Don't fail the OAuth flow - just log the error
         
         # Execute actor_created lifecycle hook for new actors
         if is_new_actor and self.hooks:

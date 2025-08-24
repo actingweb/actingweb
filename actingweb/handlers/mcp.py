@@ -21,6 +21,8 @@ from ..mcp.sdk_server import get_server_manager
 from .. import aw_web_request
 from .. import config as config_class
 from ..interface.hooks import HookRegistry
+from ..interface.actor_interface import ActorInterface
+from ..constants import ESTABLISHED_VIA_OAUTH2
 
 
 logger = logging.getLogger(__name__)
@@ -301,11 +303,11 @@ class MCPHandler(BaseHandler):
                         mcp_tool_name = metadata.get("name") or action_name
                         if mcp_tool_name == tool_name:
                             try:
-                                # Wrap actor with interface for hook execution
-                                actor_interface = self._get_actor_interface(actor)
+                                # Actor is already an ActorInterface from authenticate_and_get_actor()
+                                # No need to wrap it again
                                 
                                 # Execute the action hook
-                                result = hook(actor_interface, action_name, arguments)
+                                result = hook(actor, action_name, arguments)
 
                                 # Check if result is already properly structured MCP content
                                 if isinstance(result, dict) and "content" in result:
@@ -355,11 +357,11 @@ class MCPHandler(BaseHandler):
                         mcp_prompt_name = metadata.get("name") or method_name
                         if mcp_prompt_name == prompt_name:
                             try:
-                                # Wrap actor with interface for hook execution
-                                actor_interface = self._get_actor_interface(actor)
+                                # Actor is already an ActorInterface from authenticate_and_get_actor()
+                                # No need to wrap it again
                                 
                                 # Execute the method hook
-                                result = hook(actor_interface, method_name, arguments)
+                                result = hook(actor, method_name, arguments)
 
                                 # Convert result to string for prompt
                                 if isinstance(result, dict):
@@ -425,11 +427,11 @@ class MCPHandler(BaseHandler):
                             
                             if uri_matches:
                                 try:
-                                    # Wrap actor with interface for hook execution
-                                    actor_interface = self._get_actor_interface(actor)
+                                    # Actor is already an ActorInterface from authenticate_and_get_actor()
+                                    # No need to wrap it again
                                     
                                     # Execute the resource hook
-                                    result = hook(actor_interface, method_name, params)
+                                    result = hook(actor, method_name, params)
 
                                     # Handle different result formats
                                     if isinstance(result, dict):
@@ -495,12 +497,13 @@ class MCPHandler(BaseHandler):
 
     def authenticate_and_get_actor(self) -> Any:
         """
-        Authenticate request and get actor from ActingWeb Bearer token.
+        Authenticate request and get actor with trust relationship context.
 
-        This method validates ActingWeb tokens issued by our OAuth2 server:
+        This method validates ActingWeb tokens and establishes trust context:
         1. Extracts Bearer token from Authorization header
         2. Validates token using ActingWeb OAuth2 server
-        3. Returns the associated actor instance
+        3. Looks up trust relationship for permission context
+        4. Returns the associated actor instance with trust context
         """
         auth_header = self.get_auth_header()
 
@@ -523,15 +526,109 @@ class MCPHandler(BaseHandler):
 
             actor_id, client_id, token_data = token_validation
 
-            # Get actor instance
+            # Get actor instance using ActorInterface for consistency
             from .. import actor as actor_module
-            actor_instance = actor_module.Actor(actor_id, self.config)
+            core_actor = actor_module.Actor(actor_id, self.config)
+            
+            # CRITICAL FIX: Check if actor actually exists in storage, not just if property store is initialized
+            # The property store is always initialized in constructor, even for non-existent actors
+            if core_actor.actor and len(core_actor.actor) > 0:
+                logger.debug(f"Successfully loaded core actor {actor_id} from storage")
+            else:
+                logger.warning(f"Actor {actor_id} not found in ActingWeb storage - creating actor to bridge OAuth2 authentication")
+                
+                # Try to create the actor if it doesn't exist
+                # This bridges the gap between OAuth2 authentication and ActingWeb actor storage
+                try:
+                    # Get email from token data for actor creation
+                    user_email = token_data.get('email') or token_data.get('user_email', f'oauth2-user-{actor_id}@unknown.domain')
+                    
+                    # Create actor in ActingWeb storage using the factory pattern
+                    from .. import actor as actor_module
+                    
+                    # Create a new Actor instance and use its create method
+                    new_actor = actor_module.Actor(config=self.config)
+                    actor_url = f"{self.config.proto}{self.config.fqdn}/{actor_id}"
+                    created_actor = new_actor.create(
+                        url=actor_url,
+                        creator=user_email,
+                        passphrase="",  # OAuth2 actors don't need passphrases
+                        actor_id=actor_id
+                    )
+                    
+                    if created_actor:
+                        logger.info(f"Successfully created ActingWeb actor {actor_id} for OAuth2 user {user_email}")
+                        # Reload the core actor to get the properly initialized version
+                        core_actor = actor_module.Actor(actor_id, self.config)
+                    else:
+                        logger.error(f"Failed to create ActingWeb actor {actor_id}")
+                        
+                except Exception as e:
+                    logger.error(f"Error creating ActingWeb actor {actor_id}: {e}")
+            
+            actor_interface = ActorInterface(core_actor=core_actor)
 
-            logger.debug(f"Successfully authenticated MCP client {client_id} -> actor {actor_id}")
-            return actor_instance
+            # Lookup trust relationship for this MCP client
+            trust_relationship = self._lookup_mcp_trust_relationship(actor_interface, client_id, token_data)
+            
+            # Store trust context for permission checking
+            actor_interface._mcp_trust_context = {
+                "client_id": client_id,
+                "trust_relationship": trust_relationship,
+                "token_data": token_data,
+                "peer_id": trust_relationship.peerid if trust_relationship else None
+            }
+
+            logger.debug(f"Successfully authenticated MCP client {client_id} -> actor {actor_id} with trust context")
+            return actor_interface
 
         except Exception as e:
             logger.error(f"Error during ActingWeb token authentication: {e}")
+            return None
+
+    def _lookup_mcp_trust_relationship(self, actor: ActorInterface, client_id: str, token_data: Dict[str, Any]) -> Any:
+        """
+        Lookup trust relationship for MCP client.
+        
+        This method finds the trust relationship that was created during OAuth2
+        authentication, which links the MCP client to the actor with appropriate permissions.
+        
+        Args:
+            actor: ActorInterface instance
+            client_id: OAuth2 client ID
+            token_data: Token validation data
+            
+        Returns:
+            Trust relationship instance or None
+        """
+        try:
+            # Prefer direct lookup by normalized email-derived peer_id if available
+            user_email = token_data.get('email') or token_data.get('user_email')
+            if user_email:
+                normalized = user_email.replace('@', '_at_').replace('.', '_dot_')
+                peer_id = f"mcp:{normalized}"
+                direct = actor.trust.get_relationship(peer_id)
+                if direct:
+                    logger.debug(f"Found MCP trust via peer_id: {peer_id}")
+                    return direct
+
+            trusts = actor.trust.relationships
+
+            # Fallback: scan for established_via in ('mcp','oauth2') and matching trust_type if provided
+            desired_type = token_data.get('trust_type') or 'mcp_client'
+            for trust in trusts:
+                via = getattr(trust, 'established_via', None)
+                rel = getattr(trust, 'relationship', None)
+                peer_ident = getattr(trust, 'peer_identifier', None)
+                if via in ('mcp', 'oauth2') and (rel == desired_type or (user_email and peer_ident == user_email)):
+                    logger.debug(f"Found MCP trust via scan: peer={trust.peerid}, via={via}, rel={rel}")
+                    return trust
+
+            logger.warning(f"No trust found for MCP client {client_id}; permissions will be empty")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error looking up MCP trust relationship: {e}")
             return None
 
     def get_auth_header(self) -> Optional[str]:

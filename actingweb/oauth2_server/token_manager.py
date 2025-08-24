@@ -42,6 +42,8 @@ class ActingWebTokenManager:
         actor_id: str,
         client_id: str,
         google_token_data: Dict[str, Any],
+        user_email: Optional[str] = None,
+        trust_type: Optional[str] = None,
         code_challenge: Optional[str] = None,
         code_challenge_method: Optional[str] = None,
     ) -> str:
@@ -75,6 +77,10 @@ class ActingWebTokenManager:
             "code_challenge": code_challenge,
             "code_challenge_method": code_challenge_method,
         }
+        if user_email:
+            auth_data["user_email"] = user_email
+        if trust_type:
+            auth_data["trust_type"] = trust_type
 
         self._store_auth_code(actor_id, auth_code, auth_data)
 
@@ -161,12 +167,19 @@ class ActingWebTokenManager:
         self._remove_auth_code(code)
 
         # Return token response
+        # Prepare extra context for trust creation at token issuance
+        user_email = auth_data.get("user_email")
+        trust_type = auth_data.get("trust_type", "mcp_client")
+
         return {
             "access_token": access_token["token"],
             "token_type": "Bearer",
             "expires_in": access_token["expires_in"],
             "refresh_token": refresh_token["token"],
             "scope": "mcp",  # MCP scope
+            "actor_id": auth_data["actor_id"],
+            "email": user_email,
+            "trust_type": trust_type,
         }
 
     def validate_access_token(self, token: str) -> Optional[Tuple[str, str, Dict[str, Any]]]:

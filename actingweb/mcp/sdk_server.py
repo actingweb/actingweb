@@ -44,8 +44,20 @@ else:
 from ..interface.hooks import HookRegistry
 from ..interface.actor_interface import ActorInterface
 from .decorators import get_mcp_metadata, is_mcp_exposed
+from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
 
 logger = logging.getLogger(__name__)
+
+def _get_config_from_actor(actor: Any) -> Any:
+    """Helper function to extract config from actor."""
+    # Try different ways to get config depending on actor implementation
+    if hasattr(actor, '_config'):
+        return actor._config
+    elif hasattr(actor, 'config'):
+        return actor.config
+    elif hasattr(actor, 'core_actor') and hasattr(actor.core_actor, 'config'):
+        return actor.core_actor.config
+    return None
 
 
 class ActingWebMCPServer:
@@ -76,17 +88,34 @@ class ActingWebMCPServer:
         # Tools handler - expose action hooks as MCP tools
         @self.server.list_tools()
         async def handle_list_tools() -> List[Tool]:
-            """List available tools from ActingWeb action hooks."""
+            """List available tools from ActingWeb action hooks with permission filtering."""
             tools = []
 
             if self.hooks:
+                # Get permission evaluator and trust context
+                config = _get_config_from_actor(self.actor)
+                evaluator = get_permission_evaluator(config) if config else None
+                trust_context = getattr(self.actor, '_mcp_trust_context', None)
+                peer_id = trust_context.get('peer_id') if trust_context else None
+                
                 for action_name, hook_list in self.hooks._action_hooks.items():
                     for hook in hook_list:
                         if is_mcp_exposed(hook):
                             metadata = get_mcp_metadata(hook)
                             if metadata and metadata.get("type") == "tool":
+                                tool_name = metadata.get("name", action_name)
+                                
+                                # Check permission for this tool
+                                if peer_id and evaluator:
+                                    permission_result = evaluator.evaluate_permission(
+                                        self.actor_id, peer_id, PermissionType.TOOLS, tool_name
+                                    )
+                                    if permission_result != PermissionResult.ALLOWED:
+                                        logger.debug(f"Tool '{tool_name}' filtered out - access denied for peer {peer_id}")
+                                        continue
+                                
                                 tool = Tool(
-                                    name=metadata.get("name", action_name),
+                                    name=tool_name,
                                     description=metadata.get("description", f"Execute {action_name} action"),
                                     inputSchema=metadata.get(
                                         "input_schema", {"type": "object", "properties": {}, "required": []}
@@ -94,14 +123,28 @@ class ActingWebMCPServer:
                                 )
                                 tools.append(tool)
 
-            logger.debug(f"Listed {len(tools)} tools for actor {self.actor_id}")
+            logger.debug(f"Listed {len(tools)} tools for actor {self.actor_id} (after permission filtering)")
             return tools
 
         @self.server.call_tool()
         async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-            """Execute a tool (ActingWeb action hook)."""
+            """Execute a tool (ActingWeb action hook) with permission checking."""
             if not self.hooks:
                 raise ValueError("No hooks registry available")
+
+            # Check permission before execution
+            config = _get_config_from_actor(self.actor)
+            evaluator = get_permission_evaluator(config) if config else None
+            trust_context = getattr(self.actor, '_mcp_trust_context', None)
+            peer_id = trust_context.get('peer_id') if trust_context else None
+            
+            if peer_id and evaluator:
+                permission_result = evaluator.evaluate_permission(
+                    self.actor_id, peer_id, PermissionType.TOOLS, name
+                )
+                if permission_result != PermissionResult.ALLOWED:
+                    logger.warning(f"Tool execution denied for '{name}' - peer {peer_id} lacks permission")
+                    raise ValueError(f"Access denied: You don't have permission to use tool '{name}'")
 
             # Find the corresponding action hook
             for action_name, hook_list in self.hooks._action_hooks.items():
@@ -112,7 +155,7 @@ class ActingWebMCPServer:
                             tool_name = metadata.get("name", action_name)
                             if tool_name == name:
                                 try:
-                                    # Execute the action hook
+                                    # Execute the action hook with permission verified
                                     result = hook(self.actor, action_name, arguments)
 
                                     # Handle async results
@@ -139,8 +182,14 @@ class ActingWebMCPServer:
         # Resources handler - expose resources from hooks or static resources
         @self.server.list_resources()
         async def handle_list_resources() -> List[Resource]:
-            """List available resources."""
+            """List available resources with permission filtering."""
             resources = []
+
+            # Get permission evaluator and trust context
+            config = _get_config_from_actor(self.actor)
+            evaluator = get_permission_evaluator(config) if config else None
+            trust_context = getattr(self.actor, '_mcp_trust_context', None)
+            peer_id = trust_context.get('peer_id') if trust_context else None
 
             # Dynamic resources from method hooks decorated with @mcp_resource
             if self.hooks and hasattr(self.hooks, "_method_hooks"):
@@ -150,6 +199,16 @@ class ActingWebMCPServer:
                             metadata = get_mcp_metadata(hook)
                             if metadata and metadata.get("type") == "resource":
                                 uri_template = metadata.get("uri_template") or f"actingweb://{method_name}"
+                                
+                                # Check permission for this resource
+                                if peer_id and evaluator:
+                                    permission_result = evaluator.evaluate_permission(
+                                        self.actor_id, peer_id, PermissionType.RESOURCES, uri_template
+                                    )
+                                    if permission_result != PermissionResult.ALLOWED:
+                                        logger.debug(f"Resource '{uri_template}' filtered out - access denied for peer {peer_id}")
+                                        continue
+                                
                                 # Create a resource entry using the template
                                 try:
                                     res = Resource(
@@ -164,14 +223,29 @@ class ActingWebMCPServer:
                                         f"Skipping resource for method {method_name} due to error building descriptor: {e}"
                                     )
 
-            logger.debug(f"Listed {len(resources)} resources for actor {self.actor_id}")
+            logger.debug(f"Listed {len(resources)} resources for actor {self.actor_id} (after permission filtering)")
             return resources
 
         @self.server.read_resource()
         async def handle_read_resource(uri: AnyUrl) -> str:
-            """Read a resource by URI."""
+            """Read a resource by URI with permission checking."""
+            uri_str = str(uri)
+            
+            # Check permission before accessing resource
+            config = _get_config_from_actor(self.actor)
+            evaluator = get_permission_evaluator(config) if config else None
+            trust_context = getattr(self.actor, '_mcp_trust_context', None)
+            peer_id = trust_context.get('peer_id') if trust_context else None
+            
+            if peer_id and evaluator:
+                permission_result = evaluator.evaluate_permission(
+                    self.actor_id, peer_id, PermissionType.RESOURCES, uri_str
+                )
+                if permission_result != PermissionResult.ALLOWED:
+                    logger.warning(f"Resource access denied for '{uri_str}' - peer {peer_id} lacks permission")
+                    raise ValueError(f"Access denied: You don't have permission to access resource '{uri_str}'")
+            
             try:
-                uri_str = str(uri)
                 if uri_str == "actingweb://properties/all":
                     # Get all non-sensitive properties
                     props = {}
@@ -239,30 +313,61 @@ class ActingWebMCPServer:
         # Prompts handler - expose method hooks as MCP prompts
         @self.server.list_prompts()
         async def handle_list_prompts() -> List[Prompt]:
-            """List available prompts from ActingWeb method hooks."""
+            """List available prompts from ActingWeb method hooks with permission filtering."""
             prompts = []
 
             if self.hooks:
+                # Get permission evaluator and trust context
+                config = _get_config_from_actor(self.actor)
+                evaluator = get_permission_evaluator(config) if config else None
+                trust_context = getattr(self.actor, '_mcp_trust_context', None)
+                peer_id = trust_context.get('peer_id') if trust_context else None
+                
                 for method_name, hook_list in self.hooks._method_hooks.items():
                     for hook in hook_list:
                         if is_mcp_exposed(hook):
                             metadata = get_mcp_metadata(hook)
                             if metadata and metadata.get("type") == "prompt":
+                                prompt_name = metadata.get("name", method_name)
+                                
+                                # Check permission for this prompt
+                                if peer_id and evaluator:
+                                    permission_result = evaluator.evaluate_permission(
+                                        self.actor_id, peer_id, PermissionType.PROMPTS, prompt_name
+                                    )
+                                    if permission_result != PermissionResult.ALLOWED:
+                                        logger.debug(f"Prompt '{prompt_name}' filtered out - access denied for peer {peer_id}")
+                                        continue
+                                
                                 prompt = Prompt(
-                                    name=metadata.get("name", method_name),
+                                    name=prompt_name,
                                     description=metadata.get("description", f"Generate prompt for {method_name}"),
                                     arguments=metadata.get("arguments", []),
                                 )
                                 prompts.append(prompt)
 
-            logger.debug(f"Listed {len(prompts)} prompts for actor {self.actor_id}")
+            logger.debug(f"Listed {len(prompts)} prompts for actor {self.actor_id} (after permission filtering)")
             return prompts
 
         @self.server.get_prompt()
         async def handle_get_prompt(name: str, arguments: Dict[str, str] | None) -> GetPromptResult:
-            """Get a prompt by name (execute method hook)."""
+            """Get a prompt by name (execute method hook) with permission checking."""
             if not self.hooks:
                 raise ValueError("No hooks registry available")
+
+            # Check permission before execution
+            config = _get_config_from_actor(self.actor)
+            evaluator = get_permission_evaluator(config) if config else None
+            trust_context = getattr(self.actor, '_mcp_trust_context', None)
+            peer_id = trust_context.get('peer_id') if trust_context else None
+            
+            if peer_id and evaluator:
+                permission_result = evaluator.evaluate_permission(
+                    self.actor_id, peer_id, PermissionType.PROMPTS, name
+                )
+                if permission_result != PermissionResult.ALLOWED:
+                    logger.warning(f"Prompt access denied for '{name}' - peer {peer_id} lacks permission")
+                    raise ValueError(f"Access denied: You don't have permission to access prompt '{name}'")
 
             # Find the corresponding method hook
             for method_name, hook_list in self.hooks._method_hooks.items():
@@ -273,7 +378,7 @@ class ActingWebMCPServer:
                             prompt_name = metadata.get("name", method_name)
                             if prompt_name == name:
                                 try:
-                                    # Execute the method hook
+                                    # Execute the method hook with permission verified
                                     result = hook(self.actor, method_name, arguments)
 
                                     # Handle async results

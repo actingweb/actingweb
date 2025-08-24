@@ -18,6 +18,7 @@ FIXED
 - Fixed handling of POST to /<actor_id>/www/properties (including _method=DELETE)
 - Fixed base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
 - Fixed www/ hook not triggered
+- Devtest proxy: added Basic-auth fallback (trustee:<peer passphrase>) when Bearer trust requests to peer `/properties` endpoints receive 302/401/403 to avoid OAuth2 redirects during testing
 
 CHANGED
 ~~~~~

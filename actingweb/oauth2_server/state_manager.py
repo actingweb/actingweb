@@ -163,16 +163,10 @@ class OAuth2StateManager:
         """
         Get or create encryption key for state parameters.
 
-        In production, this should be stored securely and consistently
-        across application instances.
+        Uses the OAuth2 system actor to store the key persistently
+        in an attribute bucket.
         """
-        # For now, we'll use a simple approach
-        # In production, you would want to:
-        # 1. Store the key securely (e.g., in environment variables, key management service)
-        # 2. Rotate keys periodically
-        # 3. Support multiple keys for graceful rotation
-
-        # Try to get key from config or environment
+        # Try to get key from config or environment first (for backwards compatibility)
         if hasattr(self.config, "oauth2_state_encryption_key"):
             key_str = getattr(self.config, "oauth2_state_encryption_key")
             if key_str:
@@ -181,18 +175,71 @@ class OAuth2StateManager:
                 except Exception:
                     pass
 
-        # Generate new key (this should be persistent in production)
-        if Fernet is None:
-            raise ImportError("cryptography package is required")
-        key: bytes = Fernet.generate_key()
+        # Try to get key from OAuth2 system actor
+        try:
+            from .. import actor as actor_module
+            from ..constants import OAUTH2_SYSTEM_ACTOR
+            from botocore.exceptions import ClientError
 
-        # Log warning about key generation
-        logger.warning(
-            "Generated new OAuth2 state encryption key. " "In production, store this key persistently: %s",
-            base64.urlsafe_b64encode(key).decode("utf-8"),
-        )
+            # Get or create OAuth2 system actor
+            sys_actor = actor_module.Actor(OAUTH2_SYSTEM_ACTOR, config=self.config)
+            if not getattr(sys_actor, 'id', None):
+                # Create if missing
+                base_root = getattr(self.config, 'root', '') or 'http://localhost/'
+                url = f"{base_root}{OAUTH2_SYSTEM_ACTOR}"
+                passphrase = self.config.new_token() if hasattr(self.config, 'new_token') else 'oauth2-system-pass'
+                try:
+                    created = sys_actor.create(url=url, creator="system", passphrase=passphrase, actor_id=OAUTH2_SYSTEM_ACTOR)
+                    if not created:
+                        logger.error("Failed to create OAuth2 system actor")
+                        raise RuntimeError("Cannot create OAuth2 system actor")
+                except ClientError as e:
+                    if e.response["Error"]["Code"] == "ResourceInUseException":
+                        # Actor already exists, try to load it
+                        logger.debug("OAuth2 system actor table already exists; another worker created it")
+                        sys_actor = actor_module.Actor(OAUTH2_SYSTEM_ACTOR, config=self.config)
+                    else:
+                        logger.error(f"Error creating OAuth2 system actor: {e}")
+                        raise RuntimeError("Cannot create OAuth2 system actor") from e
 
-        return key
+            # Try to get existing key from system actor properties
+            try:
+                key_str = getattr(sys_actor.property, "oauth2_state_encryption_key", None)
+                if key_str:
+                    logger.debug("Retrieved OAuth2 state encryption key from system actor")
+                    return base64.urlsafe_b64decode(key_str.encode("utf-8"))
+            except Exception as e:
+                logger.debug(f"Failed to retrieve existing encryption key: {e}")
+
+            # Generate new key and store it
+            if Fernet is None:
+                raise ImportError("cryptography package is required")
+            key: bytes = Fernet.generate_key()
+            key_str = base64.urlsafe_b64encode(key).decode("utf-8")
+            
+            # Store key in system actor properties
+            try:
+                setattr(sys_actor.property, "oauth2_state_encryption_key", key_str)
+                logger.info("Generated and stored new OAuth2 state encryption key in system actor")
+                return key
+            except Exception as e:
+                logger.error(f"Failed to store encryption key in system actor: {e}")
+                # Fall back to in-memory key with warning
+                logger.warning("Using in-memory encryption key (not persistent across restarts)")
+                return key
+
+        except Exception as e:
+            logger.error(f"Error accessing OAuth2 system actor: {e}")
+            # Fall back to generating a new key (not persistent)
+            if Fernet is None:
+                raise ImportError("cryptography package is required")
+            key: bytes = Fernet.generate_key()
+            logger.warning(
+                "Generated new OAuth2 state encryption key (not persistent). "
+                "Store this key persistently: %s",
+                base64.urlsafe_b64encode(key).decode("utf-8"),
+            )
+            return key
 
 
 # Global state manager

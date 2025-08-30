@@ -27,7 +27,6 @@ from ...handlers import (
     subscription,
     resources,
     oauth,
-    callback_oauth,
     bot,
     www,
     factory,
@@ -259,7 +258,8 @@ def create_oauth_redirect_response(
 
     # Fallback to 401 if OAuth2 not configured
     response = Response(content="Authentication required", status_code=401)
-    response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
+    # Prefer dynamic header based on configured OAuth2 provider if available
+    add_www_authenticate_header(response, config)
     return response
 
 
@@ -591,9 +591,7 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}/permissions")
         @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}/permissions")
         @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}/permissions")
-        async def app_trust_permissions(
-            actor_id: str, request: Request, relationship: str, peerid: str
-        ) -> Response:
+        async def app_trust_permissions(actor_id: str, request: Request, relationship: str, peerid: str) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
             )
@@ -715,9 +713,7 @@ class FastAPIIntegration:
         # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
         if "Authorization" not in headers and "oauth_token" in cookies:
             headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
-            self.logger.debug(
-                "FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request"
-            )
+            self.logger.debug("FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request")
 
         # Get query parameters and form data (similar to Flask's request.values)
         params = {}
@@ -756,7 +752,9 @@ class FastAPIIntegration:
 
     def _create_fastapi_response(self, webobj: AWWebObj, request: Request) -> Response:
         """Convert ActingWeb response to FastAPI response."""
-        logging.debug(f"_create_fastapi_response: webobj.response.redirect = {getattr(webobj.response, 'redirect', None)}")
+        logging.debug(
+            f"_create_fastapi_response: webobj.response.redirect = {getattr(webobj.response, 'redirect', None)}"
+        )
         logging.debug(f"_create_fastapi_response: webobj.response.status_code = {webobj.response.status_code}")
         if webobj.response.redirect:
             logging.debug(f"_create_fastapi_response: Creating redirect response to {webobj.response.redirect}")
@@ -1279,11 +1277,7 @@ class FastAPIIntegration:
                 #  - a method override is present requesting DELETE or PUT
                 #  - no explicit peerid path param is provided
                 method_override = (webobj.request.get("_method") or "").upper()
-                if (
-                    relationship
-                    and not peerid
-                    and method_override in ("DELETE", "PUT")
-                ):
+                if relationship and not peerid and method_override in ("DELETE", "PUT"):
                     # Heuristic: treat the "relationship" path part as a peer ID.
                     # Pass empty relationship (type) and the detected peer ID.
                     args.append("")
@@ -1413,9 +1407,7 @@ class FastAPIIntegration:
                 # Special case: UI may call /trust/<peerid>?_method=DELETE|PUT
                 method_override = (webobj.request.get("_method") or "").upper()
                 if method_override in ("DELETE", "PUT"):
-                    self.logger.debug(
-                        "Selecting TrustPeerHandler for single path parameter with method override"
-                    )
+                    self.logger.debug("Selecting TrustPeerHandler for single path parameter with method override")
                     return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
                 self.logger.debug("Selecting TrustRelationshipHandler for single path parameter")
                 return trust.TrustRelationshipHandler(webobj, config, hooks=self.aw_app.hooks)
@@ -1444,8 +1436,6 @@ class FastAPIIntegration:
 
     def _create_oauth_discovery_response(self) -> Dict[str, Any]:
         """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
@@ -1482,14 +1472,9 @@ class FastAPIIntegration:
 
     def _create_mcp_info_response(self) -> Dict[str, Any]:
         """Create MCP information response."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
-        oauth_config = getattr(config, "oauth", {})
-        oauth_client_id = oauth_config.get("client_id") if oauth_config else None
-        oauth_client_secret = oauth_config.get("client_secret") if oauth_config else None
 
         return {
             "mcp_enabled": True,

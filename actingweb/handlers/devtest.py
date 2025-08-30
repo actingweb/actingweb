@@ -220,4 +220,20 @@ class DevtestHandler(base_handler.BaseHandler):
                     self.response.headers["Location"] = str(mytwin["baseuri"])
                     self.response.set_status(200)
                     return
+        elif paths[0] == "attribute":
+            if len(paths) > 1:
+                bucket = attribute.Attributes(
+                    actor_id=myself.id, bucket=paths[1], config=self.config
+                )
+                # Create bucket with optional attributes from params
+                if params and isinstance(params, dict):
+                    for key, value in params.items():
+                        bucket.set_attr(key, value, timestamp=datetime.datetime.utcnow())
+                    # Return the created content as JSON
+                    out = json.dumps(params)
+                    if self.response:
+                        self.response.write(out)
+                    self.response.headers["Content-Type"] = "application/json"
+                self.response.set_status(200)
+                return
         self.response.set_status(404)

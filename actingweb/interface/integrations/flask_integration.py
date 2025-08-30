@@ -142,6 +142,10 @@ class FlaskIntegration:
         # Actor root
         @self.flask_app.route("/<actor_id>", methods=["GET", "POST", "DELETE"])
         def app_actor_root(actor_id: str) -> Union[Response, WerkzeugResponse, str]:
+            # Align with FastAPI: protect actor root with OAuth when enabled
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
             return self._handle_actor_request(actor_id, "root")
 
         # Actor meta
@@ -154,6 +158,10 @@ class FlaskIntegration:
         @self.flask_app.route("/<actor_id>/oauth", methods=["GET"])
         @self.flask_app.route("/<actor_id>/oauth/<path:path>", methods=["GET"])
         def app_oauth(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
+            # Align with FastAPI: protect actor oauth UI with OAuth when enabled
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
             return self._handle_actor_request(actor_id, "oauth", path=path)
 
         # Actor www with OAuth2 authentication
@@ -170,6 +178,10 @@ class FlaskIntegration:
         @self.flask_app.route("/<actor_id>/properties", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/properties/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
         def app_properties(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
+            # Align with FastAPI: protect properties with OAuth when enabled
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
             return self._handle_actor_request(actor_id, "properties", name=name)
 
         # Actor trust
@@ -244,6 +256,11 @@ class FlaskIntegration:
         for k, v in request.headers.items():
             headers[k] = v
 
+        # If no Authorization header but we have an oauth_token cookie (web UI session),
+        # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
+        if "Authorization" not in headers and cookies.get("oauth_token"):
+            headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
+
         params = {}
         for k, v in request.values.items():
             params[k] = v
@@ -274,7 +291,11 @@ class FlaskIntegration:
         # Set cookies
         for cookie in webobj.response.cookies:
             response.set_cookie(
-                cookie["name"], cookie["value"], max_age=cookie.get("max_age"), secure=cookie.get("secure", False)
+                cookie["name"],
+                cookie["value"],
+                max_age=cookie.get("max_age"),
+                secure=cookie.get("secure", False),
+                httponly=cookie.get("httponly", False),
             )
 
         return response
@@ -345,7 +366,18 @@ class FlaskIntegration:
                 return Response(status=405)
         except Exception as e:
             logging.error(f"Error in factory handler: {e}")
-            return Response(status=500)
+            # Map common network/SSL errors to clearer status codes if handler didn't set one
+            if webobj.response.status_code != 200:
+                pass
+            else:
+                error_message = str(e).lower()
+                if "ssl" in error_message or "certificate" in error_message:
+                    webobj.response.set_status(502, "Bad Gateway - SSL connection failed")
+                elif "connection" in error_message or "timeout" in error_message:
+                    webobj.response.set_status(503, "Service Unavailable - Connection failed")
+                else:
+                    webobj.response.set_status(500, "Internal server error")
+            return self._create_flask_response(webobj)
 
         # Handle template rendering for factory
         if request.method == "GET" and webobj.response.status_code == 200:
@@ -674,18 +706,9 @@ class FlaskIntegration:
 
         # Check for Bearer token
         if auth_header and auth_header.startswith("Bearer "):
-            # Verify the Bearer token
-            bearer_token = auth_header[7:]
-            try:
-                from ...oauth2 import create_oauth2_authenticator
-
-                authenticator = create_oauth2_authenticator(self.aw_app.get_config())
-                if authenticator.is_enabled():
-                    user_info = authenticator.validate_token_and_get_user_info(bearer_token)
-                    if user_info:
-                        return None  # Valid Bearer token
-            except Exception as e:
-                logging.error(f"Bearer token validation error: {e}")
+            # Align with FastAPI: if a Bearer token is present, let the underlying handlers verify it.
+            # This supports both OAuth2 tokens and ActingWeb trust secret tokens without forcing redirect here.
+            return None
 
         # Check for OAuth token cookie (for session-based authentication)
         oauth_cookie = request.cookies.get("oauth_token")
@@ -811,7 +834,18 @@ class FlaskIntegration:
                 return Response(status=405)
         except Exception as e:
             logging.error(f"Error in {endpoint} handler: {e}")
-            return Response(status=500)
+            # Map common network/SSL errors to clearer status codes if handler didn't set one
+            if webobj.response.status_code != 200:
+                pass
+            else:
+                error_message = str(e).lower()
+                if "ssl" in error_message or "certificate" in error_message:
+                    webobj.response.set_status(502, "Bad Gateway - SSL connection failed")
+                elif "connection" in error_message or "timeout" in error_message:
+                    webobj.response.set_status(503, "Service Unavailable - Connection failed")
+                else:
+                    webobj.response.set_status(500, "Internal server error")
+            return self._create_flask_response(webobj)
 
         # Special handling for www endpoint templates
         if endpoint == "www" and request.method == "GET" and webobj.response.status_code == 200:
@@ -826,6 +860,8 @@ class FlaskIntegration:
                     return Response(render_template("aw-actor-www-properties.html", **template_values))
                 elif path == "property":
                     return Response(render_template("aw-actor-www-property.html", **template_values))
+                elif path == "trust/new":
+                    return Response(render_template("aw-actor-www-trust-new.html", **template_values))
                 elif path.startswith("properties/"):
                     # Handle individual property pages like "properties/notes", "properties/demo_version"
                     return Response(render_template("aw-actor-www-property.html", **template_values))

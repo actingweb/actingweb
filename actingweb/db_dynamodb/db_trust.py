@@ -40,8 +40,8 @@ class Trust(Model):
     id = UnicodeAttribute(hash_key=True)  # actor_id
     peerid = UnicodeAttribute(range_key=True)
     baseuri = UnicodeAttribute()
-    type = UnicodeAttribute()  # peer type (for compatibility)
-    relationship = UnicodeAttribute()  # legacy relationship field
+    type = UnicodeAttribute()  # peer's ActingWeb mini-application type (e.g., "urn:actingweb:example.com:banking")
+    relationship = UnicodeAttribute()  # trust type (e.g., "friend", "admin", "partner") - defines permission level
     secret = UnicodeAttribute()
     desc = UnicodeAttribute()
     approved = BooleanAttribute()

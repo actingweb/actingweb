@@ -1821,8 +1821,9 @@ For applications requiring extensive permission customization, the following
 endpoints provide dedicated permission management:
 
 ``GET /{actorid}/trust/{relationship}/{peerid}/permissions``
-  Retrieve detailed permission overrides for a specific trust relationship.
-  Returns 404 if no overrides exist.
+  Retrieve effective permissions for a specific trust relationship.
+  Returns either custom permission overrides or default permissions from the trust type.
+  Includes ``is_custom`` and ``source`` fields to indicate permission origin.
 
 ``PUT /{actorid}/trust/{relationship}/{peerid}/permissions``  
   Create or update permission overrides for a trust relationship.
@@ -1858,6 +1859,59 @@ Permission overrides SHOULD follow this structure to ensure interoperability:
 ``prompts`` (for MCP clients)
   Controls MCP prompt access with allowed patterns for prompt-specific
   permissions.
+
+**Permission Response Format**
+
+The GET permissions endpoint SHOULD return a JSON response with these additional fields:
+
+``is_custom`` (boolean)
+  True if the permissions are custom overrides, false if using trust type defaults.
+
+``source`` (string)  
+  Indicates the source of permissions: "custom_override" for custom permissions
+  or "trust_type_default" for default permissions from the trust type registry.
+
+``created_by`` (string, optional)
+  User or system that created the custom permissions (if is_custom is true).
+
+``updated_at`` (string, optional)
+  Timestamp when custom permissions were last updated (if is_custom is true).
+
+``notes`` (string, optional)
+  Description or notes about the permissions.
+
+Example response with custom permissions::
+
+    {
+        "actor_id": "actor123",
+        "peer_id": "peer456", 
+        "trust_type": "mcp_power_user",
+        "tools": {
+            "allowed": ["search", "fetch", "create_note"],
+            "denied": ["delete_*"]
+        },
+        "is_custom": true,
+        "source": "custom_override",
+        "created_by": "user@example.com",
+        "updated_at": "2024-01-15T10:30:00Z",
+        "notes": "Enhanced permissions for power user"
+    }
+
+Example response with default permissions::
+
+    {
+        "actor_id": "actor123", 
+        "peer_id": "peer456",
+        "trust_type": "mcp_power_user",
+        "tools": {
+            "allowed": ["search", "fetch", "create_note", "update_note", "analyze"]
+        },
+        "is_custom": false,
+        "source": "trust_type_default",
+        "created_by": "system",
+        "updated_at": null,
+        "notes": "Default permissions for AI Assistant (Power User)"
+    }
 
 **Permission Evaluation**
 

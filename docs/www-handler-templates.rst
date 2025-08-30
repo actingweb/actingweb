@@ -23,6 +23,7 @@ This creates several web endpoints:
 - ``/<actor_id>/www/properties`` - Property management
 - ``/<actor_id>/www/properties/<name>`` - Individual property editing
 - ``/<actor_id>/www/trust`` - Trust relationship management
+- ``/<actor_id>/www/trust/new`` - Add new trust relationship
 - ``/<actor_id>/www/init`` - Actor initialization
 
 Web Interface Features
@@ -61,9 +62,18 @@ Trust Relationships
 
 The trust interface (``/<actor_id>/www/trust``) allows users to:
 
-- View existing trust relationships
+- View existing trust relationships with permission status indicators
+- View and edit relationship-specific permissions 
 - Approve pending relationships
 - Manage trust connections with other actors
+
+**Add New Trust Relationship** (``/<actor_id>/www/trust/new``):
+
+- Form-based trust relationship creation
+- Select trust type from configured registry
+- Specify peer actor URL and relationship details  
+- Creates reciprocal trust relationships
+- Relationship names must be URL-safe (letters, numbers, underscores, hyphens only)
 
 Property Hooks and Web Interface
 ================================
@@ -127,8 +137,14 @@ Templates should be placed in a ``templates/`` directory in your application roo
     │   ├── aw-actor-www-root.html
     │   ├── aw-actor-www-properties.html
     │   ├── aw-actor-www-property.html
+    │   ├── aw-actor-www-property-delete.html
     │   ├── aw-actor-www-trust.html
-    │   └── aw-actor-www-init.html
+    │   ├── aw-actor-www-trust-new.html
+    │   ├── aw-actor-www-init.html
+    │   ├── aw-oauth-authorization-form.html
+    │   ├── aw-root-factory.html
+    │   ├── aw-root-created.html
+    │   └── aw-root-failed.html
     └── static/
         ├── style.css
         └── favicon.png
@@ -165,6 +181,15 @@ Available Templates
     - ``qual``: Property status ("a" if exists, "n" if not)
     - ``is_read_only``: Boolean indicating if property is read-only
 
+**aw-actor-www-property-delete.html**
+    Property deletion confirmation template
+
+    Available variables:
+    - ``url``: Actor base URL (without ``/www``)
+    - ``id``: Actor ID
+    - ``property``: Property name to be deleted
+    - ``value``: Property value
+
 **aw-actor-www-trust.html**
     Trust relationships template
 
@@ -173,12 +198,58 @@ Available Templates
     - ``id``: Actor ID
     - ``trusts``: List of trust relationship objects
 
+**aw-actor-www-trust-new.html**
+    Add new trust relationship form template
+
+    Available variables:
+    - ``url``: Base URL for navigation
+    - ``id``: Actor ID
+    - ``form_action``: Form submission URL
+    - ``form_method``: HTTP method for form (typically "POST")
+    - ``trust_types``: List of available trust types from registry
+    - ``error``: Error message if trust types are not configured
+    - ``default_relationship``: Default relationship name
+
 **aw-actor-www-init.html**
     Actor initialization template
 
     Available variables:
     - ``url``: Base URL for navigation
     - ``id``: Actor ID
+
+**aw-oauth-authorization-form.html**
+    OAuth2 authorization form template
+
+    Available variables:
+    - ``client_name``: Name of the OAuth2 client
+    - ``scope``: Requested OAuth2 scope
+    - ``trust_types``: Available trust types for OAuth2 clients
+    - ``default_trust_type``: Default trust type selection
+    - ``form_action``: Authorization form submission URL
+    - ``email_hint``: Pre-filled email for authorization
+
+**aw-root-factory.html**
+    Root actor creation form template
+
+    Available variables:
+    - ``form_action``: Form submission URL
+    - ``form_method``: HTTP method for form
+    - ``error``: Error message if creation failed
+
+**aw-root-created.html**
+    Actor creation success template
+
+    Available variables:
+    - ``id``: Newly created actor ID
+    - ``creator``: Creator email
+    - ``passphrase``: Generated actor passphrase
+
+**aw-root-failed.html**
+    Actor creation failure template
+
+    Available variables:
+    - ``error``: Error message explaining the failure
+    - ``form_action``: Form submission URL to retry
 
 Template Customization
 ---------------------
@@ -348,6 +419,7 @@ Basic Structure
     /<actor_id>/www/properties         # Properties list
     /<actor_id>/www/properties/name    # Edit property
     /<actor_id>/www/trust              # Trust relationships
+    /<actor_id>/www/trust/new          # Add new trust relationship
     /<actor_id>/www/init               # Initialization
 
 With Base Paths (e.g., deployed under /mcp-server)
@@ -358,6 +430,8 @@ With Base Paths (e.g., deployed under /mcp-server)
     /mcp-server/<actor_id>/www                    # Dashboard
     /mcp-server/<actor_id>/www/properties         # Properties list
     /mcp-server/<actor_id>/www/properties/name    # Edit property
+    /mcp-server/<actor_id>/www/trust              # Trust relationships
+    /mcp-server/<actor_id>/www/trust/new          # Add new trust relationship
 
 The templates automatically handle base paths by using the ``url`` variable provided by the handler.
 

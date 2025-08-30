@@ -568,8 +568,20 @@ class Actor:
             peer_approved=peer_approved,
         )
 
-    def create_reciprocal_trust(self, url, secret=None, desc="", relationship="", trust_type=""):
-        """Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor."""
+    def create_reciprocal_trust(
+        self, 
+        url, 
+        secret=None, 
+        desc="", 
+        relationship="",  # trust type/permission level (e.g., "friend", "admin") - goes in URL
+        trust_type=""     # peer's expected ActingWeb mini-app type for validation (optional)
+    ):
+        """Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
+        
+        Args:
+            relationship: The trust type/permission level to request (friend, admin, etc.)
+            trust_type: Expected peer mini-app type for validation (optional)
+        """
         if len(url) == 0:
             return False
         if not secret or len(secret) == 0:
@@ -656,12 +668,17 @@ class Actor:
         approved=False,
         secret=None,
         verification_token=None,
-        trust_type=None,
+        trust_type=None,  # peer's ActingWeb mini-app type (e.g., "urn:actingweb:example.com:banking")
         peer_approved=None,
-        relationship=None,
+        relationship=None,  # trust type/permission level (e.g., "friend", "admin", "partner")
         desc="",
     ):
-        """Creates a new trust when requested and call backs to initiating actor to verify relationship."""
+        """Creates a new trust when requested and call backs to initiating actor to verify relationship.
+        
+        Args:
+            trust_type: The peer's ActingWeb mini-application type URI
+            relationship: The trust type/permission level (friend, admin, etc.)
+        """
         if not peerid or len(baseuri) == 0 or not relationship:
             return False
         requrl = baseuri + "/trust/" + relationship + "/" + self.id

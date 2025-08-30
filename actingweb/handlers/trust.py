@@ -20,15 +20,16 @@ except ImportError:
 # and admins allowed)
 # POST /trust with json body to initiate a trust relationship between this
 #   actor and another (reciprocal relationship) (auth: only creator and admins allowed)
-# POST /trust/{relationship} with json body to create new trust
+# POST /trust/{trust_type} with json body to create new trust
 #   relationship (see config.py for default relationship and auto-accept, no
 #   auth required)
-# GET /trust/{relationship}}/{actorid} to get details on a specific relationship (auth: creator, admin, or peer secret)
-# POST /trust/{relationship}}/{actorid} to send information to a peer about changes in the relationship
-# PUT /trust/{relationship}}/{actorid} with a json body to change details on a relationship (baseuri, secret, desc)
+#   Note: {trust_type} is the permission level (friend, admin, etc.), not the mini-app type
+# GET /trust/{trust_type}}/{actorid} to get details on a specific relationship (auth: creator, admin, or peer secret)
+# POST /trust/{trust_type}}/{actorid} to send information to a peer about changes in the relationship
+# PUT /trust/{trust_type}}/{actorid} with a json body to change details on a relationship (baseuri, secret, desc)
 # (auth: creator,
 #   admin, or peer secret)
-# DELETE /trust/{relationship}}/{actorid} to delete a relationship (with
+# DELETE /trust/{trust_type}}/{actorid} to delete a relationship (with
 #   ?peer=true if the delete is from the peer) (auth: creator, admin, or
 #   peer secret)
 
@@ -274,15 +275,17 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         else:
             approved = False
         # Since we received a request for a relationship, assume that peer has approved
+        # Note: trust_type=peer_type is the peer's mini-app type (from JSON body)
+        #       relationship is the trust type/permission level (from URL path)
         new_trust = myself.create_verified_trust(
             baseuri=baseuri,
             peerid=peerid,
             approved=approved,
             secret=secret,
             verification_token=verification_token,
-            trust_type=peer_type,
+            trust_type=peer_type,  # peer's mini-application type (e.g., "urn:actingweb:example.com:banking")
             peer_approved=True,
-            relationship=relationship,
+            relationship=relationship,  # trust type/permission level (e.g., "friend", "admin")
             desc=desc,
         )
         if not new_trust:
@@ -578,7 +581,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
 # Handling requests to trust permissions, e.g. /trust/friend/12f2ae53bd/permissions
 class TrustPermissionHandler(base_handler.BaseHandler):
     def get(self, actor_id: str, relationship: str, peerid: str):
-        """Get permission overrides for a specific trust relationship."""
+        """Get effective permissions for a specific trust relationship (custom or default from trust type)."""
         if not PERMISSION_SYSTEM_AVAILABLE or not get_trust_permission_store:
             if self.response:
                 self.response.set_status(501, "Permission system not available")
@@ -586,6 +589,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             
         (myself, check) = self._init_dual_auth(actor_id, "trust", "trust", relationship)
         if not myself or not check or check.response["code"] != 200:
+            logging.error(f"TrustPermissionHandler auth failed: myself={myself is not None}, check={check is not None}, code={check.response['code'] if check else 'None'}")
             return
             
         # Same authorization as trust endpoint
@@ -596,28 +600,67 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             
         try:
             permission_store = get_trust_permission_store(self.config)
-            permissions = permission_store.get_permissions(actor_id, peerid)
+            custom_permissions = permission_store.get_permissions(actor_id, peerid)
             
-            if not permissions:
-                if self.response:
-                    self.response.set_status(404, "No permission overrides found")
-                return
-                
-            # Return permission data
-            permission_data = {
-                "actor_id": permissions.actor_id,
-                "peer_id": permissions.peer_id,
-                "trust_type": permissions.trust_type,
-                "properties": permissions.properties,
-                "methods": permissions.methods,
-                "actions": permissions.actions,
-                "tools": permissions.tools,
-                "resources": permissions.resources,
-                "prompts": permissions.prompts,
-                "created_by": permissions.created_by,
-                "updated_at": permissions.updated_at,
-                "notes": permissions.notes
-            }
+            if custom_permissions:
+                # Return custom permission overrides
+                permission_data = {
+                    "actor_id": custom_permissions.actor_id,
+                    "peer_id": custom_permissions.peer_id,
+                    "trust_type": custom_permissions.trust_type,
+                    "properties": custom_permissions.properties,
+                    "methods": custom_permissions.methods,
+                    "actions": custom_permissions.actions,
+                    "tools": custom_permissions.tools,
+                    "resources": custom_permissions.resources,
+                    "prompts": custom_permissions.prompts,
+                    "created_by": custom_permissions.created_by,
+                    "updated_at": custom_permissions.updated_at,
+                    "notes": custom_permissions.notes,
+                    "is_custom": True,
+                    "source": "custom_override"
+                }
+            else:
+                # No custom permissions, get defaults from trust type registry
+                # The 'relationship' parameter is the trust type (friend, admin, etc.)
+                try:
+                    from ..trust_type_registry import get_registry
+                    registry = get_registry(self.config)
+                    logging.debug(f"Looking up trust type '{relationship}' in registry")
+                    trust_type = registry.get_type(relationship)
+                    
+                    if not trust_type:
+                        logging.error(f"Trust type '{relationship}' not found in registry")
+                        available_types = [t.name for t in registry.list_types()] if registry else []
+                        logging.error(f"Available trust types: {available_types}")
+                        if self.response:
+                            self.response.set_status(404, f"Trust type '{relationship}' not found")
+                        return
+                    
+                    logging.debug(f"Found trust type '{relationship}': {trust_type.display_name}")
+                    
+                    # Return default permissions from trust type
+                    permission_data = {
+                        "actor_id": actor_id,
+                        "peer_id": peerid,
+                        "trust_type": relationship,
+                        "properties": trust_type.base_permissions.get("properties", {}),
+                        "methods": trust_type.base_permissions.get("methods", {}),
+                        "actions": trust_type.base_permissions.get("actions", {}),
+                        "tools": trust_type.base_permissions.get("tools", {}),
+                        "resources": trust_type.base_permissions.get("resources", {}),
+                        "prompts": trust_type.base_permissions.get("prompts", {}),
+                        "created_by": trust_type.created_by,
+                        "updated_at": None,
+                        "notes": f"Default permissions for {trust_type.display_name}",
+                        "is_custom": False,
+                        "source": "trust_type_default"
+                    }
+                except Exception as registry_error:
+                    logging.error(f"Error accessing trust type registry for {relationship}: {registry_error}")
+                    if self.response:
+                        self.response.set_status(500, f"Error accessing trust type defaults: {registry_error}")
+                    return
             
             out = json.dumps(permission_data)
             self.response.write(out)

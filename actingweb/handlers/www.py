@@ -1,6 +1,7 @@
 # mypy: disable-error-code="unreachable,unused-ignore"
 import json
 import logging
+from typing import Dict, List
 from actingweb import auth
 from actingweb.handlers import base_handler
 
@@ -255,7 +256,7 @@ class WwwHandler(base_handler.BaseHandler):
                     list_prop = getattr(myself.property_lists, prop_name)
                     list_items = list_prop.to_list()
                     list_length = len(list_items)
-                    
+
                     # Get description and explanation
                     list_description = list_prop.get_description()
                     list_explanation = list_prop.get_explanation()
@@ -309,9 +310,7 @@ class WwwHandler(base_handler.BaseHandler):
                     "list_explanation": list_explanation,
                 }
             elif lookup is not None:
-                logger.debug(
-                    f"Template variables for {prop_name}: is_list_property=False"
-                )
+                logger.debug(f"Template variables for {prop_name}: is_list_property=False")
                 self.response.template_values = {
                     "id": myself.id,
                     "property": prop_name,
@@ -346,18 +345,22 @@ class WwwHandler(base_handler.BaseHandler):
             if not relationships:
                 relationships = []
 
-            # Build approve URIs safely for dict-based relationships
+            # Build approve URIs and check for custom permissions
             for t in relationships:
                 if isinstance(t, dict):
                     rel = t.get("relationship", "")
                     peerid = t.get("peerid", "")
                     t["approveuri"] = f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
+
+                    # Check if this relationship has custom permissions
+                    t["has_custom_permissions"] = self._has_custom_permissions(myself.id or "", peerid)
                 else:
                     # Fallback for object-like items
                     rel = getattr(t, "relationship", "")
                     peerid = getattr(t, "peerid", "")
                     try:
                         t.approveuri = f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
+                        t.has_custom_permissions = self._has_custom_permissions(myself.id or "", peerid)
                     except Exception:
                         pass
 
@@ -381,6 +384,40 @@ class WwwHandler(base_handler.BaseHandler):
                 "url": f"{actor_base_path}/",
             }
             return
+        
+        # Compute actor base path for trust/new form (reuse the same logic)
+        if hasattr(self.request, "url") and self.request.url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self.request.url)
+            path_parts = parsed.path.strip("/").split("/")
+            try:
+                actor_index = path_parts.index(actor_id)
+                actor_base_path = "/" + "/".join(path_parts[: actor_index + 1])
+            except (ValueError, IndexError):
+                actor_base_path = f"/{actor_id}"
+        else:
+            actor_base_path = f"/{actor_id}"
+            
+        if path == "trust/new":
+            # Add new trust relationship form
+            available_trust_types = self._get_available_trust_types()
+
+            # Check if trust types are properly configured
+            trust_types_error = None
+            if not available_trust_types:
+                trust_types_error = "Trust types are not properly configured. Cannot create trust relationships."
+
+            self.response.template_values = {
+                "id": myself.id,
+                "url": f"{actor_base_path}/",
+                "form_action": f"{actor_base_path}/www/trust/new",
+                "form_method": "POST",
+                "trust_types": available_trust_types,
+                "error": trust_types_error,
+                "default_relationship": self.config.default_relationship,
+            }
+            return
         # Execute callback hook for custom web paths
         output = None
         if self.hooks:
@@ -400,6 +437,109 @@ class WwwHandler(base_handler.BaseHandler):
             self.response.set_status(404, "Not found")
         return
 
+    def _has_custom_permissions(self, actor_id: str, peer_id: str) -> bool:
+        """Check if a trust relationship has custom permission overrides."""
+        if not actor_id or not peer_id:
+            return False
+
+        try:
+            # Import permission system with fallback
+            from ..trust_permissions import get_trust_permission_store
+
+            permission_store = get_trust_permission_store(self.config)
+            permissions = permission_store.get_permissions(actor_id, peer_id)
+            return permissions is not None
+        except Exception:
+            # If permission system is not available or there's an error, assume no custom permissions
+            return False
+
+    def _get_available_trust_types(self) -> List[Dict[str, str]]:
+        """Get available trust types for trust relationship creation."""
+        try:
+            from ..trust_type_registry import get_registry
+
+            registry = get_registry(self.config)
+            trust_types = registry.list_types()
+
+            # Convert to list of dicts for template use
+            available_types = []
+            for trust_type in trust_types:
+                available_types.append(
+                    {
+                        "name": trust_type.name,
+                        "display_name": trust_type.display_name,
+                        "description": trust_type.description,
+                    }
+                )
+
+            return available_types
+
+        except Exception as e:
+            logging.error(f"Error accessing trust type registry: {e}")
+            # No fallback - this is a configuration error that should be fixed
+            return []
+
+    def _handle_new_trust_relationship(self, myself, actor_id: str) -> None:
+        """Handle creation of a new trust relationship."""
+        peer_url = self.request.get("peer_url")
+        relationship = self.request.get("relationship") or self.config.default_relationship
+        trust_type = self.request.get("trust_type") or ""
+        description = self.request.get("description") or ""
+
+        if not peer_url:
+            self.response.set_status(400, "Peer URL is required")
+            self.response.write("Error: Peer URL is required")
+            return
+        
+        # Validate relationship name length 
+        if relationship and len(relationship) > 100:  # Reasonable length limit for human-readable names
+            self.response.set_status(400, "Relationship name too long")
+            self.response.write("Error: Relationship name must be 100 characters or less")
+            return
+
+        # Normalize URL (add https:// if missing)
+        if not peer_url.startswith(("http://", "https://")):
+            peer_url = "https://" + peer_url
+
+        # Remove trailing slash
+        peer_url = peer_url.rstrip("/")
+
+        # Validate that trust type is provided
+        if not trust_type:
+            self.response.set_status(400, "Trust type is required")
+            self.response.write("Error: Trust type is required")
+            return
+
+        try:
+            # Create reciprocal trust relationship
+            # The 'relationship' parameter in create_reciprocal_trust is the trust type requested from peer
+            secret = self.config.new_token()
+            new_trust = myself.create_reciprocal_trust(
+                url=peer_url,
+                secret=secret,
+                desc=description,
+                relationship=trust_type,  # Trust type requested from peer (goes in URL)
+                trust_type="",  # Empty allows any mini-application type - trust registry type is separate
+            )
+            
+            # TODO: Store human-readable relationship name separately if different from trust_type
+            # For now, the relationship field will contain the trust type used in the protocol
+
+            if new_trust:
+                # Success - redirect back to trust page
+                self.response.set_status(302, "Found")
+                self.response.set_redirect(f"/{actor_id}/www/trust")
+            else:
+                self.response.set_status(400, "Failed to create trust relationship")
+                self.response.write(
+                    "Error: Unable to create trust relationship. Please check the peer URL and try again."
+                )
+
+        except Exception as e:
+            logging.error(f"Error creating trust relationship: {e}")
+            self.response.set_status(500, "Internal Server Error")
+            self.response.write(f"Error: {str(e)}")
+
     def post(self, actor_id: str, path: str) -> None:
         """Handle POST requests for web UI property operations."""
         (myself, check) = auth.init_actingweb(
@@ -416,33 +556,42 @@ class WwwHandler(base_handler.BaseHandler):
             self.response.set_status(403)
             return
 
+        # Handle trust relationship creation
+        if path == "trust/new":
+            self._handle_new_trust_relationship(myself, actor_id)
+            return
+
         # Handle list metadata updates (description/explanation)
         if "properties/" in path and "/metadata" in path:
             path_parts = path.split("/")
             if len(path_parts) >= 3 and path_parts[2] == "metadata":
                 prop_name = path_parts[1]
                 action = self.request.get("action")
-                
+
                 if action == "update":
                     # Update list metadata
                     description = self.request.get("description")
                     explanation = self.request.get("explanation")
-                    
-                    if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None 
-                        and myself.property_lists.exists(prop_name)):
+
+                    if (
+                        myself
+                        and hasattr(myself, "property_lists")
+                        and myself.property_lists is not None
+                        and myself.property_lists.exists(prop_name)
+                    ):
                         try:
                             list_prop = getattr(myself.property_lists, prop_name)
-                            
+
                             if description is not None:
                                 list_prop.set_description(description)
                             if explanation is not None:
                                 list_prop.set_explanation(explanation)
-                                
+
                             # Redirect back to the property page
                             self.response.set_status(302, "Found")
                             self.response.set_redirect(f"/{actor_id}/www/properties/{prop_name}")
                             return
-                            
+
                         except Exception as e:
                             logger.error(f"Error updating list metadata for '{prop_name}': {e}")
                             self.response.set_status(500, f"Error updating list metadata: {str(e)}")
@@ -470,7 +619,7 @@ class WwwHandler(base_handler.BaseHandler):
                         # Add new item to list
                         item_value = self.request.get("item_value")
                         logger.debug(f"List item add request - prop_name: {prop_name}, item_value: {item_value}")
-                        
+
                         if not item_value:
                             self.response.set_status(400, "Missing item_value parameter")
                             return
@@ -570,7 +719,7 @@ class WwwHandler(base_handler.BaseHandler):
         property_name: str | None = None
         property_value: str | None = None
         property_type: str = "simple"
-        
+
         if path == "properties":
             # Get form parameters
             property_name = self.request.get("property_name") or self.request.get("property")
@@ -596,14 +745,14 @@ class WwwHandler(base_handler.BaseHandler):
 
                         # Create empty list by accessing it (this initializes the ListProperty)
                         list_prop = getattr(myself.property_lists, property_name)
-                        
+
                         # Initialize the list by ensuring metadata exists (this creates the list in the database)
                         _ = len(list_prop)  # This will trigger metadata creation if it doesn't exist
 
                         # Set description and explanation if provided
                         description = self.request.get("description") or ""
                         explanation = self.request.get("explanation") or ""
-                        
+
                         if description:
                             list_prop.set_description(description)
                         if explanation:

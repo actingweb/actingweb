@@ -41,6 +41,19 @@ class MetaHandler(base_handler.BaseHandler):
                 "aw_supported": self.config.aw_supported,
                 "aw_formats": self.config.aw_formats,
             }
+            
+            # Add supported trust types if available
+            try:
+                from ..trust_type_registry import get_registry
+                registry = get_registry(self.config)
+                trust_types = registry.list_types()
+                if trust_types:
+                    # Convert trust types to a simple list of names for the meta endpoint
+                    supported_trust_types = [trust_type.name for trust_type in trust_types]
+                    values["aw_trust_types"] = supported_trust_types
+            except Exception:
+                # If trust type registry is not available, don't include trust types
+                pass
             out = json.dumps(values)
             if self.response:
                 self.response.write(out)
@@ -67,6 +80,33 @@ class MetaHandler(base_handler.BaseHandler):
             out = self.config.aw_supported
         elif path == "actingweb/formats":
             out = self.config.aw_formats
+        elif path == "actingweb/trust_types":
+            # Dedicated endpoint for supported trust types with more details
+            try:
+                from ..trust_type_registry import get_registry
+                registry = get_registry(self.config)
+                trust_types = registry.list_types()
+                if trust_types:
+                    # Return detailed trust type information
+                    trust_type_details = []
+                    for trust_type in trust_types:
+                        trust_type_details.append({
+                            "name": trust_type.name,
+                            "display_name": trust_type.display_name,
+                            "description": getattr(trust_type, 'description', ''),
+                            "created_by": trust_type.created_by
+                        })
+                    out = json.dumps(trust_type_details)
+                else:
+                    out = json.dumps([])
+            except Exception as e:
+                logging.error(f"Error retrieving trust types: {e}")
+                out = json.dumps([])
+            
+            if self.response:
+                self.response.write(out)
+                self.response.headers["Content-Type"] = "application/json"
+            return
         else:
             if self.response:
                 self.response.set_status(404)

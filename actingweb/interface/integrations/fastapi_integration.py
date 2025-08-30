@@ -1345,6 +1345,7 @@ class FastAPIIntegration:
                 "properties": "aw-actor-www-properties.html",
                 "property": "aw-actor-www-property.html",
                 "trust": "aw-actor-www-trust.html",
+                "trust/new": "aw-actor-www-trust-new.html",
             }
             template_name = template_map.get(path)
 

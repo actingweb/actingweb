@@ -152,7 +152,6 @@ class ActingWebOAuth2Server:
                 trust_type = params.get("trust_type", "mcp_client").strip()
 
                 # Create state with MCP context including PKCE parameters and trust type
-                logger.debug(f"Creating MCP state for client_id={client_id}, redirect_uri={redirect_uri}, state={state}, email={email}, trust_type={trust_type}")
                 mcp_state = self.state_manager.create_mcp_state(
                     client_id=client_id, 
                     original_state=state, 
@@ -162,13 +161,10 @@ class ActingWebOAuth2Server:
                     code_challenge=code_challenge,
                     code_challenge_method=code_challenge_method
                 )
-                logger.debug(f"Created MCP state: {mcp_state[:50]}... (truncated)")
 
                 # Create Google OAuth2 authorization URL
                 # For MCP flows, we need to use a special method that preserves the encrypted state
-                logger.debug(f"Creating Google OAuth2 URL with MCP state and email hint")
                 google_auth_url = self._create_google_oauth_url_for_mcp(mcp_state, email)
-                logger.debug(f"Google OAuth2 URL created: {google_auth_url}")
 
                 if not google_auth_url:
                     logger.error("Failed to create MCP Google OAuth2 URL, falling back to standard method")
@@ -176,7 +172,6 @@ class ActingWebOAuth2Server:
                     google_auth_url = self.google_authenticator.create_authorization_url(
                         state=mcp_state, redirect_after_auth="", email_hint=email
                     )
-                    logger.debug(f"Fallback Google OAuth2 URL created: {google_auth_url}")
 
                 if not google_auth_url:
                     return self._error_response("server_error", "Failed to create authorization URL")
@@ -219,14 +214,10 @@ class ActingWebOAuth2Server:
             if not code or not state:
                 return self._error_response("invalid_request", "Missing code or state parameter")
 
-            # Debug: log the received state parameter
-            logger.debug(f"OAuth2 callback received state parameter: {state[:50]}... (truncated)")
-            
             # Extract MCP context from state
             mcp_context = self.state_manager.extract_mcp_context(state)
-            logger.debug(f"Extracted MCP context: {mcp_context}")
             if not mcp_context:
-                logger.warning(f"Failed to extract MCP context from state: {state}")
+                logger.warning("Failed to extract MCP context from state - invalid or expired")
                 return self._error_response("invalid_request", "Invalid or expired state parameter")
 
             client_id = mcp_context.get("client_id")
@@ -258,8 +249,34 @@ class ActingWebOAuth2Server:
             if not actor_obj:
                 return self._error_response("server_error", "Failed to create or retrieve user actor")
 
-            # Extract trust_type from MCP context if present
+            # Determine trust type and establishment source
             trust_type = mcp_context.get("trust_type", "mcp_client")
+            flow_type = mcp_context.get("flow_type")
+            # All OAuth2 flows establish trust via oauth2, regardless of client type (MCP, web, etc.)
+            established_via = "oauth2"
+            effective_trust_type = trust_type if trust_type else "mcp_client"
+
+            # Always create or update trust; select type based on flow
+            try:
+                from ..interface.actor_interface import ActorInterface
+                from ..oauth2 import create_oauth2_trust_relationship
+
+                actor_interface = ActorInterface(core_actor=actor_obj)
+                trust_created = create_oauth2_trust_relationship(
+                    actor=actor_interface,
+                    email=email,
+                    trust_type=str(effective_trust_type),
+                    oauth_tokens=dict(google_token_data),
+                    established_via=established_via,
+                )
+                if not trust_created:
+                    logger.warning(
+                        f"Failed to create trust for actor {actor_obj.id} and user {email} (via={established_via}, type={effective_trust_type})"
+                    )
+            except Exception as trust_error:
+                logger.error(
+                    f"Exception while creating trust for actor {actor_obj.id}: {trust_error}"
+                )
 
             # Create authorization code for MCP client (store email and trust_type for later token exchange)
             auth_code = self.token_manager.create_authorization_code(
@@ -279,7 +296,7 @@ class ActingWebOAuth2Server:
 
             callback_url = f"{redirect_uri}?{urlencode(redirect_params)}"
 
-            logger.debug(f"Completed OAuth2 authorization for MCP client {client_id}, user {email}")
+            logger.info(f"OAuth2 authorization completed for client {client_id}, user {email}")
 
             return {"action": "redirect", "url": callback_url}
 
@@ -313,9 +330,6 @@ class ActingWebOAuth2Server:
 
     def _handle_authorization_code_grant(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle authorization_code grant type."""
-        # Debug: log all received parameters
-        logger.debug(f"Token request parameters: {list(params.keys())}")
-        logger.debug(f"Token request values: {params}")
         
         code = params.get("code")
         client_id = params.get("client_id")
@@ -326,7 +340,6 @@ class ActingWebOAuth2Server:
         if not code:
             return self._error_response("invalid_request", "code is required")
         if not client_id:
-            logger.warning(f"Missing client_id in token request. Available params: {list(params.keys())}")
             return self._error_response("invalid_request", "client_id is required")
         if not redirect_uri:
             return self._error_response("invalid_request", "redirect_uri is required")
@@ -352,30 +365,9 @@ class ActingWebOAuth2Server:
         if not token_response:
             return self._error_response("invalid_grant", "Invalid or expired authorization code")
 
-        # Create or refresh MCP trust at token issuance
-        try:
-            actor_id = token_response.get("actor_id")
-            email = token_response.get("email")
-            # Prefer trust_type from state if carried through token manager
-            trust_type = token_response.get("trust_type", "mcp_client")
-            if actor_id and email:
-                from .. import actor as actor_module
-                from ..interface.actor_interface import ActorInterface
-                from ..interface.trust_manager import TrustManager
-                actor_obj = actor_module.Actor(actor_id, self.config)
-                if actor_obj and actor_obj.id:
-                    actor_interface = ActorInterface(actor_obj)
-                    tm = TrustManager(actor_interface.core_actor)
-                    tm.create_or_update_oauth_trust(
-                        email=email,
-                        trust_type=trust_type,
-                        oauth_tokens=None,
-                        established_via="mcp",
-                    )
-        except Exception as e:
-            logger.warning(f"Failed to create MCP trust at token issuance: {e}")
+        # Trust relationships are created during OAuth2 callback, not here
 
-        logger.debug(f"Issued ActingWeb access token for client {client_id}")
+        logger.info(f"Issued ActingWeb access token for client {client_id}")
         return token_response
 
     def _handle_refresh_token_grant(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -402,7 +394,7 @@ class ActingWebOAuth2Server:
         if not token_response:
             return self._error_response("invalid_grant", "Invalid or expired refresh token")
 
-        logger.debug(f"Refreshed ActingWeb access token for client {client_id}")
+        logger.info(f"Refreshed ActingWeb access token for client {client_id}")
         return token_response
 
     def handle_discovery_request(self) -> Dict[str, Any]:
@@ -462,7 +454,6 @@ class ActingWebOAuth2Server:
                     if isinstance(existing, dict):
                         # Single actor found
                         actor_id = existing["id"]
-                        logger.debug(f"Found existing actor {actor_id} for email {email}")
                         actor_obj = actor_module.Actor(actor_id, self.config)
                         # Load the actor data
                         actor_obj.get(actor_id)
@@ -470,7 +461,6 @@ class ActingWebOAuth2Server:
                     elif isinstance(existing, list) and len(existing) > 0:
                         # Multiple actors found, use the first one
                         actor_id = existing[0]["id"]
-                        logger.debug(f"Found existing actor {actor_id} for email {email}")
                         actor_obj = actor_module.Actor(actor_id, self.config)
                         # Load the actor data
                         actor_obj.get(actor_id)
@@ -497,15 +487,12 @@ class ActingWebOAuth2Server:
             except Exception as create_error:
                 logger.error(f"Failed to create actor for email {email}: {create_error}")
                 return None
-                
-            logger.debug(f"Successfully created actor {actor_obj.id} for email {email}")
             
             # Verify the actor has the necessary components
             if not actor_obj.property:
                 logger.error(f"Actor {actor_obj.id} does not have property object set after creation")
                 return None
 
-            logger.debug(f"Successfully created/retrieved actor {actor_obj.id} with property object")
             return actor_obj
 
         except Exception as e:
@@ -529,10 +516,6 @@ class ActingWebOAuth2Server:
             Google OAuth2 authorization URL
         """
         try:
-            logger.debug(f"Attempting to create MCP Google OAuth2 URL...")
-            logger.debug(f"Authenticator enabled: {self.google_authenticator.is_enabled()}")
-            logger.debug(f"Client exists: {self.google_authenticator.client is not None}")
-            
             if not self.google_authenticator.is_enabled():
                 logger.error("Google authenticator is not enabled")
                 return ""
@@ -543,9 +526,6 @@ class ActingWebOAuth2Server:
                 
             # Get the provider config
             provider = self.google_authenticator.provider
-            logger.debug(f"Provider auth URI: {provider.auth_uri}")
-            logger.debug(f"Provider redirect URI: {provider.redirect_uri}")
-            logger.debug(f"Provider scope: {provider.scope}")
             
             # Prepare Google OAuth2 parameters
             extra_params = {
@@ -556,10 +536,8 @@ class ActingWebOAuth2Server:
             # Add email hint for Google OAuth2
             if email_hint:
                 extra_params["login_hint"] = email_hint
-                logger.debug(f"Adding login_hint for MCP OAuth2: {email_hint}")
             
             # Use oauthlib directly to generate the authorization URL with the encrypted state
-            logger.debug(f"Calling prepare_request_uri with state: {mcp_state[:50]}...")
             authorization_url = self.google_authenticator.client.prepare_request_uri(
                 provider.auth_uri,
                 redirect_uri=provider.redirect_uri,
@@ -568,8 +546,6 @@ class ActingWebOAuth2Server:
                 **extra_params,
             )
             
-            logger.debug(f"Created MCP Google OAuth2 URL with encrypted state: {mcp_state[:50]}...")
-            logger.debug(f"Authorization URL: {authorization_url[:200]}...")
             return str(authorization_url)
             
         except Exception as e:

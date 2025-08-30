@@ -397,6 +397,9 @@ allow use of OAuth to get access.
 | nestedproperties | Announce support for deeper, nested json structures in /properties (beyond the    |
 |                  | mandatory attribute/value pairs)                                                  |
 +------------------+-----------------------------------------------------------------------------------+
+| trustpermissions | The trust endpoint supports per-relationship permission management through the     |
+|                  | enhanced trust API with permission overrides and the /permissions sub-endpoint    |
++------------------+-----------------------------------------------------------------------------------+
 
 The Actor
 ==========
@@ -1214,11 +1217,24 @@ MCP integration introduces additional security considerations:
 4. **Audit Trail**: All MCP interactions SHOULD be logged for security and
    debugging purposes.
 
-Option Tag
+Option Tags
 -----------------------------
+
+**MCP Support**
 
 Actors supporting MCP MUST include "mcp" in their supported option tags
 returned by /meta/actingweb/supported.
+
+**Trust Permission Management**
+
+Actors supporting per-relationship permission management SHOULD include 
+"trustpermissions" in their supported option tags returned by 
+/meta/actingweb/supported. This indicates support for:
+
+* Enhanced trust relationship endpoints with permission query parameters
+* Dedicated permission management endpoints (``/trust/{relationship}/{peerid}/permissions``)
+* Per-relationship permission overrides that modify trust type defaults
+* Standardized permission structures for interoperability
 
 /trust - Trust Relationships (OPTIONAL)
 =======================================
@@ -1778,11 +1794,84 @@ A mini-application MAY implement assigning of rights to a specific
 instance of a trust relationship (i.e. rights per actor). This allows
 granular access control. For example allowing home contact information
 to be available to some actors, while others only get access to business
-information. Whether this granular access control is implemented
-assigning a new type of trust relationship to a defined access group or
-on an individual basis is outside the scope of this specification. The
-same holds for how to determine which relationship to get upgraded or
-reduced rights.
+information.
+
+**Permission Management API (RECOMMENDED)**
+
+To support per-relationship permission customization, mini-applications 
+SHOULD implement the following API extensions to the /trust endpoint:
+
+**Enhanced Trust Relationship Endpoint**
+
+The GET /trust/{relationship}/{peerid} endpoint MAY support a 
+``permissions`` query parameter to include permission override information:
+
+GET /{actorid}/trust/{relationship}/{peerid}?permissions=true
+
+If permission overrides exist for the relationship, the response SHOULD include
+a ``permissions`` field containing the custom permission rules.
+
+The PUT /trust/{relationship}/{peerid} endpoint MAY accept a ``permissions``
+field in the request body to update permission overrides alongside standard
+trust relationship properties.
+
+**Dedicated Permission Management Endpoints (OPTIONAL)**
+
+For applications requiring extensive permission customization, the following
+endpoints provide dedicated permission management:
+
+``GET /{actorid}/trust/{relationship}/{peerid}/permissions``
+  Retrieve detailed permission overrides for a specific trust relationship.
+  Returns 404 if no overrides exist.
+
+``PUT /{actorid}/trust/{relationship}/{peerid}/permissions``  
+  Create or update permission overrides for a trust relationship.
+  Requires the trust relationship to exist.
+
+``DELETE /{actorid}/trust/{relationship}/{peerid}/permissions``
+  Remove permission overrides, reverting to trust type defaults.
+
+**Permission Structure**
+
+Permission overrides SHOULD follow this structure to ensure interoperability:
+
+``properties``
+  Controls access to actor property storage with patterns, operations, and 
+  excluded patterns for fine-grained property access control.
+
+``methods``
+  Controls ActingWeb method calls with allowed and denied lists supporting
+  glob patterns for method name matching.
+
+``actions``  
+  Controls ActingWeb action execution with allowed and denied lists for
+  specific action permissions.
+
+``tools`` (for MCP clients)
+  Controls MCP tool access with allowed and denied lists for tool-specific
+  permissions.
+
+``resources`` (for MCP clients)
+  Controls MCP resource access with URI patterns and operations for
+  resource-specific permissions.
+
+``prompts`` (for MCP clients)
+  Controls MCP prompt access with allowed patterns for prompt-specific
+  permissions.
+
+**Permission Evaluation**
+
+When evaluating permissions for a trust relationship, the system SHOULD:
+
+1. Start with base permissions defined by the trust type
+2. Apply any per-relationship permission overrides  
+3. Evaluate patterns using glob matching with ``*`` (any characters) and ``?`` (single character)
+4. Apply precedence: explicit deny > explicit allow > trust type defaults
+5. Default to deny if no matching rule is found
+
+This approach provides standardized per-relationship permission management
+while maintaining backward compatibility with existing trust relationship
+implementations.
 
 Using a Trustee To Manage Relationships
 ---------------------------------------

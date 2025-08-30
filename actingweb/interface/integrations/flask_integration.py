@@ -20,7 +20,6 @@ from ...handlers import (
     subscription,
     resources,
     oauth,
-    callback_oauth,
     bot,
     www,
     factory,
@@ -94,22 +93,17 @@ class FlaskIntegration:
             return self._handle_oauth2_callback()
 
         # OAuth2 server endpoints for MCP clients
-        @self.flask_app.route("/oauth/register", methods=["POST"])
+        @self.flask_app.route("/oauth/register", methods=["POST", "OPTIONS"])
         def oauth2_register() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("register")
 
-        @self.flask_app.route("/oauth/authorize", methods=["GET", "POST"])
+        @self.flask_app.route("/oauth/authorize", methods=["GET", "POST", "OPTIONS"])
         def oauth2_authorize() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("authorize")
 
-        @self.flask_app.route("/oauth/token", methods=["POST"])
+        @self.flask_app.route("/oauth/token", methods=["POST", "OPTIONS"])
         def oauth2_token() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("token")
-
-        # OAuth2 discovery endpoint
-        @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET"])
-        def oauth2_discovery() -> Union[Response, WerkzeugResponse, str]:
-            return self._handle_oauth2_endpoint(".well-known/oauth-authorization-server")
 
         # Bot endpoint
         @self.flask_app.route("/bot", methods=["POST"])
@@ -125,19 +119,19 @@ class FlaskIntegration:
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
         @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"])
-        def oauth_discovery() -> Response:
+        def oauth_discovery() -> Union[Response, WerkzeugResponse, str]:
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
-            return self._handle_oauth2_endpoint(".well-known/oauth-authorization-server")
+            return self._handle_oauth2_discovery_endpoint(".well-known/oauth-authorization-server")
 
         @self.flask_app.route("/.well-known/oauth-protected-resource", methods=["GET", "OPTIONS"])
-        def oauth_protected_resource_discovery() -> Response:
+        def oauth_protected_resource_discovery() -> Union[Response, WerkzeugResponse, str]:
             """OAuth2 Protected Resource discovery endpoint."""
-            return self._handle_oauth2_endpoint(".well-known/oauth-protected-resource")
+            return self._handle_oauth2_discovery_endpoint(".well-known/oauth-protected-resource")
 
         @self.flask_app.route("/.well-known/oauth-protected-resource/mcp", methods=["GET", "OPTIONS"])
-        def oauth_protected_resource_mcp_discovery() -> Response:
+        def oauth_protected_resource_mcp_discovery() -> Union[Response, WerkzeugResponse, str]:
             """OAuth2 Protected Resource discovery endpoint for MCP."""
-            return self._handle_oauth2_endpoint(".well-known/oauth-protected-resource/mcp")
+            return self._handle_oauth2_discovery_endpoint(".well-known/oauth-protected-resource/mcp")
 
         # MCP information endpoint
         @self.flask_app.route("/mcp/info", methods=["GET"])
@@ -186,6 +180,15 @@ class FlaskIntegration:
             actor_id: str, relationship: Optional[str] = None, peerid: Optional[str] = None
         ) -> Union[Response, WerkzeugResponse, str]:
             return self._handle_actor_request(actor_id, "trust", relationship=relationship, peerid=peerid)
+
+        # Trust permission management endpoints
+        @self.flask_app.route("/<actor_id>/trust/<relationship>/<peerid>/permissions", methods=["GET", "PUT", "DELETE"])
+        def app_trust_permissions(
+            actor_id: str, relationship: str, peerid: str
+        ) -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_actor_request(
+                actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
+            )
 
         # Actor subscriptions
         @self.flask_app.route("/<actor_id>/subscriptions", methods=["GET", "POST", "DELETE", "PUT"])
@@ -448,7 +451,7 @@ class FlaskIntegration:
             logging.error(f"Error in factory POST handler: {e}")
             return Response("Internal server error", status=500)
 
-    def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:  # pylint: disable=unused-argument
         """Handle POST to factory route without OAuth2 - standard actor creation."""
         try:
             # Always use the standard factory handler
@@ -528,7 +531,7 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_oauth2_endpoint(self, endpoint: str) -> Response:
+    def _handle_oauth2_endpoint(self, endpoint: str) -> Union[Response, WerkzeugResponse, str]:
         """Handle OAuth2 endpoints (register, authorize, token)."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -568,10 +571,62 @@ class FlaskIntegration:
                     }
                 )
 
-        # Return the OAuth2 result as JSON
+        # Handle redirect responses (e.g., OAuth2 callbacks)
+        if isinstance(result, dict) and result.get("status") == "redirect":
+            redirect_url = result.get("location")
+            if redirect_url:
+                redirect_response = redirect(redirect_url, code=302)
+                
+                # Add CORS headers for OAuth2 redirect responses  
+                redirect_response.headers["Access-Control-Allow-Origin"] = "*"
+                redirect_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                redirect_response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+                
+                return redirect_response
+
+        # Return the OAuth2 result as JSON with CORS headers
         from flask import jsonify
 
-        return jsonify(result)
+        json_response = jsonify(result)
+        
+        # Add CORS headers for OAuth2 endpoints
+        json_response.headers["Access-Control-Allow-Origin"] = "*"
+        json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        json_response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+        json_response.headers["Access-Control-Max-Age"] = "86400"
+
+        return json_response
+
+    def _handle_oauth2_discovery_endpoint(self, endpoint: str) -> Union[Response, WerkzeugResponse, str]:
+        """Handle OAuth2 discovery endpoints that return JSON directly."""
+        req_data = self._normalize_request()
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_endpoints import OAuth2EndpointsHandler
+
+        handler = OAuth2EndpointsHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        if request.method == "OPTIONS":
+            result = handler.options(endpoint)
+        else:
+            result = handler.get(endpoint)
+
+        # Add CORS headers directly for OAuth2 discovery endpoints
+        from flask import jsonify
+
+        response = jsonify(result)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+        response.headers["Access-Control-Max-Age"] = "86400"
+
+        return response
 
     def _handle_mcp_request(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle MCP requests."""
@@ -782,8 +837,8 @@ class FlaskIntegration:
         return self._create_flask_response(webobj)
 
     def _get_handler(
-        self, endpoint: str, webobj: AWWebObj, actor_id: str, **kwargs: Any
-    ) -> Optional[Any]:  # pylint: disable=unused-argument
+        self, endpoint: str, webobj: AWWebObj, actor_id: str, **kwargs: Any  # pylint: disable=unused-argument
+    ) -> Optional[Any]:
         """Get the appropriate handler for an endpoint."""
         config = self.aw_app.get_config()
 
@@ -802,7 +857,25 @@ class FlaskIntegration:
 
         # Special handling for trust endpoint
         if endpoint == "trust":
-            path_parts = [p for p in [kwargs.get("relationship"), kwargs.get("peerid")] if p]
+            relationship = kwargs.get("relationship")
+            peerid = kwargs.get("peerid")
+            
+            # Check for permissions endpoint
+            if kwargs.get("permissions"):
+                return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
+            
+            # For trust endpoint, we need to distinguish between path parameters and query parameters
+            # If peerid appears in query params but not as path param, it's a query-based request
+            query_peerid = webobj.request.get("peerid")
+            
+            # Only count actual path parameters (non-None, non-empty)
+            path_parts = []
+            if relationship is not None and relationship != "":
+                path_parts.append(relationship)
+            # Only count peerid as path param if it's not a query param request
+            if peerid is not None and peerid != "" and not query_peerid:
+                path_parts.append(peerid)
+            
             if len(path_parts) == 0:
                 return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
@@ -831,8 +904,6 @@ class FlaskIntegration:
 
     def _create_oauth_discovery_response(self) -> Dict[str, Any]:
         """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
@@ -869,38 +940,27 @@ class FlaskIntegration:
 
     def _create_mcp_info_response(self) -> Dict[str, Any]:
         """Create MCP information response."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
-        oauth_config = getattr(config, "oauth", {})
-        oauth_client_id = oauth_config.get("client_id") if oauth_config else None
-        oauth_client_secret = oauth_config.get("client_secret") if oauth_config else None
 
         return {
             "mcp_enabled": True,
             "mcp_endpoint": "/mcp",
             "authentication": {
                 "type": "oauth2",
-                "provider": oauth_provider,
-                "required_scopes": ["openid", "email", "profile"] if oauth_provider == "google" else ["user:email"],
+                "provider": "actingweb",
+                "required_scopes": ["mcp"],
                 "flow": "authorization_code",
-                "auth_url": (
-                    "https://accounts.google.com/o/oauth2/v2/auth"
-                    if oauth_provider == "google"
-                    else "https://github.com/login/oauth/authorize"
-                ),
-                "token_url": (
-                    "https://oauth2.googleapis.com/token"
-                    if oauth_provider == "google"
-                    else "https://github.com/login/oauth/access_token"
-                ),
+                "auth_url": f"{base_url}/oauth/authorize",
+                "token_url": f"{base_url}/oauth/token",
                 "callback_url": f"{base_url}/oauth/callback",
                 "registration_endpoint": f"{base_url}/oauth/register",
                 "authorization_endpoint": f"{base_url}/oauth/authorize",
                 "token_endpoint": f"{base_url}/oauth/token",
-                "enabled": bool(oauth_client_id and oauth_client_secret),
+                "discovery_url": f"{base_url}/.well-known/oauth-authorization-server",
+                "resource_discovery_url": f"{base_url}/.well-known/oauth-protected-resource",
+                "enabled": True,
             },
             "supported_features": ["tools", "prompts"],
             "tools_count": 4,  # search, fetch, create_note, create_reminder

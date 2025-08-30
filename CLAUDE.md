@@ -200,6 +200,70 @@ Add type checking to your CI pipeline:
 
 This ensures type safety is maintained across all contributions and prevents type-related runtime errors.
 
+## Singleton Initialization
+
+**CRITICAL:** ActingWeb's unified access control system requires explicit initialization of singletons at application startup to prevent performance issues during OAuth2 flows.
+
+### Required at Application Startup
+
+Add this to your application immediately after creating the ActingWeb app:
+
+```python
+from actingweb.interface import ActingWebApp
+from actingweb.singleton_warmup import initialize_actingweb_singletons
+
+# Create your ActingWeb app
+app = ActingWebApp(...)
+
+# CRITICAL: Initialize singletons at startup
+try:
+    initialize_actingweb_singletons(app.get_config())
+    logger.info("ActingWeb singletons initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize ActingWeb singletons: {e}")
+    # Continue anyway - the system will fall back gracefully
+```
+
+### What Gets Initialized
+
+The singleton initialization sets up:
+
+1. **Trust Type Registry** - Loads default and custom trust types
+2. **Permission Evaluator** - Compiles patterns and sets up caches  
+3. **Trust Permission Store** - Initializes attribute bucket access
+
+### Performance Impact
+
+**Without initialization:**
+- OAuth2 flows take 4+ minutes (lazy loading blocks on first use)
+- Permission checks cause delays during first MCP requests
+- Database operations block request threads
+
+**With initialization:**
+- OAuth2 flows complete in <1 second
+- Permission checks are fast from first use
+- No blocking during request processing
+
+### Debugging Initialization Issues
+
+If initialization fails, check:
+
+```bash
+# Verify database connectivity
+aws dynamodb list-tables
+
+# Check environment variables
+env | grep AWS
+
+# Test basic ActingWeb functionality
+python -c "from actingweb import actor; print('ActingWeb imports OK')"
+```
+
+Common issues:
+- Missing AWS credentials or DynamoDB access
+- Network connectivity problems
+- Database table creation permissions
+
 ### Documentation
 The project uses Sphinx for documentation:
 ```bash
@@ -330,6 +394,59 @@ app = (
     # Comment out .with_oauth() to disable OAuth2
 )
 ```
+
+## Singleton Initialization
+
+**CRITICAL**: For applications using the unified access control system, you MUST initialize ActingWeb singletons at application startup to avoid severe performance issues.
+
+### Performance Impact
+
+Without proper initialization:
+- OAuth2 flows may hang for 4+ minutes
+- First requests trigger expensive singleton initialization
+- Database operations, system actor creation, and pattern compilation block request threads
+
+### Required Initialization
+
+Add this code at application startup, before serving requests:
+
+```python
+# CRITICAL: Initialize ActingWeb singletons at application startup
+try:
+    from actingweb.singleton_warmup import initialize_actingweb_singletons
+    initialize_actingweb_singletons(app.get_config())
+    logger.info("ActingWeb singletons initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize ActingWeb singletons: {e}")
+    # Continue anyway - system will fall back gracefully with degraded performance
+    logger.warning("Continuing with degraded performance - singletons will initialize lazily")
+```
+
+### What Gets Initialized
+
+1. **Trust Type Registry**: Pre-compiles all trust types and their permissions
+2. **Permission Evaluator**: Pre-loads system patterns and rule engine
+3. **Trust Permission Store**: Initializes custom permission overrides system
+
+### Debugging Singleton Issues
+
+If you see these symptoms:
+- OAuth2 callbacks hanging for minutes
+- First requests extremely slow after startup
+- Logs showing "Initializing trust type registry..." during requests
+
+Then singleton initialization is happening during request processing instead of at startup.
+
+**Check initialization logs:**
+```
+ActingWeb singletons initialized successfully
+Trust type registry initialized with X types
+Permission evaluator initialized successfully  
+Trust permission store initialized
+```
+
+**Handle initialization failures:**
+The system includes graceful fallbacks - if singleton initialization fails at startup, individual components will fall back to lazy loading with warnings.
 
 ## Security Notes
 

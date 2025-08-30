@@ -115,6 +115,5 @@ CLIENT_INDEX_BUCKET = "client_index"
 OAUTH_TOKENS_PREFIX = "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREFIX + peer_id]
 
 # Establishment methods for trust relationships
-ESTABLISHED_VIA_ACTINGWEB = "actingweb"  # Traditional ActingWeb protocol
-ESTABLISHED_VIA_OAUTH2 = "oauth2"  # OAuth2 authentication flow
-ESTABLISHED_VIA_MCP = "mcp"  # MCP client registration
+ESTABLISHED_VIA_ACTINGWEB = "actingweb"  # Traditional ActingWeb protocol handshake
+ESTABLISHED_VIA_OAUTH2 = "oauth2"  # OAuth2 authentication flow (includes MCP clients)

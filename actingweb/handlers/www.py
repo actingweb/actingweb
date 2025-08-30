@@ -290,8 +290,28 @@ class WwwHandler(base_handler.BaseHandler):
                     # If anything goes wrong, use original value
                     pass
 
-            if lookup:
-                logger.debug(f"Template variables for {prop_name}: is_list_property={is_list_property}, list_items_count={len(list_items) if list_items else 0}")
+            # Always populate template values; handle list vs. simple explicitly
+            if is_list_property:
+                logger.debug(
+                    f"Template variables for {prop_name}: is_list_property=True, list_items_count={len(list_items) if list_items is not None else 0}"
+                )
+                self.response.template_values = {
+                    "id": myself.id,
+                    "property": prop_name,
+                    "value": display_value or "",
+                    "raw_value": lookup or "",
+                    "qual": "a",
+                    "url": actor_base_path,
+                    "is_read_only": is_read_only,
+                    "is_list_property": True,
+                    "list_items": list_items or [],
+                    "list_description": list_description,
+                    "list_explanation": list_explanation,
+                }
+            elif lookup is not None:
+                logger.debug(
+                    f"Template variables for {prop_name}: is_list_property=False"
+                )
                 self.response.template_values = {
                     "id": myself.id,
                     "property": prop_name,
@@ -300,12 +320,13 @@ class WwwHandler(base_handler.BaseHandler):
                     "qual": "a",
                     "url": actor_base_path,
                     "is_read_only": is_read_only,
-                    "is_list_property": is_list_property,
-                    "list_items": list_items,
-                    "list_description": list_description,
-                    "list_explanation": list_explanation,
+                    "is_list_property": False,
+                    "list_items": [],
+                    "list_description": "",
+                    "list_explanation": "",
                 }
             else:
+                # Property not found
                 self.response.template_values = {
                     "id": myself.id,
                     "property": prop_name,

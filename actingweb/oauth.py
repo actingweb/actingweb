@@ -8,7 +8,7 @@ import base64
 import json
 import logging
 import urlfetch
-from typing import Optional, Dict, Any
+from typing import Optional
 from . import config as config_class
 
 # This function code is from latest urlfetch. For some reason the
@@ -65,17 +65,10 @@ class OAuth:
         if params:
             if urlencode:
                 data = urllib_urlencode(params)
-                logging.debug(
-                    "Oauth POST request with urlencoded payload: " + url + " " + data
-                )
             else:
                 data = json.dumps(params)
-                logging.debug(
-                    "Oauth POST request with JSON payload: " + url + " " + data
-                )
         else:
             data = None
-            logging.debug("Oauth POST request: " + url)
         if urlencode:
             if self.token:
                 if basic_auth:
@@ -122,24 +115,16 @@ class OAuth:
                 + str(response.content)
             )
             return None
-        logging.debug("Oauth POST response JSON:" + str(response.content))
         return json.loads(response.content.decode("utf-8", "ignore"))
 
     def put_request(self, url, params=None, urlencode=False):
         if params:
             if urlencode:
                 data = urllib_urlencode(params)
-                logging.debug(
-                    "Oauth PUT request with urlencoded payload: " + url + " " + data
-                )
             else:
                 data = json.dumps(params)
-                logging.debug(
-                    "Oauth PUT request with JSON payload: " + url + " " + data
-                )
         else:
             data = None
-            logging.debug("Oauth PUT request: " + url)
         if urlencode:
             if self.token:
                 headers = {
@@ -178,16 +163,13 @@ class OAuth:
                 + str(response.content)
             )
             return None
-        logging.debug("Oauth PUT response JSON:" + str(response.content))
         return json.loads(response.content.decode("utf-8", "ignore"))
 
     def get_request(self, url, params=None):
         if not self.token:
-            logging.debug("No token set in get_request()")
             return None
         if params:
             url = url + "?" + urllib_urlencode(params)
-        logging.debug("Oauth GET request: " + url)
         try:
             response = urlfetch.get(
                 url,
@@ -214,7 +196,6 @@ class OAuth:
         self.first = None
         self.prev = None
         for link in links:
-            logging.debug("Links:" + link["rel"] + ":" + link["url"])
             if link["rel"] == "next":
                 self.next = link["url"]
             elif link["rel"] == "first":
@@ -225,11 +206,9 @@ class OAuth:
 
     def head_request(self, url, params=None):
         if not self.token:
-            logging.debug("No token set in head_request(()")
             return None
         if params:
             url = url + "?" + urllib_urlencode(params)
-        logging.debug("Oauth HEAD request: " + url)
         try:
             response = urlfetch.head(
                 url=url, headers={"Authorization": "Bearer " + self.token}
@@ -253,7 +232,6 @@ class OAuth:
     def delete_request(self, url):
         if not self.token:
             return None
-        logging.debug("Oauth DELETE request: " + url)
         try:
             response = urlfetch.delete(
                 url=url, headers={"Authorization": "Bearer " + self.token}
@@ -321,7 +299,6 @@ class OAuth:
                             v = creator
                     params[k] = v
         uri = self.config.oauth["auth_uri"] + "?" + urllib_urlencode(params)
-        logging.debug("OAuth redirect with url: " + uri + " and state:" + state)
         return uri
 
     def oauth_request_token(self, code=None):

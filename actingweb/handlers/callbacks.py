@@ -15,13 +15,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             self.put(actor_id, name)
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="callbacks",
-            add_response=False,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "callbacks", "callbacks", name, add_response=False)
         if not myself or not check or (
             check.response["code"] != 200 and check.response["code"] != 401
         ):
@@ -48,9 +42,7 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def delete(self, actor_id, name):
         """Handles deletion of callbacks, like subscriptions"""
-        (myself, check) = auth.init_actingweb(
-            appreq=self, actor_id=actor_id, path="callbacks", config=self.config
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "callbacks", "callbacks", name)
         if not myself or not check or check.response["code"] != 200:
             return
         path = name.split("/")
@@ -92,13 +84,7 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def post(self, actor_id, name):
         """Handles POST callbacks"""
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="callbacks",
-            add_response=False,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "callbacks", "callbacks", name, add_response=False)
         # Allow unauthenticated requests to /callbacks/subscriptions, so
         # do the auth check further below
         path = name.split("/")

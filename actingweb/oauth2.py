@@ -98,7 +98,7 @@ class OAuth2Authenticator:
         self._sessions: Dict[str, Dict[str, Any]] = {}
 
         if not self.provider.is_enabled():
-            logger.debug(
+            logger.warning(
                 f"OAuth2 provider '{self.provider.name}' not configured - client_id and client_secret required"
             )
 
@@ -148,7 +148,6 @@ class OAuth2Authenticator:
         # Add email hint for Google OAuth2
         if email_hint and self.provider.name == "google":
             extra_params["login_hint"] = email_hint
-            logger.debug(f"Adding login_hint for Google OAuth2: {email_hint}")
 
         # Use oauthlib to generate the authorization URL
         authorization_url = self.client.prepare_request_uri(
@@ -159,7 +158,6 @@ class OAuth2Authenticator:
             **extra_params,
         )
 
-        logger.debug(f"Created OAuth2 authorization URL with state: {state[:50]}...")
         return str(authorization_url)
 
     def _looks_like_encrypted_state(self, state: str) -> bool:
@@ -232,7 +230,6 @@ class OAuth2Authenticator:
             # Parse token response using oauthlib
             self.client.parse_request_body_response(response.content.decode("utf-8"))
 
-            logger.debug("Successfully exchanged authorization code for access token")
             return dict(token_data)
 
         except Exception as e:
@@ -276,7 +273,6 @@ class OAuth2Authenticator:
             # Parse token response using oauthlib
             self.client.parse_request_body_response(response.content.decode("utf-8"))
 
-            logger.debug("Successfully refreshed access token")
             return dict(token_data)
 
         except Exception as e:
@@ -310,7 +306,6 @@ class OAuth2Authenticator:
                 return None
 
             userinfo = json.loads(response.content.decode("utf-8"))
-            logger.debug(f"Successfully validated token and extracted user info")
             return dict(userinfo)
 
         except Exception as e:
@@ -400,12 +395,8 @@ class OAuth2Authenticator:
         try:
             # Use get_from_creator() method to find existing actor by email
             existing_actor = actor_module.Actor(config=self.config)
-            logger.debug(f"Looking up existing actor for email: {email}")
             if existing_actor.get_from_creator(email):
-                logger.debug(f"Found existing actor {existing_actor.id} for email {email}")
                 return existing_actor
-            else:
-                logger.debug(f"No existing actor found for email {email}, will create new one")
 
             # Create new actor with email as creator using ActorInterface
             try:
@@ -423,7 +414,6 @@ class OAuth2Authenticator:
                     actor_interface.core_actor.store.created_at = str(int(time.time()))
                     actor_interface.core_actor.store.oauth_provider = self.provider.name
 
-                logger.debug(f"Created new actor {actor_interface.id} for {self.provider.name} user {email}")
                 return actor_interface.core_actor  # Return the core actor for backward compatibility
             except Exception as create_error:
                 logger.error(f"Failed to create actor for email {email}: {create_error}")
@@ -619,7 +609,7 @@ def validate_redirect_url(redirect_url: str, allowed_domains: list[str]) -> bool
 
 
 def create_oauth2_trust_relationship(
-    actor: ActorInterface, email: str, trust_type: str, oauth_tokens: Dict[str, Any]
+    actor: ActorInterface, email: str, trust_type: str, oauth_tokens: Dict[str, Any], established_via: Optional[str] = None
 ) -> bool:
     """
     Create trust relationship after successful OAuth2 authentication.
@@ -629,11 +619,16 @@ def create_oauth2_trust_relationship(
         email: Authenticated user's email
         trust_type: Type of trust relationship to create
         oauth_tokens: OAuth2 tokens from authentication
+        established_via: Optional override for how relationship was established
 
     Returns:
         True if trust relationship was created successfully
     """
     try:
+        # All OAuth2 trust relationships are established via OAuth2, regardless of trust type
+        if established_via is None:
+            established_via = ESTABLISHED_VIA_OAUTH2
+        
         # Delegate to TrustManager for unified behavior
         from .interface.trust_manager import TrustManager  # type: ignore
         tm = TrustManager(actor.core_actor)
@@ -641,7 +636,7 @@ def create_oauth2_trust_relationship(
             email=email,
             trust_type=trust_type,
             oauth_tokens=oauth_tokens,
-            established_via=ESTABLISHED_VIA_OAUTH2,
+            established_via=established_via,
         )
     except Exception as e:
         logger.error(f"Error creating OAuth2 trust relationship: {e}")

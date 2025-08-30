@@ -317,20 +317,19 @@ class PermissionEvaluator:
         
         This combines base trust type permissions with individual overrides.
         """
-        # First, we need to determine the trust type for this relationship
-        # This would typically come from the trust relationship in db_trust
-        # For now, we'll check if there's a permission override that specifies it
-        
-        permission_override = self.permission_store.get_permissions(actor_id, peer_id)
+        # First, determine the trust type for this relationship
         trust_type_name = None
         
+        # Check for permission overrides first (higher priority)
+        permission_override = self.permission_store.get_permissions(actor_id, peer_id)
         if permission_override:
             trust_type_name = permission_override.trust_type
         else:
-            # If no override exists, we need to look up the trust relationship
-            # This would require querying the trust database
-            # For now, we'll assume some default behavior
-            logger.warning(f"No permission override found for {actor_id}:{peer_id}, cannot determine trust type")
+            # Look up trust relationship from database
+            trust_type_name = self._lookup_trust_type_from_database(actor_id, peer_id)
+        
+        if not trust_type_name:
+            logger.debug(f"No trust relationship found for {actor_id}:{peer_id}")
             return None
         
         # Get base permissions from trust type
@@ -357,6 +356,37 @@ class PermissionEvaluator:
             effective_permissions = base_permissions
         
         return effective_permissions
+    
+    def _lookup_trust_type_from_database(self, actor_id: str, peer_id: str) -> Optional[str]:
+        """
+        Look up trust type (relationship) from the database.
+        
+        Args:
+            actor_id: The actor ID
+            peer_id: The peer ID
+            
+        Returns:
+            Trust type name (relationship) or None if not found
+        """
+        try:
+            from .db_dynamodb.db_trust import DbTrust
+
+            db_trust = DbTrust()
+            trust_record = db_trust.get(actor_id=actor_id, peerid=peer_id)
+
+            # DbTrust.get() returns a dict; support both dicts and objects defensively
+            if isinstance(trust_record, dict):
+                relationship = trust_record.get("relationship")
+                if relationship:
+                    return str(relationship)
+            elif trust_record is not None and hasattr(trust_record, "relationship"):
+                return str(getattr(trust_record, "relationship"))
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error looking up trust relationship {actor_id}:{peer_id}: {e}")
+            return None
     
     def _evaluate_rules(
         self,
@@ -525,9 +555,17 @@ def check_tool_access(
 _permission_evaluator: Optional[PermissionEvaluator] = None
 
 
-def get_permission_evaluator(config: config_class.Config) -> PermissionEvaluator:
-    """Get the singleton permission evaluator."""
+def initialize_permission_evaluator(config: config_class.Config) -> None:
+    """Initialize the permission evaluator at application startup."""
     global _permission_evaluator
     if _permission_evaluator is None:
+        logger.info("Initializing permission evaluator...")
         _permission_evaluator = PermissionEvaluator(config)
+        logger.info("Permission evaluator initialized")
+
+def get_permission_evaluator(config: config_class.Config) -> PermissionEvaluator:
+    """Get the singleton permission evaluator (must be initialized first)."""
+    global _permission_evaluator
+    if _permission_evaluator is None:
+        raise RuntimeError("Permission evaluator not initialized. Call initialize_permission_evaluator() at application startup.")
     return _permission_evaluator

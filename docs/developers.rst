@@ -1013,6 +1013,69 @@ Methods
     :param peer_id: Peer actor ID
     :return: True if peer is trusted
 
+Trust Relationship Permission Management
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For applications using the unified access control system, you can manage per-relationship permission overrides:
+
+.. code-block:: python
+
+    from actingweb.trust_permissions import get_trust_permission_store, create_permission_override
+
+    # Grant custom permissions to a specific relationship
+    def customize_peer_permissions(actor_id: str, peer_id: str):
+        permission_store = get_trust_permission_store(config)
+        
+        # Create permission override
+        permissions = create_permission_override(
+            actor_id=actor_id,
+            peer_id=peer_id,
+            trust_type="friend",
+            permission_updates={
+                "properties": {
+                    "patterns": ["public/*", "notes/*"],
+                    "operations": ["read", "write"],
+                    "excluded_patterns": ["private/*"]
+                },
+                "methods": {
+                    "allowed": ["get_*", "create_*"],
+                    "denied": ["delete_*", "admin_*"]
+                },
+                "notes": "Enhanced permissions for trusted partner"
+            }
+        )
+        
+        # Store the override
+        permission_store.store_permissions(permissions)
+
+    # Check existing permissions
+    def check_peer_permissions(actor_id: str, peer_id: str):
+        permission_store = get_trust_permission_store(config)
+        permissions = permission_store.get_permissions(actor_id, peer_id)
+        
+        if permissions:
+            print(f"Custom permissions exist for {peer_id}")
+            print(f"Properties: {permissions.properties}")
+            print(f"Methods: {permissions.methods}")
+        else:
+            print(f"Using trust type defaults for {peer_id}")
+
+    # Remove custom permissions
+    def revert_to_defaults(actor_id: str, peer_id: str):
+        permission_store = get_trust_permission_store(config)
+        success = permission_store.delete_permissions(actor_id, peer_id)
+        if success:
+            print(f"Reverted {peer_id} to trust type defaults")
+
+**REST API Access**
+
+The trust API also supports permission management through HTTP endpoints:
+
+* ``GET /{actor_id}/trust/{relationship}/{peer_id}?permissions=true`` - Include permissions in trust response
+* ``PUT /{actor_id}/trust/{relationship}/{peer_id}/permissions`` - Set custom permissions
+* ``GET /{actor_id}/trust/{relationship}/{peer_id}/permissions`` - Get custom permissions
+* ``DELETE /{actor_id}/trust/{relationship}/{peer_id}/permissions`` - Remove custom permissions
+
 SubscriptionManager
 -------------------
 

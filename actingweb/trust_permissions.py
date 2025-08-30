@@ -334,9 +334,17 @@ def create_permission_override(
 _permission_store: Optional[TrustPermissionStore] = None
 
 
-def get_trust_permission_store(config: config_class.Config) -> TrustPermissionStore:
-    """Get the singleton trust permission store."""
+def initialize_trust_permission_store(config: config_class.Config) -> None:
+    """Initialize the trust permission store at application startup.""" 
     global _permission_store
     if _permission_store is None:
+        logger.info("Initializing trust permission store...")
         _permission_store = TrustPermissionStore(config)
+        logger.info("Trust permission store initialized")
+
+def get_trust_permission_store(config: config_class.Config) -> TrustPermissionStore:
+    """Get the singleton trust permission store (must be initialized first)."""
+    global _permission_store
+    if _permission_store is None:
+        raise RuntimeError("Trust permission store not initialized. Call initialize_trust_permission_store() at application startup.")
     return _permission_store

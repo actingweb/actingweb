@@ -342,10 +342,81 @@ Troubleshooting
 Advanced Topics
 ==============
 
-Per-User Permission Overrides
------------------------------
+Per-Relationship Permission Overrides
+------------------------------------
 
-Users can customize permissions for specific relationships through the web UI or API (implementation details in the full technical documentation).
+Sometimes you need to give specific relationships different permissions than their trust type defaults. ActingWeb provides a simple API for this:
+
+**Quick API Usage**
+
+.. code-block:: bash
+
+   # Give a specific friend enhanced access to notes
+   PUT /myapp/actor123/trust/friend/alice/permissions
+   {
+     "properties": {
+       "patterns": ["public/*", "notes/*", "shared/*"],
+       "operations": ["read", "write"]
+     },
+     "methods": {
+       "allowed": ["get_*", "list_*", "create_note", "update_note"]
+     }
+   }
+
+   # Remove custom permissions (reverts to trust type defaults)
+   DELETE /myapp/actor123/trust/friend/alice/permissions
+
+**In Your Application Code**
+
+You can also manage permissions programmatically:
+
+.. code-block:: python
+
+   from actingweb.trust_permissions import get_trust_permission_store, create_permission_override
+
+   # Give enhanced permissions to a trusted user
+   def grant_enhanced_access(actor_id: str, peer_id: str):
+       permission_store = get_trust_permission_store(config)
+       
+       # Create custom permissions for this relationship
+       permissions = create_permission_override(
+           actor_id=actor_id,
+           peer_id=peer_id,
+           trust_type="friend",  # Base trust type
+           permission_updates={
+               "properties": {
+                   "patterns": ["*"],  # Full property access
+                   "excluded_patterns": ["private/*"]  # Except private
+               },
+               "tools": {
+                   "allowed": ["*"],  # All tools
+                   "denied": ["admin_*", "delete_*"]  # Except dangerous ones
+               },
+               "notes": "Enhanced access for trusted user"
+           }
+       )
+       
+       permission_store.store_permissions(permissions)
+
+**Common Use Cases**
+
+* **Enhanced Partner Access**: Give business partners broader access than regular friends
+* **Limited Trial Access**: Restrict new relationships until they prove trustworthy  
+* **Temporary Permissions**: Grant temporary enhanced access for specific projects
+* **Custom Tool Access**: Allow specific users access to specialized tools
+
+The system automatically merges these overrides with trust type defaults, so you only specify what's different.
+
+**Feature Discovery**
+
+Clients can discover permission management support by checking the ``/meta/actingweb/supported`` endpoint:
+
+.. code-block:: bash
+
+   GET /myapp/actor123/meta/actingweb/supported
+   
+   # If response includes "trustpermissions", the enhanced trust API is available
+   www,oauth,callbacks,trust,onewaytrust,subscriptions,actions,resources,methods,sessions,nestedproperties,trustpermissions
 
 Custom Permission Logic
 ----------------------

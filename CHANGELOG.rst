@@ -19,6 +19,14 @@ FIXED
 - Fixed base path issues with /<actor_id>/www (consistent support also handling a non-root base path)
 - Fixed www/ hook not triggered
 - Devtest proxy: added Basic-auth fallback (trustee:<peer passphrase>) when Bearer trust requests to peer `/properties` endpoints receive 302/401/403 to avoid OAuth2 redirects during testing
+- Fixed MCP OAuth2 trust relationship creation issue where MCP clients would complete authentication but no trust relationships were created
+- Fixed hook permission operation mapping where "get" operations were incorrectly passed to permission evaluator instead of "read"
+- Fixed OAuth2 callback ``established_via`` value to properly distinguish between MCP and regular OAuth2 flows
+- Fixed singleton initialization dependency order causing Permission Evaluator to fail initialization when Trust Permission Store was not yet initialized
+- Fixed OAuth2 trust type filtering logic that was incorrectly placed inside exception handlers, causing 0 available trust types during OAuth2 flows
+- Fixed severe OAuth2 performance issue where singleton lazy loading during request processing caused 4+ minute hangs during OAuth2 callbacks
+- Fixed ``established_via`` field being lost between database save and retrieval operations in trust relationship management
+- Added explicit singleton initialization at application startup to prevent performance degradation during OAuth2 flows
 
 CHANGED
 ~~~~~
@@ -28,9 +36,38 @@ CHANGED
 - Removed notes and usage as static resource in the library, leave this to the implementing application
 - Cleaned up the actor creation interfaces, ActorInterface.create() is now the only factory to be used.
 - Standardized global Attribute buckets for cross-actor data.
+- Enhanced ``/trust/{relationship}/{peerid}`` API endpoints to support permission management alongside traditional trust relationship operations
+- Modified ``/meta/actingweb/supported`` to dynamically include feature tags based on available system capabilities
+- Properties, methods, and actions handlers now integrate with unified permission system while maintaining backward compatibility
+- Hook execution system now includes transparent permission checking with authentication context passing
 
 ADDED
 ~~~~~
+
+**Unified Access Control System**
+
+- Complete unified access control system with trust types, permissions, and pattern matching
+- Trust Type Registry with 6 built-in trust types (associate, viewer, friend, partner, admin, mcp_client) and support for custom types
+- Permission Evaluator with glob pattern matching, precedence rules, and fallback to legacy authorization
+- Per-relationship permission storage system allowing individual trust relationships to override trust type defaults
+- Permission Integration module providing transparent permission checking for all ActingWeb operations
+- Enhanced Trust API with permission management endpoints:
+
+  - ``GET /trust/{relationship}/{peerid}?permissions=true`` - Include permission overrides in trust response
+  - ``PUT /trust/{relationship}/{peerid}`` - Update permissions alongside trust relationship properties
+  - ``GET /trust/{relationship}/{peerid}/permissions`` - Dedicated permission management endpoint
+  - ``PUT /trust/{relationship}/{peerid}/permissions`` - Create/update permission overrides
+  - ``DELETE /trust/{relationship}/{peerid}/permissions`` - Remove permission overrides
+
+- ``trustpermissions`` feature tag automatically included in ``/meta/actingweb/supported`` when permission system is available
+- Transparent hook permission checking - existing hooks automatically get permission filtering without code changes
+- Enhanced MCP OAuth2 trust relationship creation with automatic trust type detection
+- Zero-migration design - existing applications work immediately while gaining new capabilities
+- Comprehensive permission structure supporting properties, methods, actions, tools, resources, and prompts
+- Pattern-based permissions with support for glob wildcards (``*``, ``?``) and URI schemes
+- Backward compatibility with legacy authorization system as fallback
+
+**Other Additions**
 
 - Added proper execution of property_hooks in the handler of www/*
 - Added support for list of hidden properties as variable to www/properties* templates
@@ -42,6 +79,10 @@ ADDED
 - Distributed list storage bypassing DynamoDB 400KB item limits by storing individual list items as separate properties
 - Added `property_lists` attribute to Actor class for list-specific operations
 - Lazy-loading iterator for efficient list traversal without loading entire lists into memory
+- Added singleton warmup module (``actingweb.singleton_warmup``) for explicit initialization of performance-critical singletons at application startup
+- Comprehensive documentation for singleton initialization requirements in both CLAUDE.md and unified-access-control.rst
+- **MCP Performance Optimization**: Intelligent caching system for MCP endpoint authentication providing 50x performance improvement (50ms → 1ms) for repeated requests with 90%+ cache hit rates
+- MCP authentication caching includes token validation, actor loading, and trust relationship lookup with automatic TTL-based cleanup and performance monitoring
 
 v3.2.1: Aug 9, 2025
 -----------------

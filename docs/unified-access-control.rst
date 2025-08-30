@@ -158,7 +158,6 @@ The system uses standardized constants for consistent global data storage:
    # Establishment Methods
    ESTABLISHED_VIA_ACTINGWEB = "actingweb"
    ESTABLISHED_VIA_OAUTH2 = "oauth2"
-   ESTABLISHED_VIA_MCP = "mcp"
 
 Pattern Matching
 ===============
@@ -257,6 +256,64 @@ All components are designed to be thread-safe:
 * Stateless permission evaluation
 * DynamoDB consistency guarantees
 
+Permission System Initialization
+------------------------
+
+**Good News**: The ActingWeb permission system is **automatically initialized** when you use Flask or FastAPI integration - no manual setup required!
+
+**Automatic Initialization:**
+
+.. code-block:: python
+
+   # Permission system automatically initialized here - nothing else needed!
+   app = ActingWebApp(...)
+   integration = app.integrate_fastapi(fastapi_app)  # Auto-initializes permissions
+   
+   # Or for Flask:
+   integration = app.integrate_flask(flask_app)      # Auto-initializes permissions
+
+**Manual Initialization (Advanced Use Cases):**
+
+If you need to initialize before integration (e.g., testing, custom frameworks), you can still do it manually:
+
+.. code-block:: python
+
+   # Optional - only needed for advanced use cases
+   try:
+       from actingweb.permission_initialization import initialize_permission_system
+       initialize_permission_system(app.get_config())
+       logger.info("ActingWeb permission system initialized manually")
+   except Exception as e:
+       logger.debug(f"Permission system initialization failed: {e}")
+       # System will fall back gracefully with lazy loading
+
+**What Gets Initialized:**
+
+1. **Trust Type Registry**: Pre-compiles all trust types and permission patterns
+2. **Permission Evaluator**: Pre-loads system patterns and rule engine  
+3. **Trust Permission Store**: Initializes custom permission overrides system
+
+**Debugging Initialization Issues:**
+
+With automatic initialization, performance issues should be rare. If you still experience:
+
+* OAuth2 callbacks hanging for minutes
+* Extremely slow first requests after startup
+* Logs showing "Initializing trust type registry..." during requests
+
+This indicates the automatic initialization failed. Check your logs for initialization errors.
+
+**Expected Initialization Logs:**
+
+.. code-block:: text
+
+   ActingWeb permission system initialized automatically
+   Trust type registry initialized with X types
+   Permission evaluator initialized successfully  
+   Trust permission store initialized
+
+The system includes graceful fallbacks - if automatic initialization fails during integration, individual components will fall back to lazy loading with debug messages.
+
 Backward Compatibility
 =====================
 
@@ -288,6 +345,224 @@ Applications can adopt the new system gradually:
 
 This approach allows existing applications to continue operating while new applications can take full advantage of the unified access control capabilities.
 
+Trust API Enhancements
+======================
+
+The unified access control system extends the standard ActingWeb ``/trust`` API with permission management capabilities, allowing fine-grained control over individual trust relationships.
+
+Enhanced Trust Relationship API
+-------------------------------
+
+**GET /trust/{relationship}/{peerid}**
+
+The standard trust relationship endpoint now supports an optional ``permissions`` query parameter to include permission information in the response:
+
+.. code-block:: bash
+
+   GET /myapp/actor123/trust/friend/peer456?permissions=true
+
+Response includes permission overrides if they exist:
+
+.. code-block:: json
+
+   {
+     "peerid": "peer456",
+     "relationship": "friend",
+     "approved": true,
+     "verified": true,
+     "permissions": {
+       "properties": {"allowed": ["notes/*"], "denied": ["private/*"]},
+       "methods": {"allowed": ["get_*", "list_*"]},
+       "tools": {"allowed": ["search", "create_note"]},
+       "created_by": "admin",
+       "notes": "Custom permissions for this relationship"
+     }
+   }
+
+**PUT /trust/{relationship}/{peerid}**
+
+The PUT endpoint now accepts permission updates alongside traditional trust relationship modifications:
+
+.. code-block:: json
+
+   {
+     "approved": true,
+     "desc": "Updated relationship description",
+     "permissions": {
+       "properties": {
+         "allowed": ["public/*", "notes/*"],
+         "denied": ["private/*", "security/*"]
+       },
+       "methods": {
+         "allowed": ["get_*", "list_*", "search_*"],
+         "denied": ["delete_*", "admin_*"]
+       },
+       "tools": {
+         "allowed": ["search", "fetch", "create_note"]
+       },
+       "notes": "Customized permissions for enhanced access"
+     }
+   }
+
+Permission Management API
+------------------------
+
+The system introduces a new dedicated API for managing per-relationship permission overrides:
+
+**GET /trust/{relationship}/{peerid}/permissions**
+
+Retrieve detailed permission overrides for a specific trust relationship:
+
+.. code-block:: bash
+
+   GET /myapp/actor123/trust/friend/peer456/permissions
+
+Response:
+
+.. code-block:: json
+
+   {
+     "actor_id": "actor123",
+     "peer_id": "peer456", 
+     "trust_type": "friend",
+     "properties": {
+       "patterns": ["public/*", "notes/*"],
+       "operations": ["read", "write"],
+       "excluded_patterns": ["private/*"]
+     },
+     "methods": {
+       "allowed": ["get_*", "list_*", "create_*"],
+       "denied": ["delete_*", "admin_*"]
+     },
+     "tools": {
+       "allowed": ["search", "fetch", "create_note"],
+       "denied": ["admin_*", "system_*"]
+     },
+     "resources": {
+       "patterns": ["notes://*", "public://*"],
+       "operations": ["read"]
+     },
+     "created_by": "admin",
+     "updated_at": "2024-01-15T10:30:00Z",
+     "notes": "Custom permissions for enhanced access"
+   }
+
+**PUT /trust/{relationship}/{peerid}/permissions**
+
+Create or update permission overrides for a trust relationship:
+
+.. code-block:: json
+
+   {
+     "properties": {
+       "patterns": ["public/*", "shared/*", "notes/*"],
+       "operations": ["read", "write"],
+       "excluded_patterns": ["private/*", "security/*"]
+     },
+     "methods": {
+       "allowed": ["get_*", "list_*", "create_*", "update_*"],
+       "denied": ["delete_*", "admin_*", "system_*"]
+     },
+     "tools": {
+       "allowed": ["search", "fetch", "create_note", "update_note"],
+       "denied": ["delete_*", "admin_*"]
+     },
+     "notes": "Enhanced permissions for trusted partner"
+   }
+
+**DELETE /trust/{relationship}/{peerid}/permissions**
+
+Remove permission overrides, reverting to trust type defaults:
+
+.. code-block:: bash
+
+   DELETE /myapp/actor123/trust/friend/peer456/permissions
+
+Permission Structure
+-------------------
+
+Permission overrides follow this structure:
+
+**Properties**
+  Controls access to actor property storage:
+
+  .. code-block:: json
+
+     {
+       "patterns": ["public/*", "notes/*"],
+       "operations": ["read", "write", "delete"],
+       "excluded_patterns": ["private/*", "security/*"]
+     }
+
+**Methods**
+  Controls ActingWeb method calls:
+
+  .. code-block:: json
+
+     {
+       "allowed": ["get_*", "list_*", "create_*"],
+       "denied": ["delete_*", "admin_*", "system_*"]
+     }
+
+**Actions**
+  Controls ActingWeb action execution:
+
+  .. code-block:: json
+
+     {
+       "allowed": ["search", "fetch", "export"],
+       "denied": ["delete_*", "admin_*"]
+     }
+
+**Tools** (MCP)
+  Controls MCP tool access:
+
+  .. code-block:: json
+
+     {
+       "allowed": ["search", "fetch", "create_note"],
+       "denied": ["admin_*", "system_*", "delete_*"]
+     }
+
+**Resources** (MCP)
+  Controls MCP resource access:
+
+  .. code-block:: json
+
+     {
+       "patterns": ["notes://*", "public://*"],
+       "operations": ["read", "subscribe"],
+       "excluded_patterns": ["private://*"]
+     }
+
+**Prompts** (MCP)
+  Controls MCP prompt access:
+
+  .. code-block:: json
+
+     {
+       "allowed": ["analyze_*", "create_*", "summarize_*"]
+     }
+
+Feature Discovery
+=================
+
+ActingWeb applications supporting the unified access control system automatically include the ``trustpermissions`` feature tag in their ``/meta/actingweb/supported`` endpoint response. This allows clients to discover permission management capabilities:
+
+.. code-block:: bash
+
+   GET /myapp/actor123/meta/actingweb/supported
+   
+   # Response includes:
+   www,oauth,callbacks,trust,onewaytrust,subscriptions,actions,resources,methods,sessions,nestedproperties,trustpermissions
+
+The presence of ``trustpermissions`` indicates support for:
+
+* Enhanced trust relationship endpoints with permission query parameters
+* Dedicated permission management endpoints (``/permissions`` sub-endpoint)
+* Per-relationship permission overrides
+* Standardized permission structures
+
 Implementation Guide
 ===================
 
@@ -298,6 +573,8 @@ For practical implementation details and simple usage patterns, see:
 The Unified Access Control system provides the foundation for:
 
 * **OAuth2 Integration**: Trust type selection during OAuth2 flows
-* **MCP Client Unification**: Seamless AI assistant integration
+* **MCP Client Unification**: Seamless AI assistant integration  
+* **Permission Management**: Per-relationship permission customization through REST API
+* **Feature Discovery**: Automatic ``trustpermissions`` tag in ``/meta/actingweb/supported``
 * **Template Customization**: UI customization for 3rd party applications
 * **Advanced Analytics**: Trust relationship and access pattern analysis

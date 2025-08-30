@@ -223,12 +223,21 @@ class TrustTypeRegistry:
 _registry: Optional[TrustTypeRegistry] = None
 
 
-def get_registry(config: config_class.Config) -> TrustTypeRegistry:
-    """Get the singleton trust type registry."""
+def initialize_registry(config: config_class.Config) -> None:
+    """Initialize the trust type registry at application startup."""
     global _registry
     if _registry is None:
+        logger.info("Initializing trust type registry...")
         _registry = TrustTypeRegistry(config)
-        # Register default trust types
+        _register_default_types(_registry)
+        logger.info(f"Trust type registry initialized with {len(_registry.list_types())} types")
+
+def get_registry(config: config_class.Config) -> TrustTypeRegistry:
+    """Get the singleton trust type registry, initializing lazily if needed."""
+    global _registry
+    if _registry is None:
+        # Lazy initialization to keep backward compatibility with tests and apps
+        _registry = TrustTypeRegistry(config)
         _register_default_types(_registry)
     return _registry
 
@@ -377,7 +386,9 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
                 "denied": ["delete_*", "admin_*", "system_*", "oauth_*", "auth_*"]
             },
             "tools": {
-                "allowed": ["search", "fetch", "create_note", "get_*", "list_*"],  # Common MCP tools
+                # Allow common MCP tools including a generic 'list' tool name
+                # Some MCP clients (e.g., mcp_power) use 'list' without suffix
+                "allowed": ["search", "fetch", "create_note", "list", "get_*", "list_*"],  # Common MCP tools
                 "denied": ["admin_*", "system_*", "delete_*", "oauth_*", "auth_*"]
             },
             "resources": {

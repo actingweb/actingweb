@@ -722,7 +722,14 @@ class Actor:
         else:
             rels = self.get_trust_relationships(peerid=peerid)
         for rel in rels:
-            if delete_peer:
+            # For OAuth2-established trusts, there is no remote actor endpoint to call.
+            # Skip remote deletion and delete locally only.
+            is_oauth2_trust = (
+                (rel.get("established_via") == "oauth2")
+                or (rel.get("type") == "oauth2")
+                or (str(rel.get("peerid", "")).startswith("oauth2:"))
+            )
+            if delete_peer and not is_oauth2_trust:
                 url = rel["baseuri"] + "/trust/" + rel["relationship"] + "/" + self.id
                 headers = {}
                 if rel["secret"]:
@@ -742,6 +749,12 @@ class Actor:
                     continue
                 else:
                     success_once = True
+            elif delete_peer and is_oauth2_trust:
+                # Treat as successful remote delete for OAuth2 trusts and proceed with local deletion
+                logging.debug(
+                    "Skipping remote delete for OAuth2-established trust; deleting locally only"
+                )
+                success_once = True
             if not self.subs_list:
                 self.subs_list = subscription.Subscriptions(actor_id=self.id, config=self.config).fetch()
             # Delete this peer's subscriptions

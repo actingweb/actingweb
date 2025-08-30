@@ -185,10 +185,23 @@ class Config:
         #########
         # This app follows the actingweb specification specified
         self.aw_version = "1.0"
-        self.aw_supported = (
-            "www,oauth,callbacks,trust,onewaytrust,subscriptions,"
-            "actions,resources,methods,sessions,nestedproperties"
-        )  # This app supports these options
+        
+        # Base supported options
+        base_supported = [
+            "www", "oauth", "callbacks", "trust", "onewaytrust", 
+            "subscriptions", "actions", "resources", "methods", 
+            "sessions", "nestedproperties"
+        ]
+        
+        # Add optional features if available
+        if self._check_trust_permissions_available():
+            base_supported.append("trustpermissions")
+        
+        if kwargs.get('mcp', False):
+            base_supported.append("mcp")
+            
+        self.aw_supported = ",".join(base_supported)
+        
         # These are the supported formats
         self.aw_formats = "json"
         #########
@@ -207,6 +220,19 @@ class Config:
         self.root = self.proto + self.fqdn + "/"
         # Authentication realm used in Basic auth
         self.auth_realm = self.fqdn
+
+    def _check_trust_permissions_available(self) -> bool:
+        """Check if trust permission management system is available."""
+        try:
+            # Try to import the trust permissions modules
+            from . import trust_permissions
+            from . import permission_evaluator
+            from . import trust_type_registry
+            # If all imports succeed, the system is available
+            return True
+        except ImportError:
+            # If imports fail, the system is not available
+            return False
 
     @staticmethod
     def new_uuid(seed: str) -> str:

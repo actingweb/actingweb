@@ -433,71 +433,104 @@ class OAuth2EndpointsHandler(BaseHandler):
             # Initialize oauth2_config to avoid unbound variable error
             oauth2_config = getattr(self.config, '_oauth2_trust_types', None)
             
+            if oauth2_config is None:
+                logger.info("No OAuth2 trust type configuration found - using default behavior")
+                # Use default behavior - show all trust types  
+                oauth2_config = {"allowed": None, "default": "mcp_client"}
+            
+            # Get trust types from registry with graceful fallback
+            trust_types = []
             try:
                 from actingweb.trust_type_registry import get_registry
                 registry = get_registry(self.config)
                 trust_types = registry.list_types()
-                
-                # Get developer-configured OAuth2 trust type restrictions (already initialized above)
-                allowed_by_developer = oauth2_config.get("allowed") if oauth2_config else None
-                
-                # Filter trust types based on multiple criteria
-                for trust_type in trust_types:
-                    should_include = True
-                    
-                    # Option 1: Filter by developer configuration (highest priority)
-                    if allowed_by_developer is not None:
-                        if trust_type.name not in allowed_by_developer:
-                            should_include = False
-                    
-                    # Option 2: Filter by OAuth2 scope if specified
-                    if requested_scope and trust_type.oauth_scope and should_include:
-                        # Check if requested scope matches or includes this trust type's scope
-                        requested_scopes = set(requested_scope.split())
-                        trust_type_scopes = set(trust_type.oauth_scope.split())
-                        if not (trust_type_scopes & requested_scopes):  # No intersection
-                            should_include = False
-                    
-                    # Option 3: Check client-specific trust type restrictions
-                    # Developers can register clients with allowed_trust_types
-                    if client_id and should_include:
-                        try:
-                            client_data = self.oauth2_server.client_registry.validate_client(client_id)
-                            if client_data and "allowed_trust_types" in client_data:
-                                allowed_types = client_data["allowed_trust_types"]
-                                if isinstance(allowed_types, list) and trust_type.name not in allowed_types:
-                                    should_include = False
-                        except Exception:
-                            pass  # Continue if client lookup fails
-                    
-                    if should_include:
-                        available_trust_types.append({
-                            "name": trust_type.name,
-                            "display_name": trust_type.display_name,
-                            "description": trust_type.description,
-                            "oauth_scope": trust_type.oauth_scope or ""
-                        })
-                        
-            except Exception as e:
-                logger.warning(f"Failed to load trust types for authorization form: {e}")
-                # Provide fallback trust types
-                available_trust_types = [
-                    {
-                        "name": "mcp_client",
-                        "display_name": "AI Assistant (MCP Client)",
-                        "description": "AI assistants with controlled tool access",
-                        "oauth_scope": "actingweb.mcp_client"
-                    },
-                    {
-                        "name": "web_user",
-                        "display_name": "Web User",
-                        "description": "Full access for web applications",
-                        "oauth_scope": "actingweb.web_user"
-                    }
+            except RuntimeError:
+                logger.debug("Trust type registry not initialized - using default trust types")
+                # Fallback to default trust types for OAuth2
+                trust_types = [
+                    type('TrustType', (), {
+                        'name': 'mcp_client',
+                        'display_name': 'AI Assistant (MCP Client)', 
+                        'description': 'AI assistants with controlled tool access',
+                        'oauth_scope': 'actingweb.mcp_client'
+                    })(),
+                    type('TrustType', (), {
+                        'name': 'web_user',
+                        'display_name': 'Web User',
+                        'description': 'Standard web application user',
+                        'oauth_scope': 'actingweb.web_user'
+                    })()
                 ]
+            except Exception as e:
+                logger.warning(f"Error accessing trust type registry: {e}")
+                trust_types = []
+                
+            # Get developer-configured OAuth2 trust type restrictions (already initialized above)
+            allowed_by_developer = oauth2_config.get("allowed") if oauth2_config else None
+                
+            logger.debug(f"Trust type filtering: oauth2_config={oauth2_config}, allowed_by_developer={allowed_by_developer}")
+            logger.debug(f"Available trust types from registry: {[tt.name for tt in trust_types]}")
+            
+            # Filter trust types based on multiple criteria
+            for trust_type in trust_types:
+                should_include = True
+                
+                # Option 1: Filter by developer configuration (highest priority)
+                if allowed_by_developer is not None:
+                    if trust_type.name not in allowed_by_developer:
+                        should_include = False
+                
+                # Option 2: Filter by OAuth2 scope if specified
+                # Skip scope filtering if no scope is requested (show all allowed types)
+                if requested_scope and trust_type.oauth_scope and should_include:
+                    # Check if requested scope matches or includes this trust type's scope
+                    requested_scopes = set(requested_scope.split())
+                    trust_type_scopes = set(trust_type.oauth_scope.split())
+                    
+                    # More flexible scope matching for compatibility
+                    scope_matches = False
+                    if trust_type_scopes & requested_scopes:  # Direct intersection
+                        scope_matches = True
+                    else:
+                        # Check for partial matches (e.g., "mcp" matches "actingweb.mcp_client")
+                        for req_scope in requested_scopes:
+                            for tt_scope in trust_type_scopes:
+                                if req_scope in tt_scope or tt_scope in req_scope:
+                                    scope_matches = True
+                                    break
+                            if scope_matches:
+                                break
+                    
+                    if not scope_matches:
+                        should_include = False
+                
+                # Option 3: Check client-specific trust type restrictions
+                # Developers can register clients with allowed_trust_types
+                if client_id and should_include:
+                    try:
+                        client_data = self.oauth2_server.client_registry.validate_client(client_id)
+                        if client_data and "allowed_trust_types" in client_data:
+                            allowed_types = client_data["allowed_trust_types"]
+                            if isinstance(allowed_types, list) and trust_type.name not in allowed_types:
+                                should_include = False
+                    except Exception:
+                        pass  # Continue if client lookup fails
+                
+                if should_include:
+                    available_trust_types.append({
+                        "name": trust_type.name,
+                        "display_name": trust_type.display_name,
+                        "description": trust_type.description,
+                        "oauth_scope": trust_type.oauth_scope or ""
+                    })
+                    logger.debug(f"Trust type {trust_type.name} included")
+                else:
+                    logger.debug(f"Trust type {trust_type.name} excluded")
             
             # If no trust types available, provide at least one fallback
+            logger.debug(f"Final available_trust_types count: {len(available_trust_types)}")
             if not available_trust_types:
+                logger.warning("No trust types available after filtering - using fallback")
                 available_trust_types = [{
                     "name": "mcp_client",
                     "display_name": "AI Assistant (MCP Client)", 

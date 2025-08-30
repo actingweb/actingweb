@@ -48,13 +48,13 @@ class Trust(Model):
     peer_approved = BooleanAttribute()
     verified = BooleanAttribute()
     verification_token = UnicodeAttribute()
-    
+
     # New attributes for unified trust system
     peer_identifier = UnicodeAttribute(null=True)  # Email, username, UUID - service-specific identifier
-    established_via = UnicodeAttribute(null=True)  # 'actingweb', 'oauth2', 'mcp'
+    established_via = UnicodeAttribute(null=True)  # 'actingweb', 'oauth2'
     created_at = UTCDateTimeAttribute(null=True)  # When trust was created
     last_accessed = UTCDateTimeAttribute(null=True)  # Last time trust was used
-    
+
     # Indexes
     secret_index = SecretIndex()
 
@@ -76,14 +76,10 @@ class DbTrust:
             return None
         try:
             if not self.handle and peerid:
-                logging.debug(
-                    "    Retrieving trust from db based on peerid(" + peerid + ")"
-                )
+                logging.debug("    Retrieving trust from db based on peerid(" + peerid + ")")
                 self.handle = Trust.get(actor_id, peerid, consistent_read=True)
             elif not self.handle and token:
-                logging.debug(
-                    "    Retrieving trust from db based on token(" + token + ")"
-                )
+                logging.debug("    Retrieving trust from db based on token(" + token + ")")
                 res = Trust.secret_index.query(token)
                 for h in res:
                     if actor_id == h.id:
@@ -107,17 +103,17 @@ class DbTrust:
             "verified": t.verified,
             "verification_token": t.verification_token,
         }
-        
+
         # Add new unified trust attributes if they exist
-        if hasattr(t, 'peer_identifier') and t.peer_identifier:
+        if hasattr(t, "peer_identifier") and t.peer_identifier:
             result["peer_identifier"] = t.peer_identifier
-        if hasattr(t, 'established_via') and t.established_via:
+        if hasattr(t, "established_via") and t.established_via:
             result["established_via"] = t.established_via
-        if hasattr(t, 'created_at') and t.created_at:
+        if hasattr(t, "created_at") and t.created_at:
             result["created_at"] = t.created_at.isoformat() if t.created_at else None
-        if hasattr(t, 'last_accessed') and t.last_accessed:
+        if hasattr(t, "last_accessed") and t.last_accessed:
             result["last_accessed"] = t.last_accessed.isoformat() if t.last_accessed else None
-            
+
         return result
 
     def modify(
@@ -155,7 +151,7 @@ class DbTrust:
             self.handle.verification_token = verification_token
         if peer_approved is not None:
             self.handle.peer_approved = peer_approved
-        
+
         # Handle new unified trust attributes
         if peer_identifier is not None:
             self.handle.peer_identifier = peer_identifier
@@ -164,10 +160,11 @@ class DbTrust:
         if last_accessed is not None:
             if isinstance(last_accessed, str):
                 from datetime import datetime
-                self.handle.last_accessed = datetime.fromisoformat(last_accessed.replace('Z', '+00:00'))
+
+                self.handle.last_accessed = datetime.fromisoformat(last_accessed.replace("Z", "+00:00"))
             else:
                 self.handle.last_accessed = last_accessed
-        
+
         self.handle.save()
         return True
 
@@ -192,7 +189,7 @@ class DbTrust:
         if not actor_id or not peerid:
             return False
         from datetime import datetime
-        
+
         # Create trust with existing attributes
         trust_kwargs = {
             "id": actor_id,
@@ -207,16 +204,16 @@ class DbTrust:
             "verification_token": verification_token,
             "desc": desc,
         }
-        
+
         # Add new unified trust attributes if provided
         if peer_identifier is not None:
             trust_kwargs["peer_identifier"] = peer_identifier
         if established_via is not None:
             trust_kwargs["established_via"] = established_via
-        
+
         # Always set created_at for new trusts
         trust_kwargs["created_at"] = datetime.utcnow()
-        
+
         self.handle = Trust(**trust_kwargs)
         self.handle.save()
         return True
@@ -265,21 +262,31 @@ class DbTrustList:
         self.trusts = []
         if self.handle:
             for t in self.handle:
-                self.trusts.append(
-                    {
-                        "id": t.id,
-                        "peerid": t.peerid,
-                        "baseuri": t.baseuri,
-                        "type": t.type,
-                        "relationship": t.relationship,
-                        "secret": t.secret,
-                        "desc": t.desc,
-                        "approved": t.approved,
-                        "peer_approved": t.peer_approved,
-                        "verified": t.verified,
-                        "verification_token": t.verification_token,
-                    }
-                )
+                result = {
+                    "id": t.id,
+                    "peerid": t.peerid,
+                    "baseuri": t.baseuri,
+                    "type": t.type,
+                    "relationship": t.relationship,
+                    "secret": t.secret,
+                    "desc": t.desc,
+                    "approved": t.approved,
+                    "peer_approved": t.peer_approved,
+                    "verified": t.verified,
+                    "verification_token": t.verification_token,
+                }
+
+                # Add new unified trust attributes if they exist (same logic as get() method)
+                if hasattr(t, "peer_identifier") and t.peer_identifier:
+                    result["peer_identifier"] = t.peer_identifier
+                if hasattr(t, "established_via"):
+                    result["established_via"] = t.established_via
+                if hasattr(t, "created_at") and t.created_at:
+                    result["created_at"] = t.created_at.isoformat() if t.created_at else None
+                if hasattr(t, "last_accessed") and t.last_accessed:
+                    result["last_accessed"] = t.last_accessed.isoformat() if t.last_accessed else None
+
+                self.trusts.append(result)
             return self.trusts
         else:
             return []

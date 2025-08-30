@@ -9,20 +9,20 @@ protocol handling.
 import logging
 import asyncio
 import re
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mcp.server import Server
-    from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage, TextResourceContents
+    from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage
     from pydantic import AnyUrl
 
     MCP_AVAILABLE = True
 else:
     try:
         from mcp.server import Server
-        from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage, TextResourceContents
+        from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage
         from pydantic import AnyUrl
 
         MCP_AVAILABLE = True
@@ -38,7 +38,6 @@ else:
         TextContent = Any
         GetPromptResult = Any
         PromptMessage = Any
-        TextResourceContents = Any
         AnyUrl = Any
 
 from ..interface.hooks import HookRegistry
@@ -92,11 +91,23 @@ class ActingWebMCPServer:
             tools = []
 
             if self.hooks:
-                # Get permission evaluator and trust context
-                config = _get_config_from_actor(self.actor)
-                evaluator = get_permission_evaluator(config) if config else None
+                # Get trust context and peer_id first
                 trust_context = getattr(self.actor, '_mcp_trust_context', None)
                 peer_id = trust_context.get('peer_id') if trust_context else None
+                
+                # Get permission evaluator and trust context
+                config = _get_config_from_actor(self.actor)
+                # Get permission evaluator (must be initialized at startup)
+                evaluator = None
+                if peer_id and config:
+                    try:
+                        evaluator = get_permission_evaluator(config)
+                    except RuntimeError:
+                        logger.debug("Permission evaluator not initialized - skipping permission checks")
+                        evaluator = None
+                    except Exception as e:
+                        logger.warning(f"Error accessing permission evaluator: {e}")
+                        evaluator = None
                 
                 for action_name, hook_list in self.hooks._action_hooks.items():
                     for hook in hook_list:
@@ -317,11 +328,23 @@ class ActingWebMCPServer:
             prompts = []
 
             if self.hooks:
-                # Get permission evaluator and trust context
-                config = _get_config_from_actor(self.actor)
-                evaluator = get_permission_evaluator(config) if config else None
+                # Get trust context and peer_id first
                 trust_context = getattr(self.actor, '_mcp_trust_context', None)
                 peer_id = trust_context.get('peer_id') if trust_context else None
+                
+                # Get permission evaluator and trust context
+                config = _get_config_from_actor(self.actor)
+                # Get permission evaluator (must be initialized at startup)
+                evaluator = None
+                if peer_id and config:
+                    try:
+                        evaluator = get_permission_evaluator(config)
+                    except RuntimeError:
+                        logger.debug("Permission evaluator not initialized - skipping permission checks")
+                        evaluator = None
+                    except Exception as e:
+                        logger.warning(f"Error accessing permission evaluator: {e}")
+                        evaluator = None
                 
                 for method_name, hook_list in self.hooks._method_hooks.items():
                     for hook in hook_list:

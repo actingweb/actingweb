@@ -63,15 +63,15 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
         email="user@example.com",
         trust_type="mcp_client",
         oauth_tokens=oauth_tokens,
-        established_via="mcp",
+        established_via="oauth2",
     )
     assert ok is True
 
-    peer_id = "mcp:user_at_example_dot_com"
+    # Unified behavior: OAuth2-established trusts are prefixed with 'oauth2:'
+    peer_id = "oauth2:user_at_example_dot_com"
     rel = tm.get_relationship(peer_id)
     assert rel is not None
     assert rel.relationship == "mcp_client"
     # token stored
     token_key = f"oauth_tokens:{peer_id}"
     assert actor.store[token_key]["access_token"] == "at"
-

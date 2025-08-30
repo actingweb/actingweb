@@ -587,6 +587,17 @@ class FastAPIIntegration:
                 request, actor_id, "trust", relationship=relationship, peerid=peerid
             )
 
+        # Trust permission management endpoints
+        @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        async def app_trust_permissions(
+            actor_id: str, request: Request, relationship: str, peerid: str
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
+            )
+
         # Actor subscriptions
         @self.fastapi_app.get("/{actor_id}/subscriptions")
         @self.fastapi_app.post("/{actor_id}/subscriptions")
@@ -699,6 +710,14 @@ class FastAPIIntegration:
                 headers["Content-Type"] = v
             else:
                 headers[k] = v
+
+        # If no Authorization header but we have an oauth_token cookie (web UI session),
+        # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
+        if "Authorization" not in headers and "oauth_token" in cookies:
+            headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
+            self.logger.debug(
+                "FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request"
+            )
 
         # Get query parameters and form data (similar to Flask's request.values)
         params = {}
@@ -1250,11 +1269,34 @@ class FastAPIIntegration:
                 args.append(kwargs.get("path", ""))
             elif endpoint == "trust":
                 # Only pass path parameters if they exist, let handler read query params from request
-                if kwargs.get("relationship"):
-                    args.append(kwargs["relationship"])
-                    if kwargs.get("peerid"):
-                        args.append(kwargs["peerid"])
-                self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
+                relationship = kwargs.get("relationship")
+                peerid = kwargs.get("peerid")
+
+                # Support UI forms that send GET /trust/<peerid>?_method=DELETE|PUT
+                # by interpreting the single path segment as a peer ID.
+                # We detect this when:
+                #  - there is only one path param provided
+                #  - a method override is present requesting DELETE or PUT
+                #  - no explicit peerid path param is provided
+                method_override = (webobj.request.get("_method") or "").upper()
+                if (
+                    relationship
+                    and not peerid
+                    and method_override in ("DELETE", "PUT")
+                ):
+                    # Heuristic: treat the "relationship" path part as a peer ID.
+                    # Pass empty relationship (type) and the detected peer ID.
+                    args.append("")
+                    args.append(relationship)
+                    self.logger.debug(
+                        f"Trust handler args adjusted for method override: {args} (peerid assumed from single segment)"
+                    )
+                else:
+                    if relationship:
+                        args.append(relationship)
+                        if peerid:
+                            args.append(peerid)
+                    self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
             elif endpoint == "subscriptions":
                 if kwargs.get("peerid"):
                     args.append(kwargs["peerid"])
@@ -1359,10 +1401,21 @@ class FastAPIIntegration:
 
             self.logger.debug(f"Trust handler selection - path_parts: {path_parts}, len: {len(path_parts)}")
 
-            if len(path_parts) == 0:
+            # Check for permissions endpoint
+            if kwargs.get("permissions"):
+                self.logger.debug("Selecting TrustPermissionHandler for permission management")
+                return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
+            elif len(path_parts) == 0:
                 self.logger.debug("Selecting TrustHandler for query parameter request")
                 return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
+                # Special case: UI may call /trust/<peerid>?_method=DELETE|PUT
+                method_override = (webobj.request.get("_method") or "").upper()
+                if method_override in ("DELETE", "PUT"):
+                    self.logger.debug(
+                        "Selecting TrustPeerHandler for single path parameter with method override"
+                    )
+                    return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
                 self.logger.debug("Selecting TrustRelationshipHandler for single path parameter")
                 return trust.TrustRelationshipHandler(webobj, config, hooks=self.aw_app.hooks)
             else:

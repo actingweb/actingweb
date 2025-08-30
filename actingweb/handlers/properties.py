@@ -1,9 +1,10 @@
 import copy
 import json
 import logging
+from typing import Any, Dict
 
-from actingweb import auth
 from actingweb.handlers import base_handler
+from ..permission_evaluator import get_permission_evaluator, PermissionResult
 
 
 def merge_dict(d1, d2):
@@ -45,6 +46,76 @@ def delete_dict(d1, path):
 
 
 class PropertiesHandler(base_handler.BaseHandler):
+    
+    def _check_property_permission(self, actor_id: str, auth_obj, property_path: str, operation: str) -> bool:
+        """
+        Check property permission using the unified access control system.
+        
+        This replaces the legacy auth.check_authorisation() with the new permission evaluator
+        that supports granular trust type-based permissions.
+        
+        Args:
+            actor_id: The actor ID
+            auth_obj: Auth object from init_actingweb
+            property_path: Property path (e.g., "email", "notes/work")
+            operation: Operation type ("read", "write", "delete")
+            
+        Returns:
+            True if access is allowed, False otherwise
+        """
+        # Get peer ID from auth object (if authenticated via trust relationship)
+        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
+        
+        if not peer_id:
+            # No peer relationship - fall back to legacy authorization for basic/oauth auth
+            legacy_subpath = property_path.split('/')[0] if property_path else ""
+            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+            return auth_obj.check_authorisation(
+                path="properties", 
+                subpath=legacy_subpath, 
+                method=method_map.get(operation, "GET")
+            )
+        
+        # Use permission evaluator for peer-based access
+        try:
+            evaluator = get_permission_evaluator(self.config)
+            result = evaluator.evaluate_property_access(actor_id, peer_id, property_path, operation)
+            
+            if result == PermissionResult.ALLOWED:
+                return True
+            elif result == PermissionResult.DENIED:
+                logging.info(f"Property access denied: {actor_id} -> {peer_id} -> {property_path} ({operation})")
+                return False
+            else:  # NOT_FOUND
+                # No specific permission rule - fall back to legacy for backward compatibility
+                legacy_subpath = property_path.split('/')[0] if property_path else ""
+                method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+                return auth_obj.check_authorisation(
+                    path="properties", 
+                    subpath=legacy_subpath, 
+                    method=method_map.get(operation, "GET")
+                )
+                
+        except Exception as e:
+            logging.error(f"Error in permission evaluation for {actor_id}:{peer_id}:{property_path}: {e}")
+            # Fall back to legacy authorization on errors
+            legacy_subpath = property_path.split('/')[0] if property_path else ""
+            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+            return auth_obj.check_authorisation(
+                path="properties", 
+                subpath=legacy_subpath, 
+                method=method_map.get(operation, "GET")
+            )
+    
+    def _create_auth_context(self, auth_obj, operation: str = "read") -> Dict[str, Any]:
+        """Create auth context for hook execution with peer information."""
+        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
+        return {
+            'peer_id': peer_id,
+            'config': self.config,
+            'operation': operation
+        }
+    
     def get(self, actor_id, name):
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
@@ -52,13 +123,7 @@ class PropertiesHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "DELETE":
             self.delete(actor_id, name)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="properties",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
         if not myself or not check or check.response["code"] != 200:
             return
         if not name:
@@ -66,13 +131,15 @@ class PropertiesHandler(base_handler.BaseHandler):
         else:
             path = name.split("/")
             name = path[0]
-        if not check.check_authorisation(path="properties", subpath=name, method="GET"):
+        # Use unified access control system for permission checking
+        property_path = "/".join(path) if path else ""
+        if not self._check_property_permission(actor_id, check, property_path, "read"):
             if self.response:
                 self.response.set_status(403)
             return
         # if name is not set, this request URI was the properties root
         if not name:
-            self.listall(myself)
+            self.listall(myself, check)
             return
             
         # Check if this is a list property first
@@ -94,8 +161,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                             actor_interface = self._get_actor_interface(myself)
                             if actor_interface:
                                 hook_path = [name, str(index)]
+                                auth_context = self._create_auth_context(check, "read")
                                 transformed = self.hooks.execute_property_hooks(
-                                    name, "get", actor_interface, item, hook_path
+                                    name, "get", actor_interface, item, hook_path, auth_context
                                 )
                                 if transformed is not None:
                                     item = transformed
@@ -118,8 +186,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
                             hook_path = [name]
+                            auth_context = self._create_auth_context(check, "read")
                             transformed = self.hooks.execute_property_hooks(
-                                name, "get", actor_interface, all_items, hook_path
+                                name, "get", actor_interface, all_items, hook_path, auth_context
                             )
                             if transformed is not None:
                                 all_items = transformed
@@ -162,8 +231,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                     if actor_interface:
                         # Use the original name for the hook, not the modified path
                         hook_path = name.split("/") if name else []
+                        auth_context = self._create_auth_context(check, "read")
                         transformed = self.hooks.execute_property_hooks(
-                            name or "*", "get", actor_interface, out, hook_path
+                            name or "*", "get", actor_interface, out, hook_path, auth_context
                         )
                         if transformed is not None:
                             out = transformed
@@ -184,7 +254,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.headers["Content-Type"] = "application/json"
             self.response.write(out)
 
-    def listall(self, myself):
+    def listall(self, myself, check):
         properties = myself.get_properties()
         if not properties or len(properties) == 0:
             self.response.set_status(404, "No properties")
@@ -200,9 +270,10 @@ class PropertiesHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
+                auth_context = self._create_auth_context(check, "read")
                 result = {}
                 for key, value in pair.items():
-                    transformed = self.hooks.execute_property_hooks(key, "get", actor_interface, value, [])
+                    transformed = self.hooks.execute_property_hooks(key, "get", actor_interface, value, [], auth_context)
                     if transformed is not None:
                         result[key] = transformed
                 pair = result
@@ -215,13 +286,7 @@ class PropertiesHandler(base_handler.BaseHandler):
         return
 
     def put(self, actor_id, name):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="properties",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
         if not myself or (check and check.response["code"] != 200):
             return
         resource = None
@@ -232,7 +297,9 @@ class PropertiesHandler(base_handler.BaseHandler):
             name = path[0]
             if len(path) >= 2 and len(path[1]) > 0:
                 resource = path[1]
-        if not check or not check.check_authorisation(path="properties", subpath=name, method="PUT"):
+        # Use unified access control system for permission checking
+        property_path = "/".join(path) if path else ""
+        if not check or not self._check_property_permission(actor_id, check, property_path, "write"):
             if self.response:
                 self.response.set_status(403)
             return
@@ -259,8 +326,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface and path:
                     property_name = path[0] if path else "*"
+                    auth_context = self._create_auth_context(check, "write")
                     transformed = self.hooks.execute_property_hooks(
-                        property_name, "put", actor_interface, new_body, path
+                        property_name, "put", actor_interface, new_body, path, auth_context
                     )
                     if transformed is not None:
                         new = transformed
@@ -307,7 +375,8 @@ class PropertiesHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface and path:
                 property_name = path[0] if path else "*"
-                transformed = self.hooks.execute_property_hooks(property_name, "put", actor_interface, res, path)
+                auth_context = self._create_auth_context(check, "write")
+                transformed = self.hooks.execute_property_hooks(property_name, "put", actor_interface, res, path, auth_context)
                 if transformed is not None:
                     final_res = transformed
                 else:
@@ -322,13 +391,7 @@ class PropertiesHandler(base_handler.BaseHandler):
         self.response.set_status(204)
 
     def post(self, actor_id, name):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="properties",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
         if not myself or not check or check.response["code"] != 200:
             return
         if not check.check_authorisation(path="properties", subpath=name, method="POST"):
@@ -365,8 +428,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
+                            auth_context = self._create_auth_context(check, "write")
                             transformed = self.hooks.execute_property_hooks(
-                                prop_name, "post", actor_interface, [], [prop_name]
+                                prop_name, "post", actor_interface, [], [prop_name], auth_context
                             )
                             if transformed is None:
                                 if self.response:
@@ -386,8 +450,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                 if self.hooks:
                     actor_interface = self._get_actor_interface(myself)
                     if actor_interface:
+                        auth_context = self._create_auth_context(check, "write")
                         transformed = self.hooks.execute_property_hooks(
-                            prop_name, "post", actor_interface, val, [prop_name]
+                            prop_name, "post", actor_interface, val, [prop_name], auth_context
                         )
                         if transformed is not None:
                             val = transformed
@@ -411,7 +476,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                 if self.hooks:
                     actor_interface = self._get_actor_interface(myself)
                     if actor_interface:
-                        transformed = self.hooks.execute_property_hooks(name, "post", actor_interface, val, [name])
+                        auth_context = self._create_auth_context(check, "write")
+                        transformed = self.hooks.execute_property_hooks(name, "post", actor_interface, val, [name], auth_context)
                         if transformed is not None:
                             val = transformed
                         else:
@@ -449,7 +515,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                         if self.hooks:
                             actor_interface = self._get_actor_interface(myself)
                             if actor_interface:
-                                transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, [], [key])
+                                auth_context = self._create_auth_context(check, "write")
+                                transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, [], [key], auth_context)
                                 if transformed is not None:
                                     pair[key] = f"[Empty list property created with metadata]"
                                 else:
@@ -546,7 +613,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 if actor_interface:
                                     # Pass the entire list for hook validation
                                     current_items = list_prop.to_list()
-                                    transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, current_items, [key])
+                                    auth_context = self._create_auth_context(check, "write")
+                                    transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, current_items, [key], auth_context)
                                     if transformed is None:
                                         # Hook rejected the update - need to revert changes
                                         if self.response:
@@ -571,7 +639,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
-                            transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, val, [key])
+                            auth_context = self._create_auth_context(check, "write")
+                            transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, val, [key], auth_context)
                             if transformed is not None:
                                 val = transformed
                             else:
@@ -595,13 +664,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(201, "Created")
 
     def delete(self, actor_id, name):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="properties",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
         if not myself or not check or check.response["code"] != 200:
             return
         resource = None
@@ -612,7 +675,9 @@ class PropertiesHandler(base_handler.BaseHandler):
             name = path[0]
             if len(path) >= 2 and len(path[1]) > 0:
                 resource = path[1]
-        if not check.check_authorisation(path="properties", subpath=name, method="DELETE"):
+        # Use unified access control system for permission checking
+        property_path = "/".join(path) if path else ""
+        if not self._check_property_permission(actor_id, check, property_path, "delete"):
             self.response.set_status(403)
             return
         if not name:
@@ -644,8 +709,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                         if actor_interface:
                             # Pass current list data for hook validation
                             current_items = list_prop.to_list()
+                            auth_context = self._create_auth_context(check, "delete")
                             result = self.hooks.execute_property_hooks(
-                                name, "delete", actor_interface, current_items, path
+                                name, "delete", actor_interface, current_items, path, auth_context
                             )
                             if result is None:
                                 self.response.set_status(403)
@@ -669,8 +735,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface and path:
                     property_name = path[0] if path else "*"
+                    auth_context = self._create_auth_context(check, "delete")
                     result = self.hooks.execute_property_hooks(
-                        property_name, "delete", actor_interface, old_prop or {}, path
+                        property_name, "delete", actor_interface, old_prop or {}, path, auth_context
                     )
                     if result is None:
                         self.response.set_status(403)
@@ -698,7 +765,8 @@ class PropertiesHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface and path:
                 property_name = path[0] if path else "*"
-                result = self.hooks.execute_property_hooks(property_name, "delete", actor_interface, old or {}, path)
+                auth_context = self._create_auth_context(check, "delete")
+                result = self.hooks.execute_property_hooks(property_name, "delete", actor_interface, old or {}, path, auth_context)
                 if result is None:
                     self.response.set_status(403)
                     return

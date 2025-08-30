@@ -177,7 +177,7 @@ class ActorInterface:
     def properties(self) -> PropertyStore:
         """Actor properties."""
         if self._property_store is None:
-            if self._core_actor.property is None:
+            if not hasattr(self._core_actor, 'property') or self._core_actor.property is None:
                 raise RuntimeError("Actor properties not available - actor may not be properly initialized")
             self._property_store = PropertyStore(self._core_actor.property)
         return self._property_store

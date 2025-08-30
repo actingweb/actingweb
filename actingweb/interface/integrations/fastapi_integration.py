@@ -294,10 +294,10 @@ async def check_authentication_and_redirect(request: Request, config: Any) -> Op
     # Check for Bearer token
     bearer_token = await get_bearer_token(request)
     if bearer_token:
-        # Verify the Bearer token
-        auth_result = await authenticate_google_oauth(request, config)
-        if auth_result:
-            return None  # Valid Bearer token
+        # If a Bearer token is present, let the underlying handlers verify it.
+        # This supports both OAuth2 tokens and ActingWeb trust secret tokens
+        # without forcing an OAuth2 redirect here.
+        return None
 
     # Check for OAuth token cookie (for session-based authentication)
     oauth_cookie = request.cookies.get("oauth_token")
@@ -395,18 +395,13 @@ class FastAPIIntegration:
             content_type = request.headers.get("content-type", "")
             accepts_json = request.headers.get("accept", "").find("application/json") >= 0
             is_json_request = "application/json" in content_type
-            
+
             if is_json_request or accepts_json:
                 # Handle JSON API requests with the standard factory handler
                 return await self._handle_factory_request(request)
             else:
                 # For web form requests, extract email and redirect to OAuth2 with email hint
                 return await self._handle_factory_post_with_oauth_redirect(request)
-
-        # OAuth callback (legacy)
-        @self.fastapi_app.get("/oauth")
-        async def app_oauth_callback(request: Request) -> Response:
-            return await self._handle_oauth_callback(request)
 
         # Google OAuth callback
         @self.fastapi_app.get("/oauth/callback")
@@ -529,10 +524,7 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/{actor_id}/meta")
         @self.fastapi_app.get("/{actor_id}/meta/{path:path}")
         async def app_meta(actor_id: str, request: Request, path: str = "") -> Response:
-            # Check authentication and redirect to Google OAuth2 if needed
-            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
-            if auth_redirect:
-                return auth_redirect
+            # Meta endpoint should be public for peer discovery - no authentication required
             return await self._handle_actor_request(request, actor_id, "meta", path=path)
 
         # Actor OAuth
@@ -593,6 +585,17 @@ class FastAPIIntegration:
         ) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "trust", relationship=relationship, peerid=peerid
+            )
+
+        # Trust permission management endpoints
+        @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        async def app_trust_permissions(
+            actor_id: str, request: Request, relationship: str, peerid: str
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
             )
 
         # Actor subscriptions
@@ -708,6 +711,14 @@ class FastAPIIntegration:
             else:
                 headers[k] = v
 
+        # If no Authorization header but we have an oauth_token cookie (web UI session),
+        # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
+        if "Authorization" not in headers and "oauth_token" in cookies:
+            headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
+            self.logger.debug(
+                "FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request"
+            )
+
         # Get query parameters and form data (similar to Flask's request.values)
         params = {}
         # Start with query parameters
@@ -745,7 +756,10 @@ class FastAPIIntegration:
 
     def _create_fastapi_response(self, webobj: AWWebObj, request: Request) -> Response:
         """Convert ActingWeb response to FastAPI response."""
+        logging.debug(f"_create_fastapi_response: webobj.response.redirect = {getattr(webobj.response, 'redirect', None)}")
+        logging.debug(f"_create_fastapi_response: webobj.response.status_code = {webobj.response.status_code}")
         if webobj.response.redirect:
+            logging.debug(f"_create_fastapi_response: Creating redirect response to {webobj.response.redirect}")
             response: Response = RedirectResponse(url=webobj.response.redirect, status_code=302)
         else:
             # Create appropriate response based on content type
@@ -899,7 +913,6 @@ class FastAPIIntegration:
 
         return self._create_fastapi_response(webobj, request)
 
-
     async def _handle_factory_get_request(self, request: Request) -> Response:
         """Handle GET requests to factory route - just show the email form."""
         # Simply show the factory template without any authentication
@@ -1027,25 +1040,6 @@ class FastAPIIntegration:
             else:
                 raise HTTPException(status_code=500, detail="Actor creation failed")
 
-    async def _handle_oauth_callback(self, request: Request) -> Response:
-        """Handle OAuth callback."""
-        req_data = await self._normalize_request(request)
-        webobj = AWWebObj(
-            url=req_data["url"],
-            params=req_data["values"],
-            body=req_data["data"],
-            headers=req_data["headers"],
-            cookies=req_data["cookies"],
-        )
-
-        handler = callback_oauth.CallbackOauthHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-
-        # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self.executor, handler.get)
-
-        return self._create_fastapi_response(webobj, request)
-
     async def _handle_google_oauth_callback(self, request: Request) -> Response:
         """Handle Google OAuth2 callback."""
         req_data = await self._normalize_request(request)
@@ -1137,7 +1131,7 @@ class FastAPIIntegration:
             redirect_url = result.get("location")
             if redirect_url:
                 from fastapi.responses import RedirectResponse
-                
+
                 # Add CORS headers for OAuth2 redirect responses
                 cors_headers = {
                     "Access-Control-Allow-Origin": "*",
@@ -1149,13 +1143,13 @@ class FastAPIIntegration:
 
         # Return the OAuth2 result as JSON with CORS headers
         from fastapi.responses import JSONResponse
-        
+
         # Add CORS headers for OAuth2 endpoints
         cors_headers = {
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
-            "Access-Control-Max-Age": "86400"
+            "Access-Control-Max-Age": "86400",
         }
 
         return JSONResponse(content=result, headers=cors_headers)
@@ -1244,7 +1238,7 @@ class FastAPIIntegration:
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
             "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
-            "Access-Control-Max-Age": "86400"
+            "Access-Control-Max-Age": "86400",
         }
 
         return JSONResponse(content=result, headers=cors_headers)
@@ -1275,11 +1269,34 @@ class FastAPIIntegration:
                 args.append(kwargs.get("path", ""))
             elif endpoint == "trust":
                 # Only pass path parameters if they exist, let handler read query params from request
-                if kwargs.get("relationship"):
-                    args.append(kwargs["relationship"])
-                    if kwargs.get("peerid"):
-                        args.append(kwargs["peerid"])
-                self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
+                relationship = kwargs.get("relationship")
+                peerid = kwargs.get("peerid")
+
+                # Support UI forms that send GET /trust/<peerid>?_method=DELETE|PUT
+                # by interpreting the single path segment as a peer ID.
+                # We detect this when:
+                #  - there is only one path param provided
+                #  - a method override is present requesting DELETE or PUT
+                #  - no explicit peerid path param is provided
+                method_override = (webobj.request.get("_method") or "").upper()
+                if (
+                    relationship
+                    and not peerid
+                    and method_override in ("DELETE", "PUT")
+                ):
+                    # Heuristic: treat the "relationship" path part as a peer ID.
+                    # Pass empty relationship (type) and the detected peer ID.
+                    args.append("")
+                    args.append(relationship)
+                    self.logger.debug(
+                        f"Trust handler args adjusted for method override: {args} (peerid assumed from single segment)"
+                    )
+                else:
+                    if relationship:
+                        args.append(relationship)
+                        if peerid:
+                            args.append(peerid)
+                    self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
             elif endpoint == "subscriptions":
                 if kwargs.get("peerid"):
                     args.append(kwargs["peerid"])
@@ -1330,12 +1347,12 @@ class FastAPIIntegration:
                 "trust": "aw-actor-www-trust.html",
             }
             template_name = template_map.get(path)
-            
+
             # Handle individual property pages like "properties/notes", "properties/demo_version"
             if not template_name and path.startswith("properties/"):
                 # This is an individual property page
                 template_name = "aw-actor-www-property.html"
-            
+
             if template_name:
                 return self.templates.TemplateResponse(
                     template_name, {"request": request, **webobj.response.template_values}
@@ -1384,10 +1401,21 @@ class FastAPIIntegration:
 
             self.logger.debug(f"Trust handler selection - path_parts: {path_parts}, len: {len(path_parts)}")
 
-            if len(path_parts) == 0:
+            # Check for permissions endpoint
+            if kwargs.get("permissions"):
+                self.logger.debug("Selecting TrustPermissionHandler for permission management")
+                return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
+            elif len(path_parts) == 0:
                 self.logger.debug("Selecting TrustHandler for query parameter request")
                 return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
+                # Special case: UI may call /trust/<peerid>?_method=DELETE|PUT
+                method_override = (webobj.request.get("_method") or "").upper()
+                if method_override in ("DELETE", "PUT"):
+                    self.logger.debug(
+                        "Selecting TrustPeerHandler for single path parameter with method override"
+                    )
+                    return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
                 self.logger.debug("Selecting TrustRelationshipHandler for single path parameter")
                 return trust.TrustRelationshipHandler(webobj, config, hooks=self.aw_app.hooks)
             else:

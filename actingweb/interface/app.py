@@ -58,6 +58,33 @@ class ActingWebApp:
 
         # Internal config object (lazy initialized)
         self._config: Optional[Config] = None
+        # Automatically initialize permission system for better performance
+        self._initialize_permission_system()
+
+    def _apply_runtime_changes_to_config(self) -> None:
+        """Propagate builder changes to an existing Config instance.
+
+        This keeps configuration consistent even if get_config() was called
+        early (e.g., during startup warmups) before builder methods like
+        with_oauth() were invoked.
+        """
+        if self._config is None:
+            return
+        # Core toggles
+        self._config.ui = self._enable_ui
+        self._config.devtest = self._enable_devtest
+        self._config.www_auth = self._www_auth
+        self._config.unique_creator = self._unique_creator
+        self._config.force_email_prop_as_creator = self._force_email_prop_as_creator
+        # OAuth configuration
+        if self._oauth_config is not None:
+            # Replace with latest provided OAuth settings
+            self._config.oauth = dict(self._oauth_config)
+        # Actor types and bot config
+        if self._actors_config:
+            self._config.actors = dict(self._actors_config)
+        if self._enable_bot:
+            self._config.bot = dict(self._bot_config or {})
 
     def with_oauth(
         self,
@@ -82,16 +109,20 @@ class ActingWebApp:
             **kwargs,
         }
         self._www_auth = "oauth"
+        # Ensure existing config (if already created) is updated
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_web_ui(self, enable: bool = True) -> "ActingWebApp":
         """Enable or disable the web UI."""
         self._enable_ui = enable
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_devtest(self, enable: bool = True) -> "ActingWebApp":
         """Enable or disable development/testing endpoints."""
         self._enable_devtest = enable
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_bot(self, token: str = "", email: str = "", secret: str = "", admin_room: str = "") -> "ActingWebApp":
@@ -103,21 +134,26 @@ class ActingWebApp:
             "secret": secret or os.getenv("APP_BOT_SECRET", ""),
             "admin_room": admin_room or os.getenv("APP_BOT_ADMIN_ROOM", ""),
         }
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_unique_creator(self, enable: bool = True) -> "ActingWebApp":
         """Enable unique creator constraint."""
         self._unique_creator = enable
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_email_as_creator(self, enable: bool = True) -> "ActingWebApp":
         """Force email property as creator."""
         self._force_email_prop_as_creator = enable
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_mcp(self, enable: bool = True) -> "ActingWebApp":
         """Enable or disable MCP (Model Context Protocol) functionality."""
         self._enable_mcp = enable
+        # Note: aw_supported is computed in Config.__init__. We keep this minimal
+        # to avoid touching unrelated features; OAuth fix does not require recompute.
         return self
 
     def add_actor_type(self, name: str, factory: str = "", relationship: str = "friend") -> "ActingWebApp":
@@ -127,8 +163,8 @@ class ActingWebApp:
             "factory": factory or f"{self.proto}{self.fqdn}/",
             "relationship": relationship,
         }
+        self._apply_runtime_changes_to_config()
         return self
-
 
     def property_hook(self, property_name: str = "*") -> Callable[..., Any]:
         """Decorator to register property hooks."""
@@ -214,6 +250,9 @@ class ActingWebApp:
                 oauth=self._oauth_config or {},
                 mcp=self._enable_mcp,
             )
+        else:
+            # If config already exists, keep it in sync with latest builder settings
+            self._apply_runtime_changes_to_config()
         return self._config
 
     def is_mcp_enabled(self) -> bool:
@@ -272,3 +311,22 @@ class ActingWebApp:
         flask_app = Flask(__name__)
         self.integrate_flask(flask_app)
         flask_app.run(host=host, port=port, debug=debug)
+
+    def _initialize_permission_system(self) -> None:
+        """
+        Automatically initialize the ActingWeb permission system.
+
+        This method is called automatically when integrating with web frameworks
+        to ensure optimal performance without requiring manual initialization.
+        """
+        try:
+            from ..permission_initialization import initialize_permission_system
+
+            initialize_permission_system(self.get_config())
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.info(f"Permission system initialization failed: {e}")
+            logger.info("System will fall back to basic functionality with lazy loading")
+            # Graceful fallback - don't raise exceptions that would break app startup

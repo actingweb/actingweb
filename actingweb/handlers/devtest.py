@@ -220,25 +220,4 @@ class DevtestHandler(base_handler.BaseHandler):
                     self.response.headers["Location"] = str(mytwin["baseuri"])
                     self.response.set_status(200)
                     return
-        elif paths[0] == "ping":
-            self.response.set_status(204)
-            return
-        elif paths[0] == "attribute":
-            if paths[1] and len(paths[1]) > 0:
-                bucket = attribute.Attributes(
-                    actor_id=myself.id, bucket=paths[1], config=self.config
-                )
-                if params:
-                    for k, v in params.items():
-                        bucket.set_attr(k, v, timestamp=datetime.datetime.utcnow())
-                    out = json.dumps(params)
-                    if self.response:
-                        self.response.write(out)
-                else:
-                    if self.response:
-                        self.response.set_status(400)
-                    return
-                self.response.headers["Content-Type"] = "application/json"
-                self.response.set_status(200)
-                return
         self.response.set_status(404)

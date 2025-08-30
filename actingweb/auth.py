@@ -37,8 +37,10 @@ def add_auth_response(appreq=None, auth_obj=None):
         + ":"
         + auth_obj.response["text"]
     )
+    logging.debug(f"add_auth_response: auth_obj.redirect = {getattr(auth_obj, 'redirect', None)}")
     appreq.response.set_status(auth_obj.response["code"], auth_obj.response["text"])
     if auth_obj.response["code"] == 302:
+        logging.debug(f"add_auth_response: Setting redirect to {auth_obj.redirect}")
         appreq.response.set_redirect(url=auth_obj.redirect)
     elif auth_obj.response["code"] == 401:
         if hasattr(appreq, 'response') and appreq.response:
@@ -715,6 +717,7 @@ class Auth:
         logging.debug(f"Checking authentication for path: {path}, auth type: {self.type}")
         logging.debug("Checking authentication, token auth...")
         if self.check_token_auth(appreq):
+            logging.debug("Token auth succeeded")
             return
         elif self.type == "oauth":
             logging.debug("Auth type is 'oauth', checking cookie authentication...")
@@ -722,11 +725,19 @@ class Auth:
             return
         elif self.type == "basic":
             logging.debug("Auth type is 'basic', checking basic authentication...")
-            self.__check_basic_auth_creator(appreq=appreq)
-            return
+            if self.__check_basic_auth_creator(appreq=appreq):
+                logging.debug("Basic auth succeeded, response code: %s", self.response["code"])
+                return
+            else:
+                # Basic auth failed - mark as done and don't fall through to OAuth2
+                logging.debug("Basic auth failed, response code: %s", self.response["code"])
+                self.authn_done = True
+                return
         
         # If all authentication methods fail, try OAuth2 redirect if configured
+        logging.debug("All auth methods failed, checking OAuth2 redirect...")
         if self._should_redirect_to_oauth2(appreq, path):
+            logging.debug("OAuth2 redirect triggered")
             return
             
         logging.debug("Authentication done, and failed")

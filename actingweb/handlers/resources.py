@@ -8,13 +8,7 @@ from actingweb.handlers import base_handler
 class ResourcesHandler(base_handler.BaseHandler):
 
     def get(self, actor_id, name):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="resources",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
         if not myself or not check or check.response["code"] != 200:
             return
         if not check.check_authorisation(path="resources", subpath=name, method="GET"):
@@ -38,13 +32,7 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def delete(self, actor_id, name):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="resources",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
         if not myself or not check or check.response["code"] != 200:
             return
         if not check.check_authorisation(
@@ -73,13 +61,7 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def put(self, actor_id, name):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="resources",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
         if not myself or not check or check.response["code"] != 200:
             return
         if not check.check_authorisation(path="resources", subpath=name, method="PUT"):
@@ -122,13 +104,7 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def post(self, actor_id, name):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="resources",
-            subpath=name,
-            config=self.config,
-        )
+        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
         if not myself or not check or check.response["code"] != 200:
             return
         if not check.check_authorisation(path="resources", subpath=name, method="POST"):

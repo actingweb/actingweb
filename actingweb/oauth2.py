@@ -19,6 +19,8 @@ from oauthlib.common import generate_token  # type: ignore[import-untyped]
 from . import actor as actor_module
 from . import config as config_class
 from .interface.actor_interface import ActorInterface
+from .trust_type_registry import TrustTypeRegistry
+from .constants import ESTABLISHED_VIA_OAUTH2
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,7 @@ class OAuth2Authenticator:
         self._sessions: Dict[str, Dict[str, Any]] = {}
 
         if not self.provider.is_enabled():
-            logger.debug(
+            logger.warning(
                 f"OAuth2 provider '{self.provider.name}' not configured - client_id and client_secret required"
             )
 
@@ -104,14 +106,17 @@ class OAuth2Authenticator:
         """Check if OAuth2 is properly configured."""
         return self.provider.is_enabled()
 
-    def create_authorization_url(self, state: str = "", redirect_after_auth: str = "", email_hint: str = "") -> str:
+    def create_authorization_url(
+        self, state: str = "", redirect_after_auth: str = "", email_hint: str = "", trust_type: str = ""
+    ) -> str:
         """
-        Create OAuth2 authorization URL using oauthlib.
+        Create OAuth2 authorization URL using oauthlib with trust type selection.
 
         Args:
             state: State parameter to prevent CSRF attacks
             redirect_after_auth: Where to redirect after successful auth
             email_hint: Email to hint which account to use for authentication
+            trust_type: Trust relationship type to establish (e.g., 'mcp_client', 'web_user')
 
         Returns:
             OAuth2 authorization URL
@@ -123,13 +128,14 @@ class OAuth2Authenticator:
         if not state:
             state = generate_token()
 
-        # Encode redirect URL and email hint in state if provided
+        # Encode redirect URL, email hint, and trust type in state if provided
         # IMPORTANT: Don't overwrite encrypted MCP state (which is base64 encoded)
-        if (redirect_after_auth or email_hint) and not self._looks_like_encrypted_state(state):
+        if (redirect_after_auth or email_hint or trust_type) and not self._looks_like_encrypted_state(state):
             state_data = {
-                "csrf": state, 
+                "csrf": state,
                 "redirect": redirect_after_auth,
                 "expected_email": email_hint,  # Store original email for validation
+                "trust_type": trust_type,  # Store trust type for automatic relationship creation
             }
             state = json.dumps(state_data)
 
@@ -142,7 +148,6 @@ class OAuth2Authenticator:
         # Add email hint for Google OAuth2
         if email_hint and self.provider.name == "google":
             extra_params["login_hint"] = email_hint
-            logger.debug(f"Adding login_hint for Google OAuth2: {email_hint}")
 
         # Use oauthlib to generate the authorization URL
         authorization_url = self.client.prepare_request_uri(
@@ -153,35 +158,35 @@ class OAuth2Authenticator:
             **extra_params,
         )
 
-        logger.debug(f"Created OAuth2 authorization URL with state: {state[:50]}...")
         return str(authorization_url)
 
     def _looks_like_encrypted_state(self, state: str) -> bool:
         """
         Check if state parameter looks like an encrypted MCP state.
-        
+
         MCP states are base64-encoded encrypted data and won't be valid JSON.
         Standard ActingWeb states are JSON strings.
-        
+
         Args:
             state: State parameter to check
-            
+
         Returns:
             True if this looks like an encrypted MCP state
         """
         if not state:
             return False
-            
+
         # If it starts with '{' it's likely JSON (standard ActingWeb state)
-        if state.strip().startswith('{'):
+        if state.strip().startswith("{"):
             return False
-            
+
         # If it contains only base64-safe characters and is reasonably long,
         # it's likely an encrypted MCP state
         import re
-        if len(state) > 50 and re.match(r'^[A-Za-z0-9+/_=-]+$', state):
+
+        if len(state) > 50 and re.match(r"^[A-Za-z0-9+/_=-]+$", state):
             return True
-            
+
         return False
 
     def exchange_code_for_token(self, code: str, state: str = "") -> Optional[Dict[str, Any]]:
@@ -225,7 +230,6 @@ class OAuth2Authenticator:
             # Parse token response using oauthlib
             self.client.parse_request_body_response(response.content.decode("utf-8"))
 
-            logger.debug("Successfully exchanged authorization code for access token")
             return dict(token_data)
 
         except Exception as e:
@@ -269,7 +273,6 @@ class OAuth2Authenticator:
             # Parse token response using oauthlib
             self.client.parse_request_body_response(response.content.decode("utf-8"))
 
-            logger.debug("Successfully refreshed access token")
             return dict(token_data)
 
         except Exception as e:
@@ -303,7 +306,6 @@ class OAuth2Authenticator:
                 return None
 
             userinfo = json.loads(response.content.decode("utf-8"))
-            logger.debug(f"Successfully validated token and extracted user info")
             return dict(userinfo)
 
         except Exception as e:
@@ -393,12 +395,8 @@ class OAuth2Authenticator:
         try:
             # Use get_from_creator() method to find existing actor by email
             existing_actor = actor_module.Actor(config=self.config)
-            logger.debug(f"Looking up existing actor for email: {email}")
             if existing_actor.get_from_creator(email):
-                logger.debug(f"Found existing actor {existing_actor.id} for email {email}")
                 return existing_actor
-            else:
-                logger.debug(f"No existing actor found for email {email}, will create new one")
 
             # Create new actor with email as creator using ActorInterface
             try:
@@ -406,9 +404,9 @@ class OAuth2Authenticator:
                     creator=email,
                     config=self.config,
                     passphrase="",  # ActingWeb will auto-generate
-                    hooks=getattr(self.config, '_hooks', None)  # Pass hooks if available for lifecycle events
+                    hooks=getattr(self.config, "_hooks", None),  # Pass hooks if available for lifecycle events
                 )
-                
+
                 # Set up initial properties for OAuth actor
                 if actor_interface.core_actor.store:
                     actor_interface.core_actor.store.email = email
@@ -416,7 +414,6 @@ class OAuth2Authenticator:
                     actor_interface.core_actor.store.created_at = str(int(time.time()))
                     actor_interface.core_actor.store.oauth_provider = self.provider.name
 
-                logger.debug(f"Created new actor {actor_interface.id} for {self.provider.name} user {email}")
                 return actor_interface.core_actor  # Return the core actor for backward compatibility
             except Exception as create_error:
                 logger.error(f"Failed to create actor for email {email}: {create_error}")
@@ -430,48 +427,8 @@ class OAuth2Authenticator:
             return None
 
     def validate_email_from_state(self, state: str, authenticated_email: str) -> bool:
-        """
-        Validate that the authenticated email matches the expected email from OAuth2 state.
-
-        Args:
-            state: OAuth2 state parameter containing expected email
-            authenticated_email: Email obtained from OAuth2 authentication
-
-        Returns:
-            True if emails match or no expected email in state, False otherwise
-        """
-        if not state or not authenticated_email:
-            return False
-
-        try:
-            # Try to parse state as JSON
-            state_data = json.loads(state)
-            expected_email = state_data.get("expected_email")
-
-            if not expected_email:
-                # No expected email in state - allow (backward compatibility)
-                return True
-
-            # Normalize both emails for comparison (lowercase, strip whitespace)
-            expected_email_normalized = expected_email.lower().strip()
-            authenticated_email_normalized = authenticated_email.lower().strip()
-
-            if expected_email_normalized == authenticated_email_normalized:
-                logger.debug(f"Email validation successful: {authenticated_email}")
-                return True
-            else:
-                logger.warning(
-                    f"Email mismatch: expected {expected_email_normalized}, got {authenticated_email_normalized}"
-                )
-                return False
-
-        except (json.JSONDecodeError, TypeError):
-            # State is not JSON - treat as simple string (backward compatibility)
-            logger.debug("State is not JSON, skipping email validation")
-            return True
-        except Exception as e:
-            logger.error(f"Error validating email from state: {e}")
-            return False
+        from .oauth_state import validate_expected_email
+        return validate_expected_email(state, authenticated_email)
 
     def authenticate_bearer_token(self, bearer_token: str) -> Tuple[Optional[actor_module.Actor], Optional[str]]:
         """
@@ -558,8 +515,6 @@ def create_oauth2_authenticator(config: config_class.Config, provider_name: str 
         return OAuth2Authenticator(config, GoogleOAuth2Provider(config))
 
 
-
-
 def create_google_authenticator(config: config_class.Config) -> OAuth2Authenticator:
     """
     Factory function to create Google OAuth2 authenticator.
@@ -619,29 +574,7 @@ def extract_bearer_token(auth_header: str) -> Optional[str]:
     return auth_header[7:].strip()
 
 
-def parse_state_parameter(state: str) -> Tuple[str, str, str]:
-    """
-    Parse state parameter to extract CSRF token, redirect URL, and actor ID.
-
-    Args:
-        state: State parameter from OAuth callback
-
-    Returns:
-        Tuple of (csrf_token, redirect_url, actor_id)
-    """
-    if not state:
-        return "", "", ""
-
-    try:
-        state_data = json.loads(state)
-        return (state_data.get("csrf", ""), state_data.get("redirect", ""), state_data.get("actor_id", ""))
-    except (json.JSONDecodeError, TypeError):
-        # If not JSON, it might be just an actor ID (for legacy compatibility)
-        # Check if it looks like an actor ID (32 hex chars)
-        if len(state) == 32 and all(c in "0123456789abcdef" for c in state.lower()):
-            return "", "", state
-        # Otherwise treat as simple CSRF token
-        return state, "", ""
+"""Legacy helpers removed: use actingweb.oauth_state.decode_state and validate_expected_email"""
 
 
 def validate_redirect_url(redirect_url: str, allowed_domains: list[str]) -> bool:
@@ -672,4 +605,39 @@ def validate_redirect_url(redirect_url: str, allowed_domains: list[str]) -> bool
         return False
 
     except Exception:
+        return False
+
+
+def create_oauth2_trust_relationship(
+    actor: ActorInterface, email: str, trust_type: str, oauth_tokens: Dict[str, Any], established_via: Optional[str] = None
+) -> bool:
+    """
+    Create trust relationship after successful OAuth2 authentication.
+
+    Args:
+        actor: ActorInterface for the user's actor
+        email: Authenticated user's email
+        trust_type: Type of trust relationship to create
+        oauth_tokens: OAuth2 tokens from authentication
+        established_via: Optional override for how relationship was established
+
+    Returns:
+        True if trust relationship was created successfully
+    """
+    try:
+        # All OAuth2 trust relationships are established via OAuth2, regardless of trust type
+        if established_via is None:
+            established_via = ESTABLISHED_VIA_OAUTH2
+        
+        # Delegate to TrustManager for unified behavior
+        from .interface.trust_manager import TrustManager  # type: ignore
+        tm = TrustManager(actor.core_actor)
+        return tm.create_or_update_oauth_trust(
+            email=email,
+            trust_type=trust_type,
+            oauth_tokens=oauth_tokens,
+            established_via=established_via,
+        )
+    except Exception as e:
+        logger.error(f"Error creating OAuth2 trust relationship: {e}")
         return False

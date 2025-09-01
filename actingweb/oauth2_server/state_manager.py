@@ -181,22 +181,36 @@ class OAuth2StateManager:
             from ..constants import OAUTH2_SYSTEM_ACTOR
             from botocore.exceptions import ClientError
 
-            # Get or create OAuth2 system actor
+            # First, try to load existing OAuth2 system actor
             sys_actor = actor_module.Actor(OAUTH2_SYSTEM_ACTOR, config=self.config)
-            if not getattr(sys_actor, 'id', None):
-                # Create if missing
+            actor_exists = False
+            
+            # Check if actor exists by trying to access its properties
+            try:
+                # If actor exists, this should work without error
+                _ = sys_actor.property
+                actor_exists = True
+                logger.debug("OAuth2 system actor already exists")
+            except Exception:
+                # Actor doesn't exist, we need to create it
+                actor_exists = False
+                logger.debug("OAuth2 system actor does not exist, creating it")
+
+            # Create actor if it doesn't exist
+            if not actor_exists:
                 base_root = getattr(self.config, 'root', '') or 'http://localhost/'
                 url = f"{base_root}{OAUTH2_SYSTEM_ACTOR}"
                 passphrase = self.config.new_token() if hasattr(self.config, 'new_token') else 'oauth2-system-pass'
                 try:
-                    created = sys_actor.create(url=url, creator="system", passphrase=passphrase, actor_id=OAUTH2_SYSTEM_ACTOR)
+                    created = sys_actor.create(url=url, creator="oauth2-system", passphrase=passphrase, actor_id=OAUTH2_SYSTEM_ACTOR)
                     if not created:
                         logger.error("Failed to create OAuth2 system actor")
                         raise RuntimeError("Cannot create OAuth2 system actor")
+                    logger.debug("Successfully created OAuth2 system actor")
                 except ClientError as e:
                     if e.response["Error"]["Code"] == "ResourceInUseException":
-                        # Actor already exists, try to load it
-                        logger.debug("OAuth2 system actor table already exists; another worker created it")
+                        # Actor was created by another process, reload it
+                        logger.debug("OAuth2 system actor was created by another process, reloading")
                         sys_actor = actor_module.Actor(OAUTH2_SYSTEM_ACTOR, config=self.config)
                     else:
                         logger.error(f"Error creating OAuth2 system actor: {e}")

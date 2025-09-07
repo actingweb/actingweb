@@ -1,11 +1,10 @@
-============================
 ActingWeb Developer Interface
-============================
+=============================
 
 This document describes the modern developer interface for the ActingWeb library. It replaces the complex ``OnAWBase`` callback system with a clean, fluent API and decorator-based hooks.
 
 Actor vs ActorInterface - Important Distinction
-===============================================
+-----------------------------------------------
 
 ActingWeb provides two actor classes that serve different purposes:
 
@@ -27,7 +26,7 @@ ActingWeb provides two actor classes that serve different purposes:
    **Always use ActorInterface in your applications.** The core Actor class is an internal implementation detail and may change between versions. ActorInterface provides a stable, documented API with proper error handling and type safety.
 
 Key Features
-============
+------------
 
 - **Fluent Configuration API**: Chain configuration methods for easy setup
 - **Decorator-Based Hooks**: Simple, focused functions for handling events
@@ -37,7 +36,7 @@ Key Features
 - **Backward Compatibility**: Works with existing ActingWeb applications
 
 Quick Start
-===========
+-----------
 
 Basic Application
 -----------------
@@ -98,7 +97,7 @@ Flask Integration
     flask_app.run()
 
 Core Components
-===============
+---------------
 
 ActingWebApp
 ------------
@@ -437,6 +436,7 @@ List Operations
     Remove all items from the list.
 
 .. py:method:: delete()
+   :no-index:
 
     Delete the entire list including metadata.
 
@@ -1162,7 +1162,7 @@ Methods
     :return: True if there are subscribers
 
 Hook System
-===========
+-----------
 
 Property Hooks
 --------------
@@ -1512,7 +1512,7 @@ Hook Function Signature
     :return: Event-specific return value
 
 Migration from OnAWBase (v3.1 Breaking Change)
-=================================================
+-------------------------------------------------
 
 .. warning::
    **Breaking Change in v3.1**: The legacy ``OnAWBase`` interface has been completely removed.
@@ -1557,7 +1557,7 @@ After (Modern Interface - REQUIRED in v3.1+)
         return value
 
 Benefits
-========
+--------
 
 1. **Reduced Boilerplate**: No more manual route definitions or complex handler setup
 2. **Better Organization**: Hooks are focused on specific functionality
@@ -1567,7 +1567,7 @@ Benefits
 6. **Testing**: Hooks can be tested independently
 
 Version 3.1 Breaking Changes
-============================
+----------------------------
 
 .. warning::
    **ActingWeb v3.1 removes backward compatibility** with the legacy ``OnAWBase`` interface.
@@ -1584,7 +1584,7 @@ Version 3.1 Breaking Changes
    ``ActingWebApp`` interface. See :doc:`migration-v3.1` for complete migration instructions.
 
 Advanced Usage
-==============
+--------------
 
 Accessing Core Components
 -------------------------
@@ -1645,7 +1645,7 @@ The new interface provides better error handling:
             return None
 
 Global Data Storage with Attributes and Buckets
-===============================================
+-----------------------------------------------
 
 ActingWeb provides a flexible attribute and bucket system for storing global data that needs to be shared across actors or persisted at the application level. This is particularly useful for storing configuration data, client registrations, indexes, and other shared state.
 
@@ -1919,7 +1919,7 @@ Best Practices
 6. **Private Data Security**: Always use Attributes (not regular properties) for sensitive data like tokens, passwords, and private keys.
 
 Example: Complete Client Registry Implementation
------------------------------------------------
+------------------------------------------------
 
 Here's a complete example of using the attribute system for a client registry:
 
@@ -1995,7 +1995,7 @@ Here's a complete example of using the attribute system for a client registry:
             return clients
 
 Testing
-=======
+-------
 
 The new interface makes testing much easier:
 

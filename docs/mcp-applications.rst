@@ -5,7 +5,7 @@ Building MCP Applications with ActingWeb
 This guide shows how to build Model Context Protocol (MCP) server applications using ActingWeb, following the patterns demonstrated in the ``actingweb_mcp`` example application.
 
 Overview
-========
+--------
 
 An MCP server application with ActingWeb combines:
 
@@ -16,7 +16,7 @@ An MCP server application with ActingWeb combines:
 - **Per-User Data Isolation**: Each authenticated user gets their own actor with private data
 
 Architecture Pattern
-===================
+--------------------
 
 MCP Application Structure
 -------------------------
@@ -59,7 +59,7 @@ Key Components
 6. **Multi-Provider OAuth2**: Support for Google, GitHub, etc.
 
 Quick Start
-===========
+-----------
 
 Basic MCP Application
 ---------------------
@@ -117,7 +117,7 @@ Basic MCP Application
         uvicorn.run(fastapi_app, host="0.0.0.0", port=5000, reload=True)
 
 MCP Tools Implementation
-=======================
+------------------------
 
 Create reusable MCP tools in ``shared_mcp/tools.py``:
 
@@ -202,7 +202,7 @@ Create reusable MCP tools in ``shared_mcp/tools.py``:
                 return f"Error fetching URL: {str(e)}"
 
 MCP Prompts Implementation
-=========================
+--------------------------
 
 Create prompt templates in ``shared_mcp/prompts.py``:
 
@@ -282,7 +282,7 @@ Create prompt templates in ``shared_mcp/prompts.py``:
     """
 
 Property Hooks for MCP Applications
-==================================
+-----------------------------------
 
 Implement property access control in ``shared_hooks/property_hooks.py``:
 
@@ -340,12 +340,12 @@ Implement property access control in ``shared_hooks/property_hooks.py``:
             return value
 
 OAuth2 Integration
-==================
+------------------
 
 Configure OAuth2 authentication for your MCP server:
 
 Environment Variables
---------------------
+~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
@@ -360,7 +360,7 @@ Environment Variables
     LOG_LEVEL="INFO"
 
 OAuth2 Flow
-----------
+~~~~~~~~~~~
 
 1. Client accesses protected ``/mcp`` endpoint
 2. Returns 401 with ``WWW-Authenticate`` header containing OAuth2 provider auth URL  
@@ -369,7 +369,7 @@ OAuth2 Flow
 5. Bearer token provided for subsequent API access
 
 Authentication in Application Code
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -390,7 +390,7 @@ Authentication in Application Code
         return f"Tool executed for user {user_email}"
 
 Deployment Patterns
-==================
+===================
 
 AWS Lambda with Serverless Framework
 ------------------------------------
@@ -427,7 +427,7 @@ AWS Lambda with Serverless Framework
       - serverless-domain-manager
 
 Container Deployment
--------------------
+---------------------
 
 .. code-block:: dockerfile
 
@@ -442,7 +442,7 @@ Container Deployment
     CMD ["application.lambda_handler"]
 
 Local Development
-----------------
+-----------------
 
 .. code-block:: python
 
@@ -459,10 +459,10 @@ Then run:
     poetry run python application.py
 
 Web Interface Customization
-===========================
+---------------------------
 
 Template Customization for MCP Apps
------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Customize the web interface to show MCP-specific functionality:
 
@@ -484,7 +484,7 @@ Customize the web interface to show MCP-specific functionality:
     </div>
 
 MCP-Specific Property Management
--------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Show MCP-related properties in a dedicated section:
 
@@ -521,10 +521,10 @@ Show MCP-related properties in a dedicated section:
     </div>
 
 Testing MCP Applications
-=======================
+------------------------
 
 Unit Testing Tools and Prompts
-------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -569,7 +569,7 @@ Unit Testing Tools and Prompts
             self.assertTrue(len(notes) > 0)
 
 Integration Testing with FastAPI
--------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -589,10 +589,10 @@ Integration Testing with FastAPI
         assert response.status_code == 200
 
 Best Practices
-==============
+--------------
 
 Security
---------
+~~~~~~~~
 
 1. **Always validate MCP tool parameters** before processing
 2. **Use property hooks to control access** to sensitive data
@@ -601,7 +601,7 @@ Security
 5. **Use environment variables** for sensitive configuration
 
 Performance
------------
+~~~~~~~~~~~
 
 1. **Cache expensive operations** using actor properties or attributes
 2. **Limit response sizes** from MCP tools (especially fetch operations)
@@ -673,7 +673,7 @@ The MCP handler automatically logs cache statistics:
 This optimization is particularly beneficial for AI assistants making multiple consecutive requests, which is the typical MCP usage pattern.
 
 Data Management
---------------
+~~~~~~~~~~~~~~~
 
 1. **Use consistent property naming** (e.g., ``note_*``, ``fetch_*``)
 2. **Store timestamps** for all user-generated data
@@ -682,7 +682,7 @@ Data Management
 5. **Handle data migration** when updating schemas
 
 Monitoring and Logging
----------------------
+~~~~~~~~~~~~~~~~~~~~~~
 
 1. **Log MCP tool usage** with appropriate detail levels
 2. **Track user activity** through property access
@@ -691,7 +691,7 @@ Monitoring and Logging
 5. **Implement health checks** for all dependencies
 
 Example: Complete MCP Application
-=================================
+---------------------------------
 
 Here's a complete example of a specialized MCP application for note-taking:
 
@@ -864,3 +864,265 @@ Here's a complete example of a specialized MCP application for note-taking:
         uvicorn.run(app, host="0.0.0.0", port=5000, reload=True)
 
 This example demonstrates all the key concepts for building production-ready MCP applications with ActingWeb.
+
+OAuth2 Client Management
+------------------------
+
+MCP applications with ActingWeb support dynamic OAuth2 client registration for AI assistants. This allows users to generate API credentials that AI assistants can use to authenticate and access their personal data.
+
+Client Registration API
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The application provides an OAuth2 client generation endpoint:
+
+.. code-block:: python
+
+    @fastapi_app.post("/{actor_id}/api/generate-oauth-client")
+    async def generate_oauth_client(actor_id: str, request: Request):
+        """Generate OAuth2 client credentials for AI assistants."""
+        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+        
+        # Parse request body
+        body = await request.json()
+        client_name = body.get("client_name", "AI Assistant Connector")
+        trust_type = body.get("trust_type", "mcp_client")
+        
+        # Dynamic client registration data (RFC 7591)
+        registration_data = {
+            "client_name": client_name,
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "mcp",
+            "trust_type": trust_type,
+        }
+        
+        # Register client
+        client_registry = MCPClientRegistry(app.get_config())
+        client_data = client_registry.register_client(actor_id, registration_data)
+        
+        return JSONResponse(content={
+            "client_id": client_data["client_id"],
+            "client_secret": client_data["client_secret"],
+            "client_name": client_name,
+            "trust_type": trust_type,
+            "created_at": client_data.get("created_at")
+        })
+
+Client Deletion API
+~~~~~~~~~~~~~~~~~~~
+
+Users can delete OAuth2 clients they no longer need:
+
+.. code-block:: python
+
+    @fastapi_app.delete("/{actor_id}/api/oauth-client/{client_id}")
+    async def delete_oauth_client(actor_id: str, client_id: str):
+        """Delete an OAuth2 client."""
+        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+        
+        client_registry = MCPClientRegistry(app.get_config())
+        
+        # Verify client belongs to actor
+        client_data = client_registry._load_client(client_id)
+        if client_data.get("actor_id") != actor_id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        # Delete the client
+        success = client_registry.delete_client(client_id)
+        
+        return JSONResponse(content={
+            "success": success, 
+            "message": "OAuth client deleted successfully"
+        })
+
+Web Interface Integration
+--------------------------
+
+Display OAuth2 clients in the web interface by enhancing the WWW handler:
+
+.. code-block:: python
+
+    # In actingweb/handlers/www.py
+    def _get_oauth_clients_for_actor(self, actor_id: str):
+        """Get registered OAuth2 clients for an actor."""
+        from ..oauth2_server.client_registry import MCPClientRegistry
+        import datetime
+        
+        client_registry = MCPClientRegistry(self.config)
+        clients = client_registry.list_clients_for_actor(actor_id)
+        
+        # Process client data for template display
+        processed_clients = []
+        for client in clients:
+            processed_client = {
+                "client_id": client.get("client_id", ""),
+                "client_name": client.get("client_name", "Unknown Client"),
+                "trust_type": client.get("trust_type", "mcp_client"),
+                "created_at": datetime.datetime.fromtimestamp(
+                    client.get("created_at", 0)
+                ).strftime("%Y-%m-%d %H:%M"),
+                "status": "active",
+            }
+            processed_clients.append(processed_client)
+        
+        return processed_clients
+
+Then include OAuth2 clients in the trust page template variables:
+
+.. code-block:: python
+
+    # In the trust page handler
+    oauth_clients = self._get_oauth_clients_for_actor(actor_id)
+    
+    self.response.template_values = {
+        "id": myself.id,
+        "trusts": relationships,
+        "oauth_clients": oauth_clients,  # Add this line
+        "url": f"{urls['actor_root']}/",
+        "actor_root": urls["actor_root"],
+        "actor_www": urls["actor_www"],
+    }
+
+Template Integration
+---------------------
+
+Display OAuth2 clients in templates with delete functionality:
+
+.. code-block:: html
+
+    <!-- OAuth2 Clients Section -->
+    <div class="connections-card">
+        <h3>🔑 API Clients</h3>
+        
+        {% if oauth_clients %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Client</th>
+                    <th>Type</th>
+                    <th>Created</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for client in oauth_clients %}
+                <tr>
+                    <td>{{ client.client_name }}</td>
+                    <td>{{ client.trust_type }}</td>
+                    <td>{{ client.created_at }}</td>
+                    <td>{{ client.status }}</td>
+                    <td>
+                        <button onclick="deleteOAuthClient('{{ client.client_id }}', '{{ client.client_name }}')">
+                            Delete
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No API clients registered. Generate credentials to connect AI assistants.</p>
+        {% endif %}
+    </div>
+
+    <script>
+        async function deleteOAuthClient(clientId, clientName) {
+            if (!confirm(`Delete OAuth2 client "${clientName}"?`)) return;
+            
+            const response = await fetch(`{{ actor_root }}/api/oauth-client/${clientId}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            
+            if (response.ok) {
+                alert('Client deleted successfully!');
+                window.location.reload();
+            } else {
+                alert('Error deleting client');
+            }
+        }
+    </script>
+
+Client Registry Features
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``MCPClientRegistry`` class provides comprehensive client management:
+
+* **Dynamic Registration**: RFC 7591 compliant client registration
+* **Per-Actor Storage**: Clients are stored in actor-specific attribute buckets
+* **Global Index**: Fast client lookup using global index system
+* **Secure Deletion**: Removes client from both actor storage and global index
+* **Trust Type Integration**: Clients inherit permissions from trust type system
+
+Usage in AI Assistants
+~~~~~~~~~~~~~~~~~~~~~~
+
+Generated OAuth2 credentials can be used with AI assistants:
+
+1. **Client Registration**: User generates credentials via web interface
+2. **OAuth2 Flow**: AI assistant uses authorization code flow
+3. **Token Exchange**: Client credentials exchanged for access tokens
+4. **MCP Access**: Authenticated access to user's MCP tools and data
+
+The OAuth2 system integrates seamlessly with ActingWeb's trust and permission system, ensuring secure access control for AI assistant connections.
+
+OAuth2ClientManager Interface
+------------------------------
+
+For developer-friendly OAuth2 client management, ActingWeb provides the ``OAuth2ClientManager`` interface that follows the same patterns as other ActingWeb interfaces like ``TrustManager`` and ``PropertyStore``.
+
+.. code-block:: python
+
+    from actingweb.interface.oauth_client_manager import OAuth2ClientManager
+
+    # Initialize manager for specific actor
+    client_manager = OAuth2ClientManager(actor_id, config)
+
+    # Create new OAuth2 client
+    client = client_manager.create_client("My AI Assistant")
+    print(f"Client ID: {client['client_id']}")
+    print(f"Client Secret: {client['client_secret']}")
+
+    # List all clients for actor
+    clients = client_manager.list_clients()
+    for client in clients:
+        print(f"{client['client_name']} - {client['created_at_formatted']}")
+
+    # Get specific client details
+    client_data = client_manager.get_client("mcp_abc123...")
+    if client_data:
+        print(f"Client: {client_data['client_name']}")
+
+    # Delete client
+    success = client_manager.delete_client("mcp_abc123...")
+    if success:
+        print("Client deleted successfully")
+
+    # Get client statistics
+    stats = client_manager.get_client_stats()
+    print(f"Total clients: {stats['total_clients']}")
+    print(f"Trust types: {stats['trust_types']}")
+
+    # Convenience properties and methods
+    print(f"Client count: {client_manager.client_count}")
+    print(f"Has clients: {bool(client_manager)}")
+    
+    # Iteration support
+    for client in client_manager:
+        print(f"Client: {client['client_name']}")
+
+Interface Features
+------------------
+
+The ``OAuth2ClientManager`` provides these developer-friendly features:
+
+* **Formatted Timestamps**: Automatic conversion of Unix timestamps to readable format
+* **Status Information**: Enhanced client metadata with activity status
+* **Validation**: Built-in client ownership validation before operations
+* **Statistics**: Convenient methods for client analytics and reporting
+* **Pythonic Interface**: Support for ``len()``, ``bool()``, and iteration
+* **Error Handling**: Comprehensive logging and error management
+* **Trust Type Integration**: Seamless integration with ActingWeb's trust system
+
+This interface abstracts away the complexity of the underlying ``MCPClientRegistry`` while providing a clean, consistent API that follows ActingWeb's established interface patterns.

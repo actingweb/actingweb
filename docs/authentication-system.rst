@@ -1,6 +1,5 @@
-============================
 ActingWeb Authentication System
-============================
+===============================
 
 This document describes the comprehensive OAuth2 authentication system in ActingWeb, including support for multiple providers like Google and GitHub.
 

@@ -1,6 +1,8 @@
 Getting Started
 ===============
 
+This is a longer, step‑by‑step tutorial that builds on the short Quickstart. If you’re new to ActingWeb, do the Quickstart first (minimal Flask/FastAPI app, create an actor), then come back here for deeper patterns, hooks, and integration details.
+
 The easiest way to get started is to use the modern ActingWeb interface that provides a clean, fluent API for building ActingWeb applications. For a complete example, see the actingwebdemo mini-application at `http://acting-web-demo.readthedocs.io/ <http://acting-web-demo.readthedocs.io/>`_.
 
 Quick Start
@@ -63,6 +65,32 @@ For production applications, integrate with Flask:
 
     if __name__ == "__main__":
         flask_app.run()
+
+FastAPI Integration (non‑MCP)
+-----------------------------
+
+If you prefer FastAPI and do not need MCP features:
+
+.. code-block:: python
+
+    from fastapi import FastAPI
+    from actingweb.interface import ActingWebApp
+
+    app = FastAPI()
+
+    aw = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com",
+    ).with_web_ui(enable=True)
+
+    # Explicitly disable MCP exposure for this app
+    aw.with_mcp(enable=False)
+
+    # Auto-generate all ActingWeb routes under the FastAPI app
+    aw.integrate_fastapi(app, templates_dir="templates")
+
+    # Run with: uvicorn main:app --reload
 
 How it works
 ------------

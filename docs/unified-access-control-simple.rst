@@ -1,6 +1,5 @@
-========================================
 ActingWeb Access Control (Simple Guide)
-========================================
+=======================================
 
 ActingWeb's Unified Access Control system works transparently with your existing hooks. You don't need to add permission checks to your code - ActingWeb handles them automatically.
 
@@ -19,7 +18,7 @@ For most applications, you only need to do two things:
 That's it! No explicit permission checking code required.
 
 Simple Example
-=============
+==============
 
 Here's a complete example of adding access control to an ActingWeb application:
 
@@ -76,7 +75,7 @@ Here's a complete example of adding access control to an ActingWeb application:
 - Only calls your hooks if permission is granted
 
 Built-in Trust Types
-===================
+====================
 
 ActingWeb provides these trust types out of the box:
 
@@ -117,7 +116,7 @@ Only add custom trust types if the built-in ones don't meet your needs:
    access_control = AccessControlConfig(config)
 
 Simple Format
-------------
+-------------
 
 Use the simple format for basic permissions:
 
@@ -137,7 +136,7 @@ Use the simple format for basic permissions:
    )
 
 Advanced Format
---------------
+---------------
 
 Use the advanced format for fine-grained control:
 
@@ -165,12 +164,12 @@ Use the advanced format for fine-grained control:
    )
 
 Permission Patterns
-==================
+===================
 
 Use these patterns to control access:
 
 Property Patterns
-----------------
+-----------------
 
 .. code-block:: python
 
@@ -181,7 +180,7 @@ Property Patterns
    ]
 
 Method Patterns
---------------
+---------------
 
 .. code-block:: python
 
@@ -192,7 +191,7 @@ Method Patterns
    ]
 
 Excluded Patterns
-----------------
+-----------------
 
 Use the advanced format to exclude specific items:
 
@@ -204,7 +203,7 @@ Use the advanced format to exclude specific items:
    }
 
 How It Works
-===========
+============
 
 The access control system integrates seamlessly with ActingWeb:
 
@@ -215,7 +214,7 @@ The access control system integrates seamlessly with ActingWeb:
 5. **Access denied response** sent automatically if permission is denied
 
 Trust Relationship Setup
-=======================
+========================
 
 Trust relationships are established through:
 
@@ -234,7 +233,7 @@ Trust relationships are established through:
 Your hooks don't need to worry about any of this - ActingWeb handles it all.
 
 Migration from Existing Apps
-===========================
+============================
 
 If you have an existing ActingWeb application:
 
@@ -267,10 +266,10 @@ Example migration:
        return process_data(value)
 
 Common Patterns
-==============
+===============
 
 API Client Access
-----------------
+-----------------
 
 .. code-block:: python
 
@@ -285,7 +284,7 @@ API Client Access
    )
 
 Mobile App Access
-----------------
+-----------------
 
 .. code-block:: python
 
@@ -301,7 +300,7 @@ Mobile App Access
    )
 
 AI Assistant Access
-------------------
+-------------------
 
 .. code-block:: python
 
@@ -317,7 +316,7 @@ AI Assistant Access
    )
 
 Troubleshooting
-==============
+===============
 
 **Hook not being called?**
   Check that the peer has the required trust relationship and permissions
@@ -340,10 +339,10 @@ Troubleshooting
    logging.getLogger("actingweb.permission_evaluator").setLevel(logging.DEBUG)
 
 Advanced Topics
-==============
+===============
 
 Per-Relationship Permission Overrides
-------------------------------------
+-------------------------------------
 
 Sometimes you need to give specific relationships different permissions than their trust type defaults. ActingWeb provides a simple API for this:
 
@@ -419,7 +418,7 @@ Clients can discover permission management support by checking the ``/meta/actin
    www,oauth,callbacks,trust,onewaytrust,subscriptions,actions,resources,methods,sessions,nestedproperties,trustpermissions
 
 Custom Permission Logic
-----------------------
+-----------------------
 
 For complex scenarios, you can still add custom permission logic in your hooks:
 

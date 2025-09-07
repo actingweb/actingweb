@@ -36,14 +36,6 @@ actingweb.handlers.callbacks module
     :undoc-members:
     :show-inheritance:
 
-actingweb.handlers.devtest module
----------------------------------
-
-.. automodule:: actingweb.handlers.devtest
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 actingweb.handlers.factory module
 ---------------------------------
 
@@ -115,4 +107,3 @@ actingweb.handlers.www module
     :members:
     :undoc-members:
     :show-inheritance:
-

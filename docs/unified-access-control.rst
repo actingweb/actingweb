@@ -55,7 +55,7 @@ Trust types are templates that define the base permissions for different kinds o
      - Configurable tools, resources, and prompts
 
 Permission Categories
---------------------
+---------------------
 
 The system controls access across six categories:
 
@@ -78,7 +78,7 @@ The system controls access across six categories:
   MCP prompt access like ``analyze_notes``, ``summarize_document``
 
 Permission Structure
--------------------
+--------------------
 
 Permissions are defined using flexible structures that support both explicit lists and pattern matching:
 
@@ -106,7 +106,7 @@ Architecture
 The Unified Access Control system consists of four main components:
 
 Trust Type Registry
-------------------
+-------------------
 
 Manages the registration and storage of trust relationship types. Trust types are stored globally using ActingWeb's attribute bucket pattern.
 
@@ -116,7 +116,7 @@ Manages the registration and storage of trust relationship types. Trust types ar
   * Key: ``{trust_type_name}``
 
 Trust Permission Store
----------------------
+----------------------
 
 Handles per-relationship permission overrides that customize the base permissions defined by trust types.
 
@@ -126,7 +126,7 @@ Handles per-relationship permission overrides that customize the base permission
   * Key: ``{actor_id}:{peer_id}``
 
 Permission Evaluator
--------------------
+--------------------
 
 The core engine that combines trust type base permissions with individual overrides to make authorization decisions.
 
@@ -141,7 +141,7 @@ The existing trust database model has been extended with new fields while mainta
 * ``last_accessed`` - Last access timestamp for analytics
 
 System Constants
-===============
+================
 
 The system uses standardized constants for consistent global data storage:
 
@@ -160,19 +160,19 @@ The system uses standardized constants for consistent global data storage:
    ESTABLISHED_VIA_OAUTH2 = "oauth2"
 
 Pattern Matching
-===============
+================
 
 The permission system supports sophisticated pattern matching for scalable access control:
 
 Glob Patterns
-------------
+-------------
 
 * ``*`` - Matches any characters: ``get_*`` matches ``get_profile``, ``get_notes``
 * ``?`` - Matches single character: ``get_?`` matches ``get_a`` but not ``get_ab``  
 * ``exact`` - Exact string match
 
 Path Patterns
-------------
+-------------
 
 * ``public/*`` - Matches all paths under ``public/``
 * ``notes/work/*`` - Matches all work-related notes
@@ -193,7 +193,7 @@ Different permission categories support different operations:
 * **Methods/Actions/Tools/Prompts**: Typically just existence/access checks
 
 Security Model
-=============
+==============
 
 The Unified Access Control system follows security best practices:
 
@@ -207,7 +207,7 @@ The system defaults to denying access when:
 * Trust relationship or trust type cannot be found
 
 Precedence Rules
----------------
+----------------
 
 Permission evaluation follows this precedence order:
 
@@ -217,7 +217,7 @@ Permission evaluation follows this precedence order:
 4. **Default Deny**: No matching rule found (lowest priority)
 
 Audit Trail
-----------
+-----------
 
 The system maintains audit capabilities through:
 
@@ -226,12 +226,12 @@ The system maintains audit capabilities through:
 * Security event tracking
 
 Performance Considerations
-=========================
+==========================
 
 The system is designed for high performance through:
 
 Caching Strategy
----------------
+----------------
 
 * **Pattern Cache**: Compiled regex patterns are cached for reuse
 * **Registry Cache**: Trust types cached after first load
@@ -239,7 +239,7 @@ Caching Strategy
 * **Singleton Pattern**: Single evaluator instance per process
 
 Database Efficiency
-------------------
+-------------------
 
 * **Attribute Buckets**: Efficient key-value storage using DynamoDB
 * **Global Indexes**: Fast token and client lookups for OAuth2/MCP
@@ -257,7 +257,7 @@ All components are designed to be thread-safe:
 * DynamoDB consistency guarantees
 
 Permission System Initialization
-------------------------
+--------------------------------
 
 **Good News**: The ActingWeb permission system is **automatically initialized** when you use Flask or FastAPI integration - no manual setup required!
 
@@ -315,26 +315,26 @@ This indicates the automatic initialization failed. Check your logs for initiali
 The system includes graceful fallbacks - if automatic initialization fails during integration, individual components will fall back to lazy loading with debug messages.
 
 Backward Compatibility
-=====================
+======================
 
 The Unified Access Control system maintains full backward compatibility:
 
 Database Schema
---------------
+---------------
 
 * All existing trust model fields remain unchanged
 * New fields are optional and nullable
 * Existing queries continue to work
 
 API Compatibility
-----------------
+-----------------
 
 * Existing ActingWeb handler patterns continue to work
 * No changes required to existing applications
 * New permission checks can be added incrementally
 
 Migration Path
--------------
+--------------
 
 Applications can adopt the new system gradually:
 
@@ -405,7 +405,7 @@ The PUT endpoint now accepts permission updates alongside traditional trust rela
    }
 
 Permission Management API
-------------------------
+-------------------------
 
 The system introduces a new dedicated API for managing per-relationship permission overrides:
 
@@ -479,7 +479,7 @@ Remove permission overrides, reverting to trust type defaults:
    DELETE /myapp/actor123/trust/friend/peer456/permissions
 
 Permission Structure
--------------------
+--------------------
 
 Permission overrides follow this structure:
 
@@ -564,7 +564,7 @@ The presence of ``trustpermissions`` indicates support for:
 * Standardized permission structures
 
 Implementation Guide
-===================
+====================
 
 For practical implementation details and simple usage patterns, see:
 

@@ -1,6 +1,5 @@
-===============================
 ActingWeb v3.1 Migration Guide
-===============================
+==============================
 
 This guide helps you migrate from the legacy OnAWBase interface (removed in v3.1) to the modern ActingWebApp interface.
 
@@ -19,7 +18,7 @@ Migration Steps
 ===============
 
 Step 1: Replace OnAWBase Class
--------------------------------
+------------------------------
 
 **Before (Legacy - NO LONGER SUPPORTED):**
 
@@ -79,7 +78,7 @@ Step 2: Update Handler Instantiation
     handler = SomeHandler(webobj, config, hooks=app.hooks)
 
 Step 3: Update Flask Integration
--------------------------------
+--------------------------------
 
 **Before:**
 
@@ -150,7 +149,7 @@ OnAWBase Method Mapping
      - ``@app.action_hook("action_name")``
 
 Hook Function Signatures
-=========================
+========================
 
 Property Hooks
 --------------
@@ -188,7 +187,7 @@ Application-Level Callback Hooks
         return True
 
 Method Hooks
------------
+------------
 
 .. code-block:: python
 
@@ -198,7 +197,7 @@ Method Hooks
         return {"result": "success"}
 
 Action Hooks
------------
+------------
 
 .. code-block:: python
 
@@ -223,7 +222,7 @@ Lifecycle Hooks
         pass
 
 Subscription Hooks
------------------
+------------------
 
 .. code-block:: python
 
@@ -233,7 +232,7 @@ Subscription Hooks
         return True
 
 Benefits of Migration
-====================
+=====================
 
 The new interface provides significant advantages:
 
@@ -258,10 +257,10 @@ The new interface provides significant advantages:
     - Eliminated potential for interface synchronization issues
 
 Common Migration Issues
-======================
+=======================
 
 Type Errors
-----------
+-----------
 
 If you encounter type errors, ensure hook function signatures match exactly:
 
@@ -273,7 +272,7 @@ If you encounter type errors, ensure hook function signatures match exactly:
         return value
 
 Missing Imports
---------------
+---------------
 
 Update your imports:
 
@@ -287,7 +286,7 @@ Update your imports:
     from actingweb.interface import ActingWebApp, ActorInterface
 
 Handler Parameters
------------------
+------------------
 
 Ensure all handler instantiations use the new parameter:
 

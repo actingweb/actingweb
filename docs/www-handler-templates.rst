@@ -1,11 +1,10 @@
-============================
 WWW Handler and Templates
-============================
+=========================
 
 The WWW Handler provides a web-based user interface for ActingWeb actors, allowing users to manage properties, trust relationships, and other actor functionality through a browser interface.
 
 Overview
-========
+--------
 
 The WWW Handler is automatically enabled when you configure your ActingWeb application with ``.with_web_ui()``:
 
@@ -27,7 +26,7 @@ This creates several web endpoints:
 - ``/<actor_id>/www/init`` - Actor initialization
 
 Web Interface Features
-======================
+----------------------
 
 Dashboard
 ---------
@@ -39,7 +38,7 @@ The main dashboard (``/<actor_id>/www``) provides:
 - Links to property management, trust relationships, and initialization
 
 Properties Management
---------------------
+---------------------
 
 **Properties List** (``/<actor_id>/www/properties``):
 
@@ -58,7 +57,7 @@ Properties Management
 - Delete functionality is disabled for protected properties
 
 Trust Relationships
-------------------
+-------------------
 
 The trust interface (``/<actor_id>/www/trust``) allows users to:
 
@@ -76,7 +75,7 @@ The trust interface (``/<actor_id>/www/trust``) allows users to:
 - Relationship names must be URL-safe (letters, numbers, underscores, hyphens only)
 
 Property Hooks and Web Interface
-================================
+--------------------------------
 
 Property hooks directly control what users see and can do in the web interface:
 
@@ -99,7 +98,7 @@ Properties that return ``None`` for GET operations are completely hidden from th
 **Result**: These properties won't appear in the properties list at all.
 
 Read-Only Properties
--------------------
+--------------------
 
 Properties that return ``None`` for PUT/POST operations are marked as read-only:
 
@@ -120,12 +119,12 @@ Properties that return ``None`` for PUT/POST operations are marked as read-only:
 - Edit form and delete button are disabled
 
 Template System
-================
+----------------
 
 The WWW Handler uses Jinja2 templates that can be customized for your application.
 
 Template Location
-----------------
+-----------------
 
 Templates should be placed in a ``templates/`` directory in your application root:
 
@@ -150,13 +149,15 @@ Templates should be placed in a ``templates/`` directory in your application roo
         └── favicon.png
 
 Available Templates
-------------------
+-------------------
 
 **aw-actor-www-root.html**
     Main dashboard template
 
     Available variables:
-    - ``url``: Base URL for navigation (includes ``/www``)
+    - ``url``: Base URL for navigation (includes ``/www``) - **backwards compatible**
+    - ``actor_root``: Actor base URL (e.g., ``/mcp-server/actor123``) - **NEW**
+    - ``actor_www``: Actor www URL (e.g., ``/mcp-server/actor123/www``) - **NEW**
     - ``id``: Actor ID
     - ``creator``: Actor creator
     - ``passphrase``: Actor passphrase
@@ -165,21 +166,31 @@ Available Templates
     Properties list template
 
     Available variables:
-    - ``url``: Base URL for navigation
+    - ``url``: Base URL for navigation (includes ``/www``) - **backwards compatible**
+    - ``actor_root``: Actor base URL (e.g., ``/mcp-server/actor123``) - **NEW**
+    - ``actor_www``: Actor www URL (e.g., ``/mcp-server/actor123/www``) - **NEW**
     - ``id``: Actor ID
     - ``properties``: Dictionary of property name → value
     - ``read_only_properties``: Set of property names that are read-only
+    - ``list_properties``: Set of property names that are list properties
 
 **aw-actor-www-property.html**
     Individual property editing template
 
     Available variables:
-    - ``url``: Actor base URL (without ``/www``)
+    - ``url``: Actor www URL (e.g., ``/mcp-server/actor123/www``) - **backwards compatible**
+    - ``actor_root``: Actor base URL (e.g., ``/mcp-server/actor123``) - **NEW**
+    - ``actor_www``: Actor www URL (e.g., ``/mcp-server/actor123/www``) - **NEW**
     - ``id``: Actor ID
     - ``property``: Property name
-    - ``value``: Property value
+    - ``value``: Property value (display value for list properties)
+    - ``raw_value``: Raw property value
     - ``qual``: Property status ("a" if exists, "n" if not)
     - ``is_read_only``: Boolean indicating if property is read-only
+    - ``is_list_property``: Boolean indicating if this is a list property
+    - ``list_items``: List of items (for list properties)
+    - ``list_description``: Description of list property
+    - ``list_explanation``: Explanation of list property
 
 **aw-actor-www-property-delete.html**
     Property deletion confirmation template
@@ -214,7 +225,9 @@ Available Templates
     Actor initialization template
 
     Available variables:
-    - ``url``: Base URL for navigation
+    - ``url``: Base URL for navigation (includes ``/www``) - **backwards compatible**
+    - ``actor_root``: Actor base URL (e.g., ``/mcp-server/actor123``) - **NEW**
+    - ``actor_www``: Actor www URL (e.g., ``/mcp-server/actor123/www``) - **NEW**
     - ``id``: Actor ID
 
 **aw-oauth-authorization-form.html**
@@ -251,8 +264,52 @@ Available Templates
     - ``error``: Error message explaining the failure
     - ``form_action``: Form submission URL to retry
 
+Template URL Variables
+----------------------
+
+**NEW in ActingWeb v3.2**: All templates now receive consistent URL variables for navigation.
+
+**Template Variables Explained:**
+
+- **``actor_root``**: Actor base URL (e.g., ``/mcp-server/actor123``)
+  
+  - Use for dashboard and non-www pages: ``{{ actor_root }}/dashboard/memory``
+  - Use for actor-level endpoints: ``{{ actor_root }}/properties``
+
+- **``actor_www``**: Actor www URL (e.g., ``/mcp-server/actor123/www``)
+  
+  - Use for www pages: ``{{ actor_www }}/properties``
+  - Use for navigation within the www section
+
+- **``url``**: Backwards compatible variable that points to ``actor_www``
+  
+  - Existing templates continue to work unchanged
+  - Recommended to use ``actor_www`` or ``actor_root`` for clarity
+
+**Navigation Examples:**
+
+.. code-block:: html
+
+    <!-- Navigation with new variables -->
+    <nav>
+        <a href="{{ actor_www }}">🏠 Home</a>
+        <a href="{{ actor_root }}/dashboard/memory">🧠 My Memory</a>
+        <a href="{{ actor_root }}/dashboard/setup">Connect AI</a>
+        <a href="{{ actor_www }}/properties">Properties</a>
+        <a href="{{ actor_www }}/trust">Trust</a>
+    </nav>
+
+    <!-- Backwards compatible (still works) -->
+    <nav>
+        <a href="{{ url }}">Dashboard</a>
+        <a href="{{ url }}/properties">Properties</a>
+        <a href="{{ url }}/trust">Trust</a>
+    </nav>
+
+**Critical: Never use relative paths** like ``../www`` as they create incorrect URLs when on sub-pages.
+
 Template Customization
----------------------
+----------------------
 
 You can customize templates by creating your own versions. Here's an example of customizing the properties template:
 
@@ -302,7 +359,7 @@ You can customize templates by creating your own versions. Here's an example of 
     </html>
 
 Static Assets
-=============
+-------------
 
 Static files (CSS, JavaScript, images) should be placed in a ``static/`` directory:
 
@@ -323,7 +380,7 @@ These files are served at ``/static/`` URLs and can be referenced in templates:
     <img src="/static/logo.png" alt="Logo">
 
 Advanced Template Features
-==========================
+--------------------------
 
 Conditional Content Based on Property Status
 --------------------------------------------
@@ -353,26 +410,35 @@ Templates can show different content based on property protection:
     {% endfor %}
 
 Dynamic Navigation
------------------
+------------------
 
-Use the provided URL variables for consistent navigation:
+Use the consistent URL variables for navigation:
 
 .. code-block:: html
 
+    <!-- Recommended: Use specific variables -->
+    <nav>
+        <a href="{{ actor_www }}">Dashboard</a>
+        <a href="{{ actor_www }}/properties">Properties</a>
+        <a href="{{ actor_www }}/trust">Trust</a>
+        <a href="{{ actor_root }}/dashboard/memory">My Memory</a>
+        <a href="{{ actor_root }}/dashboard/setup">Setup</a>
+    </nav>
+
+    <!-- Legacy: Still works but less clear -->
     <nav>
         <a href="{{ url }}">Dashboard</a>
         <a href="{{ url }}/properties">Properties</a>
         <a href="{{ url }}/trust">Trust</a>
-        <a href="{{ url }}/init">Initialize</a>
     </nav>
 
-Note that ``url`` in most templates includes ``/www``, but in individual property templates, it's the actor base URL without ``/www``.
+**New consistent behavior**: All templates now receive both ``actor_root`` and ``actor_www`` variables, eliminating confusion about URL structure.
 
 Security Considerations
-======================
+-----------------------
 
 Property Protection
-------------------
+-------------------
 
 The web interface automatically enforces property hook security:
 
@@ -396,7 +462,7 @@ Template Security
     <div>{{ value|safe }}</div>
 
 Authentication Integration
-=========================
+--------------------------
 
 The WWW Handler integrates with ActingWeb's authentication system:
 
@@ -406,12 +472,12 @@ The WWW Handler integrates with ActingWeb's authentication system:
 - Sessions are managed automatically
 
 URL Structure and Base Paths
-============================
+----------------------------
 
 The WWW Handler supports flexible URL structures for different deployment scenarios:
 
 Basic Structure
---------------
+---------------
 
 .. code-block:: text
 
@@ -423,7 +489,7 @@ Basic Structure
     /<actor_id>/www/init               # Initialization
 
 With Base Paths (e.g., deployed under /mcp-server)
--------------------------------------------------
+--------------------------------------------------
 
 .. code-block:: text
 
@@ -436,7 +502,7 @@ With Base Paths (e.g., deployed under /mcp-server)
 The templates automatically handle base paths by using the ``url`` variable provided by the handler.
 
 Best Practices
-==============
+--------------
 
 1. **Consistent Styling**: Use a consistent CSS framework across all templates
 2. **Responsive Design**: Ensure templates work on mobile devices
@@ -447,7 +513,7 @@ Best Practices
 7. **Navigation Consistency**: Use the provided URL variables for navigation
 
 Example: Complete Custom Template
-=================================
+---------------------------------
 
 Here's a complete example of a custom properties template with modern styling:
 

@@ -22,6 +22,17 @@ The latest documentation for the released version (release branch) of this libra
 The master branch of the library has the latest features and bug fixes and the updated documentation can be found at
 `http://actingweb.readthedocs.io/en/master <http://actingweb.readthedocs.io/en/master>`_.
 
+Contributing
+------------
+
+See ``CONTRIBUTING.rst`` for local setup, dev workflow, testing, coding standards, and devtest endpoint usage.
+
+Public Demo Application
+-----------------------
+
+For a full example application and reference while developing, see the public demo repo:
+https://github.com/actingweb/actingwebdemo
+
 
 Why use actingweb?
 ---------------------

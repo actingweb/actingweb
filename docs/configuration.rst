@@ -78,8 +78,9 @@ Local Development (DynamoDB Local)
     export AWS_ACCESS_KEY_ID=local
     export AWS_SECRET_ACCESS_KEY=local
     export AWS_DEFAULT_REGION=us-east-1
+    export AWS_DB_HOST=http://localhost:8000  # PynamoDB host override for local
 
-Point your app to DynamoDB Local via AWS SDK defaults or environment (no code changes needed). The library uses its bundled models to create/access required tables at runtime.
+Point your app to DynamoDB Local via these environment variables (no code changes needed). The library uses its bundled PynamoDB models to create/access required tables at runtime.
 
 Production (AWS DynamoDB)
 ~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -4,6 +4,21 @@ Quickstart
 
 This 3–5 minute tour shows how to spin up a minimal app, create an actor, and browse the web UI.
 
+Install
+-------
+
+.. code-block:: bash
+
+    # Minimal
+    pip install actingweb
+
+    # Flask or FastAPI integration
+    pip install 'actingweb[flask]'
+    pip install 'actingweb[fastapi]'
+
+    # Everything (incl. MCP)
+    pip install 'actingweb[all]'
+
 1) Minimal app (choose one)
 ===========================
 
@@ -81,7 +96,9 @@ The response contains the new actor ID. The actor root is ``http://localhost:500
 Where to next
 =============
 
+- Local dev setup: install extras, DynamoDB Local → :doc:`local-dev-setup`
 - Configuration reference: identity, auth (OAuth2), DB, base paths → :doc:`configuration`
 - Routing overview: generated routes and structure → :doc:`routing-overview`
 - Developer API: high‑level interfaces and hooks → :doc:`developers`
 - MCP apps: add AI‑client access when needed → :doc:`mcp-applications`
+- MCP quickstart: minimal server with tools/prompts → :doc:`mcp-quickstart`

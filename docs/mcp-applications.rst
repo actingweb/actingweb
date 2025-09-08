@@ -119,167 +119,107 @@ Basic MCP Application
 MCP Tools Implementation
 ------------------------
 
-Create reusable MCP tools in ``shared_mcp/tools.py``:
+Create reusable MCP tools in ``shared_mcp/tools.py`` using the correct decorators:
 
 .. code-block:: python
 
     # shared_mcp/tools.py
     import logging
-    from typing import Optional, Dict, Any
-    from mcp.server import Server
-    from mcp.types import Tool, TextContent
+    from datetime import datetime
+    from typing import Dict, Any
+    from actingweb.interface import ActorInterface
+    from actingweb.mcp import mcp_tool
 
     logger = logging.getLogger(__name__)
 
     def setup_mcp_tools(aw_app):
-        """Setup MCP tools for the ActingWeb application."""
-        
-        @aw_app.mcp_tool
-        def search(query: str, actor_context: Optional[Dict[str, Any]] = None) -> str:
-            """Search through the actor's data and properties."""
-            if not actor_context:
-                return "No actor context available"
-            
-            actor = actor_context.get("actor")
-            if not actor:
-                return "No actor available"
-            
+        """Register MCP tools with the ActingWeb app."""
+
+        @aw_app.action_hook("search")
+        @mcp_tool(description="Search through the actor's properties")
+        def search(actor: ActorInterface, action_name: str, params: Dict[str, Any]):
+            query = str(params.get("query", "")).lower()
             results = []
-            
-            # Search through properties
             for key, value in actor.properties.items():
-                if query.lower() in key.lower() or query.lower() in str(value).lower():
+                if query in key.lower() or query in str(value).lower():
                     results.append(f"Property {key}: {value}")
-            
-            if not results:
-                return f"No results found for '{query}'"
-            
-            return "\\n".join(results)
+            return "\n".join(results) if results else f"No results for '{query}'"
 
-        @aw_app.mcp_tool
-        def create_note(title: str, content: str, actor_context: Optional[Dict[str, Any]] = None) -> str:
-            """Create a new note for the actor."""
-            if not actor_context:
-                return "No actor context available"
-            
-            actor = actor_context.get("actor")
-            if not actor:
-                return "No actor available"
-            
-            # Store note in properties
-            note_key = f"note_{datetime.now().isoformat()}"
-            note_data = {
-                "title": title,
-                "content": content,
-                "created": datetime.now().isoformat()
-            }
-            
-            actor.properties[note_key] = note_data
-            
-            return f"Created note '{title}' successfully"
+        @aw_app.action_hook("create_note")
+        @mcp_tool(description="Create a note for this actor")
+        def create_note(actor: ActorInterface, action_name: str, params: Dict[str, Any]):
+            title = params.get("title", "Untitled")
+            content = params.get("content", "")
+            key = f"note_{datetime.now().isoformat()}"
+            actor.properties[key] = {"title": title, "content": content, "created": datetime.now().isoformat()}
+            return {"status": "ok", "note": key}
 
-        @aw_app.mcp_tool
-        def fetch_url(url: str, actor_context: Optional[Dict[str, Any]] = None) -> str:
-            """Fetch content from a URL."""
+        @aw_app.action_hook("fetch_url")
+        @mcp_tool(description="Fetch URL content and store metadata")
+        def fetch_url(actor: ActorInterface, action_name: str, params: Dict[str, Any]):
+            import requests
+            url = params.get("url")
+            if not url:
+                return {"error": "Missing url"}
             try:
-                import requests
-                response = requests.get(url, timeout=10)
-                response.raise_for_status()
-                
-                # Store fetch history in actor properties
-                if actor_context and actor_context.get("actor"):
-                    actor = actor_context["actor"]
-                    history_key = f"fetch_history_{datetime.now().isoformat()}"
-                    actor.properties[history_key] = {
-                        "url": url,
-                        "timestamp": datetime.now().isoformat(),
-                        "status_code": response.status_code
-                    }
-                
-                return response.text[:5000]  # Limit response size
-                
+                resp = requests.get(url, timeout=10)
+                resp.raise_for_status()
+                actor.properties[f"fetch_{datetime.now().isoformat()}"] = {
+                    "url": url,
+                    "status_code": resp.status_code,
+                }
+                return resp.text[:5000]
             except Exception as e:
-                return f"Error fetching URL: {str(e)}"
+                return f"Error fetching URL: {e}"
 
 MCP Prompts Implementation
 --------------------------
 
-Create prompt templates in ``shared_mcp/prompts.py``:
+Create prompts in ``shared_mcp/prompts.py`` using the correct decorators:
 
 .. code-block:: python
 
     # shared_mcp/prompts.py
-    from typing import Optional, Dict, Any
+    from typing import Dict, Any
+    from actingweb.interface import ActorInterface
+    from actingweb.mcp import mcp_prompt
 
     def setup_mcp_prompts(aw_app):
-        """Setup MCP prompts for the ActingWeb application."""
-        
-        @aw_app.mcp_prompt
-        def analyze_notes(actor_context: Optional[Dict[str, Any]] = None) -> str:
-            """Analyze all notes created by this actor."""
-            if not actor_context:
-                return "No actor context available"
-            
-            actor = actor_context.get("actor")
-            if not actor:
-                return "No actor available"
-            
-            # Collect all notes
-            notes = []
-            for key, value in actor.properties.items():
-                if key.startswith("note_") and isinstance(value, dict):
-                    notes.append(value)
-            
+        """Register MCP prompts for the ActingWeb application."""
+
+        @aw_app.method_hook("analyze_notes")
+        @mcp_prompt(description="Analyze notes for this actor")
+        def analyze_notes(actor: ActorInterface, method_name: str, data: Dict[str, Any]):
+            notes = [v for k, v in actor.properties.items() if k.startswith("note_") and isinstance(v, dict)]
             if not notes:
-                return "You are analyzing notes for a user, but no notes were found."
-            
-            notes_text = "\\n".join([
-                f"Title: {note.get('title', 'Untitled')}\\n"
-                f"Content: {note.get('content', '')}\\n"
-                f"Created: {note.get('created', 'Unknown')}\\n---"
-                for note in notes
-            ])
-            
-            return f"""You are analyzing the following notes for a user:
+                return "No notes found."
+            titles = ", ".join(n.get("title", "Untitled") for n in notes)
+            return f"You have {len(notes)} notes. Titles: {titles}"
 
-    {notes_text}
+        @aw_app.method_hook("create_meeting_prep")
+        @mcp_prompt(description="Create a meeting prep prompt")
+        def create_meeting_prep(actor: ActorInterface, method_name: str, data: Dict[str, Any]):
+            topic = str(data.get("topic", ""))
+            relevant = [f"{k}: {v}" for k, v in actor.properties.items() if topic.lower() in str(v).lower()]
+            context = "\n".join(relevant) if relevant else "No relevant data found."
+            return f"Prepare for a meeting about: {topic}\n\nRelevant information:\n{context}"
 
-    Please provide insights about:
-    1. Common themes or topics
-    2. Sentiment analysis
-    3. Suggestions for organization
-    4. Action items or follow-ups identified
-    """
+MCP Resources Implementation
+----------------------------
 
-        @aw_app.mcp_prompt  
-        def create_meeting_prep(topic: str, actor_context: Optional[Dict[str, Any]] = None) -> str:
-            """Create a meeting preparation prompt based on actor's data."""
-            if not actor_context:
-                return "No actor context available"
-            
-            actor = actor_context.get("actor")
-            if not actor:
-                return "No actor available"
-            
-            # Find relevant notes and data
-            relevant_data = []
-            for key, value in actor.properties.items():
-                if topic.lower() in str(value).lower():
-                    relevant_data.append(f"{key}: {value}")
-            
-            context = "\\n".join(relevant_data) if relevant_data else "No relevant data found."
-            
-            return f"""Prepare for a meeting about: {topic}
+You can expose resources via MCP using the resource decorator on a method hook:
 
-    Relevant information from your data:
-    {context}
+.. code-block:: python
 
-    Please help prepare for this meeting by:
-    1. Summarizing key points from the relevant data
-    2. Identifying potential questions to ask
-    3. Suggesting discussion topics
-    4. Recommending action items to propose
-    """
+    from typing import Dict, Any
+    from actingweb.mcp import mcp_resource
+
+    def setup_mcp_resources(aw_app):
+        @aw_app.method_hook("config")
+        @mcp_resource(uri_template="config://{path}", description="Read config values")
+        def get_config(actor, method_name: str, data: Dict[str, Any]):
+            path = data.get("path", "")
+            return {"path": path, "value": actor.properties.get(path, None)}
 
 Property Hooks for MCP Applications
 -----------------------------------
@@ -376,17 +316,13 @@ Authentication in Application Code
     # The ActingWeb integration handles OAuth2 automatically
     # Authenticated users get access to their actor context in MCP tools
 
-    @aw_app.mcp_tool
-    def my_tool(param: str, actor_context: Optional[Dict[str, Any]] = None) -> str:
-        if not actor_context:
-            return "Authentication required"
-        
-        actor = actor_context.get("actor")
-        user_email = actor.creator  # The authenticated user's email
-        
-        # Use actor.properties for per-user data storage
+    from actingweb.mcp import mcp_tool
+
+    @aw_app.action_hook("my_tool")
+    @mcp_tool(description="Demo tool showing actor context")
+    def my_tool(actor: ActorInterface, action_name: str, params: Dict[str, Any]) -> str:
+        user_email = actor.creator
         actor.properties.last_tool_use = datetime.now().isoformat()
-        
         return f"Tool executed for user {user_email}"
 
 Deployment Patterns
@@ -549,21 +485,23 @@ Unit Testing Tools and Prompts
         def test_search_tool(self):
             # Add test data
             self.actor.properties.test_note = "This is a test note about Python"
-            
-            # Test search
-            result = search("Python", actor_context={"actor": self.actor})
+
+            # Execute the registered action hook (tool)
+            result = self.app.hooks.execute_action_hooks(
+                self.actor, "search", {"query": "Python"}
+            )
             self.assertIn("test_note", result)
             self.assertIn("Python", result)
             
         def test_create_note_tool(self):
-            result = create_note(
-                "Test Title", 
-                "Test content",
-                actor_context={"actor": self.actor}
+            result = self.app.hooks.execute_action_hooks(
+                self.actor,
+                "create_note",
+                {"title": "Test Title", "content": "Test content"},
             )
-            
-            self.assertIn("Created note", result)
-            
+
+            self.assertTrue("status" in result or "Created note" in str(result))
+
             # Check that note was stored
             notes = [k for k in self.actor.properties.keys() if k.startswith("note_")]
             self.assertTrue(len(notes) > 0)
@@ -740,14 +678,15 @@ Here's a complete example of a specialized MCP application for note-taking:
         return None if operation in ["put", "post", "delete"] else value
 
     # MCP Tools
-    @aw_app.mcp_tool
-    def create_note(title: str, content: str, tags: str = "", 
-                   actor_context: Optional[Dict[str, Any]] = None) -> str:
+    from actingweb.mcp import mcp_tool
+
+    @aw_app.action_hook("create_note")
+    @mcp_tool(description="Create a new note with title, content, and tags")
+    def create_note(actor: ActorInterface, action_name: str, params: Dict[str, Any]) -> str:
         """Create a new note with title, content, and optional tags."""
-        if not actor_context:
-            return "Authentication required"
-        
-        actor = actor_context["actor"]
+        title = params.get("title", "Untitled")
+        content = params.get("content", "")
+        tags = params.get("tags", "")
         note_id = f"note_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         note_data = {
@@ -767,14 +706,12 @@ Here's a complete example of a specialized MCP application for note-taking:
         
         return f"Created note '{title}' with ID {note_id}"
 
-    @aw_app.mcp_tool
-    def search_notes(query: str, tag: str = "", 
-                    actor_context: Optional[Dict[str, Any]] = None) -> str:
+    @aw_app.action_hook("search_notes")
+    @mcp_tool(description="Search notes by content, title, or tags")
+    def search_notes(actor: ActorInterface, action_name: str, params: Dict[str, Any]) -> str:
         """Search notes by content, title, or tags."""
-        if not actor_context:
-            return "Authentication required"
-        
-        actor = actor_context["actor"]
+        query = str(params.get("query", ""))
+        tag = str(params.get("tag", ""))
         results = []
         
         for key, value in actor.properties.items():
@@ -798,13 +735,10 @@ Here's a complete example of a specialized MCP application for note-taking:
         
         return "\\n---\\n".join(results)
 
-    @aw_app.mcp_tool
-    def list_tags(actor_context: Optional[Dict[str, Any]] = None) -> str:
+    @aw_app.action_hook("list_tags")
+    @mcp_tool(description="List all tags used in notes")
+    def list_tags(actor: ActorInterface, action_name: str, params: Dict[str, Any]) -> str:
         """List all tags used in notes."""
-        if not actor_context:
-            return "Authentication required"
-        
-        actor = actor_context["actor"]
         all_tags = set()
         
         for key, value in actor.properties.items():
@@ -817,14 +751,14 @@ Here's a complete example of a specialized MCP application for note-taking:
         
         return "Available tags: " + ", ".join(sorted(all_tags))
 
-    # MCP Prompts  
-    @aw_app.mcp_prompt
-    def summarize_notes(topic: str = "", actor_context: Optional[Dict[str, Any]] = None) -> str:
+    # MCP Prompts
+    from actingweb.mcp import mcp_prompt
+
+    @aw_app.method_hook("summarize_notes")
+    @mcp_prompt(description="Summarize notes, optionally filtered by topic")
+    def summarize_notes(actor: ActorInterface, method_name: str, params: Dict[str, Any]) -> str:
         """Generate a summary of notes, optionally filtered by topic."""
-        if not actor_context:
-            return "Authentication required"
-        
-        actor = actor_context["actor"]
+        topic = str(params.get("topic", ""))
         notes = []
         
         for key, value in actor.properties.items():

@@ -308,6 +308,15 @@ ActingWeb currently supports DynamoDB as the database backend. For local develop
 
 For production, ensure your AWS credentials are properly configured and DynamoDB tables are created with the appropriate permissions.
 
+For DynamoDB Local, set the following environment variables before running your app:
+
+.. code-block:: bash
+
+    export AWS_ACCESS_KEY_ID=local
+    export AWS_SECRET_ACCESS_KEY=local
+    export AWS_DEFAULT_REGION=us-east-1
+    export AWS_DB_HOST=http://localhost:8000
+
 Testing
 -------
 

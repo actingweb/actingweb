@@ -20,7 +20,9 @@ Start Here
    :caption: Get Started
 
    docs/overview
+   docs/local-dev-setup
    docs/configuration
+   docs/routing-overview
 
 Guides
 ------
@@ -63,6 +65,7 @@ MCP Apps
    :maxdepth: 3
    :caption: MCP
 
+   docs/mcp-quickstart
    docs/mcp-applications
 
 Migration & Pitfalls
@@ -83,6 +86,17 @@ Building Apps
    :caption: Building Apps
 
    docs/getting-started
+   docs/testing
+
+Troubleshooting
+---------------
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Troubleshooting
+
+   docs/troubleshooting
+   docs/security-cheatsheet
 
 Deployment
 ~~~~~~~~~~
@@ -108,6 +122,7 @@ High-Level API
 
    docs/developers
    docs/hooks-reference
+   docs/interface-api
 
 Module Reference
 ~~~~~~~~~~~~~~~~

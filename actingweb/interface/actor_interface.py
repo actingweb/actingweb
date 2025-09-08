@@ -18,37 +18,40 @@ if TYPE_CHECKING:
 class ActorInterface:
     """
     Clean interface for ActingWeb actors.
-    
+
     This class wraps the core Actor class and provides a more intuitive
     interface for developers.
-    
+
     Example usage:
+
+    .. code-block:: python
+
         # Create new actor
         actor = ActorInterface.create(
             creator="user@example.com",
-            config=config
+            config=config,
         )
-        
+
         # Access properties
         actor.properties.email = "user@example.com"
         actor.properties["settings"] = {"theme": "dark"}
-        
+
         # Manage trust relationships
         peer = actor.trust.create_relationship(
             peer_url="https://peer.example.com/actor123",
-            relationship="friend"
+            relationship="friend",
         )
-        
+
         # Handle subscriptions
         actor.subscriptions.subscribe_to_peer(
             peer_id="peer123",
-            target="properties"
+            target="properties",
         )
-        
+
         # Notify subscribers
         actor.subscriptions.notify_subscribers(
             target="properties",
-            data={"status": "active"}
+            data={"status": "active"},
         )
     """
     

@@ -197,7 +197,7 @@ class HookRegistry:
 
         Args:
             event: Lifecycle event name
-            func: Function with signature (actor, **kwargs) -> Any
+            func: Function with signature ``(actor, **kwargs) -> Any``
         """
         if event not in self._lifecycle_hooks:
             self._lifecycle_hooks[event] = []
@@ -445,13 +445,15 @@ def property_hook(property_name: str = "*", operations: Optional[List[str]] = No
         operations: List of operations to hook (default: all)
 
     Example:
-        @property_hook("email", ["get", "put"])
-        def handle_email(actor, operation, value, path):
-            if operation == "get":
-                return value if actor.is_owner() else None
-            elif operation == "put":
-                return value.lower() if "@" in value else None
-            return value
+        .. code-block:: python
+
+            @property_hook("email", ["get", "put"])
+            def handle_email(actor, operation, value, path):
+                if operation == "get":
+                    return value if actor.is_owner() else None
+                elif operation == "put":
+                    return value.lower() if "@" in value else None
+                return value
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
@@ -470,10 +472,12 @@ def callback_hook(callback_name: str = "*") -> Callable[..., Any]:
         callback_name: Name of callback to hook ("*" for all)
 
     Example:
-        @callback_hook("ping")
-        def handle_ping_callback(actor, name, data):
-            # Process actor-level callback
-            return True
+        .. code-block:: python
+
+            @callback_hook("ping")
+            def handle_ping_callback(actor, name, data):
+                # Process actor-level callback
+                return True
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
@@ -491,10 +495,12 @@ def app_callback_hook(callback_name: str) -> Callable[..., Any]:
         callback_name: Name of callback to hook (e.g., "bot", "oauth")
 
     Example:
-        @app_callback_hook("bot")
-        def handle_bot_callback(data):
-            # Process bot callback (no actor context)
-            return True
+        .. code-block:: python
+
+            @app_callback_hook("bot")
+            def handle_bot_callback(data):
+                # Process bot callback (no actor context)
+                return True
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
@@ -509,10 +515,12 @@ def subscription_hook(func: Callable[..., Any]) -> Callable:
     Decorator for registering subscription hooks.
 
     Example:
-        @subscription_hook
-        def handle_subscription(actor, subscription, peer_id, data):
-            # Process subscription callback
-            return True
+        .. code-block:: python
+
+            @subscription_hook
+            def handle_subscription(actor, subscription, peer_id, data):
+                # Process subscription callback
+                return True
     """
     _hook_registry.register_subscription_hook(func)
     return func
@@ -526,10 +534,12 @@ def lifecycle_hook(event: str) -> Callable[..., Any]:
         event: Lifecycle event name
 
     Example:
-        @lifecycle_hook("actor_created")
-        def on_actor_created(actor, **kwargs):
-            # Initialize actor
-            actor.properties.created_at = datetime.now()
+        .. code-block:: python
+
+            @lifecycle_hook("actor_created")
+            def on_actor_created(actor, **kwargs):
+                # Initialize actor
+                actor.properties.created_at = datetime.now()
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
@@ -547,11 +557,13 @@ def method_hook(method_name: str = "*") -> Callable[..., Any]:
         method_name: Name of method to hook ("*" for all methods)
 
     Example:
-        @method_hook("calculate")
-        def handle_calculate_method(actor, method_name, data):
-            # Execute RPC-style method
-            result = perform_calculation(data)
-            return {"result": result}
+        .. code-block:: python
+
+            @method_hook("calculate")
+            def handle_calculate_method(actor, method_name, data):
+                # Execute RPC-style method
+                result = perform_calculation(data)
+                return {"result": result}
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
@@ -569,11 +581,13 @@ def action_hook(action_name: str = "*") -> Callable[..., Any]:
         action_name: Name of action to hook ("*" for all actions)
 
     Example:
-        @action_hook("send_notification")
-        def handle_send_notification(actor, action_name, data):
-            # Execute trigger-based action
-            send_notification(data.get("message"))
-            return {"status": "sent"}
+        .. code-block:: python
+
+            @action_hook("send_notification")
+            def handle_send_notification(actor, action_name, data):
+                # Execute trigger-based action
+                send_notification(data.get("message"))
+                return {"status": "sent"}
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:

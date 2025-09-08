@@ -20,14 +20,19 @@ class ActingWebApp:
     Main application class for ActingWeb with fluent configuration API.
 
     Example usage:
-        app = ActingWebApp(
-            aw_type="urn:actingweb:example.com:myapp",
-            database="dynamodb",
-            fqdn="myapp.example.com"
-        ).with_oauth(
-            client_id="...",
-            client_secret="..."
-        ).with_web_ui().with_devtest()
+
+    .. code-block:: python
+
+        app = (
+            ActingWebApp(
+                aw_type="urn:actingweb:example.com:myapp",
+                database="dynamodb",
+                fqdn="myapp.example.com",
+            )
+            .with_oauth(client_id="...", client_secret="...")
+            .with_web_ui()
+            .with_devtest()
+        )
 
         @app.lifecycle_hook("actor_created")
         def handle_actor_created(actor: 'ActorInterface') -> None:

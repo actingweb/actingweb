@@ -755,7 +755,10 @@ class Auth:
         is different from the peer that owns the path, e.g. creator). If approved
         is False, then the trust relationship does not need to be approved for
         access"""
-        if len(self.acl["peerid"]) > 0 and approved and self.acl["approved"] is False:
+        # For DELETE operations on trust relationships, always allow deletion regardless of approval status
+        # This ensures that broken or partially approved relationships can still be cleaned up
+        if (len(self.acl["peerid"]) > 0 and approved and self.acl["approved"] is False and 
+            not (path.lower() == "trust" and method.upper() == "DELETE")):
             logging.debug(
                 "Rejected authorization because trust relationship is not approved."
             )
@@ -813,3 +816,81 @@ class Auth:
                         )
                         return True
         return False
+
+
+def check_and_verify_auth(appreq=None, actor_id=None, config=None):
+    """Check and verify authentication for non-ActingWeb routes.
+
+    This function provides authentication verification for custom routes that don't go through
+    the standard ActingWeb handler system. It performs the same authentication checks as
+    ``init_actingweb()`` but is designed for use in custom application routes.
+
+    Args:
+        appreq: Request object in the format used by ActingWeb handlers.
+        actor_id (str | None): Actor ID to verify authentication against.
+        config (Config | None): ActingWeb config object.
+
+    Returns:
+        dict: A dictionary with the following keys:
+
+        - ``authenticated`` (bool): True if authentication successful.
+        - ``actor`` (Actor | None): Actor object when authenticated, otherwise None.
+        - ``auth`` (Auth): Auth object with authentication details.
+        - ``response`` (dict): Response details: ``{"code": int, "text": str, "headers": dict}``.
+        - ``redirect`` (str | None): Redirect URL if authentication requires redirect.
+
+    Example:
+        .. code-block:: python
+
+            auth_result = check_and_verify_auth(appreq, actor_id, config)
+            if not auth_result['authenticated']:
+                if auth_result['response']['code'] == 302:
+                    # Redirect for OAuth
+                    return redirect(auth_result['redirect'])
+                # Return error response
+                return error_response(
+                    auth_result['response']['code'], auth_result['response']['text']
+                )
+
+            # Authentication successful, use auth_result['actor']
+            actor = auth_result['actor']
+    """
+    
+    if not config:
+        config = config_class.Config()
+        
+    # Use basic auth type for custom routes (supports both basic and Bearer token auth)
+    auth_obj = Auth(actor_id, auth_type="basic", config=config)
+    
+    result = {
+        'authenticated': False,
+        'actor': None,
+        'auth': auth_obj,
+        'response': {'code': 403, 'text': 'Forbidden', 'headers': {}},
+        'redirect': None
+    }
+    
+    if not auth_obj.actor:
+        result['response'] = {'code': 404, 'text': 'Actor not found', 'headers': {}}
+        return result
+    
+    # Check authentication without modifying the response object
+    auth_obj.check_authentication(appreq=appreq, path="/custom")
+    
+    # Copy response details
+    result['response'] = {
+        'code': auth_obj.response['code'],
+        'text': auth_obj.response['text'],
+        'headers': auth_obj.response['headers'].copy()
+    }
+    
+    # Set redirect if needed
+    if hasattr(auth_obj, 'redirect') and auth_obj.redirect:
+        result['redirect'] = auth_obj.redirect
+    
+    # Check if authentication was successful
+    if auth_obj.acl['authenticated'] and auth_obj.response['code'] == 200:
+        result['authenticated'] = True
+        result['actor'] = auth_obj.actor
+        
+    return result

@@ -7,12 +7,12 @@ except ImportError:
 import base64
 import json
 import logging
-import urlfetch
+import requests
 from typing import Optional
 from . import config as config_class
 
-# This function code is from latest urlfetch. For some reason the
-# Appengine version of urlfetch does not include links()
+# This function code is from the previous urlfetch library.
+# Kept for Link header parsing functionality.
 
 
 def pagination_links(self):
@@ -95,8 +95,8 @@ class OAuth:
             else:
                 headers = {"Content-Type": "application/json"}
         try:
-            response = urlfetch.post(
-                url=url, data=data, headers=headers
+            response = requests.post(
+                url=url, data=data, headers=headers, timeout=(5, 10)
             )
             if response:
                 self.last_response_code = response.status_code
@@ -115,7 +115,7 @@ class OAuth:
                 + str(response.content)
             )
             return None
-        return json.loads(response.content.decode("utf-8", "ignore"))
+        return response.json()
 
     def put_request(self, url, params=None, urlencode=False):
         if params:
@@ -144,8 +144,8 @@ class OAuth:
             else:
                 headers = {"Content-Type": "application/json"}
         try:
-            response = urlfetch.put(
-                url=url, data=data, headers=headers
+            response = requests.put(
+                url=url, data=data, headers=headers, timeout=(5, 10)
             )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
@@ -163,7 +163,7 @@ class OAuth:
                 + str(response.content)
             )
             return None
-        return json.loads(response.content.decode("utf-8", "ignore"))
+        return response.json()
 
     def get_request(self, url, params=None):
         if not self.token:
@@ -171,11 +171,12 @@ class OAuth:
         if params:
             url = url + "?" + urllib_urlencode(params)
         try:
-            response = urlfetch.get(
+            response = requests.get(
                 url,
                 headers={
                     "Authorization": "Bearer " + self.token,
                 },
+                timeout=(5, 10)
             )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
@@ -202,7 +203,7 @@ class OAuth:
                 self.first = link["url"]
             elif link["rel"] == "prev":
                 self.prev = link["url"]
-        return json.loads(response.content.decode("utf-8", "ignore"))
+        return response.json()
 
     def head_request(self, url, params=None):
         if not self.token:
@@ -210,8 +211,8 @@ class OAuth:
         if params:
             url = url + "?" + urllib_urlencode(params)
         try:
-            response = urlfetch.head(
-                url=url, headers={"Authorization": "Bearer " + self.token}
+            response = requests.head(
+                url=url, headers={"Authorization": "Bearer " + self.token}, timeout=(5, 10)
             )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
@@ -233,8 +234,8 @@ class OAuth:
         if not self.token:
             return None
         try:
-            response = urlfetch.delete(
-                url=url, headers={"Authorization": "Bearer " + self.token}
+            response = requests.delete(
+                url=url, headers={"Authorization": "Bearer " + self.token}, timeout=(5, 10)
             )
             self.last_response_code = response.status_code
             self.last_response_message = response.content
@@ -253,12 +254,11 @@ class OAuth:
         if response.status_code == 204:
             return {}
         try:
-            ret = json.loads(response.content.decode("utf-8", "ignore"))
+            ret = response.json()
         except (
-            urlfetch.UrlfetchException,
-            urlfetch.URLError,
-            urlfetch.Timeout,
-            urlfetch.TooManyRedirects,
+            requests.exceptions.RequestException,
+            requests.exceptions.Timeout,
+            requests.exceptions.TooManyRedirects,
         ):
             return {}
         return ret

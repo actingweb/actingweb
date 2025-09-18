@@ -10,6 +10,69 @@ logger = logging.getLogger(__name__)
 
 class WwwHandler(base_handler.BaseHandler):
 
+    def _get_consistent_urls(self, actor_id: str) -> Dict[str, str]:
+        """
+        Get consistent URL variables for templates using config.root.
+        Returns a dictionary with standardized URL paths that work across all pages.
+
+        The config.fqdn may contain a base path like "demo.actingweb.io/base",
+        and config.root is constructed as proto + fqdn + "/".
+
+        Returns:
+            Dict containing:
+            - 'actor_root': Actor root path like /base/actor_id (no trailing slash)
+            - 'actor_www': Actor www path like /base/actor_id/www (no trailing slash)
+            - 'url': Backwards compatible URL (typically actor_www)
+
+        Raises:
+            RuntimeError: If calculated base path doesn't match config.root
+        """
+        if not self.config or not hasattr(self.config, 'root') or not self.config.root:
+            raise RuntimeError("Config object with root property is required")
+
+        # Extract base path from config.root
+        # config.root format: "https://demo.actingweb.io/base/"
+        from urllib.parse import urlparse
+
+        parsed_root = urlparse(self.config.root)
+        base_path = parsed_root.path.rstrip("/")  # Remove trailing slash: "/base" or ""
+
+        # Validate against current request URL if available for debugging
+        if hasattr(self.request, "url") and self.request.url:
+            try:
+                parsed_request = urlparse(self.request.url)
+                request_parts = parsed_request.path.strip("/").split("/")
+
+                # Find actor_id in request path to validate base path
+                if actor_id in request_parts:
+                    actor_index = request_parts.index(actor_id)
+                    detected_base_parts = request_parts[:actor_index]
+                    detected_base = "/" + "/".join(detected_base_parts) if detected_base_parts else ""
+
+                    # Validate that detected base matches config
+                    if detected_base != base_path:
+                        logger.error(
+                            f"Base path mismatch: config.root indicates '{base_path}' but request URL indicates '{detected_base}'. "
+                            f"Config.fqdn='{self.config.fqdn}', config.root='{self.config.root}', request.url='{self.request.url}'"
+                        )
+                        raise RuntimeError(
+                            f"Base path mismatch: config.fqdn '{self.config.fqdn}' should match request path. "
+                            f"Expected base '{base_path}' but detected '{detected_base}'"
+                        )
+
+                    logger.debug(f"Base path validation successful: '{base_path}' matches request URL")
+            except (ValueError, IndexError, AttributeError) as e:
+                logger.debug(f"Could not validate base path from request URL: {e}")
+
+        # Build URLs using config-derived base path
+        actor_root = f"{base_path}/{actor_id}" if base_path else f"/{actor_id}"
+
+        return {
+            "actor_root": actor_root,
+            "actor_www": f"{actor_root}/www",
+            "url": f"{actor_root}/www",  # Backwards compatible - points to www
+        }
+
     def get(self, actor_id: str, path: str) -> None:
         (myself, check) = auth.init_actingweb(
             appreq=self, actor_id=actor_id, path="www", subpath=path, config=self.config
@@ -26,21 +89,13 @@ class WwwHandler(base_handler.BaseHandler):
             return
 
         if not path or path == "":
-            # Extract base path from request URL to handle base paths like /mcp-server
-            # The request URL might be like: https://domain.com/mcp-server/actor_id/www
-            # We want the base URL up to and including /www: /mcp-server/actor_id/www
-            if hasattr(self.request, "url") and self.request.url:
-                # Parse the URL to extract the path part
-                from urllib.parse import urlparse
-
-                parsed = urlparse(self.request.url)
-                base_path = parsed.path  # This gives us /mcp-server/actor_id/www
-            else:
-                # Fallback if no request URL available
-                base_path = f"/{actor_id}/www"
-
+            # Use consistent URL calculation
+            urls = self._get_consistent_urls(actor_id)
+            
             self.response.template_values = {
-                "url": base_path,
+                "url": urls["url"],
+                "actor_root": urls["actor_root"], 
+                "actor_www": urls["actor_www"],
                 "id": actor_id,
                 "creator": myself.creator,
                 "passphrase": myself.passphrase,
@@ -48,8 +103,14 @@ class WwwHandler(base_handler.BaseHandler):
             return
 
         if path == "init":
+            # Use consistent URL calculation
+            urls = self._get_consistent_urls(actor_id)
+            
             self.response.template_values = {
                 "id": myself.id,
+                "url": urls["url"],
+                "actor_root": urls["actor_root"], 
+                "actor_www": urls["actor_www"],
             }
             return
         if path == "properties":
@@ -124,11 +185,17 @@ class WwwHandler(base_handler.BaseHandler):
             logger.debug(f"Template values - properties: {list((display_properties or properties).keys())}")
             logger.debug(f"Template values - list_properties: {list(list_properties)}")
 
+            # Use consistent URL calculation
+            urls = self._get_consistent_urls(actor_id)
+            
             self.response.template_values = {
                 "id": myself.id,
                 "properties": display_properties or properties,
                 "read_only_properties": read_only_properties,
                 "list_properties": list_properties,
+                "url": urls["url"],
+                "actor_root": urls["actor_root"], 
+                "actor_www": urls["actor_www"],
             }
             return
         elif "properties/" in path and "/items" in path:
@@ -206,22 +273,8 @@ class WwwHandler(base_handler.BaseHandler):
                         return
                     else:
                         lookup = hook_result
-            # Extract actor base path from request URL to handle base paths like /mcp-server
-            # Request URL is like: https://domain.com/mcp-server/actor_id/www/properties/prop_name
-            # We want: /mcp-server/actor_id
-            if hasattr(self.request, "url") and self.request.url:
-                from urllib.parse import urlparse
-
-                parsed = urlparse(self.request.url)
-                # Remove /www/properties/prop_name to get /mcp-server/actor_id
-                path_parts = parsed.path.strip("/").split("/")
-                try:
-                    actor_index = path_parts.index(actor_id)
-                    actor_base_path = "/" + "/".join(path_parts[: actor_index + 1])
-                except (ValueError, IndexError):
-                    actor_base_path = f"/{actor_id}"
-            else:
-                actor_base_path = f"/{actor_id}"
+            # Use consistent URL calculation
+            urls = self._get_consistent_urls(actor_id)
 
             # Check if this property is read-only (protected from editing)
             is_read_only = False
@@ -302,7 +355,9 @@ class WwwHandler(base_handler.BaseHandler):
                     "value": display_value or "",
                     "raw_value": lookup or "",
                     "qual": "a",
-                    "url": actor_base_path,
+                    "url": urls["actor_www"],
+                    "actor_root": urls["actor_root"],
+                    "actor_www": urls["actor_www"],
                     "is_read_only": is_read_only,
                     "is_list_property": True,
                     "list_items": list_items or [],
@@ -317,7 +372,9 @@ class WwwHandler(base_handler.BaseHandler):
                     "value": display_value,
                     "raw_value": lookup,
                     "qual": "a",
-                    "url": actor_base_path,
+                    "url": urls["actor_www"],
+                    "actor_root": urls["actor_root"],
+                    "actor_www": urls["actor_www"],
                     "is_read_only": is_read_only,
                     "is_list_property": False,
                     "list_items": [],
@@ -332,7 +389,9 @@ class WwwHandler(base_handler.BaseHandler):
                     "value": "",
                     "raw_value": "",
                     "qual": "n",
-                    "url": actor_base_path,
+                    "url": urls["actor_www"],
+                    "actor_root": urls["actor_root"],
+                    "actor_www": urls["actor_www"],
                     "is_read_only": is_read_only,
                     "is_list_property": False,
                     "list_items": [],
@@ -364,42 +423,25 @@ class WwwHandler(base_handler.BaseHandler):
                     except Exception:
                         pass
 
-            # Compute actor base path for links (e.g., /<actor_id>)
-            if hasattr(self.request, "url") and self.request.url:
-                from urllib.parse import urlparse
+            # Get OAuth2 clients for this actor
+            oauth_clients = self._get_oauth_clients_for_actor(actor_id)
 
-                parsed = urlparse(self.request.url)
-                path_parts = parsed.path.strip("/").split("/")
-                try:
-                    actor_index = path_parts.index(actor_id)
-                    actor_base_path = "/" + "/".join(path_parts[: actor_index + 1])
-                except (ValueError, IndexError):
-                    actor_base_path = f"/{actor_id}"
-            else:
-                actor_base_path = f"/{actor_id}"
+            # Use consistent URL calculation
+            urls = self._get_consistent_urls(actor_id)
 
             self.response.template_values = {
                 "id": myself.id,
                 "trusts": relationships,
-                "url": f"{actor_base_path}/",
+                "oauth_clients": oauth_clients,
+                "url": f"{urls['actor_root']}/",
+                "actor_root": urls["actor_root"],
+                "actor_www": urls["actor_www"],
             }
             return
         
-        # Compute actor base path for trust/new form (reuse the same logic)
-        if hasattr(self.request, "url") and self.request.url:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(self.request.url)
-            path_parts = parsed.path.strip("/").split("/")
-            try:
-                actor_index = path_parts.index(actor_id)
-                actor_base_path = "/" + "/".join(path_parts[: actor_index + 1])
-            except (ValueError, IndexError):
-                actor_base_path = f"/{actor_id}"
-        else:
-            actor_base_path = f"/{actor_id}"
-            
         if path == "trust/new":
+            # Use consistent URL calculation
+            urls = self._get_consistent_urls(actor_id)
             # Add new trust relationship form
             available_trust_types = self._get_available_trust_types()
 
@@ -410,8 +452,10 @@ class WwwHandler(base_handler.BaseHandler):
 
             self.response.template_values = {
                 "id": myself.id,
-                "url": f"{actor_base_path}/",
-                "form_action": f"{actor_base_path}/www/trust/new",
+                "url": f"{urls['actor_root']}/",
+                "actor_root": urls["actor_root"],
+                "actor_www": urls["actor_www"],
+                "form_action": f"{urls['actor_root']}/www/trust/new",
                 "form_method": "POST",
                 "trust_types": available_trust_types,
                 "error": trust_types_error,
@@ -477,6 +521,34 @@ class WwwHandler(base_handler.BaseHandler):
         except Exception as e:
             logging.error(f"Error accessing trust type registry: {e}")
             # No fallback - this is a configuration error that should be fixed
+            return []
+
+    def _get_oauth_clients_for_actor(self, actor_id: str) -> List[Dict[str, str]]:
+        """Get registered OAuth2 clients for an actor."""
+        try:
+            from ..interface.oauth_client_manager import OAuth2ClientManager
+            
+            # Use the high-level OAuth2ClientManager interface
+            client_manager = OAuth2ClientManager(actor_id, self.config)
+            clients = client_manager.list_clients()
+            
+            # OAuth2ClientManager provides pre-formatted data ready for templates
+            # Just need to map the field names to match template expectations
+            processed_clients = []
+            for client in clients:
+                processed_client = {
+                    "client_id": client.get("client_id", ""),
+                    "client_name": client.get("client_name", "Unknown Client"),
+                    "trust_type": client.get("trust_type", "mcp_client"),
+                    "created_at": client.get("created_at_formatted", "Recently"),
+                    "status": client.get("status", "active"),
+                }
+                processed_clients.append(processed_client)
+            
+            return processed_clients
+            
+        except Exception as e:
+            logging.error(f"Error getting OAuth2 clients for actor {actor_id}: {e}")
             return []
 
     def _handle_new_trust_relationship(self, myself, actor_id: str) -> None:

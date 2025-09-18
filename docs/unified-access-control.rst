@@ -157,7 +157,8 @@ The system uses standardized constants for consistent global data storage:
    
    # Establishment Methods
    ESTABLISHED_VIA_ACTINGWEB = "actingweb"
-   ESTABLISHED_VIA_OAUTH2 = "oauth2"
+   ESTABLISHED_VIA_OAUTH2_INTERACTIVE = "oauth2_interactive"
+   ESTABLISHED_VIA_OAUTH2_CLIENT = "oauth2_client"
 
 Pattern Matching
 ================

@@ -78,7 +78,7 @@ class OAuth2CallbackHandler(BaseHandler):
         state = self.request.get("state")
         if not state:
             state = ""
-        _, redirect_url, actor_id, trust_type, expected_email = decode_state(state)
+        _, redirect_url, actor_id, trust_type, expected_email, user_agent = decode_state(state)
         logger.debug(f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}'")
         
         # Critical debug: Check if trust_type was parsed correctly
@@ -152,6 +152,41 @@ class OAuth2CallbackHandler(BaseHandler):
             if refresh_token:
                 actor_instance.store.oauth_refresh_token = refresh_token
             actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+
+        # Extract client metadata for trust relationship storage
+        client_name = None
+        client_version = None
+        client_platform = user_agent  # Use User-Agent as platform info
+
+        if user_agent:
+            try:
+                # Generate session key using same logic as MCP handler
+                client_ip = getattr(self.request, "remote_addr", "unknown")
+                session_key = f"{client_ip}:{hash(user_agent)}"
+
+                # Import here to avoid circular dependencies
+                from .mcp import MCPHandler
+                stored_client_info = MCPHandler.get_stored_client_info(session_key)
+
+                if stored_client_info and stored_client_info.get("client_info"):
+                    mcp_client_info = stored_client_info["client_info"]
+                    client_name = mcp_client_info.get("name", "MCP Client")
+                    client_version = mcp_client_info.get("version")
+
+                    # Use implementation info for better platform detection
+                    if "implementation" in mcp_client_info:
+                        impl = mcp_client_info["implementation"]
+                        if isinstance(impl, dict):
+                            impl_name = impl.get("name", "Unknown")
+                            impl_version = impl.get("version", "")
+                            client_platform = f"{impl_name} {impl_version}".strip()
+
+                    logger.debug(f"Extracted MCP client metadata: {client_name} v{client_version} on {client_platform}")
+
+            except Exception as e:
+                logger.debug(f"Could not retrieve MCP client info during OAuth callback: {e}")
+                # Continue with User-Agent as platform info
+                # Non-critical, don't fail the OAuth flow
         
         # Create trust relationship if trust_type was specified in state
         logger.debug(f"About to check trust_type for relationship creation: trust_type='{trust_type}'")
@@ -169,12 +204,15 @@ class OAuth2CallbackHandler(BaseHandler):
                     "token_type": token_data.get("token_type", "Bearer")
                 }
                 
-                # Create trust relationship with automatic approval
+                # Create trust relationship with automatic approval and client metadata
                 trust_created = create_oauth2_trust_relationship(
-                    actor_interface, 
-                    email, 
-                    trust_type, 
-                    oauth_tokens
+                    actor_interface,
+                    email,
+                    trust_type,
+                    oauth_tokens,
+                    client_name=client_name,
+                    client_version=client_version,
+                    client_platform=client_platform
                 )
                 
                 if trust_created:

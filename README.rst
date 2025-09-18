@@ -219,7 +219,7 @@ Dependencies:
 
 - ``pynamodb`` - DynamoDB ORM for AWS DynamoDB backend
 - ``boto3`` - AWS SDK for Python (DynamoDB support)
-- ``urlfetch`` - HTTP client library
+- ``requests`` - HTTP client library
 
 Development dependencies:
 

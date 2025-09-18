@@ -79,10 +79,12 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._handle_token_request()
         elif path == "authorize":
             return self._handle_authorization_request("POST")
+        elif path == "logout":
+            return self._handle_logout_request("POST")
         else:
             return self.error_response(404, f"Unknown OAuth2 endpoint: {path}")
 
-    def options(self, path: str = "") -> Dict[str, Any]:
+    def options(self, _path: str = "") -> Dict[str, Any]:
         """
         Handle OPTIONS requests (CORS preflight).
 
@@ -119,6 +121,8 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._handle_authorization_request("GET")
         elif path == "callback":
             return self._handle_oauth_callback()
+        elif path == "logout":
+            return self._handle_logout_request("GET")
         elif path == ".well-known/oauth-authorization-server":
             return self._handle_authorization_server_discovery()
         elif path == ".well-known/oauth-protected-resource":
@@ -627,6 +631,150 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "roots": False,
             },
         }
+
+    def _handle_logout_request(self, method: str = "GET") -> Dict[str, Any]:
+        """
+        Handle OAuth2 logout request.
+        
+        This endpoint revokes the current access token and clears session cookies.
+        Works for both GET and POST requests.
+        
+        Args:
+            method: HTTP method (GET or POST)
+            
+        Returns:
+            Response dict with success and redirect information
+        """
+        try:
+            logger.info(f"Logout request started: method={method}")
+            
+            # Extract token from Authorization header or cookie
+            auth_header = None
+            if self.request.headers:
+                auth_header = self.request.headers.get("Authorization") or self.request.headers.get("authorization")
+            token = None
+            
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header[7:]  # Remove "Bearer " prefix
+                logger.debug(f"Found token in Authorization header: {token[:20]}...")
+            else:
+                # Try to get token from cookies (for web sessions)
+                token = self.request.cookies.get("oauth_token") if self.request.cookies else None
+                if token:
+                    logger.debug(f"Found token in cookies: {token[:20]}...")
+                else:
+                    logger.debug("No token found in cookies or Authorization header")
+                    logger.debug(f"Available cookies: {list(self.request.cookies.keys()) if self.request.cookies else []}")
+            
+            # Handle Google OAuth2 token logout (web UI authentication)
+            try:
+                if token:
+                    response = self._handle_google_token_logout(token)
+                else:
+                    # No token provided - just clear cookies
+                    response = {
+                        "action": "success",
+                        "message": "Successfully logged out",
+                        "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                        "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+                    }
+                    
+                # Clear MCP token cache if the token was cached there
+                if token and response.get("action") == "success":
+                    try:
+                        from .mcp import MCPHandler
+                        MCPHandler.clear_token_from_cache(token)
+                    except Exception as cache_error:
+                        logger.warning(f"Failed to clear MCP token cache: {cache_error}")
+                        # Non-critical - token will expire from cache naturally
+            except Exception as logout_error:
+                logger.error(f"Google token logout error: {logout_error}")
+                import traceback
+                logger.error(f"Full Google logout error: {traceback.format_exc()}")
+                # Continue with basic logout even if Google revocation fails
+                response = {
+                    "action": "success",
+                    "message": "Logged out (token revocation failed)",
+                    "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                    "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+                }
+            
+            if response["action"] == "success":
+                # Clear cookies
+                self.response.set_status(200)
+                
+                # Clear OAuth cookies by setting them to expire immediately
+                for cookie_name in response.get("clear_cookies", []):
+                    try:
+                        # Clear both secure and non-secure versions of cookies
+                        self.response.set_cookie(cookie_name, "", max_age=-1, path="/", secure=False)
+                        self.response.set_cookie(cookie_name, "", max_age=-1, path="/", secure=True)
+                    except Exception as cookie_error:
+                        logger.warning(f"Failed to clear cookie {cookie_name}: {cookie_error}")
+                
+                # Return JSON response
+                return {
+                    "success": True,
+                    "message": response["message"],
+                    "redirect_url": response["redirect_url"],
+                    "method": method,
+                    "cleared_cookies": response.get("clear_cookies", [])
+                }
+            else:
+                logger.error(f"Logout failed with response: {response}")
+                return self.error_response(500, "Logout failed")
+                
+        except Exception as e:
+            logger.error(f"Logout request error: {e}")
+            import traceback
+            logger.error(f"Full logout handler traceback: {traceback.format_exc()}")
+            return self.error_response(500, "Internal server error during logout")
+
+    def _handle_google_token_logout(self, google_token: str) -> Dict[str, Any]:
+        """
+        Handle logout for Google OAuth2 tokens.
+        
+        Google tokens need to be revoked directly with Google's revocation endpoint
+        to ensure they are immediately invalidated.
+        
+        Args:
+            google_token: Google OAuth2 access token
+            
+        Returns:
+            Response dict indicating logout success/failure
+        """
+        try:
+            # Revoke the token with Google
+            revocation_successful = False
+            try:
+                from ..oauth2 import OAuth2Authenticator
+                authenticator = OAuth2Authenticator(self.config)
+                revocation_successful = authenticator.revoke_token(google_token)
+            except Exception as revoke_error:
+                logger.error(f"Error during Google token revocation: {revoke_error}")
+                # Continue with logout even if Google revocation fails
+            
+            # Always return success and clear cookies, even if Google revocation failed
+            # The user should be logged out from the local session regardless
+            return {
+                "action": "success",
+                "message": "Successfully logged out" + ("" if revocation_successful else " (Google token revocation failed)"),
+                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling Google token logout: {e}")
+            import traceback
+            logger.error(f"Google token logout error traceback: {traceback.format_exc()}")
+            
+            # Still return success to clear cookies and log user out locally
+            return {
+                "action": "success", 
+                "message": "Logged out (with errors)",
+                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+            }
 
     def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
         """Create OAuth2 error response."""

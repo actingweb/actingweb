@@ -32,7 +32,10 @@ class MCPClientRegistry:
 
     def register_client(self, actor_id: str, registration_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Register an MCP client for a specific actor.
+        Register an MCP client for a specific actor and create corresponding trust relationship.
+
+        This integrates OAuth2 client registration with ActingWeb's trust system,
+        ensuring that clients are properly authenticated and authorized.
 
         Args:
             actor_id: The actor this client will be associated with
@@ -59,6 +62,7 @@ class MCPClientRegistry:
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "client_secret_post",
+            "trust_type": registration_data.get("trust_type", "mcp_client"),
             "created_at": int(time.time()),
             "actor_id": actor_id,
         }
@@ -68,6 +72,9 @@ class MCPClientRegistry:
 
         # Update global index
         self._update_global_index(client_id, actor_id)
+
+        # Create corresponding trust relationship for this OAuth2 client
+        self._create_client_trust_relationship(actor_id, client_id, client_data)
 
         # Return registration response
         base_url = f"{self.config.proto}{self.config.fqdn}"
@@ -79,7 +86,10 @@ class MCPClientRegistry:
             "grant_types": client_data["grant_types"],
             "response_types": client_data["response_types"],
             "token_endpoint_auth_method": client_data["token_endpoint_auth_method"],
+            "trust_type": client_data["trust_type"],
+            "created_at": client_data["created_at"],
             "client_id_issued_at": client_data["created_at"],
+            "actor_id": client_data["actor_id"],
             # OAuth2 endpoints
             "authorization_endpoint": f"{base_url}/oauth/authorize",
             "token_endpoint": f"{base_url}/oauth/token",
@@ -106,9 +116,16 @@ class MCPClientRegistry:
 
         # For confidential clients, validate secret
         if client_secret is not None:
-            if client_data.get("client_secret") != client_secret:
+            stored_secret = client_data.get("client_secret")
+            if stored_secret != client_secret:
                 logger.warning(f"Invalid client secret for client {client_id}")
+                logger.debug(f"Client secret validation failed - Expected length: {len(stored_secret) if stored_secret else 0}, Provided length: {len(client_secret)}")
+                logger.debug(f"Client last regenerated: {client_data.get('secret_regenerated_at', 'Never')}")
                 return None
+            else:
+                logger.debug(f"Client secret validation successful for {client_id}")
+                if client_data.get("secret_regenerated_at"):
+                    logger.debug(f"Using regenerated secret from {client_data.get('secret_regenerated_at')}")
 
         return client_data
 
@@ -172,6 +189,49 @@ class MCPClientRegistry:
         except Exception as e:
             logger.error(f"Error listing clients for actor {actor_id}: {e}")
             return []
+
+    def delete_client(self, client_id: str) -> bool:
+        """
+        Delete an OAuth2 client.
+
+        Args:
+            client_id: Client identifier to delete
+
+        Returns:
+            True if deletion was successful, False otherwise
+        """
+        try:
+            # First find the client to get the actor_id
+            client_data = self._load_client(client_id)
+            if not client_data:
+                logger.warning(f"Client {client_id} not found for deletion")
+                return False
+
+            actor_id = client_data.get("actor_id")
+            if not actor_id:
+                logger.error(f"No actor_id found for client {client_id}")
+                return False
+
+            # Delete from actor's bucket
+            bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
+            bucket.delete_attr(name=client_id)
+
+            # Delete from global index
+            try:
+                global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
+                global_bucket.delete_attr(name=client_id)
+            except Exception as e:
+                logger.warning(f"Failed to remove client {client_id} from global index: {e}")
+
+            # Delete corresponding trust relationship
+            self._delete_client_trust_relationship(actor_id, client_id)
+
+            logger.info(f"Successfully deleted OAuth2 client {client_id} for actor {actor_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error deleting client {client_id}: {e}")
+            return False
 
     def _store_client(self, actor_id: str, client_id: str, client_data: Dict[str, Any]) -> None:
         """Store client data using ActingWeb attributes bucket."""
@@ -259,6 +319,128 @@ class MCPClientRegistry:
         except Exception as e:
             logger.error(f"Error loading client from global index: {e}")
             return None
+
+    def _create_client_trust_relationship(self, actor_id: str, client_id: str, client_data: Dict[str, Any]) -> None:
+        """
+        Create a trust relationship for the OAuth2 client.
+
+        This ensures that OAuth2 clients are integrated into ActingWeb's trust system
+        and subject to permission evaluation.
+
+        Args:
+            actor_id: Actor this client belongs to
+            client_id: OAuth2 client ID
+            client_data: Client registration data
+        """
+        try:
+            from .. import actor as actor_module
+            from ..interface.actor_interface import ActorInterface
+            from ..interface.trust_manager import TrustManager
+
+            # Load the actor
+            core_actor = actor_module.Actor(actor_id, config=self.config)
+            if not core_actor.actor:
+                logger.error(f"Cannot create trust relationship - actor {actor_id} not found")
+                return
+
+            # Create ActorInterface wrapper
+            actor_interface = ActorInterface(core_actor=core_actor)
+            trust_manager = TrustManager(core_actor)
+
+            # Create trust relationship using OAuth2 client credentials flow
+            # Use client_id as the "email" identifier for this trust type
+            trust_created = trust_manager.create_or_update_oauth_trust(
+                email=client_id,  # Use client_id as identifier
+                trust_type=client_data.get("trust_type", "mcp_client"),
+                oauth_tokens={
+                    "client_id": client_id,
+                    "client_secret": client_data["client_secret"],
+                    "grant_type": "client_credentials",
+                    "created_at": client_data["created_at"],
+                },
+                established_via="oauth2_client",  # OAuth2 client credentials flow (not interactive)
+                client_id=client_id,  # Ensure unique peer ID per client
+            )
+
+            if trust_created:
+                logger.info(f"Created trust relationship for OAuth2 client {client_id}")
+
+                # Store client metadata in the trust relationship
+                # Find the newly created trust relationship and add client metadata
+                trust_relationship = None
+                for trust in actor_interface.trust.relationships:
+                    if hasattr(trust, 'peerid') and client_id in trust.peerid:
+                        trust_relationship = trust
+                        break
+
+                if trust_relationship:
+                    # Store client metadata in trust relationship
+                    trust_desc = f"OAuth2 Client: {client_data.get('client_name', client_id)}"
+                    logger.debug(f"Enhanced trust relationship for OAuth2 client: {trust_desc}")
+            else:
+                logger.error(f"Failed to create trust relationship for OAuth2 client {client_id}")
+
+        except Exception as e:
+            logger.error(f"Error creating trust relationship for client {client_id}: {e}")
+            # Don't raise - client registration can continue without trust relationship
+
+    def _delete_client_trust_relationship(self, actor_id: str, client_id: str) -> None:
+        """
+        Delete the trust relationship for an OAuth2 client.
+
+        Args:
+            actor_id: Actor this client belongs to
+            client_id: OAuth2 client ID
+        """
+        try:
+            from .. import actor as actor_module
+            from ..interface.actor_interface import ActorInterface
+
+            # Load the actor
+            core_actor = actor_module.Actor(actor_id, config=self.config)
+            if not core_actor.actor:
+                logger.error(f"Cannot delete trust relationship - actor {actor_id} not found")
+                return
+
+            # Create ActorInterface wrapper
+            actor_interface = ActorInterface(core_actor=core_actor)
+
+            # Find and delete the trust relationship for this client
+            # The peer ID should be in format "oauth2_client:client_id"
+            expected_peer_patterns = [
+                f"oauth2_client:{client_id}",  # New format
+                f"oauth2:{client_id}",  # Alternative format
+                client_id,  # Direct client_id match
+            ]
+
+            deleted = False
+            for trust in actor_interface.trust.relationships:
+                if hasattr(trust, 'peerid'):
+                    peer_id = trust.peerid
+                    # Check if this trust relationship belongs to our client
+                    for pattern in expected_peer_patterns:
+                        if pattern in peer_id or peer_id.endswith(client_id):
+                            try:
+                                # Delete the trust relationship
+                                success = actor_interface.trust.delete_relationship(peer_id)
+                                if success:
+                                    logger.info(f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}")
+                                    deleted = True
+                                    break
+                                else:
+                                    logger.warning(f"Failed to delete trust relationship {peer_id} for client {client_id}")
+                            except Exception as e:
+                                logger.error(f"Error deleting trust relationship {peer_id} for client {client_id}: {e}")
+
+                if deleted:
+                    break
+
+            if not deleted:
+                logger.warning(f"No trust relationship found to delete for OAuth2 client {client_id}")
+
+        except Exception as e:
+            logger.error(f"Error deleting trust relationship for client {client_id}: {e}")
+            # Don't raise - client deletion can continue
 
     def _update_global_index(self, client_id: str, actor_id: str) -> None:
         """Update the global client index using attribute buckets."""

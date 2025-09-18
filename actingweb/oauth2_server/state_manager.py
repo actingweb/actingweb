@@ -77,8 +77,13 @@ class OAuth2StateManager:
             MCP context dict or None if invalid/expired
         """
         try:
-            # Base64 decode
-            encrypted_state = base64.urlsafe_b64decode(state_param.encode("utf-8"))
+            # Base64 decode with padding fix
+            # Add missing padding if needed
+            state_bytes = state_param.encode("utf-8")
+            missing_padding = len(state_bytes) % 4
+            if missing_padding:
+                state_bytes += b'=' * (4 - missing_padding)
+            encrypted_state = base64.urlsafe_b64decode(state_bytes)
 
             # Decrypt
             state_json = self.cipher.decrypt(encrypted_state).decode("utf-8")

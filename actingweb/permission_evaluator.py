@@ -38,7 +38,7 @@ class PermissionResult(Enum):
 class PermissionType(Enum):
     """Types of permissions that can be evaluated."""
     PROPERTIES = "properties"
-    METHODS = "methods" 
+    METHODS = "methods"
     ACTIONS = "actions"
     TOOLS = "tools"
     RESOURCES = "resources"
@@ -337,24 +337,24 @@ class PermissionEvaluator:
         if not trust_type:
             logger.error(f"Unknown trust type: {trust_type_name}")
             return None
-        
+
         base_permissions = trust_type.base_permissions
         
         # If we have permission overrides, merge them
         if permission_override:
             override_dict = {}
-            
+
             # Extract non-None override fields
             for field in ["properties", "methods", "actions", "tools", "resources", "prompts"]:
                 override_value = getattr(permission_override, field, None)
                 if override_value is not None:
                     override_dict[field] = override_value
-            
+
             # Merge base permissions with overrides
             effective_permissions = merge_permissions(base_permissions, override_dict)
         else:
             effective_permissions = base_permissions
-        
+
         return effective_permissions
     
     def _lookup_trust_type_from_database(self, actor_id: str, peer_id: str) -> Optional[str]:

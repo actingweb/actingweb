@@ -1,6 +1,6 @@
 import json
 import logging
-import urlfetch
+import requests
 import base64
 
 from actingweb import trust
@@ -60,14 +60,14 @@ class AwProxy:
             bh = self._basic_headers()
             if data is None:
                 if method == "GET":
-                    return urlfetch.get(url=url, headers=bh)
+                    return requests.get(url=url, headers=bh, timeout=(5, 10))
                 if method == "DELETE":
-                    return urlfetch.delete(url=url, headers=bh)
+                    return requests.delete(url=url, headers=bh, timeout=(5, 10))
             else:
                 if method == "POST":
-                    return urlfetch.post(url=url, data=data, headers={**bh, "Content-Type": "application/json"})
+                    return requests.post(url=url, data=data, headers={**bh, "Content-Type": "application/json"}, timeout=(5, 10))
                 if method == "PUT":
-                    return urlfetch.put(url=url, data=data, headers={**bh, "Content-Type": "application/json"})
+                    return requests.put(url=url, data=data, headers={**bh, "Content-Type": "application/json"}, timeout=(5, 10))
         except Exception:
             return None
         return None
@@ -85,7 +85,7 @@ class AwProxy:
         headers = self._bearer_headers()
         logging.debug("Getting trust peer resource at (" + url + ")")
         try:
-            response = urlfetch.get(url=url, headers=headers)
+            response = requests.get(url=url, headers=headers, timeout=(5, 10))
             # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("GET", url)
@@ -111,7 +111,7 @@ class AwProxy:
         if response.status_code < 200 or response.status_code > 299:
             logging.info("Not able to get trust peer resource.")
         try:
-            result = json.loads(response.content.decode("utf-8", "ignore"))
+            result = response.json()
         except (TypeError, ValueError, KeyError):
             logging.debug(
                 "Not able to parse response when getting resource at(" + url + ")"
@@ -133,8 +133,8 @@ class AwProxy:
             "Creating trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
-            response = urlfetch.post(
-                url=url, data=data, headers=headers
+            response = requests.post(
+                url=url, data=data, headers=headers, timeout=(5, 10)
             )
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("POST", url, data=data)
@@ -164,7 +164,7 @@ class AwProxy:
         if response.status_code < 200 or response.status_code > 299:
             logging.warning("Not able to create new trust peer resource.")
         try:
-            result = json.loads(response.content.decode("utf-8", "ignore"))
+            result = response.json()
         except (TypeError, ValueError, KeyError):
             logging.debug(
                 "Not able to parse response when creating resource at(" + url + ")"
@@ -186,8 +186,8 @@ class AwProxy:
             "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
-            response = urlfetch.put(
-                url=url, data=data, headers=headers
+            response = requests.put(
+                url=url, data=data, headers=headers, timeout=(5, 10)
             )
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("PUT", url, data=data)
@@ -213,7 +213,7 @@ class AwProxy:
         if response.status_code < 200 or response.status_code > 299:
             logging.warning("Not able to change trust peer resource.")
         try:
-            result = json.loads(response.content.decode("utf-8", "ignore"))
+            result = response.json()
         except (TypeError, ValueError, KeyError):
             logging.debug(
                 "Not able to parse response when changing resource at(" + url + ")"
@@ -230,8 +230,8 @@ class AwProxy:
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logging.debug("Deleting trust peer resource at (" + url + ")")
         try:
-            response = urlfetch.delete(
-                url=url, headers=headers
+            response = requests.delete(
+                url=url, headers=headers, timeout=(5, 10)
             )
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("DELETE", url)

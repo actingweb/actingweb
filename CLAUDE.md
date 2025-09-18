@@ -357,7 +357,7 @@ Key configuration options in `actingweb/config.py` (for legacy applications):
 Core dependencies (from setup.py):
 - `pynamodb`: DynamoDB ORM
 - `boto3`: AWS SDK
-- `urlfetch`: HTTP client library
+- `requests`: HTTP client library
 
 ## API Endpoints and Behavior
 
@@ -597,6 +597,164 @@ To maintain code quality and avoid pylint/pylance issues, follow these guideline
       return True
   ```
 
+## Runtime Context System
+
+ActingWeb provides a runtime context system to solve the architectural constraint where hook functions have fixed signatures but need access to request-specific context.
+
+### The Problem
+
+**Hook Function Signatures Are Fixed:**
+```python
+def hook_function(actor, action_name, data) -> Any
+```
+
+**But Multiple Clients Access Same Actor:**
+- MCP clients (ChatGPT, Claude, Cursor)
+- Web browsers with different sessions
+- OAuth2 API clients
+- Each needs different behavior/formatting
+
+### The Solution
+
+**Runtime Context Attachment:**
+```python
+# During request authentication:
+from actingweb.runtime_context import RuntimeContext
+
+runtime_context = RuntimeContext(actor)
+runtime_context.set_mcp_context(
+    client_id="mcp_abc123",
+    trust_relationship=trust_obj,
+    peer_id="oauth2_client:user@example.com:mcp_abc123"
+)
+
+# In hook functions:
+def handle_search(actor, action_name, data):
+    from actingweb.runtime_context import RuntimeContext, get_client_info_from_context
+
+    # Get client info for customization
+    client_info = get_client_info_from_context(actor)
+    if client_info:
+        client_type = client_info["type"]  # "mcp", "oauth2", "web"
+        client_name = client_info["name"]  # "Claude", "ChatGPT", etc.
+
+        # Customize response based on client
+        if client_type == "mcp" and "claude" in client_name.lower():
+            # Use Claude-optimized formatting
+            pass
+```
+
+### Context Types
+
+**MCP Context** (for Model Context Protocol clients):
+```python
+runtime_context.set_mcp_context(
+    client_id="mcp_abc123",
+    trust_relationship=trust_record,  # Contains client_name, client_version
+    peer_id="oauth2_client:user@example.com:mcp_abc123",
+    token_data={"scope": "mcp", "expires_at": 1234567890}
+)
+```
+
+**OAuth2 Context** (for API clients):
+```python
+runtime_context.set_oauth2_context(
+    client_id="web_app_123",
+    user_email="user@example.com",
+    scopes=["read", "write"],
+    token_data={"access_token": "...", "refresh_token": "..."}
+)
+```
+
+**Web Context** (for browser sessions):
+```python
+runtime_context.set_web_context(
+    session_id="sess_abc123",
+    user_agent="Mozilla/5.0...",
+    ip_address="192.168.1.1",
+    authenticated_user="user@example.com"
+)
+```
+
+### Helper Functions
+
+**Unified Client Detection:**
+```python
+from actingweb.runtime_context import get_client_info_from_context
+
+def detect_client_type(actor):
+    client_info = get_client_info_from_context(actor)
+    if client_info:
+        return {
+            "name": client_info["name"],      # "Claude", "ChatGPT", "Web Browser"
+            "version": client_info["version"], # Client version if available
+            "type": client_info["type"],      # "mcp", "oauth2", "web"
+            "platform": client_info["platform"] # User agent or platform info
+        }
+    return None
+```
+
+### Request Type Detection
+
+```python
+def handle_action(actor, action_name, data):
+    runtime_context = RuntimeContext(actor)
+    request_type = runtime_context.get_request_type()
+
+    if request_type == "mcp":
+        # Handle MCP client request
+        mcp_context = runtime_context.get_mcp_context()
+        trust_relationship = mcp_context.trust_relationship
+
+    elif request_type == "oauth2":
+        # Handle API client request
+        oauth2_context = runtime_context.get_oauth2_context()
+
+    elif request_type == "web":
+        # Handle web browser request
+        web_context = runtime_context.get_web_context()
+```
+
+### Lifecycle Management
+
+**Context is Request-Scoped:**
+- Set during authentication/request processing
+- Available throughout the request lifecycle
+- Should be cleaned up after request completion
+- Does not persist between requests
+
+**Cleanup (Optional):**
+```python
+# Clean up after request processing (framework usually handles this)
+runtime_context.clear_context()
+```
+
+### Extension for Custom Context
+
+```python
+# Add custom context types
+runtime_context.set_custom_context("my_service", {
+    "service_id": "svc_123",
+    "api_version": "v2",
+    "features": ["advanced_search", "export"]
+})
+
+# Access custom context
+my_context = runtime_context.get_custom_context("my_service")
+```
+
+### Design Rationale
+
+This approach was chosen because:
+
+1. **Fixed Hook Signatures**: Can't modify `hook(actor, action_name, data)` without breaking compatibility
+2. **Multi-Client Support**: Same actor serves multiple clients simultaneously
+3. **No Framework Changes**: Works within existing ActingWeb architecture
+4. **Type Safety**: Provides structured, documented context types
+5. **Extensibility**: Can add new context types without breaking existing code
+
+The runtime context is a pragmatic solution to the architectural constraint while maintaining clean, documented APIs.
+
 ### Before Committing
 Always run these checks before committing code:
 1. Ensure all pylance/mypy issues are resolved
@@ -604,3 +762,4 @@ Always run these checks before committing code:
 3. Test that method overrides maintain compatibility
 4. Verify None checks are in place for optional values
 5. Use correct hook types for application-level vs actor-level callbacks
+6. Use RuntimeContext for request-specific context instead of ad-hoc attributes

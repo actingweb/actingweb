@@ -469,6 +469,12 @@ class FastAPIIntegration:
         async def oauth2_token(request: Request) -> Response:
             return await self._handle_oauth2_endpoint(request, "token")
 
+        @self.fastapi_app.get("/oauth/logout")
+        @self.fastapi_app.post("/oauth/logout")
+        @self.fastapi_app.options("/oauth/logout")
+        async def oauth2_logout(request: Request) -> Response:
+            return await self._handle_oauth2_endpoint(request, "logout")
+
         # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
 
         # Bot endpoint
@@ -970,10 +976,11 @@ class FastAPIIntegration:
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    # Create authorization URL with email hint
+                    # Create authorization URL with email hint and User-Agent
                     redirect_after_auth = str(request.url)  # Redirect back to factory after auth
+                    user_agent = request.headers.get("user-agent", "")
                     auth_url = authenticator.create_authorization_url(
-                        redirect_after_auth=redirect_after_auth, email_hint=email
+                        redirect_after_auth=redirect_after_auth, email_hint=email, user_agent=user_agent
                     )
 
                     self.logger.debug(f"Redirecting to OAuth2 with email hint: {email}")

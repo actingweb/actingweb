@@ -105,6 +105,10 @@ class FlaskIntegration:
         def oauth2_token() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("token")
 
+        @self.flask_app.route("/oauth/logout", methods=["GET", "POST", "OPTIONS"])
+        def oauth2_logout() -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_oauth2_endpoint("logout")
+
         # Bot endpoint
         @self.flask_app.route("/bot", methods=["POST"])
         def app_bot() -> Union[Response, WerkzeugResponse, str]:
@@ -460,10 +464,11 @@ class FlaskIntegration:
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    # Create authorization URL with email hint
+                    # Create authorization URL with email hint and User-Agent
                     redirect_after_auth = request.url  # Redirect back to factory after auth
+                    user_agent = request.headers.get("User-Agent", "")
                     auth_url = authenticator.create_authorization_url(
-                        redirect_after_auth=redirect_after_auth, email_hint=email
+                        redirect_after_auth=redirect_after_auth, email_hint=email, user_agent=user_agent
                     )
 
                     logging.debug(f"Redirecting to OAuth2 with email hint: {email}")

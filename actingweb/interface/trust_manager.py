@@ -83,6 +83,31 @@ class TrustRelationship:
         """When this trust relationship was last accessed."""
         return self._data.get("last_accessed")
 
+    @property
+    def client_name(self) -> Optional[str]:
+        """Friendly name of the OAuth2 client (e.g., ChatGPT, Claude, MCP Inspector)."""
+        return self._data.get("client_name")
+
+    @property
+    def client_version(self) -> Optional[str]:
+        """Version of the OAuth2 client software."""
+        return self._data.get("client_version")
+
+    @property
+    def client_platform(self) -> Optional[str]:
+        """Platform info from User-Agent for OAuth2 clients."""
+        return self._data.get("client_platform")
+
+    @property
+    def oauth_client_id(self) -> Optional[str]:
+        """OAuth2 client ID reference for credentials-based clients."""
+        return self._data.get("oauth_client_id")
+
+    @property
+    def user_agent(self) -> Optional[str]:
+        """Alias for client_platform for backward compatibility."""
+        return self.client_platform
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return self._data.copy()
@@ -208,11 +233,35 @@ class TrustManager:
         trust_type: str,
         oauth_tokens: Optional[Dict[str, Any]] = None,
         established_via: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_name: Optional[str] = None,
+        client_version: Optional[str] = None,
+        client_platform: Optional[str] = None,
     ) -> bool:
         """
         Create or update a trust established via OAuth2 or MCP using an email identity.
-        - Does not run remote reciprocal flows.
-        - Idempotent on peer identifier.
+
+        When client_id is provided, creates unique trust relationships per client,
+        allowing the same user to authenticate multiple MCP clients independently.
+
+        Args:
+            email: Authenticated user's email address
+            trust_type: Type of trust relationship to create
+            oauth_tokens: OAuth2 tokens from authentication
+            established_via: How the trust was established ("oauth2_interactive", "oauth2_client")
+            client_id: Optional MCP client ID for unique per-client relationships
+            client_name: Friendly name of the client (e.g., "ChatGPT", "Claude")
+            client_version: Version of the client software
+            client_platform: Platform/User-Agent info
+
+        Returns:
+            True if trust relationship was created/updated successfully
+
+        Note:
+            - Does not run remote reciprocal flows
+            - Idempotent on peer identifier
+            - With client_id: creates "oauth2:email_at_domain:client_id" peer IDs
+            - Without client_id: uses legacy "oauth2:email_at_domain" format
         """
         if not email:
             return False
@@ -240,9 +289,28 @@ class TrustManager:
 
         # Standardize peer id and check existing
         source = established_via or "oauth2"
-        peer_id = self._standardize_peer_id(source, email)
+
+        # Determine appropriate peer type based on context
+        if client_id and established_via == "oauth2_client":
+            # For MCP clients, use "mcp" as the peer type instead of the establishment method
+            peer_type = "mcp"
+        else:
+            # For other OAuth2 trusts, use the establishment method
+            peer_type = source
+
+        # Create unique identifier per client when client_id is provided
+        if client_id:
+            # For MCP clients, include client_id to ensure each client gets its own trust relationship
+            # Format: "oauth2:email_at_example_dot_com:client_123abc"
+            normalized_email = email.replace("@", "_at_").replace(".", "_dot_")
+            normalized_client = client_id.replace("@", "_at_").replace(".", "_dot_").replace(":", "_colon_")
+            peer_id = f"{source}:{normalized_email}:{normalized_client}"
+        else:
+            # Legacy format for backward compatibility
+            peer_id = self._standardize_peer_id(source, email)
+
         logging.debug(
-            f"Creating/updating OAuth trust: email={email}, trust_type={trust_type}, established_via={established_via}, source={source}, peer_id={peer_id}"
+            f"Creating/updating OAuth trust: email={email}, trust_type={trust_type}, established_via={established_via}, source={source}, client_id={client_id}, peer_id={peer_id}"
         )
         existing = self.get_relationship(peer_id)
 
@@ -279,26 +347,53 @@ class TrustManager:
                 db = DbTrust()
                 secret = self._core_actor.config.new_token() if self._core_actor.config else ""
                 baseuri = ""
-                try:
-                    if self._core_actor.config and self._core_actor.id:
-                        baseuri = f"{self._core_actor.config.root}{self._core_actor.id}"
-                except Exception:
-                    baseuri = ""
+                # For OAuth2 clients, don't set baseuri as they don't have ActingWeb endpoints
+                # Only set baseuri for regular actor-to-actor trust relationships
+                if source != "oauth2_client":
+                    try:
+                        if self._core_actor.config and self._core_actor.id:
+                            baseuri = f"{self._core_actor.config.root}{self._core_actor.id}"
+                    except Exception:
+                        baseuri = ""
+
+                # For OAuth2 clients, determine approval based on established_via
+                if source == "oauth2_client":
+                    # OAuth2 client trust: actor approves client creation, but client must authenticate to be peer_approved
+                    local_approved = str(True)  # Actor approves the client
+                    remote_approved = False     # Client not approved until successful authentication
+                    desc = f"OAuth2 client: {email}"
+                else:
+                    # Regular OAuth2 user trust: both sides approved after successful OAuth flow
+                    local_approved = str(True)  # Actor approves the user
+                    remote_approved = True      # User already authenticated via OAuth
+                    desc = f"OAuth trust for {email}"
+
+                # Build client metadata dict (only include non-None values)
+                client_metadata = {}
+                if client_name:
+                    client_metadata["client_name"] = client_name
+                if client_version:
+                    client_metadata["client_version"] = client_version
+                if client_platform:
+                    client_metadata["client_platform"] = client_platform
+                if client_id and source == "oauth2_client":
+                    client_metadata["oauth_client_id"] = client_id
 
                 created = db.create(
                     actor_id=self._core_actor.id,
                     peerid=peer_id,
                     baseuri=baseuri,
-                    peer_type=source,
+                    peer_type=peer_type,
                     relationship=trust_type,
                     secret=secret,
-                    approved=str(True),
+                    approved=local_approved,
                     verified=True,
-                    peer_approved=True,
+                    peer_approved=remote_approved,
                     verification_token="",
-                    desc=f"OAuth trust for {email}",
+                    desc=desc,
                     peer_identifier=email,
                     established_via=source,
+                    **client_metadata,  # Include client metadata in the trust relationship
                 )
                 if created:
                     logging.info(

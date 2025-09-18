@@ -17,12 +17,16 @@ import json
 import re
 import time
 
+# Global cache for MCP client info during session establishment
+_mcp_client_info_cache: Dict[str, Dict[str, Any]] = {}
+
 from .base_handler import BaseHandler
 from ..mcp.sdk_server import get_server_manager
 from .. import aw_web_request
 from .. import config as config_class
 from ..interface.hooks import HookRegistry
 from ..interface.actor_interface import ActorInterface
+from ..runtime_context import RuntimeContext
 
 
 logger = logging.getLogger(__name__)
@@ -144,10 +148,22 @@ class MCPHandler(BaseHandler):
             # All other methods require authentication
             actor = self.authenticate_and_get_actor_cached()
             if not actor:
-                return self._create_jsonrpc_error(request_id, -32002, "Authentication required for this method")
+                # Set proper HTTP 401 response headers for framework-agnostic handling
+                base_url = f"{self.config.proto}{self.config.fqdn}"
+                www_auth = f'Bearer realm="ActingWeb MCP", authorization_uri="{base_url}/oauth/authorize"'
 
-            # Get MCP server for this actor
-            mcp_server = self.server_manager.get_server(actor.id, self.hooks, actor)  # type: ignore
+                # Set response headers for authentication challenge
+                self.response.headers["WWW-Authenticate"] = www_auth
+                self.response.set_status(401, "Unauthorized")
+
+                return self._create_jsonrpc_error(request_id, -32002, "Authentication required for MCP access")
+
+            # Extract and update client info if provided in the request
+            # MCP clients send clientInfo with many requests, not just initialize
+            self._update_actor_client_info(actor, data)
+
+            # MCP access is controlled granularly through individual permission types
+            # (tools, resources, prompts) - no need for separate MCP access check
 
             if method == "tools/list":
                 return self._handle_tools_list(request_id, actor)
@@ -218,6 +234,26 @@ class MCPHandler(BaseHandler):
 
     def _handle_initialize(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle MCP initialize request."""
+        # Store client info for later use during OAuth2 authentication
+        client_info = params.get("clientInfo", {})
+        if client_info:
+            # Store in a global cache keyed by IP or other identifier
+            # This will be retrieved during OAuth2 flow to store permanently
+            self._store_mcp_client_info_temporarily(client_info)
+            logging.debug(f"Stored MCP client info: {client_info}")
+
+            # ALSO try to store immediately if we have an authenticated actor
+            try:
+                # Check if this is an authenticated request (for re-initialization)
+                actor = self.authenticate_and_get_actor_cached()
+                if actor:
+                    logger.debug(
+                        f"Found authenticated actor during initialize, storing client info in trust relationship"
+                    )
+                    self._update_trust_with_client_info(actor, client_info)
+            except Exception as e:
+                pass
+
         # Build capabilities based on what's actually available
         capabilities: Dict[str, Any] = {}
 
@@ -258,9 +294,10 @@ class MCPHandler(BaseHandler):
                 PermissionResult,
             )
 
-            # Resolve peer_id from MCP trust context (set during auth)
-            trust_context = getattr(actor, "_mcp_trust_context", None)
-            peer_id = trust_context.get("peer_id") if trust_context else None
+            # Resolve peer_id from runtime context (set during auth)
+            runtime_context = RuntimeContext(actor)
+            mcp_context = runtime_context.get_mcp_context()
+            peer_id = mcp_context.peer_id if mcp_context else None
 
             # Get evaluator if the permission system is initialized
             evaluator = None
@@ -292,9 +329,7 @@ class MCPHandler(BaseHandler):
                                 operation="use",
                             )
                             if decision != PermissionResult.ALLOWED:
-                                logger.debug(
-                                    f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})"
-                                )
+                                logger.debug(f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})")
                                 continue
                         except Exception as e:
                             logger.warning(f"Error evaluating tool permission for '{tool_name}': {e}")
@@ -302,11 +337,9 @@ class MCPHandler(BaseHandler):
 
                     tool_def = {
                         "name": tool_name,
-                        "description": metadata.get("description")
-                        or f"Execute {action_name} action",
+                        "description": metadata.get("description") or f"Execute {action_name} action",
                     }
 
-                    # Add input schema if provided (decorator uses 'input_schema')
                     input_schema = metadata.get("input_schema")
                     if input_schema:
                         tool_def["inputSchema"] = input_schema
@@ -327,8 +360,9 @@ class MCPHandler(BaseHandler):
                 PermissionResult,
             )
 
-            trust_context = getattr(actor, "_mcp_trust_context", None)
-            peer_id = trust_context.get("peer_id") if trust_context else None
+            runtime_context = RuntimeContext(actor)
+            mcp_context = runtime_context.get_mcp_context()
+            peer_id = mcp_context.peer_id if mcp_context else None
 
             evaluator = None
             try:
@@ -365,15 +399,12 @@ class MCPHandler(BaseHandler):
                                 )
                                 continue
                         except Exception as e:
-                            logger.warning(
-                                f"Error evaluating resource permission for '{uri_template}': {e}"
-                            )
+                            logger.warning(f"Error evaluating resource permission for '{uri_template}': {e}")
 
                     resource_def = {
                         "uri": uri_template,
                         "name": metadata.get("name") or method_name.replace("_", " ").title(),
-                        "description": metadata.get("description")
-                        or f"Access {method_name} resource",
+                        "description": metadata.get("description") or f"Access {method_name} resource",
                         # Output key follows MCP spec; decorator uses 'mime_type'
                         "mimeType": metadata.get("mime_type", "application/json"),
                     }
@@ -393,8 +424,9 @@ class MCPHandler(BaseHandler):
                 PermissionResult,
             )
 
-            trust_context = getattr(actor, "_mcp_trust_context", None)
-            peer_id = trust_context.get("peer_id") if trust_context else None
+            runtime_context = RuntimeContext(actor)
+            mcp_context = runtime_context.get_mcp_context()
+            peer_id = mcp_context.peer_id if mcp_context else None
 
             evaluator = None
             try:
@@ -430,14 +462,11 @@ class MCPHandler(BaseHandler):
                                 )
                                 continue
                         except Exception as e:
-                            logger.warning(
-                                f"Error evaluating prompt permission for '{prompt_name}': {e}"
-                            )
+                            logger.warning(f"Error evaluating prompt permission for '{prompt_name}': {e}")
 
                     prompt_def = {
                         "name": prompt_name,
-                        "description": metadata.get("description")
-                        or f"Generate prompt for {method_name}",
+                        "description": metadata.get("description") or f"Generate prompt for {method_name}",
                     }
 
                     # Add arguments if provided
@@ -463,8 +492,10 @@ class MCPHandler(BaseHandler):
         # Check permission before finding/dispatching the hook
         try:
             from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
-            trust_context = getattr(actor, "_mcp_trust_context", None)
-            peer_id = trust_context.get("peer_id") if trust_context else None
+
+            runtime_context = RuntimeContext(actor)
+            mcp_context = runtime_context.get_mcp_context()
+            peer_id = mcp_context.peer_id if mcp_context else None
             if peer_id:
                 evaluator = get_permission_evaluator(self.config)
                 decision = evaluator.evaluate_permission(
@@ -537,8 +568,10 @@ class MCPHandler(BaseHandler):
         # Check permission before finding/dispatching the hook
         try:
             from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
-            trust_context = getattr(actor, "_mcp_trust_context", None)
-            peer_id = trust_context.get("peer_id") if trust_context else None
+
+            runtime_context = RuntimeContext(actor)
+            mcp_context = runtime_context.get_mcp_context()
+            peer_id = mcp_context.peer_id if mcp_context else None
             if peer_id:
                 evaluator = get_permission_evaluator(self.config)
                 decision = evaluator.evaluate_permission(
@@ -613,6 +646,7 @@ class MCPHandler(BaseHandler):
             # Check permission before accessing resource
             try:
                 from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
+
                 trust_context = getattr(actor, "_mcp_trust_context", None)
                 peer_id = trust_context.get("peer_id") if trust_context else None
                 if peer_id and uri:
@@ -631,6 +665,7 @@ class MCPHandler(BaseHandler):
 
             # Find the corresponding resource hook
             from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+
             # Reuse URI template matching from SDK server implementation
             from ..mcp.sdk_server import _match_uri_template
 
@@ -640,7 +675,9 @@ class MCPHandler(BaseHandler):
                         metadata = get_mcp_metadata(hook)
                         if metadata and metadata.get("type") == "resource":
                             # Prefer 'uri_template' from decorator; fall back to legacy
-                            resource_uri = metadata.get("uri_template") or metadata.get("uri") or f"actingweb://{method_name}"
+                            resource_uri = (
+                                metadata.get("uri_template") or metadata.get("uri") or f"actingweb://{method_name}"
+                            )
                             uri_pattern = metadata.get("uri_pattern")
 
                             # Check for template/pattern match
@@ -784,13 +821,14 @@ class MCPHandler(BaseHandler):
                             )
                             _trust_cache[actor_id] = trust_relationship
 
-                        # Update trust context using setattr to avoid Pylance issues
-                        setattr(actor_interface, '_mcp_trust_context', {
-                            "client_id": client_id,
-                            "trust_relationship": trust_relationship,
-                            "token_data": token_data,
-                            "peer_id": trust_relationship.peerid if trust_relationship else None,
-                        })
+                        # Update runtime context with MCP authentication info
+                        runtime_context = RuntimeContext(actor_interface)
+                        runtime_context.set_mcp_context(
+                            client_id=client_id,
+                            trust_relationship=trust_relationship,
+                            peer_id=trust_relationship.peerid if trust_relationship else "",
+                            token_data=token_data,
+                        )
 
                         # Log cache performance periodically
                         total_requests = sum(_cache_stats.values())
@@ -841,13 +879,17 @@ class MCPHandler(BaseHandler):
             trust_relationship = self._lookup_mcp_trust_relationship(actor_interface, client_id, token_data)
             _trust_cache[actor_id] = trust_relationship
 
-            # Store trust context for permission checking using setattr to avoid Pylance issues
-            setattr(actor_interface, '_mcp_trust_context', {
-                "client_id": client_id,
-                "trust_relationship": trust_relationship,
-                "token_data": token_data,
-                "peer_id": trust_relationship.peerid if trust_relationship else None,
-            })
+            # Mark client as peer_approved on successful authentication (if not already)
+            self._mark_client_peer_approved(actor_interface, client_id, trust_relationship)
+
+            # Store runtime context for permission checking and client identification
+            runtime_context = RuntimeContext(actor_interface)
+            runtime_context.set_mcp_context(
+                client_id=client_id,
+                trust_relationship=trust_relationship,
+                peer_id=trust_relationship.peerid if trust_relationship else "",
+                token_data=token_data,
+            )
 
             logger.debug(f"Successfully authenticated MCP client {client_id} -> actor {actor_id} with trust context")
             return actor_interface
@@ -855,7 +897,6 @@ class MCPHandler(BaseHandler):
         except Exception as e:
             logger.error(f"Error during ActingWeb token authentication: {e}")
             return None
-
 
     def _get_or_create_actor_cached(
         self, actor_id: str, token_data: Dict[str, Any], current_time: float
@@ -914,7 +955,6 @@ class MCPHandler(BaseHandler):
 
         return actor_interface
 
-
     def _lookup_mcp_trust_relationship(self, actor: ActorInterface, client_id: str, token_data: Dict[str, Any]) -> Any:
         """
         Lookup trust relationship for MCP client.
@@ -946,23 +986,23 @@ class MCPHandler(BaseHandler):
             user_email = token_data.get("email") or token_data.get("user_email")
             logger.debug(f"DEBUG: Looking up MCP trust for client_id: {client_id}, user_email: {user_email}")
             if user_email:
-                normalized = user_email.replace("@", "_at_").replace(".", "_dot_")
-                peer_id = f"mcp:{normalized}"
-                logger.debug(f"DEBUG: Attempting direct lookup with peer_id: {peer_id}")
-                direct = actor.trust.get_relationship(peer_id)
+                normalized_email = user_email.replace("@", "_at_").replace(".", "_dot_")
+
+                normalized_client = client_id.replace("@", "_at_").replace(".", "_dot_").replace(":", "_colon_")
+                peer_id_unique = f"oauth2:{normalized_email}:{normalized_client}"
+                logger.debug(f"DEBUG: Attempting unique peer_id lookup: {peer_id_unique}")
+                direct = actor.trust.get_relationship(peer_id_unique)
                 if direct:
-                    logger.debug(f"Found MCP trust via peer_id: {peer_id}")
+                    logger.debug(f"Found MCP trust via unique peer_id: {peer_id_unique}")
                     return direct
-                else:
-                    logger.debug(f"DEBUG: Direct lookup failed for peer_id: {peer_id}")
 
             trusts = actor.trust.relationships
 
-            # Fallback: scan for established_via='oauth2' and matching trust_type if provided
+            # Fallback: scan for established_via='oauth2' or 'oauth2_client' and matching trust_type if provided
             desired_type = token_data.get("trust_type") or "mcp_client"
             logger.debug(f"DEBUG: Token data: {token_data}")
             logger.debug(
-                f"DEBUG: Scanning {len(trusts)} trusts for established_via='oauth2' with desired_type: {desired_type}"
+                f"DEBUG: Scanning {len(trusts)} trusts for established_via='oauth2' or 'oauth2_client' with desired_type: {desired_type}"
             )
             for trust in trusts:
                 via = getattr(trust, "established_via", None)
@@ -972,24 +1012,56 @@ class MCPHandler(BaseHandler):
                     f"DEBUG: Checking trust - via: {via}, rel: {rel}, peer_ident: {peer_ident}, user_email: {user_email}"
                 )
 
-                # Match on established_via - any OAuth2 trust should work for MCP clients
+                # Match on established_via AND client_id to ensure correct client
                 if via == "oauth2":
-                    logger.debug(f"Found OAuth2 trust: peer={trust.peerid}, via={via}, rel={rel}")
-                    return trust
+                    # Check if this trust is for the specific client_id
+                    peer_id_str = str(getattr(trust, "peerid", ""))
+                    if client_id in peer_id_str:
+                        logger.debug(
+                            f"Found OAuth2 trust for client {client_id}: peer={trust.peerid}, via={via}, rel={rel}"
+                        )
+                        return trust
+                    else:
+                        logger.debug(
+                            f"OAuth2 trust for different client, skipping: peer={trust.peerid}, client_id={client_id}"
+                        )
+
+                # Handle oauth2_client established trusts (client credentials flow)
+                elif via == "oauth2_client":
+                    # Check if this trust is for the specific client_id
+                    peer_id_str = str(getattr(trust, "peerid", ""))
+                    if client_id in peer_id_str:
+                        logger.debug(
+                            f"Found OAuth2 client trust for client {client_id}: peer={trust.peerid}, via={via}, rel={rel}"
+                        )
+                        return trust
+                    else:
+                        logger.debug(
+                            f"OAuth2 client trust for different client, skipping: peer={trust.peerid}, client_id={client_id}"
+                        )
 
                 # Fallback: If established_via is None but this looks like an OAuth2 trust
-                # (peer_id starts with 'oauth2:'), assume it should be 'oauth2'
+                # (peer_id starts with 'oauth2:' or 'oauth2_client:'), assume it should be valid
                 peer_id_str = str(getattr(trust, "peerid", ""))
-                if via is None and peer_id_str.startswith("oauth2:"):
-                    logger.warning(
-                        f"Found OAuth2 trust with missing established_via - assuming valid: peer={trust.peerid}, rel={rel}"
-                    )
-                    logger.warning(f"Consider updating this trust relationship to include established_via='oauth2'")
-                    return trust
+                if via is None and (peer_id_str.startswith("oauth2:") or peer_id_str.startswith("oauth2_client:")):
+                    # Check if this trust is for the specific client_id
+                    if client_id in peer_id_str:
+                        trust_type = "oauth2_client" if peer_id_str.startswith("oauth2_client:") else "oauth2"
+                        logger.warning(
+                            f"Found {trust_type} trust with missing established_via - assuming valid: peer={trust.peerid}, rel={rel}"
+                        )
+                        logger.warning(
+                            f"Consider updating this trust relationship to include established_via='{trust_type}'"
+                        )
+                        return trust
+                    else:
+                        logger.debug(
+                            f"OAuth2 trust (no established_via) for different client, skipping: peer={trust.peerid}, client_id={client_id}"
+                        )
 
             logger.warning(f"No trust found for MCP client {client_id}; permissions will be empty")
             logger.debug(
-                f"DEBUG: Trust lookup failed - no matching trust found with established_via='oauth2' and desired_type: {desired_type}"
+                f"DEBUG: Trust lookup failed - no matching trust found with established_via='oauth2' or 'oauth2_client' and desired_type: {desired_type}"
             )
             return None
 
@@ -1032,25 +1104,318 @@ class MCPHandler(BaseHandler):
             "message": "Please authenticate with Google to access MCP",
         }
 
-    def validate_google_token(self, bearer_token: str) -> Optional[str]:
+    def validate_google_token_and_check_actor_email(self, bearer_token: str, expected_actor_id: str) -> bool:
         """
-        Validate Google OAuth2 token and return email (placeholder for Phase 3).
+        Validate Google OAuth2 token and verify it matches the expected actor's email.
+
+        This prevents identity confusion attacks where a Google token for one email
+        is used to authenticate as an actor created with a different email.
 
         Args:
             bearer_token: OAuth2 access token from Google
+            expected_actor_id: Actor ID to check email against
 
         Returns:
-            Email address from Google UserInfo API or None if invalid
+            True if token is valid and matches actor's email, False otherwise
         """
-        # This will be implemented in Phase 3 to:
-        # 1. Call Google TokenInfo API to validate token
-        # 2. Call Google UserInfo API to get user email
-        # 3. Return email address
+        if not bearer_token or not expected_actor_id:
+            return False
 
-        # Mock implementation
-        if bearer_token.startswith("mock_google_oauth_token"):
-            return "user@gmail.com"
+        try:
+            import requests
+
+            # Use Google TokenInfo API to validate token and get email
+            tokeninfo_url = f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={bearer_token}"
+
+            response = requests.get(url=tokeninfo_url, timeout=(5, 10))
+
+            if response.status_code != 200:
+                logger.debug(f"Google tokeninfo validation failed: {response.status_code}")
+                return False
+
+            token_info = response.json()
+
+            # Check if token is valid (has required fields)
+            if "email" not in token_info:
+                logger.debug("Google token does not contain email scope")
+                return False
+
+            # Verify token is not expired (tokeninfo returns this)
+            if "expires_in" in token_info:
+                expires_in = int(token_info.get("expires_in", 0))
+                if expires_in <= 0:
+                    logger.debug("Google token has expired")
+                    return False
+
+            authenticated_email = token_info.get("email", "").lower()
+            verified_email = token_info.get("verified_email")
+
+            # Ensure email is verified
+            if verified_email == "false" or verified_email is False:
+                logger.warning(f"Google email {authenticated_email} is not verified")
+                return False
+
+            # Load the actor and check if the email matches
+            from .. import actor as actor_module
+
+            actor_instance = actor_module.Actor(expected_actor_id, config=self.config)
+            if not actor_instance.actor:
+                logger.error(f"Actor {expected_actor_id} not found for email validation")
+                return False
+
+            # Get the actor's creator (usually email) or check email property
+            actor_email = actor_instance.creator
+            try:
+                # Prefer the email property if set
+                if actor_instance.property:
+                    email_prop = actor_instance.property.get("email")
+                    if email_prop:
+                        actor_email = email_prop
+            except (AttributeError, KeyError):
+                # Property access failed, use creator as fallback
+                pass
+
+            if not actor_email:
+                logger.warning(f"Actor {expected_actor_id} has no email to validate against")
+                return False
+
+            actor_email = actor_email.lower()
+
+            # Check if authenticated email matches actor's email
+            if authenticated_email != actor_email:
+                logger.error(
+                    f"Email mismatch: Google token for {authenticated_email} "
+                    f"but actor {expected_actor_id} has email {actor_email}"
+                )
+                return False
+
+            logger.debug(
+                f"Successfully validated Google token for {authenticated_email} matches actor {expected_actor_id}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Error validating Google token against actor email: {e}")
+            return False
+
+    def _update_actor_client_info(self, actor, request_data: Dict[str, Any]) -> None:
+        """
+        Extract and update client info from MCP request data.
+
+        MCP clients send clientInfo with many requests, not just initialize.
+        This method ensures we always have the latest client information stored.
+        """
+        try:
+            # Check for clientInfo in request params (common in tools/call, etc.)
+            client_info = None
+
+            # Look for clientInfo in request params
+            params = request_data.get("params", {})
+            if isinstance(params, dict) and "clientInfo" in params:
+                client_info = params["clientInfo"]
+
+            # Look for clientInfo at top level (sometimes sent this way)
+            elif "clientInfo" in request_data:
+                client_info = request_data["clientInfo"]
+
+            if client_info and isinstance(client_info, dict):
+                self._update_trust_with_client_info(actor, client_info)
+
+        except Exception as e:
+            logger.debug(f"Could not update client info from request: {e}")
+            # Non-critical, don't raise exception
+
+    def _update_trust_with_client_info(self, actor, client_info: Dict[str, Any]) -> None:
+        """
+        Update trust relationship with MCP client metadata instead of storing in actor properties.
+
+        This replaces the old actor-level storage with proper trust relationship attributes.
+
+        Args:
+            actor: ActorInterface instance
+            client_info: Client information dictionary from MCP initialize
+        """
+        try:
+            # Try to find the current trust relationship for this actor
+            runtime_context = RuntimeContext(actor)
+            mcp_context = runtime_context.get_mcp_context()
+
+            if not mcp_context or not mcp_context.peer_id:
+                logger.debug("No MCP context or peer_id in runtime context, cannot update trust with client info")
+                return
+
+            peer_id = mcp_context.peer_id
+
+            # Extract client metadata from client_info
+            client_name = client_info.get("name", "MCP Client")
+            client_version = client_info.get("version")
+
+            # Get platform info from User-Agent or client info
+            client_platform = None
+            if hasattr(self.request, "headers") and self.request.headers:
+                client_platform = self.request.headers.get("User-Agent")
+            if not client_platform and "implementation" in client_info:
+                impl = client_info["implementation"]
+                if isinstance(impl, dict):
+                    client_platform = f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
+
+            # Update the trust relationship with client metadata
+            from .. import actor as actor_module
+
+            core_actor = actor_module.Actor(actor.id, config=self.config)
+            if core_actor.actor:
+                # Get the relationship type from the trust relationship
+                relationship = getattr(mcp_context.trust_relationship, "relationship", "mcp_client")
+                success = core_actor.modify_trust_and_notify(
+                    relationship=relationship,
+                    peerid=peer_id,
+                    client_name=client_name,
+                    client_version=client_version,
+                    client_platform=client_platform,
+                )
+                if success:
+                    logger.info(f"Updated trust relationship {peer_id} with client info: {client_name}")
+                else:
+                    logger.warning(f"Failed to update trust relationship {peer_id} with client info")
+            else:
+                logger.error(f"Could not load actor {actor.id} to update trust with client info")
+
+        except Exception as e:
+            logger.error(f"Could not update trust with client info: {e}")
+            # Non-critical, don't raise exception
+
+    def _store_mcp_client_info_temporarily(self, client_info: Dict[str, Any]) -> None:
+        """Store MCP client info temporarily until OAuth2 authentication completes."""
+        global _mcp_client_info_cache
+
+        # Use client IP and user agent as session key
+        session_key = self._get_session_key()
+        _mcp_client_info_cache[session_key] = {"client_info": client_info, "timestamp": time.time()}
+
+        # Clean up old entries (older than 10 minutes)
+        current_time = time.time()
+        expired_keys = [key for key, data in _mcp_client_info_cache.items() if current_time - data["timestamp"] > 600]
+        for key in expired_keys:
+            del _mcp_client_info_cache[key]
+
+    def _get_session_key(self) -> str:
+        """Generate a session key based on request characteristics."""
+        # Use client IP as primary identifier
+        client_ip = getattr(self.request, "remote_addr", "unknown")
+        # Add user agent for additional uniqueness
+        user_agent = getattr(self.request, "headers", {}).get("User-Agent", "")[:50]
+        return f"{client_ip}:{hash(user_agent)}"
+
+    @classmethod
+    def get_stored_client_info(cls, session_key: str) -> Optional[Dict[str, Any]]:
+        """Retrieve stored client info for a session key."""
+        global _mcp_client_info_cache
+        if session_key in _mcp_client_info_cache:
+            data = _mcp_client_info_cache[session_key]
+            if time.time() - data["timestamp"] < 600:  # 10 minutes
+                return data["client_info"]
+            else:
+                del _mcp_client_info_cache[session_key]
         return None
+
+    @classmethod
+    def clear_token_from_cache(cls, token: str) -> bool:
+        """
+        Clear a specific token from the MCP authentication cache.
+
+        This should be called during logout to ensure revoked tokens are immediately
+        invalidated in the cache, preventing authentication via cached token data.
+
+        Args:
+            token: The token to remove from cache
+
+        Returns:
+            True if token was found and removed, False if not found in cache
+        """
+        global _token_cache, _actor_cache, _trust_cache
+
+        token_found = False
+
+        # Remove token from cache
+        if token in _token_cache:
+            # Get actor_id before removing token data to clean associated caches
+            cached_data = _token_cache[token]
+            actor_id = cached_data.get("actor_id")
+
+            del _token_cache[token]
+            token_found = True
+
+            # Also clear associated actor and trust caches to force re-authentication
+            if actor_id:
+                if actor_id in _actor_cache:
+                    del _actor_cache[actor_id]
+
+                if actor_id in _trust_cache:
+                    del _trust_cache[actor_id]
+
+        return token_found
+
+    def _mark_client_peer_approved(self, actor_interface, client_id: str, trust_relationship) -> None:
+        """
+        Mark OAuth2 client as peer_approved on successful authentication.
+
+        This sets peer_approved=True for OAuth2 clients that have successfully
+        authenticated with correct credentials, completing the bilateral trust.
+
+        Args:
+            actor_interface: ActorInterface instance
+            client_id: OAuth2 client ID that authenticated successfully
+            trust_relationship: Found trust relationship (may be None)
+        """
+        try:
+            if not trust_relationship:
+                logger.debug(f"No trust relationship found to mark as peer_approved for client {client_id}")
+                return
+
+            # Check if this is an OAuth2 client trust that needs peer approval
+            peer_id = getattr(trust_relationship, "peerid", "")
+            established_via = getattr(trust_relationship, "established_via", "")
+
+            logger.debug(
+                f"Checking peer approval for client {client_id}: peer_id={peer_id}, established_via={established_via}"
+            )
+
+            if established_via != "oauth2_client":
+                # Not an OAuth2 client trust - no need to update peer_approved
+                logger.debug(
+                    f"Trust relationship established_via='{established_via}' is not 'oauth2_client', skipping peer approval"
+                )
+                return
+
+            # Check current peer_approved status
+            current_peer_approved = getattr(trust_relationship, "peer_approved", False)
+            logger.debug(f"Current peer_approved status for client {client_id}: {current_peer_approved}")
+
+            if current_peer_approved:
+                # Already marked as peer_approved
+                logger.debug(f"OAuth2 client {client_id} already peer_approved")
+                return
+
+            # Mark as peer_approved since authentication was successful
+            from .. import actor as actor_module
+
+            core_actor = actor_module.Actor(actor_interface.id, config=self.config)
+            if core_actor.actor:
+                success = core_actor.modify_trust_and_notify(
+                    peerid=peer_id,
+                    relationship=getattr(trust_relationship, "relationship", "mcp_client"),
+                    peer_approved=True,
+                )
+                if success:
+                    logger.info(f"Marked OAuth2 client {client_id} as peer_approved after successful authentication")
+                else:
+                    logger.warning(f"Failed to mark OAuth2 client {client_id} as peer_approved")
+            else:
+                logger.error(f"Could not load actor {actor_interface.id} to mark client peer_approved")
+
+        except Exception as e:
+            logger.error(f"Error marking client {client_id} as peer_approved: {e}")
+            # Non-critical - client can still access with existing permissions
 
     def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
         """Create an error response."""

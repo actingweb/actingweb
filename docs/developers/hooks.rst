@@ -95,6 +95,56 @@ Expose hooks via MCP:
    def config_resource(actor, method_name, params):
        ...
 
+Runtime Context
+---------------
+
+Hooks receive fixed parameters (``actor``, ``name``, ``data``), but often need context about the current request (which client is calling, session info, etc.). ActingWeb provides a runtime context system to solve this:
+
+.. code-block:: python
+
+   from actingweb.runtime_context import RuntimeContext, get_client_info_from_context
+
+   @app.action_hook("search")
+   def handle_search(actor, action_name, data):
+       # Get client information for customization
+       client_info = get_client_info_from_context(actor)
+       if client_info:
+           client_type = client_info["type"]  # "mcp", "oauth2", "web"
+           client_name = client_info["name"]  # "Claude", "ChatGPT", etc.
+
+           # Customize response based on client
+           if client_type == "mcp" and "claude" in client_name.lower():
+               # Use Claude-optimized formatting
+               return format_for_claude(results)
+
+Context Types
+~~~~~~~~~~~~~
+
+- **MCP Context**: Set during MCP client authentication, contains trust relationship with client metadata
+- **OAuth2 Context**: Set during OAuth2 authentication, contains client ID, user email, scopes
+- **Web Context**: Set during web requests, contains session ID, user agent, IP address
+
+.. code-block:: python
+
+   @app.action_hook("custom_action")
+   def custom_action(actor, action_name, data):
+       runtime_context = RuntimeContext(actor)
+
+       if runtime_context.get_request_type() == "mcp":
+           mcp_context = runtime_context.get_mcp_context()
+           trust_relationship = mcp_context.trust_relationship
+           # Access client_name, client_version, etc.
+
+       elif runtime_context.get_request_type() == "oauth2":
+           oauth2_context = runtime_context.get_oauth2_context()
+           # Access client_id, user_email, scopes
+
+       elif runtime_context.get_request_type() == "web":
+           web_context = runtime_context.get_web_context()
+           # Access session_id, user_agent, ip_address
+
+The runtime context is request-scoped and automatically managed by the framework.
+
 Permissions
 -----------
 

@@ -554,6 +554,12 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403)
             return
+        
+        # Prevent actors from deleting trust relationships with themselves
+        if peerid == actor_id:
+            if self.response:
+                self.response.set_status(400, "Cannot delete trust relationship with self")
+            return
         is_peer = False
         if check and check.trust and check.trust["peerid"] == peerid:
             is_peer = True

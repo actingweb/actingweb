@@ -116,4 +116,5 @@ OAUTH_TOKENS_PREFIX = "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREF
 
 # Establishment methods for trust relationships
 ESTABLISHED_VIA_ACTINGWEB = "actingweb"  # Traditional ActingWeb protocol handshake
-ESTABLISHED_VIA_OAUTH2 = "oauth2"  # OAuth2 authentication flow (includes MCP clients)
+ESTABLISHED_VIA_OAUTH2_INTERACTIVE = "oauth2_interactive"  # OAuth2 interactive user authentication flow
+ESTABLISHED_VIA_OAUTH2_CLIENT = "oauth2_client"  # OAuth2 client credentials flow (MCP clients)

@@ -12,7 +12,12 @@ from typing import Dict, Any, Optional, Tuple
 import hashlib
 import base64
 from .. import config as config_class
-from ..constants import OAUTH2_SYSTEM_ACTOR, AUTH_CODE_INDEX_BUCKET, ACCESS_TOKEN_INDEX_BUCKET, REFRESH_TOKEN_INDEX_BUCKET
+from ..constants import (
+    OAUTH2_SYSTEM_ACTOR,
+    AUTH_CODE_INDEX_BUCKET,
+    ACCESS_TOKEN_INDEX_BUCKET,
+    REFRESH_TOKEN_INDEX_BUCKET,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -362,7 +367,9 @@ class ActingWebTokenManager:
             auth_bucket.set_attr(name=code, data=auth_data)
 
             # Also store in global index for efficient lookup
-            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+            )
             index_bucket.set_attr(name=code, data=actor_id)
 
             logger.debug(f"Successfully stored auth code for actor {actor_id}")
@@ -387,7 +394,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Create a global index bucket for auth codes
-            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+            )
 
             # Look up which actor has this code
             found_actor_data = index_bucket.get_attr(name=code)
@@ -401,7 +410,9 @@ class ActingWebTokenManager:
                 return None
 
             # Load the actual auth code data from private attributes
-            auth_bucket = attribute.Attributes(actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config)
+            auth_bucket = attribute.Attributes(
+                actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config
+            )
             auth_attr = auth_bucket.get_attr(name=code)
 
             if not auth_attr or "data" not in auth_attr:
@@ -428,13 +439,17 @@ class ActingWebTokenManager:
             # First find which actor has this code
             from .. import attribute
 
-            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+            )
 
             found_actor_data = index_bucket.get_attr(name=code)
             if found_actor_data and "data" in found_actor_data:
                 found_actor_id = found_actor_data["data"]
                 # Remove from private attributes
-                auth_bucket = attribute.Attributes(actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config)
+                auth_bucket = attribute.Attributes(
+                    actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config
+                )
                 auth_bucket.delete_attr(name=code)
                 logger.debug(f"Removed auth code {code} from actor {found_actor_id}")
 
@@ -451,7 +466,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Store Google token data in private attributes bucket
-            google_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config)
+            google_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
+            )
             google_bucket.set_attr(name=token_key, data=google_token_data)
             logger.debug(f"Stored Google token data for actor {actor_id} with key {token_key}")
 
@@ -465,9 +482,11 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Load Google token data from private attributes bucket
-            google_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config)
+            google_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
+            )
             token_attr = google_bucket.get_attr(name=token_key)
-            
+
             if not token_attr or "data" not in token_attr:
                 logger.warning(f"Google token data not found for key {token_key}")
                 return None
@@ -485,7 +504,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Remove Google token data from private attributes bucket
-            google_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config)
+            google_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
+            )
             google_bucket.delete_attr(name=token_key)
             logger.debug(f"Removed Google token data for actor {actor_id} with key {token_key}")
         except Exception as e:
@@ -501,7 +522,9 @@ class ActingWebTokenManager:
             tokens_bucket.set_attr(name=token, data=token_data)
 
             # Also store in global index for efficient lookup
-            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+            )
             index_bucket.set_attr(name=token, data=actor_id)
 
             logger.debug(f"Stored access token for actor {actor_id}")
@@ -522,7 +545,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Create a global index bucket for access tokens
-            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+            )
 
             # Look up which actor has this token
             found_actor_data = index_bucket.get_attr(name=token)
@@ -580,7 +605,9 @@ class ActingWebTokenManager:
                 return None
 
             # Load the actual token data from private attributes
-            refresh_bucket = attribute.Attributes(actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config)
+            refresh_bucket = attribute.Attributes(
+                actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+            )
             token_attr = refresh_bucket.get_attr(name=token)
 
             if not token_attr or "data" not in token_attr:
@@ -610,13 +637,17 @@ class ActingWebTokenManager:
             # First find which actor has this token
             from .. import attribute
 
-            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+            )
 
             found_actor_data = index_bucket.get_attr(name=token)
             if found_actor_data and "data" in found_actor_data:
                 found_actor_id = found_actor_data["data"]
                 # Remove from private attributes
-                tokens_bucket = attribute.Attributes(actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config)
+                tokens_bucket = attribute.Attributes(
+                    actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config
+                )
                 tokens_bucket.delete_attr(name=token)
                 logger.debug(f"Removed access token {token} from actor {found_actor_id}")
 
@@ -637,7 +668,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Store refresh token in private attributes bucket
-            refresh_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.refresh_tokens_bucket, config=self.config)
+            refresh_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+            )
             refresh_bucket.set_attr(name=token, data=refresh_data)
 
             # Also store in global index for efficient lookup
@@ -671,7 +704,9 @@ class ActingWebTokenManager:
             if found_actor_data and "data" in found_actor_data:
                 found_actor_id = found_actor_data["data"]
                 # Remove from private attributes
-                refresh_bucket = attribute.Attributes(actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config)
+                refresh_bucket = attribute.Attributes(
+                    actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+                )
                 refresh_bucket.delete_attr(name=token)
                 logger.debug(f"Removed refresh token {token} from actor {found_actor_id}")
 
@@ -690,7 +725,9 @@ class ActingWebTokenManager:
 
             # We need to search through all access tokens to find the one with this token_id
             # This is inefficient but necessary given the current storage structure
-            index_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+            )
 
             # Get all tokens from the index (this could be optimized with a reverse index)
             # For now, we'll search through actors' tokens
@@ -758,6 +795,62 @@ class ActingWebTokenManager:
         except Exception as e:
             logger.error(f"Error validating PKCE: {e}")
             return False
+
+    def create_access_token(
+        self,
+        actor_id: str,
+        client_id: str,
+        scope: str = "mcp",
+        trust_type: str = "mcp_client",
+        grant_type: str = "client_credentials",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create an access token for client credentials flow.
+
+        Args:
+            actor_id: The actor this token is for
+            client_id: The client requesting the token
+            scope: The requested scope
+            trust_type: The trust relationship type
+            grant_type: The grant type (client_credentials)
+
+        Returns:
+            Token response dictionary or None if failed
+        """
+        try:
+            token_id = secrets.token_hex(16)
+            token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
+            current_time = int(time.time())
+
+            token_data = {
+                "token_id": token_id,
+                "token": token,
+                "actor_id": actor_id,
+                "client_id": client_id,
+                "scope": scope,
+                "trust_type": trust_type,
+                "grant_type": grant_type,
+                "created_at": current_time,
+                "expires_at": current_time + self.default_expires_in,
+            }
+
+            # Store token in actor's private attributes
+            self._store_access_token(actor_id, token, token_data)
+
+            # Return standard OAuth2 token response
+            response = {
+                "access_token": token,
+                "token_type": "Bearer",
+                "expires_in": self.default_expires_in,
+                "scope": scope,
+            }
+
+            logger.info(f"Created access token for client credentials flow: {client_id} -> {actor_id}")
+            return response
+
+        except Exception as e:
+            logger.error(f"Error creating access token for client credentials: {e}")
+            return None
 
 
 # Global token manager

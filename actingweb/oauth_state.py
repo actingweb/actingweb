@@ -17,6 +17,7 @@ def encode_state(
     actor_id: str = "",
     trust_type: str = "",
     expected_email: str = "",
+    user_agent: str = "",
     extra: Dict[str, Any] | None = None,
 ) -> str:
     data: Dict[str, Any] = {
@@ -25,19 +26,20 @@ def encode_state(
         "actor_id": actor_id,
         "trust_type": trust_type,
         "expected_email": expected_email,
+        "user_agent": user_agent[:100] if user_agent else "",  # Truncate to prevent large state
     }
     if extra:
         data.update(extra)
     return json.dumps(data)
 
 
-def decode_state(state: str) -> Tuple[str, str, str, str, str]:
+def decode_state(state: str) -> Tuple[str, str, str, str, str, str]:
     """
-    Decode state into (csrf, redirect, actor_id, trust_type, expected_email).
+    Decode state into (csrf, redirect, actor_id, trust_type, expected_email, user_agent).
     Supports legacy forms (raw actor_id or raw CSRF token).
     """
     if not state:
-        return "", "", "", "", ""
+        return "", "", "", "", "", ""
 
     # If it starts with '{' it's likely JSON (standard state)
     if state.strip().startswith("{"):
@@ -49,20 +51,21 @@ def decode_state(state: str) -> Tuple[str, str, str, str, str]:
                 str(data.get("actor_id", "")),
                 str(data.get("trust_type", "")),
                 str(data.get("expected_email", "")),
+                str(data.get("user_agent", "")),
             )
         except (json.JSONDecodeError, TypeError):
             pass
 
     # Base64-like encrypted MCP state should be handled upstream; return minimal tuple
     if len(state) > 50 and re.match(r"^[A-Za-z0-9+/_=-]+$", state):
-        return "", "", "", "", ""
+        return "", "", "", "", "", ""
 
     # Legacy: 32 hex actor id
     if len(state) == 32 and all(c in "0123456789abcdef" for c in state.lower()):
-        return "", "", state, "", ""
+        return "", "", state, "", "", ""
 
     # Otherwise treat as CSRF token only
-    return state, "", "", "", ""
+    return state, "", "", "", "", ""
 
 
 def validate_expected_email(state: str, authenticated_email: str) -> bool:

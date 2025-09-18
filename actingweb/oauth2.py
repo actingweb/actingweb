@@ -9,20 +9,24 @@ functionality into a single, maintainable module.
 import json
 import logging
 import time
-import secrets
+import hashlib
+import re
 from typing import Optional, Dict, Any, Tuple
 from urllib.parse import urlparse
-import urlfetch
+import requests
 from oauthlib.oauth2 import WebApplicationClient  # type: ignore[import-untyped]
 from oauthlib.common import generate_token  # type: ignore[import-untyped]
 
 from . import actor as actor_module
 from . import config as config_class
 from .interface.actor_interface import ActorInterface
-from .trust_type_registry import TrustTypeRegistry
-from .constants import ESTABLISHED_VIA_OAUTH2
+from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 
 logger = logging.getLogger(__name__)
+
+# Simple cache for invalid tokens to avoid repeat network requests
+_invalid_token_cache = {}
+_INVALID_TOKEN_CACHE_TTL = 300  # 5 minutes
 
 
 class OAuth2Provider:
@@ -35,6 +39,7 @@ class OAuth2Provider:
         self.auth_uri = config.get("auth_uri", "")
         self.token_uri = config.get("token_uri", "")
         self.userinfo_uri = config.get("userinfo_uri", "")
+        self.revocation_uri = config.get("revocation_uri", "")
         self.scope = config.get("scope", "")
         self.redirect_uri = config.get("redirect_uri", "")
 
@@ -54,6 +59,7 @@ class GoogleOAuth2Provider(OAuth2Provider):
             "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "userinfo_uri": "https://www.googleapis.com/oauth2/v2/userinfo",
+            "revocation_uri": "https://oauth2.googleapis.com/revoke",
             "scope": "openid email profile",
             "redirect_uri": f"{config.proto}{config.fqdn}/oauth/callback",
         }
@@ -107,7 +113,12 @@ class OAuth2Authenticator:
         return self.provider.is_enabled()
 
     def create_authorization_url(
-        self, state: str = "", redirect_after_auth: str = "", email_hint: str = "", trust_type: str = ""
+        self,
+        state: str = "",
+        redirect_after_auth: str = "",
+        email_hint: str = "",
+        trust_type: str = "",
+        user_agent: str = "",
     ) -> str:
         """
         Create OAuth2 authorization URL using oauthlib with trust type selection.
@@ -117,6 +128,7 @@ class OAuth2Authenticator:
             redirect_after_auth: Where to redirect after successful auth
             email_hint: Email to hint which account to use for authentication
             trust_type: Trust relationship type to establish (e.g., 'mcp_client', 'web_user')
+            user_agent: User-Agent header for client identification and MCP coordination
 
         Returns:
             OAuth2 authorization URL
@@ -128,14 +140,17 @@ class OAuth2Authenticator:
         if not state:
             state = generate_token()
 
-        # Encode redirect URL, email hint, and trust type in state if provided
+        # Encode redirect URL, email hint, trust type, and user agent in state if provided
         # IMPORTANT: Don't overwrite encrypted MCP state (which is base64 encoded)
-        if (redirect_after_auth or email_hint or trust_type) and not self._looks_like_encrypted_state(state):
+        if (redirect_after_auth or email_hint or trust_type or user_agent) and not self._looks_like_encrypted_state(
+            state
+        ):
             state_data = {
                 "csrf": state,
                 "redirect": redirect_after_auth,
                 "expected_email": email_hint,  # Store original email for validation
                 "trust_type": trust_type,  # Store trust type for automatic relationship creation
+                "user_agent": user_agent[:100] if user_agent else "",  # Truncate user agent to prevent large state
             }
             state = json.dumps(state_data)
 
@@ -189,7 +204,7 @@ class OAuth2Authenticator:
 
         return False
 
-    def exchange_code_for_token(self, code: str, state: str = "") -> Optional[Dict[str, Any]]:
+    def exchange_code_for_token(self, code: str, state: str = "") -> Optional[Dict[str, Any]]:  # pylint: disable=unused-argument
         """
         Exchange authorization code for access token using oauthlib.
 
@@ -219,16 +234,22 @@ class OAuth2Authenticator:
             headers["User-Agent"] = "ActingWeb-OAuth2-Client"
 
         try:
-            response = urlfetch.post(url=self.provider.token_uri, data=token_request_body, headers=headers)
+            # Use requests library with better timeout and connection handling
+            response = requests.post(
+                url=self.provider.token_uri,
+                data=token_request_body,
+                headers=headers,
+                timeout=(5, 15),  # (connect timeout, read timeout)
+            )
 
             if response.status_code != 200:
-                logger.error(f"OAuth2 token exchange failed: {response.status_code} {response.content}")
+                logger.error(f"OAuth2 token exchange failed: {response.status_code} {response.text}")
                 return None
 
-            token_data = json.loads(response.content.decode("utf-8"))
+            token_data = response.json()
 
             # Parse token response using oauthlib
-            self.client.parse_request_body_response(response.content.decode("utf-8"))
+            self.client.parse_request_body_response(response.text)
 
             return dict(token_data)
 
@@ -262,16 +283,22 @@ class OAuth2Authenticator:
             return None
 
         try:
-            response = urlfetch.post(url=self.provider.token_uri, data=refresh_request_body, headers=headers)
+            # Use requests library with better timeout and connection handling
+            response = requests.post(
+                url=self.provider.token_uri,
+                data=refresh_request_body,
+                headers=headers,
+                timeout=(5, 15),  # (connect timeout, read timeout)
+            )
 
             if response.status_code != 200:
-                logger.error(f"OAuth2 token refresh failed: {response.status_code} {response.content}")
+                logger.error(f"OAuth2 token refresh failed: {response.status_code} {response.text}")
                 return None
 
-            token_data = json.loads(response.content.decode("utf-8"))
+            token_data = response.json()
 
             # Parse token response using oauthlib
-            self.client.parse_request_body_response(response.content.decode("utf-8"))
+            self.client.parse_request_body_response(response.text)
 
             return dict(token_data)
 
@@ -292,6 +319,15 @@ class OAuth2Authenticator:
         if not access_token or not self.provider.userinfo_uri:
             return None
 
+        # Check cache for previously validated invalid tokens
+        current_time = time.time()
+        token_hash = hashlib.sha256(access_token.encode()).hexdigest()[:16]
+        if token_hash in _invalid_token_cache:
+            cache_time = _invalid_token_cache[token_hash]
+            if current_time - cache_time < _INVALID_TOKEN_CACHE_TTL:
+                logger.debug("Token found in invalid token cache - skipping network request")
+                return None
+
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
 
         # GitHub API requires User-Agent header
@@ -299,17 +335,24 @@ class OAuth2Authenticator:
             headers["User-Agent"] = "ActingWeb-OAuth2-Client"
 
         try:
-            response = urlfetch.get(url=self.provider.userinfo_uri, headers=headers)
+            # Use requests library with better timeout handling
+            response = requests.get(
+                url=self.provider.userinfo_uri, headers=headers, timeout=(5, 10)  # (connect timeout, read timeout)
+            )
 
             if response.status_code != 200:
-                logger.error(f"OAuth2 userinfo request failed: {response.status_code} {response.content}")
+                logger.error(f"OAuth2 userinfo request failed: {response.status_code} {response.text}")
+                # Cache this invalid token to avoid future network requests
+                _invalid_token_cache[token_hash] = current_time
                 return None
 
-            userinfo = json.loads(response.content.decode("utf-8"))
+            userinfo = response.json()
             return dict(userinfo)
 
         except Exception as e:
             logger.error(f"Exception during token validation: {e}")
+            # Cache this invalid token to avoid future network requests
+            _invalid_token_cache[token_hash] = current_time
             return None
 
     def get_email_from_user_info(self, user_info: Dict[str, Any], access_token: Optional[str] = None) -> Optional[str]:
@@ -353,13 +396,18 @@ class OAuth2Authenticator:
         }
 
         try:
-            response = urlfetch.get(url="https://api.github.com/user/emails", headers=headers)
+            # Use requests library with better timeout handling
+            response = requests.get(
+                url="https://api.github.com/user/emails",
+                headers=headers,
+                timeout=(5, 10),  # (connect timeout, read timeout)
+            )
 
             if response.status_code != 200:
                 logger.warning(f"GitHub emails API request failed: {response.status_code}")
                 return None
 
-            emails = json.loads(response.content.decode("utf-8"))
+            emails = response.json()
 
             # Find the primary email
             for email_info in emails:
@@ -418,9 +466,6 @@ class OAuth2Authenticator:
             except Exception as create_error:
                 logger.error(f"Failed to create actor for email {email}: {create_error}")
                 return None
-            else:
-                logger.error(f"Failed to create actor for email {email}")
-                return None
 
         except Exception as e:
             logger.error(f"Exception during actor lookup/creation for {email}: {e}")
@@ -428,6 +473,7 @@ class OAuth2Authenticator:
 
     def validate_email_from_state(self, state: str, authenticated_email: str) -> bool:
         from .oauth_state import validate_expected_email
+
         return validate_expected_email(state, authenticated_email)
 
     def authenticate_bearer_token(self, bearer_token: str) -> Tuple[Optional[actor_module.Actor], Optional[str]]:
@@ -485,6 +531,60 @@ class OAuth2Authenticator:
     def clear_session_data(self, session_id: str) -> None:
         """Clear session data after OAuth2 flow completion."""
         self._sessions.pop(session_id, None)
+
+    def revoke_token(self, token: str) -> bool:
+        """
+        Revoke an OAuth2 access or refresh token.
+
+        This method calls the provider's revocation endpoint to invalidate
+        the token, ensuring it cannot be used for further authentication.
+
+        Args:
+            token: OAuth2 access token or refresh token to revoke
+
+        Returns:
+            True if revocation was successful, False otherwise
+        """
+        try:
+            if not self.is_enabled():
+                logger.warning("OAuth2 provider not enabled, cannot revoke token")
+                return False
+
+            if not token:
+                logger.warning("No token provided for revocation")
+                return False
+
+            # Get the revocation endpoint from the provider
+            revocation_url = self.provider.revocation_uri
+            if not revocation_url:
+                logger.warning(f"Provider {self.provider.__class__.__name__} does not support token revocation")
+                return False
+
+            # Prepare revocation request
+            import requests
+
+            headers = {"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "ActingWeb/1.0"}
+
+            data = {"token": token, "client_id": self.provider.client_id}
+
+            # Add client secret if available (for confidential clients)
+            if hasattr(self.provider, "client_secret") and self.provider.client_secret:
+                data["client_secret"] = self.provider.client_secret
+
+            # Make revocation request
+            response = requests.post(revocation_url, data=data, headers=headers, timeout=10)
+
+            # Google returns 200 for both successful revocations and already-invalid tokens
+            # This is per RFC 7009 - revocation should be idempotent
+            if response.status_code == 200:
+                return True
+            else:
+                logger.warning(f"Token revocation failed with status {response.status_code}: {response.text}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error during token revocation: {e}")
+            return False
 
 
 # Factory functions for backward compatibility and convenience
@@ -609,7 +709,15 @@ def validate_redirect_url(redirect_url: str, allowed_domains: list[str]) -> bool
 
 
 def create_oauth2_trust_relationship(
-    actor: ActorInterface, email: str, trust_type: str, oauth_tokens: Dict[str, Any], established_via: Optional[str] = None
+    actor: ActorInterface,
+    email: str,
+    trust_type: str,
+    oauth_tokens: Dict[str, Any],
+    established_via: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_name: Optional[str] = None,
+    client_version: Optional[str] = None,
+    client_platform: Optional[str] = None,
 ) -> bool:
     """
     Create trust relationship after successful OAuth2 authentication.
@@ -620,6 +728,10 @@ def create_oauth2_trust_relationship(
         trust_type: Type of trust relationship to create
         oauth_tokens: OAuth2 tokens from authentication
         established_via: Optional override for how relationship was established
+        client_id: Optional MCP client ID for unique identification per client
+        client_name: Optional client application name
+        client_version: Optional client application version
+        client_platform: Optional client platform/user-agent info
 
     Returns:
         True if trust relationship was created successfully
@@ -627,16 +739,21 @@ def create_oauth2_trust_relationship(
     try:
         # All OAuth2 trust relationships are established via OAuth2, regardless of trust type
         if established_via is None:
-            established_via = ESTABLISHED_VIA_OAUTH2
-        
+            established_via = ESTABLISHED_VIA_OAUTH2_INTERACTIVE
+
         # Delegate to TrustManager for unified behavior
         from .interface.trust_manager import TrustManager  # type: ignore
+
         tm = TrustManager(actor.core_actor)
         return tm.create_or_update_oauth_trust(
             email=email,
             trust_type=trust_type,
             oauth_tokens=oauth_tokens,
             established_via=established_via,
+            client_id=client_id,
+            client_name=client_name,
+            client_version=client_version,
+            client_platform=client_platform,
         )
     except Exception as e:
         logger.error(f"Error creating OAuth2 trust relationship: {e}")

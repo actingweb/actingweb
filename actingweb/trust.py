@@ -33,6 +33,15 @@ class Trust:
         verified: bool | None = None,
         verification_token: str | None = None,
         peer_approved: bool | None = None,
+        # New unified trust attributes
+        peer_identifier: str | None = None,
+        established_via: str | None = None,
+        last_accessed: str | None = None,
+        # Client metadata for OAuth2 clients
+        client_name: str | None = None,
+        client_version: str | None = None,
+        client_platform: str | None = None,
+        oauth_client_id: str | None = None,
     ) -> bool:
         if not self.handle:
             logging.debug("Attempted modifcation of trust without handle")
@@ -59,6 +68,15 @@ class Trust:
             verified=verified,
             verification_token=verification_token,
             peer_approved=peer_approved,
+            # Pass through new unified trust attributes
+            peer_identifier=peer_identifier,
+            established_via=established_via,
+            last_accessed=last_accessed,
+            # Pass through client metadata
+            client_name=client_name,
+            client_version=client_version,
+            client_platform=client_platform,
+            oauth_client_id=oauth_client_id,
         )
 
     def create(

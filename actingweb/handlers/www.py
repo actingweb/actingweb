@@ -74,18 +74,12 @@ class WwwHandler(base_handler.BaseHandler):
         }
 
     def get(self, actor_id: str, path: str) -> None:
-        (myself, check) = auth.init_actingweb(
-            appreq=self, actor_id=actor_id, path="www", subpath=path, config=self.config
-        )
-        if not myself or not check or check.response["code"] != 200:
+        myself = self.require_authenticated_actor(actor_id, "www", "GET", path)
+        if not myself:
             return
         if not self.config.ui:
             if self.response:
                 self.response.set_status(404, "Web interface is not enabled")
-            return
-        if not check.check_authorisation(path="www", subpath=path, method="GET"):
-            self.response.write("")
-            self.response.set_status(403)
             return
 
         if not path or path == "":
@@ -614,18 +608,12 @@ class WwwHandler(base_handler.BaseHandler):
 
     def post(self, actor_id: str, path: str) -> None:
         """Handle POST requests for web UI property operations."""
-        (myself, check) = auth.init_actingweb(
-            appreq=self, actor_id=actor_id, path="www", subpath=path, config=self.config
-        )
-        if not myself or not check or check.response["code"] != 200:
+        myself = self.require_authenticated_actor(actor_id, "www", "POST", path)
+        if not myself:
             return
         if not self.config.ui:
             if self.response:
                 self.response.set_status(404, "Web interface is not enabled")
-            return
-        if not check.check_authorisation(path="www", subpath=path, method="POST"):
-            self.response.write("")
-            self.response.set_status(403)
             return
 
         # Handle trust relationship creation

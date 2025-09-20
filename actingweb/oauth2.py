@@ -204,7 +204,9 @@ class OAuth2Authenticator:
 
         return False
 
-    def exchange_code_for_token(self, code: str, state: str = "") -> Optional[Dict[str, Any]]:  # pylint: disable=unused-argument
+    def exchange_code_for_token(
+        self, code: str, state: str = ""
+    ) -> Optional[Dict[str, Any]]:  # pylint: disable=unused-argument
         """
         Exchange authorization code for access token using oauthlib.
 
@@ -341,7 +343,7 @@ class OAuth2Authenticator:
             )
 
             if response.status_code != 200:
-                logger.error(f"OAuth2 userinfo request failed: {response.status_code} {response.text}")
+                logger.debug(f"OAuth2 userinfo request failed: {response.status_code} {response.text}")
                 # Cache this invalid token to avoid future network requests
                 _invalid_token_cache[token_hash] = current_time
                 return None

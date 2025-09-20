@@ -50,11 +50,19 @@ class TestMcpPermissions(unittest.TestCase):
         # Inject hooks
         self.handler.hooks = self.hooks
 
+    @patch("actingweb.handlers.mcp.RuntimeContext")
     @patch("actingweb.permission_evaluator.get_permission_evaluator")
     @patch.object(MCPHandler, "authenticate_and_get_actor_cached")
-    def test_tools_list_filters_by_permission(self, mock_auth, mock_get_eval):
+    def test_tools_list_filters_by_permission(self, mock_auth, mock_get_eval, mock_runtime_context):
         # Auth returns our fake actor
         mock_auth.return_value = self.fake_actor
+
+        # Mock runtime context to return MCP context with peer_id
+        mock_mcp_context = Mock()
+        mock_mcp_context.peer_id = self.peer_id
+        mock_runtime_instance = Mock()
+        mock_runtime_instance.get_mcp_context.return_value = mock_mcp_context
+        mock_runtime_context.return_value = mock_runtime_instance
 
         # Mock evaluator to allow 'search' and deny 'create_note'
         from actingweb.permission_evaluator import PermissionResult, PermissionType
@@ -82,10 +90,18 @@ class TestMcpPermissions(unittest.TestCase):
         self.assertIn("search", names)
         self.assertNotIn("create_note", names)
 
+    @patch("actingweb.handlers.mcp.RuntimeContext")
     @patch("actingweb.permission_evaluator.get_permission_evaluator")
     @patch.object(MCPHandler, "authenticate_and_get_actor_cached")
-    def test_tools_call_respects_permission(self, mock_auth, mock_get_eval):
+    def test_tools_call_respects_permission(self, mock_auth, mock_get_eval, mock_runtime_context):
         mock_auth.return_value = self.fake_actor
+
+        # Mock runtime context to return MCP context with peer_id
+        mock_mcp_context = Mock()
+        mock_mcp_context.peer_id = self.peer_id
+        mock_runtime_instance = Mock()
+        mock_runtime_instance.get_mcp_context.return_value = mock_mcp_context
+        mock_runtime_context.return_value = mock_runtime_instance
 
         from actingweb.permission_evaluator import PermissionResult, PermissionType
 
@@ -119,10 +135,18 @@ class TestMcpPermissions(unittest.TestCase):
         self.assertIn("error", denied)
         self.assertEqual(denied["error"].get("code"), -32003)
 
+    @patch("actingweb.handlers.mcp.RuntimeContext")
     @patch("actingweb.permission_evaluator.get_permission_evaluator")
     @patch.object(MCPHandler, "authenticate_and_get_actor_cached")
-    def test_prompts_list_and_get_respect_permission(self, mock_auth, mock_get_eval):
+    def test_prompts_list_and_get_respect_permission(self, mock_auth, mock_get_eval, mock_runtime_context):
         mock_auth.return_value = self.fake_actor
+
+        # Mock runtime context to return MCP context with peer_id
+        mock_mcp_context = Mock()
+        mock_mcp_context.peer_id = self.peer_id
+        mock_runtime_instance = Mock()
+        mock_runtime_instance.get_mcp_context.return_value = mock_mcp_context
+        mock_runtime_context.return_value = mock_runtime_instance
 
         from actingweb.permission_evaluator import PermissionResult, PermissionType
 

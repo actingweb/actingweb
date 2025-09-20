@@ -62,32 +62,41 @@ class TestTrustPermissionsFeatureTag(unittest.TestCase):
         """Test that the meta endpoint includes the trustpermissions tag in its response."""
         from actingweb.handlers.meta import MetaHandler
         from unittest.mock import Mock
-        
+
         # Mock the dependencies
         config = Config()
         handler = MetaHandler()
         handler.config = config
         handler.response = Mock()
         handler.response.headers = {}
-        
+
+        # Mock the request object
+        handler.request = Mock()
+        handler.request.headers = {}  # No authorization headers for unauthenticated access
+
         # Mock the auth system to return a valid actor and check
         mock_actor = Mock()
         mock_actor.store = Mock()
         mock_actor.store.trustee_root = None
-        
-        mock_check = Mock()
-        mock_check.check_authorisation = Mock(return_value=True)
-        
-        with patch('actingweb.handlers.meta.auth.init_actingweb', return_value=(mock_actor, mock_check)):
-            # Call the meta handler for the supported endpoint
-            handler.get("test-actor", "actingweb/supported")
-            
-            # Verify the response was written
-            handler.response.write.assert_called_once()
-            
-            # Get the written content and verify it contains trustpermissions
-            written_content = handler.response.write.call_args[0][0]
-            self.assertIn("trustpermissions", written_content)
+
+        # Mock authentication result
+        mock_auth_result = Mock()
+        mock_auth_result.actor = mock_actor
+        mock_auth_result.auth_obj = Mock()
+        mock_auth_result.auth_obj.check_authorisation = Mock(return_value=True)
+
+        # Mock the authentication method used by get_actor_allow_unauthenticated
+        handler._authenticate_internal = Mock(return_value=mock_auth_result)
+
+        # Call the meta handler for the supported endpoint
+        handler.get("test-actor", "actingweb/supported")
+
+        # Verify the response was written
+        handler.response.write.assert_called_once()
+
+        # Get the written content and verify it contains trustpermissions
+        written_content = handler.response.write.call_args[0][0]
+        self.assertIn("trustpermissions", written_content)
 
 
 if __name__ == '__main__':

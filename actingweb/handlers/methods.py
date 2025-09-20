@@ -24,7 +24,7 @@ class MethodsHandler(base_handler.BaseHandler):
         
         Args:
             actor_id: The actor ID
-            auth_obj: Auth object from init_actingweb
+            auth_obj: Auth object from authentication
             method_name: Method name to check access for
             
         Returns:
@@ -67,7 +67,7 @@ class MethodsHandler(base_handler.BaseHandler):
     def get(self, actor_id: str, name: str = "") -> None:
         """
         Handle GET requests to methods endpoint.
-        
+
         GET /methods - List available methods
         GET /methods/method_name - Get method info/schema
         """
@@ -77,13 +77,15 @@ class MethodsHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
             return
-            
-        (myself, check) = self._init_dual_auth(actor_id, "methods", "methods", name, add_response=False)
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+
+        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name, add_response=False)
+        if not auth_result.actor or not auth_result.auth_obj or (
+            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         # Use unified access control system for permission checking
         if not self._check_method_permission(actor_id, check, name):
             if self.response:
@@ -114,15 +116,17 @@ class MethodsHandler(base_handler.BaseHandler):
     def post(self, actor_id: str, name: str = "") -> None:
         """
         Handle POST requests to methods endpoint.
-        
+
         POST /methods/method_name - Execute method with JSON-RPC support
         """
-        (myself, check) = self._init_dual_auth(actor_id, "methods", "methods", name, add_response=False)
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name, add_response=False)
+        if not auth_result.actor or not auth_result.auth_obj or (
+            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         # Use unified access control system for permission checking
         if not self._check_method_permission(actor_id, check, name):
             if self.response:
@@ -175,15 +179,15 @@ class MethodsHandler(base_handler.BaseHandler):
     def delete(self, actor_id: str, name: str = "") -> None:
         """
         Handle DELETE requests to methods endpoint.
-        
+
         DELETE /methods/method_name - Remove method (if supported)
         """
-        (myself, check) = self._init_dual_auth(actor_id, "methods", "methods", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="methods", subpath=name, method="DELETE"):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+        if not auth_result.authorize("DELETE", "methods", name):
             return
             
         # Execute method delete hook

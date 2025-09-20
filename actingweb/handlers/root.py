@@ -11,15 +11,13 @@ class RootHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "DELETE":
             self.delete(actor_id)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self, actor_id=actor_id, path="", subpath="", config=self.config
-        )
-        if not myself or not check or check.response["code"] != 200:
-            return
-        if not check.check_authorisation(path="/", method="GET"):
-            if self.response:
-                self.response.set_status(403)
-            return
+        # Authenticate and authorize separately like DELETE method
+        auth_result = self.authenticate_actor(actor_id, "")
+        if not auth_result.success:
+            return  # Response already set
+        if not auth_result.authorize("GET", "/"):
+            return  # Response already set
+        myself = auth_result.actor
         pair = {
             "id": myself.id,
             "creator": myself.creator,
@@ -35,15 +33,13 @@ class RootHandler(base_handler.BaseHandler):
         self.response.set_status(200)
 
     def delete(self, actor_id):
-        (myself, check) = auth.init_actingweb(
-            appreq=self, actor_id=actor_id, path="", subpath="", config=self.config
-        )
-        if not myself or not check or check.response["code"] != 200:
-            return
-        if not check.check_authorisation(path="/", method="DELETE"):
-            if self.response:
-                self.response.set_status(403)
-            return
+        # Alternative: more control with AuthResult
+        auth_result = self.authenticate_actor(actor_id, "")
+        if not auth_result.success:
+            return  # Response already set
+        if not auth_result.authorize("DELETE", "/"):
+            return  # Response already set
+        myself = auth_result.actor
         # Execute actor deletion lifecycle hook
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)

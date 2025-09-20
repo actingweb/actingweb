@@ -61,10 +61,21 @@ class ActingWebApp:
         # Hook registry
         self.hooks = HookRegistry()
 
+        # Service registry for third-party OAuth2 services
+        self._service_registry: Optional[Any] = None  # Lazy initialized
+
         # Internal config object (lazy initialized)
         self._config: Optional[Config] = None
         # Automatically initialize permission system for better performance
         self._initialize_permission_system()
+
+    def _attach_service_registry_to_config(self) -> None:
+        """Ensure the Config instance exposes the shared service registry."""
+        if self._config is None:
+            return
+
+        # Always set attribute so downstream code can rely on it existing
+        setattr(self._config, "service_registry", self._service_registry)
 
     def _apply_runtime_changes_to_config(self) -> None:
         """Propagate builder changes to an existing Config instance.
@@ -90,6 +101,8 @@ class ActingWebApp:
             self._config.actors = dict(self._actors_config)
         if self._enable_bot:
             self._config.bot = dict(self._bot_config or {})
+        # Keep service registry reference in sync
+        self._attach_service_registry_to_config()
 
     def with_oauth(
         self,
@@ -160,6 +173,57 @@ class ActingWebApp:
         # Note: aw_supported is computed in Config.__init__. We keep this minimal
         # to avoid touching unrelated features; OAuth fix does not require recompute.
         return self
+
+    def add_service(self, name: str, client_id: str, client_secret: str,
+                   scopes: list, auth_uri: str, token_uri: str,
+                   userinfo_uri: str = "", revocation_uri: str = "",
+                   base_api_url: str = "", **extra_params) -> "ActingWebApp":
+        """Add a custom third-party OAuth2 service configuration."""
+        self._get_service_registry().register_service_from_dict(name, {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scopes": scopes,
+            "auth_uri": auth_uri,
+            "token_uri": token_uri,
+            "userinfo_uri": userinfo_uri,
+            "revocation_uri": revocation_uri,
+            "base_api_url": base_api_url,
+            "extra_params": extra_params
+        })
+        return self
+
+    def add_dropbox(self, client_id: str, client_secret: str) -> "ActingWebApp":
+        """Add Dropbox service using pre-configured template."""
+        self._get_service_registry().register_dropbox(client_id, client_secret)
+        return self
+
+    def add_gmail(self, client_id: str, client_secret: str, readonly: bool = True) -> "ActingWebApp":
+        """Add Gmail service using pre-configured template."""
+        self._get_service_registry().register_gmail(client_id, client_secret, readonly)
+        return self
+
+    def add_github(self, client_id: str, client_secret: str) -> "ActingWebApp":
+        """Add GitHub service using pre-configured template."""
+        self._get_service_registry().register_github(client_id, client_secret)
+        return self
+
+    def add_box(self, client_id: str, client_secret: str) -> "ActingWebApp":
+        """Add Box service using pre-configured template."""
+        self._get_service_registry().register_box(client_id, client_secret)
+        return self
+
+    def _get_service_registry(self):
+        """Get or create the service registry."""
+        if self._service_registry is None:
+            from .services import ServiceRegistry
+            self._service_registry = ServiceRegistry(self.get_config())
+        # Ensure config exposes the registry even if it existed earlier
+        self._attach_service_registry_to_config()
+        return self._service_registry
+
+    def get_service_registry(self):
+        """Get the service registry for advanced configuration."""
+        return self._get_service_registry()
 
     def add_actor_type(self, name: str, factory: str = "", relationship: str = "friend") -> "ActingWebApp":
         """Add an actor type configuration."""
@@ -255,6 +319,7 @@ class ActingWebApp:
                 oauth=self._oauth_config or {},
                 mcp=self._enable_mcp,
             )
+            self._attach_service_registry_to_config()
         else:
             # If config already exists, keep it in sync with latest builder settings
             self._apply_runtime_changes_to_config()

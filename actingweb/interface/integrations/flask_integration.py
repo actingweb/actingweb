@@ -19,13 +19,13 @@ from ...handlers import (
     devtest,
     subscription,
     resources,
-    oauth,
     bot,
     www,
     factory,
     methods,
     actions,
     mcp,
+    services,
 )
 
 if TYPE_CHECKING:
@@ -158,15 +158,6 @@ class FlaskIntegration:
         def app_meta(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
             return self._handle_actor_request(actor_id, "meta", path=path)
 
-        # Actor OAuth
-        @self.flask_app.route("/<actor_id>/oauth", methods=["GET"])
-        @self.flask_app.route("/<actor_id>/oauth/<path:path>", methods=["GET"])
-        def app_oauth(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
-            # Align with FastAPI: protect actor oauth UI with OAuth when enabled
-            auth_redirect = self._check_authentication_and_redirect()
-            if auth_redirect:
-                return auth_redirect
-            return self._handle_actor_request(actor_id, "oauth", path=path)
 
         # Actor www with OAuth2 authentication
         @self.flask_app.route("/<actor_id>/www", methods=["GET", "POST", "DELETE"])
@@ -245,6 +236,18 @@ class FlaskIntegration:
         @self.flask_app.route("/<actor_id>/actions/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
         def app_actions(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
             return self._handle_actor_request(actor_id, "actions", name=name)
+
+        # Third-party service OAuth2 callbacks and management
+        @self.flask_app.route("/<actor_id>/services/<service_name>/callback", methods=["GET"])
+        def app_services_callback(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_actor_request(actor_id, "services", name=service_name,
+                                            code=request.args.get('code'),
+                                            state=request.args.get('state'),
+                                            error=request.args.get('error'))
+
+        @self.flask_app.route("/<actor_id>/services/<service_name>", methods=["DELETE"])
+        def app_services_revoke(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_actor_request(actor_id, "services", name=service_name)
 
     def _normalize_request(self) -> Dict[str, Any]:
         """Convert Flask request to ActingWeb format."""
@@ -809,9 +812,6 @@ class FlaskIntegration:
                         args.append(kwargs["subid"])
                     if kwargs.get("seqnr"):
                         args.append(kwargs["seqnr"])
-                elif endpoint == "oauth":
-                    # OauthHandler.get(actor_id, path) - path defaults to "" if not provided
-                    args.append(kwargs.get("path", ""))
                 elif endpoint == "www":
                     # WwwHandler.get(actor_id, path) - path defaults to "" if not provided
                     args.append(kwargs.get("path", ""))
@@ -833,8 +833,16 @@ class FlaskIntegration:
                 elif endpoint == "actions":
                     # ActionsHandler.get(actor_id, name) - name defaults to "" if not provided
                     args.append(kwargs.get("name", ""))
+                elif endpoint == "services":
+                    # ServicesHandler.get(actor_id, service_name, **kwargs) - service_name from name parameter
+                    service_name = kwargs.get("name", "")
+                    args.append(service_name)
+                    # For services, we need to pass additional kwargs (code, state, error)
+                    for key in ["code", "state", "error"]:
+                        if key in kwargs:
+                            kwargs[key] = kwargs[key]
 
-                handler_method(*args)
+                handler_method(*args, **{k: v for k, v in kwargs.items() if k in ["code", "state", "error"]})
             else:
                 return Response(status=405)
         except Exception as e:
@@ -886,7 +894,6 @@ class FlaskIntegration:
         handlers = {
             "root": lambda: root.RootHandler(webobj, config, hooks=self.aw_app.hooks),
             "meta": lambda: meta.MetaHandler(webobj, config, hooks=self.aw_app.hooks),
-            "oauth": lambda: oauth.OauthHandler(webobj, config, hooks=self.aw_app.hooks),
             "www": lambda: www.WwwHandler(webobj, config, hooks=self.aw_app.hooks),
             "properties": lambda: properties.PropertiesHandler(webobj, config, hooks=self.aw_app.hooks),
             "resources": lambda: resources.ResourcesHandler(webobj, config, hooks=self.aw_app.hooks),
@@ -894,6 +901,7 @@ class FlaskIntegration:
             "devtest": lambda: devtest.DevtestHandler(webobj, config, hooks=self.aw_app.hooks),
             "methods": lambda: methods.MethodsHandler(webobj, config, hooks=self.aw_app.hooks),
             "actions": lambda: actions.ActionsHandler(webobj, config, hooks=self.aw_app.hooks),
+            "services": lambda: self._create_services_handler(webobj, config),
         }
 
         # Special handling for trust endpoint
@@ -1009,3 +1017,10 @@ class FlaskIntegration:
             "actor_lookup": "email_based",
             "description": f"ActingWeb MCP Demo - AI can interact with actors through MCP protocol using {oauth_provider.title()} OAuth2",
         }
+
+    def _create_services_handler(self, webobj: AWWebObj, config) -> Any:
+        """Create services handler with service registry injection."""
+        handler = services.ServicesHandler(webobj, config, hooks=self.aw_app.hooks)
+        # Inject service registry into the handler so it can access it
+        handler._service_registry = self.aw_app.get_service_registry()
+        return handler

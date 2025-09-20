@@ -56,7 +56,7 @@ class PropertiesHandler(base_handler.BaseHandler):
         
         Args:
             actor_id: The actor ID
-            auth_obj: Auth object from init_actingweb
+            auth_obj: Auth object from authentication
             property_path: Property path (e.g., "email", "notes/work")
             operation: Operation type ("read", "write", "delete")
             
@@ -123,9 +123,11 @@ class PropertiesHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "DELETE":
             self.delete(actor_id, name)
             return
-        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         if not name:
             path = []
         else:
@@ -286,9 +288,11 @@ class PropertiesHandler(base_handler.BaseHandler):
         return
 
     def put(self, actor_id, name):
-        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
-        if not myself or (check and check.response["code"] != 200):
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         resource = None
         if not name:
             path = []
@@ -391,12 +395,12 @@ class PropertiesHandler(base_handler.BaseHandler):
         self.response.set_status(204)
 
     def post(self, actor_id, name):
-        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="properties", subpath=name, method="POST"):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+        if not auth_result.authorize("POST", "properties", name):
             return
         if len(name) > 0:
             if self.response:
@@ -664,9 +668,11 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(201, "Created")
 
     def delete(self, actor_id, name):
-        (myself, check) = self._init_dual_auth(actor_id, "properties", "properties", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         resource = None
         if not name:
             path = []

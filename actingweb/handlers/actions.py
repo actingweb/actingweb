@@ -24,7 +24,7 @@ class ActionsHandler(base_handler.BaseHandler):
         
         Args:
             actor_id: The actor ID
-            auth_obj: Auth object from init_actingweb
+            auth_obj: Auth object from authentication
             action_name: Action name to check access for
             
         Returns:
@@ -67,7 +67,7 @@ class ActionsHandler(base_handler.BaseHandler):
     def get(self, actor_id: str, name: str = "") -> None:
         """
         Handle GET requests to actions endpoint.
-        
+
         GET /actions - List available actions
         GET /actions/action_name - Get action status
         """
@@ -77,13 +77,15 @@ class ActionsHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
             return
-            
-        (myself, check) = self._init_dual_auth(actor_id, "actions", "actions", name, add_response=False)
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+
+        auth_result = self.authenticate_actor(actor_id, "actions", subpath=name, add_response=False)
+        if not auth_result.actor or not auth_result.auth_obj or (
+            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         # Use unified access control system for permission checking
         if not self._check_action_permission(actor_id, check, name):
             if self.response:
@@ -113,15 +115,17 @@ class ActionsHandler(base_handler.BaseHandler):
     def post(self, actor_id: str, name: str = "") -> None:
         """
         Handle POST requests to actions endpoint.
-        
+
         POST /actions/action_name - Execute action
         """
-        (myself, check) = self._init_dual_auth(actor_id, "actions", "actions", name, add_response=False)
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+        auth_result = self.authenticate_actor(actor_id, "actions", subpath=name, add_response=False)
+        if not auth_result.actor or not auth_result.auth_obj or (
+            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         # Use unified access control system for permission checking
         if not self._check_action_permission(actor_id, check, name):
             if self.response:
@@ -163,15 +167,17 @@ class ActionsHandler(base_handler.BaseHandler):
     def put(self, actor_id: str, name: str = "") -> None:
         """
         Handle PUT requests to actions endpoint.
-        
+
         PUT /actions/action_name - Execute action (same as POST)
         """
-        (myself, check) = self._init_dual_auth(actor_id, "actions", "actions", name, add_response=False)
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+        auth_result = self.authenticate_actor(actor_id, "actions", subpath=name, add_response=False)
+        if not auth_result.actor or not auth_result.auth_obj or (
+            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         # Use unified access control system for permission checking
         if not self._check_action_permission(actor_id, check, name):
             if self.response:
@@ -213,12 +219,14 @@ class ActionsHandler(base_handler.BaseHandler):
     def delete(self, actor_id: str, name: str = "") -> None:
         """
         Handle DELETE requests to actions endpoint.
-        
+
         DELETE /actions/action_name - Remove action (if supported)
         """
-        (myself, check) = self._init_dual_auth(actor_id, "actions", "actions", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "actions", name)
+        if not auth_result.success:
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         # Use unified access control system for permission checking
         if not self._check_action_permission(actor_id, check, name):
             if self.response:

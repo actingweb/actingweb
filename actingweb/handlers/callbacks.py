@@ -1,7 +1,7 @@
 import json
 import logging
 from builtins import str
-from typing import Any, Dict, Optional, Union
+from typing import Union
 
 from actingweb import auth
 from actingweb.handlers import base_handler
@@ -15,15 +15,16 @@ class CallbacksHandler(base_handler.BaseHandler):
             self.put(actor_id, name)
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
-        (myself, check) = self._init_dual_auth(actor_id, "callbacks", "callbacks", name, add_response=False)
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+        auth_result = self._authenticate_dual_context(actor_id, "callbacks", "callbacks", name, add_response=False)
+        if (
+            not auth_result.actor
+            or not auth_result.auth_obj
+            or (auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401)
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
-        if not check.check_authorisation(path="callbacks", subpath=name, method="GET"):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        myself = auth_result.actor
+        if not auth_result.authorize("GET", "callbacks", name):
             return
         # Execute callback hook for GET
         result = False
@@ -32,7 +33,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(name, actor_interface, {"method": "GET"})
                 result = bool(hook_result) if hook_result is not None else False
-                
+
         if not result:
             self.response.set_status(403, "Forbidden")
 
@@ -42,9 +43,11 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def delete(self, actor_id, name):
         """Handles deletion of callbacks, like subscriptions"""
-        (myself, check) = self._init_dual_auth(actor_id, "callbacks", "callbacks", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self._authenticate_dual_context(actor_id, "callbacks", "callbacks", name)
+        if not auth_result.success:
             return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         path = name.split("/")
         if path[0] == "subscriptions":
             peerid = path[1]
@@ -65,9 +68,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 return
             self.response.set_status(404, "Not found")
             return
-        if not check.check_authorisation(
-            path="callbacks", subpath=name, method="DELETE"
-        ):
+        if not check.check_authorisation(path="callbacks", subpath=name, method="DELETE"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -78,13 +79,15 @@ class CallbacksHandler(base_handler.BaseHandler):
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(name, actor_interface, {"method": "DELETE"})
                 result = bool(hook_result) if hook_result is not None else False
-                
+
         if not result:
             self.response.set_status(403, "Forbidden")
 
     def post(self, actor_id, name):
         """Handles POST callbacks"""
-        (myself, check) = self._init_dual_auth(actor_id, "callbacks", "callbacks", name, add_response=False)
+        auth_result = self._authenticate_dual_context(actor_id, "callbacks", "callbacks", name, add_response=False)
+        myself = auth_result.actor
+        check = auth_result.auth_obj
         # Allow unauthenticated requests to /callbacks/subscriptions, so
         # do the auth check further below
         path = name.split("/")
@@ -115,7 +118,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 except (TypeError, ValueError, KeyError):
                     self.response.set_status(400, "Error in json body")
                     return
-                    
+
                 # Execute subscription callback hook
                 result = False
                 if self.hooks:
@@ -125,7 +128,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                         hook_data.update({"subscription": sub, "peerid": peerid})
                         hook_result = self.hooks.execute_callback_hooks("subscription", actor_interface, hook_data)
                         result = bool(hook_result) if hook_result is not None else False
-                        
+
                 if result:
                     self.response.set_status(204, "Found")
                 else:
@@ -133,14 +136,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                 return
             self.response.set_status(404, "Not found")
             return
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
-        ):
+        if not myself or not check or (check.response["code"] != 200 and check.response["code"] != 401):
             auth.add_auth_response(appreq=self, auth_obj=check)
             return
-        if not check.check_authorisation(path="callbacks", subpath=name, method="POST"):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        if not auth_result.authorize("POST", "callbacks", name):
             return
         # Execute callback hook for POST
         result = False
@@ -159,10 +158,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                     hook_data = json.loads(body_str)
                 except (TypeError, ValueError, KeyError):
                     hook_data = {}
-                    
+
                 hook_data["method"] = "POST"
                 hook_result = self.hooks.execute_callback_hooks(name, actor_interface, hook_data)
                 result = bool(hook_result) if hook_result is not None else False
-                
+
         if not result:
             self.response.set_status(403, "Forbidden")

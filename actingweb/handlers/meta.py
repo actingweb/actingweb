@@ -7,23 +7,10 @@ from actingweb.handlers import base_handler
 class MetaHandler(base_handler.BaseHandler):
 
     def get(self, actor_id, path):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="meta",
-            subpath=path,
-            add_response=False,
-            config=self.config,
-        )
-        # We accept no auth here, so don't check response code
+        # Meta endpoint allows unauthenticated access but still needs actor data
+        myself = self.get_actor_allow_unauthenticated(actor_id, "meta", path)
         if not myself:
-            return
-        if not check or not check.check_authorisation(
-            path="meta", subpath=path, method="GET", approved=False
-        ):
-            if self.response:
-                self.response.set_status(403)
-            return
+            return  # Response already set
 
         trustee_root = myself.store.trustee_root if myself.store else None
         if not trustee_root:

@@ -14,14 +14,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         try:
             body = self.request.body
@@ -66,14 +65,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         paths = path.split("/")
         if paths[0] == "proxy":
@@ -108,14 +106,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         paths = path.split("/")
         if paths[0] == "proxy":
@@ -186,14 +183,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         try:
             body = self.request.body

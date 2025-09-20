@@ -61,14 +61,6 @@ actingweb.config module
     :undoc-members:
     :show-inheritance:
 
-actingweb.oauth module
-----------------------
-
-.. automodule:: actingweb.oauth
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 actingweb.peertrustee module
 ----------------------------
 

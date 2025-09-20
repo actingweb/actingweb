@@ -190,6 +190,57 @@ Service clients automatically refresh expired access tokens using refresh tokens
         # API call failed - check logs for details
         return {"error": "Failed to access Dropbox"}
 
+Using Services in Hooks
+=======================
+
+Every hook receives an ``ActorInterface`` that already knows about the
+service registry set up at application start. That means you can
+reference ``actor.services`` anywhere—lifecycle hooks, property hooks,
+method hooks, and action hooks—without extra plumbing or manual
+initialisation.
+
+Action Hook Example
+-------------------
+
+.. code-block:: python
+
+    @app.action_hook("sync_contacts")
+    def sync_contacts(actor: ActorInterface, action_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        crm = actor.services.get("crm_service")
+
+        if not crm or not crm.is_authenticated():
+            return {"auth_url": crm.get_authorization_url() if crm else None}
+
+        contacts = crm.get("/contacts", params={"limit": 50})
+        return {"contacts": contacts}
+
+Property and Method Hook Example
+--------------------------------
+
+.. code-block:: python
+
+    @app.property_hook("sales/leads")
+    def enrich_leads(actor: ActorInterface, operation: str, value: Dict[str, Any], path: str) -> Dict[str, Any]:
+        enrichment = actor.services.get("enrichment")
+        if enrichment and value:
+            details = enrichment.post("/enrich", data=value)
+            if details:
+                value.update(details)
+        return value
+
+    @app.method_hook("refresh_dashboard")
+    def refresh_dashboard(actor: ActorInterface, method_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        analytics = actor.services.get("analytics")
+        return analytics.post("/dashboards/refresh", data=data) if analytics else {"error": "not configured"}
+
+Key points:
+
+- Configure services up front using the fluent ``ActingWebApp`` API and
+  the registry flows into every actor interface.
+- Hooks triggered via OAuth2 callbacks, factory routes, or API requests
+  all receive the same ``actor.services`` helper—no manual dependency
+  injection required.
+
 Service Management
 ==================
 

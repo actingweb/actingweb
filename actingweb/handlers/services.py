@@ -88,10 +88,7 @@ class ServicesHandler(BaseHandler):
             return self._service_registry
 
         # Try to get service registry from config
-        if hasattr(self.config, "_service_registry"):
-            return self.config._service_registry  # type: ignore
-
-        return None
+        return getattr(self.config, "service_registry", None)
 
     def delete(self, actor_id: str, service_name: str, **kwargs) -> Dict[str, Any]:  # pylint: disable=unused-argument
         """

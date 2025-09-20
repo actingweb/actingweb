@@ -69,6 +69,14 @@ class ActingWebApp:
         # Automatically initialize permission system for better performance
         self._initialize_permission_system()
 
+    def _attach_service_registry_to_config(self) -> None:
+        """Ensure the Config instance exposes the shared service registry."""
+        if self._config is None:
+            return
+
+        # Always set attribute so downstream code can rely on it existing
+        setattr(self._config, "service_registry", self._service_registry)
+
     def _apply_runtime_changes_to_config(self) -> None:
         """Propagate builder changes to an existing Config instance.
 
@@ -93,6 +101,8 @@ class ActingWebApp:
             self._config.actors = dict(self._actors_config)
         if self._enable_bot:
             self._config.bot = dict(self._bot_config or {})
+        # Keep service registry reference in sync
+        self._attach_service_registry_to_config()
 
     def with_oauth(
         self,
@@ -207,6 +217,8 @@ class ActingWebApp:
         if self._service_registry is None:
             from .services import ServiceRegistry
             self._service_registry = ServiceRegistry(self.get_config())
+        # Ensure config exposes the registry even if it existed earlier
+        self._attach_service_registry_to_config()
         return self._service_registry
 
     def get_service_registry(self):
@@ -307,6 +319,7 @@ class ActingWebApp:
                 oauth=self._oauth_config or {},
                 mcp=self._enable_mcp,
             )
+            self._attach_service_registry_to_config()
         else:
             # If config already exists, keep it in sync with latest builder settings
             self._apply_runtime_changes_to_config()

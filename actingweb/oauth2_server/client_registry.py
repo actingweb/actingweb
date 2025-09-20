@@ -344,7 +344,8 @@ class MCPClientRegistry:
                 return
 
             # Create ActorInterface wrapper
-            actor_interface = ActorInterface(core_actor=core_actor, service_registry=None)
+            registry = getattr(self.config, "service_registry", None)
+            actor_interface = ActorInterface(core_actor=core_actor, service_registry=registry)
             trust_manager = TrustManager(core_actor)
 
             # Create trust relationship using OAuth2 client credentials flow
@@ -403,7 +404,8 @@ class MCPClientRegistry:
                 return
 
             # Create ActorInterface wrapper
-            actor_interface = ActorInterface(core_actor=core_actor, service_registry=None)
+            registry = getattr(self.config, "service_registry", None)
+            actor_interface = ActorInterface(core_actor=core_actor, service_registry=registry)
 
             # Find and delete the trust relationship for this client
             # The peer ID should be in format "oauth2_client:client_id"

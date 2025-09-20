@@ -244,7 +244,8 @@ class Actor:
         if hooks:
             try:
                 from actingweb.interface.actor_interface import ActorInterface
-                actor_interface = ActorInterface(self, service_registry=None)
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(self, service_registry=registry)
                 hooks.execute_lifecycle_hooks("actor_created", actor_interface)
             except Exception as e:
                 # Log hook execution error but don't fail actor creation

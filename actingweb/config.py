@@ -114,6 +114,10 @@ class Config:
             ("friend", "resources", "", "a"),
             ("partner", "resources", "", "a"),
             ("admin", "resources", "", "a"),
+            # Allow service management for actor owners and administrators
+            ("creator", "services", "", "a"),
+            ("trustee", "services", "", "a"),
+            ("admin", "services", "", "a"),
             # Allow unauthenticated POST
             ("", "trust/<type>", "POST", "a"),
             # Allow trust peer full access

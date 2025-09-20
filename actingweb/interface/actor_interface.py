@@ -61,7 +61,12 @@ class ActorInterface:
         self._property_list_store = None  # Will be initialized on first access
         self._trust_manager: Optional[TrustManager] = None
         self._subscription_manager: Optional[SubscriptionManager] = None
-        self._service_registry = service_registry
+        if service_registry is not None:
+            self._service_registry = service_registry
+        else:
+            config = getattr(core_actor, "config", None)
+            registry_from_config = getattr(config, "service_registry", None) if config is not None else None
+            self._service_registry = registry_from_config
         self._services = None  # Will be initialized on first access
         
     @classmethod
@@ -85,6 +90,9 @@ class ActorInterface:
             New ActorInterface instance
         """
         core_actor = CoreActor(config=config)
+
+        if service_registry is None:
+            service_registry = getattr(config, "service_registry", None)
 
         if not passphrase:
             passphrase = config.new_token() if config else ""
@@ -118,6 +126,8 @@ class ActorInterface:
             ActorInterface instance or None if not found
         """
         core_actor = CoreActor(actor_id=actor_id, config=config)
+        if service_registry is None:
+            service_registry = getattr(config, "service_registry", None)
         if core_actor.id:
             return cls(core_actor, service_registry)
         return None
@@ -136,6 +146,8 @@ class ActorInterface:
             ActorInterface instance or None if not found
         """
         core_actor = CoreActor(config=config)
+        if service_registry is None:
+            service_registry = getattr(config, "service_registry", None)
         if core_actor.get_from_creator(creator=creator):
             return cls(core_actor, service_registry)
         return None
@@ -155,6 +167,8 @@ class ActorInterface:
             ActorInterface instance or None if not found
         """
         core_actor = CoreActor(config=config)
+        if service_registry is None:
+            service_registry = getattr(config, "service_registry", None)
         core_actor.get_from_property(name=property_name, value=property_value)
         if core_actor.id:
             return cls(core_actor, service_registry)

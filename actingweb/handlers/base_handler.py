@@ -26,7 +26,9 @@ class BaseHandler:
         """Get ActorInterface wrapper for given actor."""
         if actor:
             from actingweb.interface.actor_interface import ActorInterface
-            return ActorInterface(actor, service_registry=None)
+
+            registry = getattr(self.config, "service_registry", None)
+            return ActorInterface(actor, service_registry=registry)
         return None
     
     def _authenticate_dual_context(self, actor_id: str, api_path: str, web_subpath: str, name: str = "", add_response: bool = True) -> 'AuthResult':

@@ -194,7 +194,7 @@ class OAuth2CallbackHandler(BaseHandler):
             logger.info(f"Creating trust relationship for trust_type='{trust_type}' and email='{email}'")
             try:
                 from actingweb.interface.actor_interface import ActorInterface
-                actor_interface = ActorInterface(core_actor=actor_instance)
+                actor_interface = ActorInterface(core_actor=actor_instance, service_registry=None)
                 
                 # Prepare OAuth tokens for secure storage
                 oauth_tokens = {
@@ -229,7 +229,7 @@ class OAuth2CallbackHandler(BaseHandler):
             try:
                 # Convert core Actor to ActorInterface for hook consistency
                 from actingweb.interface.actor_interface import ActorInterface
-                actor_interface = ActorInterface(core_actor=actor_instance)
+                actor_interface = ActorInterface(core_actor=actor_instance, service_registry=None)
                 self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for actor_created: {e}")
@@ -240,7 +240,7 @@ class OAuth2CallbackHandler(BaseHandler):
             try:
                 # Convert core Actor to ActorInterface for hook consistency
                 from actingweb.interface.actor_interface import ActorInterface
-                actor_interface = ActorInterface(core_actor=actor_instance)
+                actor_interface = ActorInterface(core_actor=actor_instance, service_registry=None)
                 
                 result = self.hooks.execute_lifecycle_hooks(
                     "oauth_success", 

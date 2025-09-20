@@ -26,13 +26,13 @@ from ...handlers import (
     devtest,
     subscription,
     resources,
-    oauth,
     bot,
     www,
     factory,
     methods,
     actions,
     mcp,
+    services,
 )
 
 if TYPE_CHECKING:
@@ -533,16 +533,6 @@ class FastAPIIntegration:
             # Meta endpoint should be public for peer discovery - no authentication required
             return await self._handle_actor_request(request, actor_id, "meta", path=path)
 
-        # Actor OAuth
-        @self.fastapi_app.get("/{actor_id}/oauth")
-        @self.fastapi_app.get("/{actor_id}/oauth/{path:path}")
-        async def app_oauth(actor_id: str, request: Request, path: str = "") -> Response:
-            # Check authentication and redirect to Google OAuth2 if needed
-            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
-            if auth_redirect:
-                return auth_redirect
-            return await self._handle_actor_request(request, actor_id, "oauth", path=path)
-
         # Actor www
         @self.fastapi_app.get("/{actor_id}/www")
         @self.fastapi_app.post("/{actor_id}/www")
@@ -687,6 +677,24 @@ class FastAPIIntegration:
         async def app_actions(actor_id: str, request: Request, name: str = "") -> Response:
             return await self._handle_actor_request(request, actor_id, "actions", name=name)
 
+        # Third-party service OAuth2 callbacks and management
+        @self.fastapi_app.get("/{actor_id}/services/{service_name}/callback")
+        async def app_services_callback(
+            actor_id: str,
+            service_name: str,
+            request: Request,
+            code: Optional[str] = None,
+            state: Optional[str] = None,
+            error: Optional[str] = None,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "services", name=service_name, code=code, state=state, error=error
+            )
+
+        @self.fastapi_app.delete("/{actor_id}/services/{service_name}")
+        async def app_services_revoke(actor_id: str, service_name: str, request: Request) -> Response:
+            return await self._handle_actor_request(request, actor_id, "services", name=service_name)
+
     async def _normalize_request(self, request: Request) -> Dict[str, Any]:
         """Convert FastAPI request to ActingWeb format."""
         # Read body asynchronously
@@ -758,10 +766,6 @@ class FastAPIIntegration:
 
     def _create_fastapi_response(self, webobj: AWWebObj, request: Request) -> Response:
         """Convert ActingWeb response to FastAPI response."""
-        logging.debug(
-            f"_create_fastapi_response: webobj.response.redirect = {getattr(webobj.response, 'redirect', None)}"
-        )
-        logging.debug(f"_create_fastapi_response: webobj.response.status_code = {webobj.response.status_code}")
         if webobj.response.redirect:
             logging.debug(f"_create_fastapi_response: Creating redirect response to {webobj.response.redirect}")
             response: Response = RedirectResponse(url=webobj.response.redirect, status_code=302)
@@ -1270,6 +1274,8 @@ class FastAPIIntegration:
         if handler_method and callable(handler_method):
             # Build positional arguments based on endpoint and kwargs
             args = [actor_id]
+            extra_kwargs = {}  # Initialize extra_kwargs for all endpoints
+
             if endpoint == "meta":
                 args.append(kwargs.get("path", ""))
             elif endpoint == "trust":
@@ -1305,15 +1311,35 @@ class FastAPIIntegration:
                     args.append(kwargs["subid"])
                 if kwargs.get("seqnr"):
                     args.append(kwargs["seqnr"])
-            elif endpoint in ["www", "properties", "callbacks", "resources", "devtest", "methods", "actions"]:
+            elif endpoint in [
+                "www",
+                "properties",
+                "callbacks",
+                "resources",
+                "devtest",
+                "methods",
+                "actions",
+                "services",
+            ]:
                 # These endpoints take a path/name parameter
                 param_name = "path" if endpoint in ["www", "devtest"] else "name"
                 args.append(kwargs.get(param_name, ""))
 
+                # Services need additional kwargs for OAuth callback parameters
+                if endpoint == "services":
+                    # Pass code, state, error as kwargs to the handler
+                    extra_kwargs = {
+                        k: v for k, v in kwargs.items() if k in ["code", "state", "error"] and v is not None
+                    }
+
             # Run the synchronous handler in a thread pool to avoid blocking the event loop
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(self.executor, handler_method, *args)
+                if extra_kwargs:
+                    # For services endpoint, pass extra kwargs
+                    await loop.run_in_executor(self.executor, lambda: handler_method(*args, **extra_kwargs))
+                else:
+                    await loop.run_in_executor(self.executor, handler_method, *args)
             except (KeyboardInterrupt, SystemExit):
                 # Don't catch system signals
                 raise
@@ -1369,7 +1395,6 @@ class FastAPIIntegration:
         handlers = {
             "root": lambda: root.RootHandler(webobj, config, hooks=self.aw_app.hooks),
             "meta": lambda: meta.MetaHandler(webobj, config, hooks=self.aw_app.hooks),
-            "oauth": lambda: oauth.OauthHandler(webobj, config, hooks=self.aw_app.hooks),
             "www": lambda: www.WwwHandler(webobj, config, hooks=self.aw_app.hooks),
             "properties": lambda: properties.PropertiesHandler(webobj, config, hooks=self.aw_app.hooks),
             "resources": lambda: resources.ResourcesHandler(webobj, config, hooks=self.aw_app.hooks),
@@ -1377,6 +1402,7 @@ class FastAPIIntegration:
             "devtest": lambda: devtest.DevtestHandler(webobj, config, hooks=self.aw_app.hooks),
             "methods": lambda: methods.MethodsHandler(webobj, config, hooks=self.aw_app.hooks),
             "actions": lambda: actions.ActionsHandler(webobj, config, hooks=self.aw_app.hooks),
+            "services": lambda: self._create_services_handler(webobj, config),
         }
 
         # Special handling for trust endpoint
@@ -1507,3 +1533,10 @@ class FastAPIIntegration:
             "actor_lookup": "email_based",
             "description": f"ActingWeb MCP Demo - AI can interact with actors through MCP protocol using {oauth_provider.title()} OAuth2",
         }
+
+    def _create_services_handler(self, webobj: AWWebObj, config) -> Any:
+        """Create services handler with service registry injection."""
+        handler = services.ServicesHandler(webobj, config, hooks=self.aw_app.hooks)
+        # Inject service registry into the handler so it can access it
+        handler._service_registry = self.aw_app.get_service_registry()
+        return handler

@@ -5,6 +5,22 @@ CHANGELOG
 v3.3: TBD, 2025
 -----------------
 
+BREAKING CHANGES
+~~~~~~~~~~~~~~~~
+
+**Legacy OAuth System Removed**
+
+- Removed legacy ``OAuth`` class and related third-party service authentication
+- Removed ``/<actor_id>/oauth`` endpoints that used legacy OAuth
+- Removed legacy OAuth methods from ``Auth`` class (``oauth_get``, ``oauth_post``, etc.)
+- Legacy OAuth auth type no longer supported in ``select_auth_type()``
+
+**Migration Path**: Use the new unified third-party service integration system instead:
+
+- Replace ``oauth.OAuth()`` with ``actor.services.get("service_name")``
+- Replace manual OAuth configuration with ``app.add_dropbox()``, ``app.add_gmail()``, etc.
+- Use clean service API: ``service.get()``, ``service.post()``, etc.
+
 FIXED
 ~~~~~
 
@@ -45,6 +61,33 @@ CHANGED
 
 ADDED
 ~~~~~
+
+**Unified Third-Party Service Integration**
+
+- Added modern service integration system replacing legacy OAuth class
+- Added fluent API methods: ``app.add_dropbox()``, ``app.add_gmail()``, ``app.add_github()``, ``app.add_box()``
+- Added ``ServiceConfig``, ``ServiceClient``, and ``ServiceRegistry`` classes
+- Added automatic token management and refresh for third-party services
+- Added ``actor.services.get()`` interface for accessing authenticated service clients
+- Added service OAuth2 callback endpoints: ``/{actor_id}/services/{service_name}/callback``
+- Added service revocation endpoints: ``DELETE /{actor_id}/services/{service_name}``
+- Added comprehensive documentation in ``docs/service-integration.rst``
+- Integrated service system with both Flask and FastAPI frameworks
+
+**Bot Handler Improvements**
+
+- Fixed broken bot handler that tried to use removed legacy OAuth system
+- Simplified bot authentication to use direct bot token validation from config
+- Removed dependency on Auth class for bot endpoints - bots now use simpler token-based validation
+- Bot token now passed to hooks for service calls if needed
+
+**Simplified Authentication Interface**
+
+- Added ``require_authenticated_actor()`` method to BaseHandler for one-line auth + authorization
+- Added ``authenticate_actor()`` method returning ``AuthResult`` for more granular control
+- New interface reduces boilerplate from 6-8 lines to 2-3 lines per handler method
+- Maintains full compatibility with existing ``init_actingweb()`` usage
+- Automatic HTTP response handling for common authentication and authorization failures
 
 **Unified Access Control System**
 

@@ -61,6 +61,9 @@ class ActingWebApp:
         # Hook registry
         self.hooks = HookRegistry()
 
+        # Service registry for third-party OAuth2 services
+        self._service_registry: Optional[Any] = None  # Lazy initialized
+
         # Internal config object (lazy initialized)
         self._config: Optional[Config] = None
         # Automatically initialize permission system for better performance
@@ -160,6 +163,55 @@ class ActingWebApp:
         # Note: aw_supported is computed in Config.__init__. We keep this minimal
         # to avoid touching unrelated features; OAuth fix does not require recompute.
         return self
+
+    def add_service(self, name: str, client_id: str, client_secret: str,
+                   scopes: list, auth_uri: str, token_uri: str,
+                   userinfo_uri: str = "", revocation_uri: str = "",
+                   base_api_url: str = "", **extra_params) -> "ActingWebApp":
+        """Add a custom third-party OAuth2 service configuration."""
+        self._get_service_registry().register_service_from_dict(name, {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scopes": scopes,
+            "auth_uri": auth_uri,
+            "token_uri": token_uri,
+            "userinfo_uri": userinfo_uri,
+            "revocation_uri": revocation_uri,
+            "base_api_url": base_api_url,
+            "extra_params": extra_params
+        })
+        return self
+
+    def add_dropbox(self, client_id: str, client_secret: str) -> "ActingWebApp":
+        """Add Dropbox service using pre-configured template."""
+        self._get_service_registry().register_dropbox(client_id, client_secret)
+        return self
+
+    def add_gmail(self, client_id: str, client_secret: str, readonly: bool = True) -> "ActingWebApp":
+        """Add Gmail service using pre-configured template."""
+        self._get_service_registry().register_gmail(client_id, client_secret, readonly)
+        return self
+
+    def add_github(self, client_id: str, client_secret: str) -> "ActingWebApp":
+        """Add GitHub service using pre-configured template."""
+        self._get_service_registry().register_github(client_id, client_secret)
+        return self
+
+    def add_box(self, client_id: str, client_secret: str) -> "ActingWebApp":
+        """Add Box service using pre-configured template."""
+        self._get_service_registry().register_box(client_id, client_secret)
+        return self
+
+    def _get_service_registry(self):
+        """Get or create the service registry."""
+        if self._service_registry is None:
+            from .services import ServiceRegistry
+            self._service_registry = ServiceRegistry(self.get_config())
+        return self._service_registry
+
+    def get_service_registry(self):
+        """Get the service registry for advanced configuration."""
+        return self._get_service_registry()
 
     def add_actor_type(self, name: str, factory: str = "", relationship: str = "friend") -> "ActingWebApp":
         """Add an actor type configuration."""

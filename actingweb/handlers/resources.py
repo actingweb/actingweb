@@ -1,19 +1,18 @@
+# Fixed imports after removing init_actingweb
 import json
-from typing import Any, Dict, Optional, Union
+from typing import Union
 
-from actingweb import auth
 from actingweb.handlers import base_handler
 
 
 class ResourcesHandler(base_handler.BaseHandler):
 
     def get(self, actor_id, name):
-        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="resources", subpath=name, method="GET"):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("GET", "resources", name):
             return
         # Execute callback hook for resource GET
         pair = None
@@ -32,14 +31,11 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def delete(self, actor_id, name):
-        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(
-            path="resources", subpath=name, method="DELETE"
-        ):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("DELETE", "resources", name):
             return
         # Execute callback hook for resource DELETE
         pair = None
@@ -61,12 +57,11 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def put(self, actor_id, name):
-        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="resources", subpath=name, method="PUT"):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("PUT", "resources", name):
             return
         try:
             body: Union[str, bytes, None] = self.request.body
@@ -104,12 +99,11 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def post(self, actor_id, name):
-        (myself, check) = self._init_dual_auth(actor_id, "resources", "resources", name)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="resources", subpath=name, method="POST"):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("POST", "resources", name):
             return
         try:
             body: Union[str, bytes, None] = self.request.body

@@ -241,11 +241,9 @@ class TestActorConstants:
         assert ACTOR_DEFAULT_CREATOR == "creator"
 
     def test_trustee_creator_usage(self):
-        """Test that Actor uses TRUSTEE_CREATOR constant."""
-        from actingweb.actor import TRUSTEE_CREATOR as ACTOR_TRUSTEE_CREATOR
-
-        assert ACTOR_TRUSTEE_CREATOR == TRUSTEE_CREATOR
-        assert ACTOR_TRUSTEE_CREATOR == "trustee"
+        """Test that TRUSTEE_CREATOR constant is available from constants module."""
+        # TRUSTEE_CREATOR is defined in constants module but not used in actor.py
+        assert TRUSTEE_CREATOR == "trustee"
 
 
 class TestActorModernization:

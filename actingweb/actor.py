@@ -219,7 +219,7 @@ class Actor:
                             self.passphrase = c["passphrase"]
                             self.creator = c["creator"]
                             return True
-                        return False
+                    return False
         if passphrase and len(passphrase) > 0:
             self.passphrase = passphrase
         else:
@@ -242,10 +242,15 @@ class Actor:
         
         # Execute actor_created lifecycle hook if hooks are provided
         if hooks:
-            from actingweb.interface.actor_interface import ActorInterface
-            actor_interface = ActorInterface(self)
-            hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-        
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+                actor_interface = ActorInterface(self, service_registry=None)
+                hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+            except Exception as e:
+                # Log hook execution error but don't fail actor creation
+                import logging
+                logging.warning(f"Actor created successfully but lifecycle hook failed: {e}")
+
         return True
 
     def modify(self, creator: str | None = None) -> bool:
@@ -622,7 +627,7 @@ class Actor:
             peer_type=peer["type"],
             relationship=relationship,
             approved=True,
-            verified=False,
+            verified=True,  # Requesting actor has verified=True by default per ActingWeb spec
             desc=desc,
         ):
             logging.warning(

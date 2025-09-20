@@ -948,7 +948,7 @@ class MCPHandler(BaseHandler):
                 logger.error(f"Error creating ActingWeb actor {actor_id}: {e}")
                 return None
 
-        actor_interface = ActorInterface(core_actor=core_actor)
+        actor_interface = ActorInterface(core_actor=core_actor, service_registry=None)
 
         # Cache the actor
         _actor_cache[actor_id] = {"actor": actor_interface, "last_accessed": current_time}

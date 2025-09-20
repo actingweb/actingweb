@@ -266,7 +266,7 @@ class ActingWebOAuth2Server:
                 from ..interface.actor_interface import ActorInterface
                 from ..oauth2 import create_oauth2_trust_relationship
 
-                actor_interface = ActorInterface(core_actor=actor_obj)
+                actor_interface = ActorInterface(core_actor=actor_obj, service_registry=None)
                 trust_created = create_oauth2_trust_relationship(
                     actor=actor_interface,
                     email=email,
@@ -685,7 +685,7 @@ class ActingWebOAuth2Server:
             if client_info and actor_obj:
                 # Store client metadata in trust relationship (new approach)
                 from ..interface.actor_interface import ActorInterface
-                actor_interface = ActorInterface(actor_obj)
+                actor_interface = ActorInterface(actor_obj, service_registry=None)
                 client_name = client_info.get("name", "mcp_client")
 
                 # Update trust relationship with client metadata instead of actor properties

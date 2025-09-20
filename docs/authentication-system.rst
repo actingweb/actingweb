@@ -293,7 +293,7 @@ The ``check_and_verify_auth()`` Function
 
 **Location:** ``actingweb.auth.check_and_verify_auth()``
 
-This function performs the same authentication checks as ``init_actingweb()`` but is designed for use in custom application routes. It supports:
+This function performs authentication checks and is designed for use in custom application routes. It supports:
 
 - **Bearer Token Authentication**: OAuth2 tokens, ActingWeb trust secret tokens
 - **Basic Authentication**: Username/password authentication

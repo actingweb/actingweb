@@ -47,12 +47,29 @@ class RootFactoryHandler(base_handler.BaseHandler):
         # Create actor using enhanced method with hooks and trustee_root
         myself = actor.Actor(config=self.config)
         if not myself.create(
-            url=self.request.url or "", 
-            creator=creator, 
+            url=self.request.url or "",
+            creator=creator,
             passphrase=passphrase,
             trustee_root=trustee_root,
             hooks=self.hooks
         ):
+            # Check if this is a unique creator constraint violation
+            if self.config and self.config.unique_creator and creator:
+                # Check if creator already exists
+                in_db = self.config.DbActor.DbActor()
+                exists = in_db.get_by_creator(creator=creator)
+                if exists:
+                    self.response.set_status(403, "Creator already exists")
+                    logging.warning(
+                        "Creator already exists, cannot create new Actor("
+                        + str(self.request.url)
+                        + " "
+                        + str(creator)
+                        + ")"
+                    )
+                    return
+
+            # Generic creation failure
             self.response.set_status(400, "Not created")
             logging.warning(
                 "Was not able to create new Actor("

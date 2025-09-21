@@ -556,27 +556,10 @@ class ActingWebOAuth2Server:
             from .. import actor as actor_module
             from ..interface.actor_interface import ActorInterface
 
-            # First check if actor already exists with this email as creator
-            if self.config.unique_creator:
-                from ..db_dynamodb.db_actor import DbActor
-                db_actor = DbActor()
-                existing = db_actor.get_by_creator(creator=email)
-                if existing:
-                    # Handle both single dict and list of dicts return types
-                    if isinstance(existing, dict):
-                        # Single actor found
-                        actor_id = existing["id"]
-                        actor_obj = actor_module.Actor(actor_id, self.config)
-                        # Load the actor data
-                        actor_obj.get(actor_id)
-                        return actor_obj
-                    elif isinstance(existing, list) and len(existing) > 0:
-                        # Multiple actors found, use the first one
-                        actor_id = existing[0]["id"]
-                        actor_obj = actor_module.Actor(actor_id, self.config)
-                        # Load the actor data
-                        actor_obj.get(actor_id)
-                        return actor_obj
+            # Attempt to find an existing actor for this email
+            existing_actor = actor_module.Actor(config=self.config)
+            if existing_actor.get_from_creator(email):
+                return existing_actor
 
             # Create new actor using ActorInterface for proper lifecycle hook execution
             try:

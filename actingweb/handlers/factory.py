@@ -44,6 +44,23 @@ class RootFactoryHandler(base_handler.BaseHandler):
             trustee_root = self.request.get("trustee_root")
             passphrase = self.request.get("passphrase")
             
+        # Normalise creator when using email login flow
+        if isinstance(creator, str):
+            creator = creator.strip()
+            if "@" in creator:
+                creator = creator.lower()
+
+        if not is_json and creator:
+            existing_actor = actor.Actor(config=self.config)
+            if existing_actor.get_from_creator(creator):
+                actor_id = existing_actor.id or ""
+                redirect_target = f"/{actor_id}/www"
+                if self.response:
+                    self.response.set_redirect(redirect_target)
+                    self.response.headers["Location"] = f"{self.config.root}{actor_id}/www"
+                    self.response.set_status(302, "Found")
+                return
+
         # Create actor using enhanced method with hooks and trustee_root
         myself = actor.Actor(config=self.config)
         if not myself.create(

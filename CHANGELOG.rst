@@ -48,6 +48,7 @@ FIXED
 CHANGED
 ~~~~~~~
 
+- If unique_creator=False, ensure deterministic retrieval of the first actor available when doing OAuth2 auth and log in from root.
 - Refactored OAuth2 server implementation to use Attributes system instead of underscore-prefixed properties for storing sensitive data (tokens, authorization codes, Google OAuth2 tokens)
 - Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
 - Removed notes and usage as static resource in the library, leave this to the implementing application

@@ -200,6 +200,56 @@ class TestActorMethods:
                 assert callable(actor.get_property)
                 assert callable(actor.delete_property)
 
+
+class TestActorCreatorLookup:
+    """Tests for creator-based actor lookup."""
+
+    def test_get_from_creator_finds_existing_when_not_unique(self):
+        mock_config = Mock()
+        mock_config.unique_creator = False
+        mock_config.force_email_prop_as_creator = False
+
+        mock_db_actor = Mock()
+        mock_db_actor.get_by_creator.return_value = [
+            {"id": "actorB", "creator": "user@example.com", "passphrase": "bar"},
+            {"id": "actorA", "creator": "user@example.com", "passphrase": "foo"},
+        ]
+        mock_config.DbActor.DbActor.return_value = mock_db_actor
+
+        with patch.object(Actor, "get", autospec=True) as mock_get:
+            def fake_get(self, actor_id=None):
+                if actor_id:
+                    self.id = actor_id
+                    self.creator = "user@example.com"
+                    return {"id": actor_id, "creator": self.creator}
+                self.id = None
+                self.creator = None
+                return None
+
+            mock_get.side_effect = fake_get
+            actor_instance = Actor(config=mock_config)
+            result = actor_instance.get_from_creator("user@example.com")
+
+        assert result is True
+        assert actor_instance.id == "actorA"
+
+    def test_get_from_creator_returns_false_when_not_found(self):
+        mock_config = Mock()
+        mock_config.unique_creator = False
+        mock_config.force_email_prop_as_creator = False
+
+        mock_db_actor = Mock()
+        mock_db_actor.get_by_creator.return_value = []
+        mock_config.DbActor.DbActor.return_value = mock_db_actor
+
+        with patch.object(Actor, "get", autospec=True) as mock_get:
+            mock_get.return_value = None
+            actor_instance = Actor(config=mock_config)
+            result = actor_instance.get_from_creator("missing@example.com")
+
+        assert result is False
+        assert actor_instance.id is None
+
     def test_actor_method_return_types(self):
         """Test method return type annotations."""
         mock_config = Mock()

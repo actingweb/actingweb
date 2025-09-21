@@ -154,22 +154,48 @@ class Actor:
         self.get(actor_id=actor_id)
 
     def get_from_creator(self, creator: str | None = None) -> bool:
-        """Initialise an actor by matching on creator.
+        """Initialise an actor by matching on creator/email.
 
-        If unique_creator config is False, then no actor will be initialised.
-        Likewise, if multiple properties are found with the same value (due to earlier
-        uniqueness off).
+        Returns True if an actor could be loaded, otherwise False. When multiple actors
+        share the same creator (possible when unique_creator is disabled), the first
+        deterministic match will be selected in order to provide stable behaviour for
+        login flows that do not specify an explicit actor ID.
         """
+
         self.id = None
         self.creator = None
         self.passphrase = None
-        if not self.config or not self.config.unique_creator:
+
+        if not self.config or not creator:
             return False
-        exists = self.config.DbActor.DbActor().get_by_creator(creator=creator)
-        if len(exists) != 1:
+
+        lookup_creator = creator.lower() if "@" in creator else creator
+        exists = self.config.DbActor.DbActor().get_by_creator(creator=lookup_creator)
+        if not exists:
             return False
-        self.get(actor_id=exists[0]["id"])
-        return True
+
+        # Normalise return to a list of candidate records
+        candidates: list[dict[str, Any]]
+        if isinstance(exists, list):
+            candidates = [c for c in exists if c]
+        else:
+            candidates = [exists]
+
+        if not candidates:
+            return False
+
+        # Ensure deterministic selection order even when DynamoDB returns arbitrary order
+        candidates.sort(key=lambda item: item.get("id", ""))
+
+        for candidate in candidates:
+            actor_id = candidate.get("id")
+            if not actor_id:
+                continue
+            self.get(actor_id=actor_id)
+            if self.id:
+                return True
+
+        return False
 
     def create(
         self,

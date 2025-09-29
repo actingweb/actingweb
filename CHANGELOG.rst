@@ -24,6 +24,10 @@ BREAKING CHANGES
 FIXED
 ~~~~~
 
+- MCP tools/list response now applies client-specific formatting for better compatibility
+- Trust relationship descriptions now show friendly client names instead of raw identifiers when available
+- OAuth2 client trust relationships maintain proper client metadata across updates
+- Trust manager now keeps peer identifier in sync for OAuth2/MCP clients
 - Fixed FastAPI extra inadvertently importing Flask, forcing Flask as a dependency
 - Fixed trust handler to return empty list instead of 404 for graceful handling
 - Reduced logging noise by moving non-essential INFO logs to DEBUG
@@ -48,7 +52,7 @@ FIXED
 CHANGED
 ~~~~~~~
 
-- If unique_creator=False, ensure deterministic retrieval of the first actor available when doing OAuth2 auth and log in from root.
+- If ``unique_creator=False``, ensure deterministic retrieval of the first actor available when doing OAuth2 auth and log in from root
 - Refactored OAuth2 server implementation to use Attributes system instead of underscore-prefixed properties for storing sensitive data (tokens, authorization codes, Google OAuth2 tokens)
 - Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
 - Removed notes and usage as static resource in the library, leave this to the implementing application
@@ -62,6 +66,14 @@ CHANGED
 
 ADDED
 ~~~~~
+
+**MCP Client Management Enhancements**
+
+- Support for ``allowed_clients`` parameter in ``@mcp_tool`` decorator to restrict tool access by client type
+- Support for ``client_descriptions`` parameter in ``@mcp_tool`` decorator for client-specific tool descriptions
+- Client-specific tool filtering for MCP endpoints based on client type detection (ChatGPT, Claude, Cursor, etc.)
+- Enhanced OAuth2 client trust relationship display with friendly client names in web UI
+- Automatic enrichment of OAuth2 trust relationships with missing client metadata
 
 **Unified Third-Party Service Integration**
 

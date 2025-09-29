@@ -332,10 +332,32 @@ class TrustManager:
                     from datetime import datetime
 
                     # Always update last_accessed and established_via for OAuth2 trusts
-                    db.modify(
-                        last_accessed=datetime.utcnow().isoformat(),
-                        established_via=source,  # Ensure established_via is set correctly
-                    )
+                    modify_kwargs = {
+                        "last_accessed": datetime.utcnow().isoformat(),
+                        "established_via": source,  # Ensure established_via is set correctly
+                    }
+
+                    # Keep peer identifier in sync for OAuth2/MCP clients
+                    if email:
+                        modify_kwargs["peer_identifier"] = email
+
+                    if client_name:
+                        modify_kwargs["client_name"] = client_name
+                    if client_version:
+                        modify_kwargs["client_version"] = client_version
+                    if client_platform:
+                        modify_kwargs["client_platform"] = client_platform
+                    if client_id and source == "oauth2_client":
+                        modify_kwargs["oauth_client_id"] = client_id
+
+                        # If description still references client identifier, replace with friendly name
+                        current_desc = getattr(db.handle, "desc", "") or ""
+                        normalized_desc = current_desc.strip().lower()
+                        default_desc = f"OAuth2 client: {email}".strip().lower()
+                        if client_name and normalized_desc == default_desc:
+                            modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
+
+                    db.modify(**modify_kwargs)
                     logging.debug(f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}")
             except Exception:
                 pass
@@ -361,7 +383,8 @@ class TrustManager:
                     # OAuth2 client trust: actor approves client creation, but client must authenticate to be peer_approved
                     local_approved = str(True)  # Actor approves the client
                     remote_approved = False     # Client not approved until successful authentication
-                    desc = f"OAuth2 client: {email}"
+                    desc_name = client_name or email
+                    desc = f"OAuth2 client: {desc_name}"
                 else:
                     # Regular OAuth2 user trust: both sides approved after successful OAuth flow
                     local_approved = str(True)  # Actor approves the user

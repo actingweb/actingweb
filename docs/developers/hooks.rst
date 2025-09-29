@@ -95,6 +95,30 @@ Expose hooks via MCP:
    def config_resource(actor, method_name, params):
        ...
 
+Client-Specific Tool Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``@mcp_tool`` decorator supports client-specific filtering and descriptions:
+
+.. code-block:: python
+
+   @app.action_hook("sensitive_action")
+   @mcp_tool(
+       description="Perform a sensitive action",
+       allowed_clients=["claude", "cursor"],  # Only allow Claude and Cursor
+       client_descriptions={
+           "claude": "Safely perform action with Claude's oversight",
+           "cursor": "Execute action within Cursor IDE context"
+       }
+   )
+   def sensitive_action(actor, action_name, params):
+       return {"status": "executed safely"}
+
+**Parameters:**
+
+- ``allowed_clients``: List of client types that can access this tool. If None, tool is available to all clients. Supported types: ``"chatgpt"``, ``"claude"``, ``"cursor"``, ``"mcp_inspector"``, ``"universal"``
+- ``client_descriptions``: Dict mapping client types to specific descriptions for safety and clarity
+
 Runtime Context
 ---------------
 

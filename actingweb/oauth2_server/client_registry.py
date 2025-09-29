@@ -361,6 +361,7 @@ class MCPClientRegistry:
                 },
                 established_via="oauth2_client",  # OAuth2 client credentials flow (not interactive)
                 client_id=client_id,  # Ensure unique peer ID per client
+                client_name=client_data.get("client_name"),
             )
 
             if trust_created:

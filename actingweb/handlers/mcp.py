@@ -283,7 +283,8 @@ class MCPHandler(BaseHandler):
         }
 
     def _handle_tools_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
-        """Handle MCP tools/list request with permission filtering."""
+        """Handle MCP tools/list request with permission filtering and client filtering."""
+        global _mcp_client_info_cache
         tools = []
 
         if self.hooks:
@@ -307,6 +308,52 @@ class MCPHandler(BaseHandler):
                 logger.debug(f"Permission evaluator unavailable during tools/list: {e}")
                 evaluator = None
 
+            # Detect client type for filtering
+            client_type = None
+            try:
+                from ..runtime_context import get_client_info_from_context
+                client_info = get_client_info_from_context(actor)
+                if client_info and client_info.get("name"):
+                    client_name = client_info["name"].lower()
+                    # Classify client type based on name patterns
+                    if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
+                        client_type = "chatgpt"
+                    elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
+                        client_type = "claude"
+                    elif "cursor" in client_name:
+                        client_type = "cursor"
+                    elif "mcp-inspector" in client_name:
+                        client_type = "mcp_inspector"
+                    else:
+                        client_type = "universal"
+                    logger.debug(f"Detected client type for tools filtering: {client_type}")
+                else:
+                    # Fallback: Check global client info cache like the other handler does
+                    session_key = self._get_session_key()
+                    if session_key in _mcp_client_info_cache:
+                        cached_info = _mcp_client_info_cache[session_key]
+                        if cached_info and "client_info" in cached_info:
+                            fallback_client_info = cached_info["client_info"]
+                            if fallback_client_info.get("name"):
+                                client_name = fallback_client_info["name"].lower()
+                                if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
+                                    client_type = "chatgpt"
+                                elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
+                                    client_type = "claude"
+                                elif "cursor" in client_name:
+                                    client_type = "cursor"
+                                elif "mcp-inspector" in client_name:
+                                    client_type = "mcp_inspector"
+                                else:
+                                    client_type = "universal"
+                                logger.debug(f"Detected client type for tools filtering: {client_type}")
+
+                    if not client_type:
+                        client_type = "universal"
+            except Exception as e:
+                logger.debug(f"Could not detect client type for tools filtering: {e}")
+                client_type = "universal"
+
             # Discover MCP tools from action hooks
             for action_name, hooks in self.hooks._action_hooks.items():
                 for hook in hooks:
@@ -317,6 +364,13 @@ class MCPHandler(BaseHandler):
                         continue
 
                     tool_name = metadata.get("name") or action_name
+
+                    # Filter by client restrictions
+                    allowed_clients = metadata.get("allowed_clients")
+                    if allowed_clients and client_type:
+                        if client_type not in allowed_clients:
+                            logger.debug(f"Tool '{tool_name}' filtered out for client type '{client_type}' (allowed: {allowed_clients})")
+                            continue
 
                     # Filter by permissions when we have context
                     if peer_id and evaluator:
@@ -335,9 +389,16 @@ class MCPHandler(BaseHandler):
                             logger.warning(f"Error evaluating tool permission for '{tool_name}': {e}")
                             # Fail-open on evaluation errors to avoid hard lockouts
 
+                    # Use client-specific description if available
+                    client_descriptions = metadata.get("client_descriptions", {})
+                    if client_type and client_type in client_descriptions:
+                        description = client_descriptions[client_type]
+                    else:
+                        description = metadata.get("description") or f"Execute {action_name} action"
+
                     tool_def = {
                         "name": tool_name,
-                        "description": metadata.get("description") or f"Execute {action_name} action",
+                        "description": description,
                     }
 
                     input_schema = metadata.get("input_schema")
@@ -346,7 +407,48 @@ class MCPHandler(BaseHandler):
 
                     tools.append(tool_def)
 
-        return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools}}
+        # Apply client-specific formatting for tools/list response
+        tools_result = {"tools": tools}
+
+        # Get client info from trust relationship to determine formatting
+        try:
+            from ..runtime_context import get_client_info_from_context
+
+            client_info = get_client_info_from_context(actor)
+
+            # Fallback: Check global client info cache if trust relationship doesn't have client info yet
+            if not client_info:
+                session_key = self._get_session_key()
+                if session_key in _mcp_client_info_cache:
+                    cached_info = _mcp_client_info_cache[session_key]
+                    if cached_info and "client_info" in cached_info:
+                        fallback_client_info = cached_info["client_info"]
+                        if fallback_client_info.get("name"):
+                            client_info = {
+                                "name": fallback_client_info["name"],
+                                "version": fallback_client_info.get("version", ""),
+                                "platform": "",
+                                "type": "mcp"
+                            }
+                            logger.debug(f"Using fallback client info from cache: {client_info}")
+
+            if client_info and client_info.get("name"):
+                client_name = client_info["name"].lower()
+
+                # Apply ChatGPT-specific formatting if needed
+                if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
+                    # ChatGPT MCP specification requires direct JSON structure for tools/list (not JSON-encoded text)
+                    logger.debug(f"Applying ChatGPT formatting for tools/list: {len(tools)} tools (client: {client_name})")
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": tools_result
+                    }
+        except Exception as e:
+            logger.debug(f"Could not apply client-specific formatting for tools/list: {e}")
+            # Fall back to standard formatting
+
+        return {"jsonrpc": "2.0", "id": request_id, "result": tools_result}
 
     def _handle_resources_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
         """Handle MCP resources/list request with permission filtering."""

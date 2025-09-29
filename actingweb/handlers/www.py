@@ -420,6 +420,35 @@ class WwwHandler(base_handler.BaseHandler):
             # Get OAuth2 clients for this actor
             oauth_clients = self._get_oauth_clients_for_actor(actor_id)
 
+            # Enrich OAuth2 client trust relationships with client metadata if missing
+            if oauth_clients:
+                client_index = {client.get("client_id"): client for client in oauth_clients if client.get("client_id")}
+
+                for rel in relationships:
+                    if not isinstance(rel, dict):
+                        continue
+
+                    if rel.get("established_via") != "oauth2_client":
+                        continue
+
+                    peer_identifier = rel.get("peer_identifier")
+                    stored_client_id = rel.get("oauth_client_id") or peer_identifier
+                    client_info = client_index.get(stored_client_id)
+
+                    if client_info:
+                        if not rel.get("oauth_client_id"):
+                            rel["oauth_client_id"] = client_info.get("client_id")
+
+                        if not rel.get("client_name") and client_info.get("client_name"):
+                            rel["client_name"] = client_info.get("client_name")
+
+                        # Refresh description when it still references the raw identifier
+                        desc = (rel.get("desc") or "").strip()
+                        if desc.lower() == f"oauth2 client: {peer_identifier}".lower():
+                            friendly = client_info.get("client_name")
+                            if friendly:
+                                rel["desc"] = f"OAuth2 client: {friendly}"
+
             # Use consistent URL calculation
             urls = self._get_consistent_urls(actor_id)
 

@@ -13,19 +13,29 @@ from typing import Optional, List, Dict, Any, Callable
 def mcp_tool(
     name: Optional[str] = None,
     description: Optional[str] = None,
-    input_schema: Optional[Dict[str, Any]] = None
+    input_schema: Optional[Dict[str, Any]] = None,
+    allowed_clients: Optional[List[str]] = None,
+    client_descriptions: Optional[Dict[str, str]] = None
 ) -> Callable[..., Any]:
     """
     Decorator to expose an ActingWeb action as an MCP tool.
-    
+
     Args:
         name: Override name for the tool (defaults to action name)
         description: Human-readable description of what the tool does
         input_schema: JSON schema describing expected parameters
-    
+        allowed_clients: List of client types that can access this tool.
+                        If None, tool is available to all clients.
+                        Example: ["chatgpt", "claude", "cursor"]
+        client_descriptions: Client-specific descriptions for safety/clarity.
+                           Example: {"chatgpt": "Search your personal notes", "claude": "Search and store information"}
+
     Example:
         @action_hook("send_notification")
-        @mcp_tool(description="Send a notification to the user")
+        @mcp_tool(
+            description="Send a notification to the user",
+            client_descriptions={"chatgpt": "Send a safe notification"}
+        )
         def handle_notification(actor, action_name, data):
             return {"status": "sent"}
     """
@@ -34,7 +44,9 @@ def mcp_tool(
         setattr(func, '_mcp_metadata', {
             "name": name,
             "description": description,
-            "input_schema": input_schema
+            "input_schema": input_schema,
+            "allowed_clients": allowed_clients,
+            "client_descriptions": client_descriptions or {}
         })
         return func
     return decorator

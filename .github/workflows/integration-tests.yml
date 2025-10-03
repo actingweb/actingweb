@@ -15,11 +15,6 @@ jobs:
         image: amazon/dynamodb-local:latest
         ports:
           - 8000:8000
-        options: >-
-          --health-cmd "curl -f http://localhost:8000/ || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -47,6 +42,20 @@ jobs:
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
         run: poetry install --no-interaction --with test
+
+      - name: Wait for DynamoDB to be ready
+        run: |
+          echo "Waiting for DynamoDB to be ready..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8000/ > /dev/null 2>&1; then
+              echo "DynamoDB is ready!"
+              exit 0
+            fi
+            echo "Attempt $i: DynamoDB not ready yet, waiting..."
+            sleep 2
+          done
+          echo "DynamoDB failed to start within 60 seconds"
+          exit 1
 
       - name: Run integration tests
         run: |

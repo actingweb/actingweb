@@ -564,8 +564,17 @@ def initialize_permission_evaluator(config: config_class.Config) -> None:
         logger.info("Permission evaluator initialized")
 
 def get_permission_evaluator(config: config_class.Config) -> PermissionEvaluator:
-    """Get the singleton permission evaluator (must be initialized first)."""
+    """Get the singleton permission evaluator (must be initialized first).
+
+    Falls back to lazy initialization with a warning if not initialized at startup.
+    This prevents hard failures but may cause performance issues on first use.
+    """
     global _permission_evaluator
     if _permission_evaluator is None:
-        raise RuntimeError("Permission evaluator not initialized. Call initialize_permission_evaluator() at application startup.")
+        logger.warning(
+            "Permission evaluator not initialized at startup - falling back to lazy initialization. "
+            "This may cause performance issues (4+ minute delays in OAuth2 flows). "
+            "Call initialize_permission_evaluator() at application startup to avoid this."
+        )
+        initialize_permission_evaluator(config)
     return _permission_evaluator

@@ -47,13 +47,13 @@ class PropertyListStore:
         """Return a ListProperty for the requested list name."""
         if k.startswith('_'):
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{k}'")
-        
+
         # Validate actor_id is not None before creating ListProperty
         if self._actor_id is None:
             raise RuntimeError("Cannot create ListProperty without a valid actor_id")
-        
-        # Always return a ListProperty for explicit list access with "list:" prefix
-        return ListProperty(self._actor_id, f"list:{k}", self._config)
+
+        # Return a ListProperty - don't add "list:" prefix here, ListProperty will handle it
+        return ListProperty(self._actor_id, k, self._config)
 
 
 class PropertyStore:

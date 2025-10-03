@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 # Test configuration
-TEST_DYNAMODB_HOST = "http://localhost:8000"
+TEST_DYNAMODB_HOST = "http://localhost:8001"
 TEST_APP_HOST = "localhost"
 TEST_APP_PORT = 5555
 TEST_APP_URL = f"http://{TEST_APP_HOST}:{TEST_APP_PORT}"
@@ -109,6 +109,59 @@ def test_app(docker_services):
         raise RuntimeError("Test app failed to start within 30 seconds")
 
     return TEST_APP_URL
+
+
+@pytest.fixture(scope="session")
+def www_test_app(docker_services):
+    """
+    Start a test harness Flask application WITHOUT OAuth for www template testing.
+
+    This allows testing www templates with basic auth instead of OAuth redirects.
+    Returns the base URL for making requests.
+    """
+    from .test_harness import create_test_app
+    from threading import Thread
+
+    # Use a different port for www testing
+    WWW_TEST_PORT = 5557
+    WWW_TEST_URL = f"http://{TEST_APP_HOST}:{WWW_TEST_PORT}"
+
+    # Set environment for DynamoDB (same as test_app)
+    os.environ["AWS_ACCESS_KEY_ID"] = "test"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
+    os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
+    os.environ["AWS_DB_PREFIX"] = "test"
+
+    # Create app WITHOUT OAuth
+    flask_app, aw_app = create_test_app(
+        fqdn=f"{TEST_APP_HOST}:{WWW_TEST_PORT}",
+        proto="http://",
+        enable_oauth=False,  # Disable OAuth for www testing
+        enable_mcp=False,
+        enable_devtest=True,
+    )
+
+    # Run in background thread
+    def run_app():
+        flask_app.run(host="0.0.0.0", port=WWW_TEST_PORT, use_reloader=False)
+
+    thread = Thread(target=run_app, daemon=True)
+    thread.start()
+
+    # Wait for app to be ready
+    max_retries = 30
+    for i in range(max_retries):
+        try:
+            response = requests.get(f"{WWW_TEST_URL}/", timeout=2)
+            if response.status_code in [200, 404]:
+                break
+        except requests.exceptions.ConnectionError:
+            pass
+        time.sleep(1)
+    else:
+        raise RuntimeError("WWW test app failed to start within 30 seconds")
+
+    return WWW_TEST_URL
 
 
 @pytest.fixture(scope="session")
@@ -235,6 +288,22 @@ def actor_factory(test_app: str):
     manager = ActorManager(test_app)
     yield manager
     manager.cleanup()
+
+
+@pytest.fixture
+def oauth2_client(test_app):
+    """
+    Create an authenticated OAuth2 client for testing OAuth2-protected endpoints.
+
+    This fixture provides a fully authenticated client that can access /mcp, /www,
+    and other OAuth2-protected endpoints.
+
+    Returns:
+        OAuth2TestHelper instance with valid access token
+    """
+    from .utils.oauth2_helper import create_authenticated_client
+
+    return create_authenticated_client(test_app, client_name="Test Fixture Client")
 
 
 @pytest.fixture

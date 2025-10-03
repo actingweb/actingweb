@@ -272,10 +272,17 @@ class FlaskIntegration:
         for k, v in request.values.items():
             params[k] = v
 
+        # Handle form data: Flask parses form-encoded bodies into request.form,
+        # leaving request.data empty. Reconstruct the form-encoded body for OAuth2 handlers.
+        data = request.data
+        if not data and request.form:
+            from urllib.parse import urlencode
+            data = urlencode(request.form).encode('utf-8')
+
         return {
             "method": request.method,
             "path": request.path,
-            "data": request.data,
+            "data": data,
             "headers": headers,
             "cookies": cookies,
             "values": params,
@@ -628,7 +635,11 @@ class FlaskIntegration:
         from flask import jsonify
 
         json_response = jsonify(result)
-        
+
+        # Use the status code from the handler if set
+        if hasattr(webobj.response, 'status_code') and webobj.response.status_code:
+            json_response.status_code = webobj.response.status_code
+
         # Add CORS headers for OAuth2 endpoints
         json_response.headers["Access-Control-Allow-Origin"] = "*"
         json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"

@@ -53,11 +53,11 @@ class ListProperty:
 
     def _get_meta_property_name(self) -> str:
         """Get the metadata property name."""
-        return f"{self.name}-meta"
+        return f"list:{self.name}-meta"
 
     def _get_item_property_name(self, index: int) -> str:
         """Get the property name for a list item at given index."""
-        return f"{self.name}-{index}"
+        return f"list:{self.name}-{index}"
 
     def _load_metadata(self) -> Dict[str, Any]:
         """Load metadata from database, with caching."""

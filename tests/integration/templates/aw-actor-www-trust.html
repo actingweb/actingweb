@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Actor Trust - Test Template</title>
+</head>
+<body>
+    <h1>Actor Trust Relationships</h1>
+    <div id="actor-id">{{ id }}</div>
+    <div id="actor-www">{{ actor_www }}</div>
+    <div id="trusts">
+        {% for trust in trusts %}
+        <div class="trust">
+            <span class="relationship">{{ trust.relationship }}</span>
+            <span class="peerid">{{ trust.peerid }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% if oauth_clients %}
+    <div id="oauth-clients">
+        {% for client in oauth_clients %}
+        <div class="oauth-client">{{ client.client_name }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Actor Property - Test Template</title>
+</head>
+<body>
+    <h1>Actor Property</h1>
+    <div id="actor-id">{{ id }}</div>
+    <div id="actor-www">{{ actor_www }}</div>
+    <div id="property">{{ property }}</div>
+    <div id="value">{{ value }}</div>
+    <div id="raw-value">{{ raw_value }}</div>
+    {% if is_list_property %}
+    <div id="list-property">true</div>
+    <div id="list-items">
+        {% for item in list_items %}
+        <div class="list-item">{{ item }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</body>
+</html>

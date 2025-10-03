@@ -508,13 +508,18 @@ class PropertiesHandler(base_handler.BaseHandler):
                     # This is a list property creation with metadata
                     if myself and hasattr(myself, "property_lists"):
                         list_prop = getattr(myself.property_lists, key)
-                        
-                        # Set description and explanation if provided
+
+                        # Set description and explanation if provided, or ensure metadata is persisted
+                        description_set = False
                         if "description" in val:
                             list_prop.set_description(val["description"])
+                            description_set = True
                         if "explanation" in val:
                             list_prop.set_explanation(val["explanation"])
-                            
+                        elif not description_set:
+                            # Ensure metadata is persisted even if no description/explanation provided
+                            list_prop.set_description("")
+
                         # Execute property post hook if available for list creation
                         if self.hooks:
                             actor_interface = self._get_actor_interface(myself)
@@ -522,11 +527,11 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 auth_context = self._create_auth_context(check, "write")
                                 transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, [], [key], auth_context)
                                 if transformed is not None:
-                                    pair[key] = f"[Empty list property created with metadata]"
+                                    pair[key] = f"[Empty list property created]"
                                 else:
                                     continue
                         else:
-                            pair[key] = f"[Empty list property created with metadata]"
+                            pair[key] = f"[Empty list property created]"
                     else:
                         # List properties not supported
                         continue

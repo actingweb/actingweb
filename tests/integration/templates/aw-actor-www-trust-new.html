@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Create Trust - Test Template</title>
+</head>
+<body>
+    <h1>Create Trust Relationship</h1>
+    <div id="actor-id">{{ id }}</div>
+    <form method="POST" action="{{ form_action }}">
+        <label>Peer URL:</label>
+        <input type="text" name="peer" />
+        <label>Relationship:</label>
+        <select name="relationship">
+            {% for trust_type in trust_types %}
+            <option value="{{ trust_type }}">{{ trust_type }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Create Trust</button>
+    </form>
+</body>
+</html>

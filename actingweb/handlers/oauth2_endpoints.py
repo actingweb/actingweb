@@ -162,6 +162,8 @@ class OAuth2EndpointsHandler(BaseHandler):
             try:
                 client_response = self.oauth2_server.handle_client_registration(registration_data)
                 logger.debug(f"Registered MCP client: {client_response['client_id']}")
+                # Set status to 201 Created per RFC 7591
+                self.response.set_status(201, "Created")
                 return client_response
 
             except ValueError as e:

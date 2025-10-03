@@ -6,7 +6,7 @@ services:
     container_name: actingweb-test-dynamodb
     command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./tests/integration/dynamodb-data:/home/dynamodblocal/data
     working_dir: /home/dynamodblocal

@@ -66,11 +66,13 @@ def create_test_app(
     if enable_mcp:
         aw_app = aw_app.with_mcp(enable=True)
 
-    # Create Flask app
-    flask_app = Flask(__name__)
+    # Create Flask app with test templates directory
+    import os
+    template_dir = os.path.join(os.path.dirname(__file__), 'templates')
+    flask_app = Flask(__name__, template_folder=template_dir)
     flask_app.config['TESTING'] = True
 
-    # Integrate with Flask
+    # Integrate with Flask (this will automatically initialize system actors)
     aw_app.integrate_flask(flask_app)
 
     return flask_app, aw_app

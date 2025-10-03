@@ -12,7 +12,7 @@ def test_docker_services(docker_services):
     import requests
 
     # DynamoDB should respond to health check
-    response = requests.get("http://localhost:8000/", timeout=5)
+    response = requests.get("http://localhost:8001/", timeout=5)
     # DynamoDB returns 400 for GET / (expects specific operations)
     assert response.status_code == 400
 

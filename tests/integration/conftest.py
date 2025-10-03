@@ -20,7 +20,8 @@ from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 # Test configuration
-TEST_DYNAMODB_HOST = "http://localhost:8001"
+# Use AWS_DB_HOST from environment if set (for CI), otherwise use local default
+TEST_DYNAMODB_HOST = os.environ.get("AWS_DB_HOST", "http://localhost:8001")
 TEST_APP_HOST = "localhost"
 TEST_APP_PORT = 5555
 TEST_APP_URL = f"http://{TEST_APP_HOST}:{TEST_APP_PORT}"
@@ -31,36 +32,53 @@ def docker_services():
     """
     Start DynamoDB via Docker Compose for the test session.
 
+    If DynamoDB is already running (e.g., in CI), skips docker-compose setup.
     Yields after DynamoDB is ready, cleans up on session end.
     """
-    # Start Docker Compose
-    subprocess.run(
-        ["docker-compose", "-f", "docker-compose.test.yml", "up", "-d"],
-        check=True,
-        cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    )
+    # Check if DynamoDB is already running
+    dynamodb_already_running = False
+    try:
+        response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
+        if response.status_code in [200, 400]:  # DynamoDB responds with 400 to /
+            print(f"DynamoDB already running at {TEST_DYNAMODB_HOST}")
+            dynamodb_already_running = True
+    except requests.exceptions.ConnectionError:
+        pass
 
-    # Wait for DynamoDB to be ready
-    max_retries = 30
-    for i in range(max_retries):
-        try:
-            response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
-            if response.status_code in [200, 400]:  # DynamoDB responds with 400 to /
-                break
-        except requests.exceptions.ConnectionError:
-            pass
-        time.sleep(1)
-    else:
-        raise RuntimeError("DynamoDB failed to start within 30 seconds")
+    started_docker_compose = False
+    if not dynamodb_already_running:
+        # Start Docker Compose
+        print(f"Starting DynamoDB via docker-compose at {TEST_DYNAMODB_HOST}")
+        subprocess.run(
+            ["docker-compose", "-f", "docker-compose.test.yml", "up", "-d"],
+            check=True,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        )
+        started_docker_compose = True
+
+        # Wait for DynamoDB to be ready
+        max_retries = 30
+        for i in range(max_retries):
+            try:
+                response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
+                if response.status_code in [200, 400]:  # DynamoDB responds with 400 to /
+                    break
+            except requests.exceptions.ConnectionError:
+                pass
+            time.sleep(1)
+        else:
+            raise RuntimeError("DynamoDB failed to start within 30 seconds")
 
     yield
 
-    # Cleanup: Stop Docker Compose
-    subprocess.run(
-        ["docker-compose", "-f", "docker-compose.test.yml", "down", "-v"],
-        check=False,
-        cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    )
+    # Cleanup: Stop Docker Compose only if we started it
+    if started_docker_compose:
+        print("Stopping docker-compose services")
+        subprocess.run(
+            ["docker-compose", "-f", "docker-compose.test.yml", "down", "-v"],
+            check=False,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        )
 
 
 @pytest.fixture(scope="session")

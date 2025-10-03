@@ -67,6 +67,16 @@ CHANGED
 ADDED
 ~~~~~
 
+**Integration Test Suite**
+
+- Added comprehensive REST API integration test suite with 117 tests covering all mandatory ActingWeb protocol endpoints
+- Added ``tests/integration/`` directory with test harness, fixtures, and test files
+- Added Docker Compose configuration for local DynamoDB testing (``docker-compose.test.yml``)
+- Added GitHub Actions CI/CD workflow (``.github/workflows/integration-tests.yml``) for automated testing on PRs
+- Added ``make test-integration`` target for running integration tests locally
+- Added comprehensive testing documentation (``docs/TESTING.md``)
+- Test coverage: actor lifecycle, properties (nested/complex), meta, trust relationships, subscriptions with diffs
+
 **MCP Client Management Enhancements**
 
 - Support for ``allowed_clients`` parameter in ``@mcp_tool`` decorator to restrict tool access by client type

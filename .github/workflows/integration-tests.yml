@@ -10,6 +10,17 @@ jobs:
   integration-tests:
     runs-on: ubuntu-latest
 
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
+        options: >-
+          --health-cmd "curl -f http://localhost:8000/ || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,11 +47,6 @@ jobs:
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
         run: poetry install --no-interaction --with test
-
-      - name: Start DynamoDB
-        run: |
-          docker-compose -f docker-compose.test.yml up -d dynamodb-test
-          sleep 5  # Wait for DynamoDB to be ready
 
       - name: Run integration tests
         run: |
@@ -82,7 +88,3 @@ jobs:
         uses: py-cov-action/python-coverage-comment-action@v3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Stop Docker services
-        if: always()
-        run: docker-compose -f docker-compose.test.yml down -v

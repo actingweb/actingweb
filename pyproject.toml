@@ -127,6 +127,9 @@ strict_equality = true
 module = ["pynamodb.*", "boto3.*", "botocore.*", "mcp.*"]
 ignore_missing_imports = true
 
+[tool.coverage.run]
+relative_files = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]

@@ -10,9 +10,10 @@ import pytest
 def test_docker_services(docker_services):
     """Test that DynamoDB is running via Docker."""
     import requests
+    from .conftest import TEST_DYNAMODB_HOST
 
     # DynamoDB should respond to health check
-    response = requests.get("http://localhost:8001/", timeout=5)
+    response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=5)
     # DynamoDB returns 400 for GET / (expects specific operations)
     assert response.status_code == 400
 

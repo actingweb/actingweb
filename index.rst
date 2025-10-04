@@ -39,6 +39,15 @@ Authentication
    docs/authentication-system
    docs/oauth2-client-management
 
+Service Integration
+~~~~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Service Integration
+
+   docs/service-integration
+
 Access Control
 ~~~~~~~~~~~~~~
 

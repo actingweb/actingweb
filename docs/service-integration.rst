@@ -60,7 +60,7 @@ Configuration
 =============
 
 Service Registration
--------------------
+--------------------
 
 Use fluent API methods to register services:
 

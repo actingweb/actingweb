@@ -197,7 +197,7 @@ ADDED
 - Added ``check_and_verify_auth()`` helper to verify authentication for custom (non-ActingWeb) routes with redirect-aware responses
 
 v3.2.1: Aug 9, 2025
------------------
+-------------------
 
 **OAuth2 Authentication System and Enhanced Integrations**
 
@@ -415,30 +415,28 @@ MIGRATION GUIDE
 ~~~~~~~~~~~~~~~
 **For existing applications using OnAWBase:**
 
-**Before (Legacy - NO LONGER SUPPORTED):**
-```python
-class MyApp(OnAWBase):
-    def get_properties(self, path, data):
-        return data
-    
-    def post_callbacks(self, name):
-        return True
-```
+**Before (Legacy - NO LONGER SUPPORTED)**::
 
-**After (Modern Interface - REQUIRED):**
-```python
-app = ActingWebApp("my-app", "dynamodb", "myapp.com")
+    class MyApp(OnAWBase):
+        def get_properties(self, path, data):
+            return data
 
-@app.property_hook("*")
-def handle_properties(actor, operation, value, path):
-    if operation == "get":
+        def post_callbacks(self, name):
+            return True
+
+**After (Modern Interface - REQUIRED)**::
+
+    app = ActingWebApp("my-app", "dynamodb", "myapp.com")
+
+    @app.property_hook("*")
+    def handle_properties(actor, operation, value, path):
+        if operation == "get":
+            return value
         return value
-    return value
 
-@app.callback_hook("*")  
-def handle_callbacks(actor, name, data):
-    return {"status": "handled"}
-```
+    @app.callback_hook("*")
+    def handle_callbacks(actor, name, data):
+        return {"status": "handled"}
 
 **Handler instantiation changes:**
 - **Before:** `Handler(webobj, config, on_aw=my_onaw_instance)`  

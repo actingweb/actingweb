@@ -17,7 +17,8 @@ Solution:
 - Support multiple context types (MCP, OAuth2, web sessions, etc.)
 - Clean up context after request completion
 
-Usage Example:
+Usage Example::
+
     # During request authentication:
     runtime_context = RuntimeContext(actor)
     runtime_context.set_mcp_context(

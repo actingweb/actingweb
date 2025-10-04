@@ -74,6 +74,9 @@ poetry install
 # Install with development dependencies
 poetry install --with dev,docs
 
+# Install git hooks (recommended for contributors)
+bash scripts/install-git-hooks.sh
+
 # Activate virtual environment
 poetry shell
 
@@ -81,6 +84,26 @@ poetry shell
 poetry run pytest
 poetry run black .
 poetry run mypy actingweb
+```
+
+### Git Hooks
+
+The repository includes a pre-commit hook that automatically regenerates `docs/requirements.txt` when `pyproject.toml` is modified. This ensures ReadTheDocs can build documentation with the correct dependencies.
+
+**Install the hook:**
+```bash
+bash scripts/install-git-hooks.sh
+```
+
+**What it does:**
+- Detects when `pyproject.toml` is changed in a commit
+- Runs `poetry export --with docs --without-hashes -o docs/requirements.txt`
+- Automatically stages the updated `docs/requirements.txt`
+- Fails the commit if export fails
+
+**Manual regeneration:**
+```bash
+poetry export --with docs --without-hashes -o docs/requirements.txt
 ```
 
 ### Code Quality and Type Safety

@@ -2,13 +2,12 @@ import base64
 import datetime
 import json
 import logging
-import urlfetch
+import requests
 from typing import Any
 
 from actingweb import attribute, peertrustee, property, subscription, trust
 from actingweb.constants import (
     DEFAULT_CREATOR,
-    TRUSTEE_CREATOR,
 )
 
 
@@ -72,9 +71,11 @@ class Actor:
         if actor_id and config:
             self.store = attribute.InternalStore(actor_id=actor_id, config=config)
             self.property = property.PropertyStore(actor_id=actor_id, config=config)
+            self.property_lists = property.PropertyListStore(actor_id=actor_id, config=config)
         else:
             self.store = None
             self.property = None
+            self.property_lists = None
         self.get(actor_id=actor_id)
 
     def get_peer_info(self, url: str) -> dict[str, Any]:
@@ -93,7 +94,7 @@ class Actor:
         """
         try:
             logging.debug(f"Getting peer info at url({url})")
-            response = urlfetch.fetch(url=url + "/meta")
+            response = requests.get(url=url + "/meta", timeout=(5, 10))
             res = {
                 "last_response_code": response.status_code,
                 "last_response_message": response.content,
@@ -124,6 +125,7 @@ class Actor:
             self.passphrase = self.actor["passphrase"]
             self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
             self.property = property.PropertyStore(actor_id=self.id, config=self.config)
+            self.property_lists = property.PropertyListStore(actor_id=self.id, config=self.config)
             if self.config and self.config.force_email_prop_as_creator:
                 em = self.store.email
                 if em and em.lower() != self.creator:
@@ -152,22 +154,48 @@ class Actor:
         self.get(actor_id=actor_id)
 
     def get_from_creator(self, creator: str | None = None) -> bool:
-        """Initialise an actor by matching on creator.
+        """Initialise an actor by matching on creator/email.
 
-        If unique_creator config is False, then no actor will be initialised.
-        Likewise, if multiple properties are found with the same value (due to earlier
-        uniqueness off).
+        Returns True if an actor could be loaded, otherwise False. When multiple actors
+        share the same creator (possible when unique_creator is disabled), the first
+        deterministic match will be selected in order to provide stable behaviour for
+        login flows that do not specify an explicit actor ID.
         """
+
         self.id = None
         self.creator = None
         self.passphrase = None
-        if not self.config or not self.config.unique_creator:
+
+        if not self.config or not creator:
             return False
-        exists = self.config.DbActor.DbActor().get_by_creator(creator=creator)
-        if len(exists) != 1:
+
+        lookup_creator = creator.lower() if "@" in creator else creator
+        exists = self.config.DbActor.DbActor().get_by_creator(creator=lookup_creator)
+        if not exists:
             return False
-        self.get(actor_id=exists[0]["id"])
-        return True
+
+        # Normalise return to a list of candidate records
+        candidates: list[dict[str, Any]]
+        if isinstance(exists, list):
+            candidates = [c for c in exists if c]
+        else:
+            candidates = [exists]
+
+        if not candidates:
+            return False
+
+        # Ensure deterministic selection order even when DynamoDB returns arbitrary order
+        candidates.sort(key=lambda item: item.get("id", ""))
+
+        for candidate in candidates:
+            actor_id = candidate.get("id")
+            if not actor_id:
+                continue
+            self.get(actor_id=actor_id)
+            if self.id:
+                return True
+
+        return False
 
     def create(
         self,
@@ -176,6 +204,8 @@ class Actor:
         passphrase: str,
         actor_id: str | None = None,
         delete: bool = False,
+        trustee_root: str | None = None,
+        hooks: Any = None,
     ) -> bool:
         """ "Creates a new actor and persists it.
 
@@ -184,7 +214,7 @@ class Actor:
         will be chosen (if any)
         """
         seed = url
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         seed += now.strftime("%Y%m%dT%H%M%S%f")
         if len(creator) > 0:
             self.creator = creator
@@ -215,7 +245,7 @@ class Actor:
                             self.passphrase = c["passphrase"]
                             self.creator = c["creator"]
                             return True
-                        return False
+                    return False
         if passphrase and len(passphrase) > 0:
             self.passphrase = passphrase
         else:
@@ -230,6 +260,24 @@ class Actor:
             self.handle.create(creator=self.creator, passphrase=self.passphrase, actor_id=self.id)
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
+        self.property_lists = property.PropertyListStore(actor_id=self.id, config=self.config)
+        
+        # Set trustee_root if provided
+        if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0 and self.store:
+            self.store.trustee_root = trustee_root
+        
+        # Execute actor_created lifecycle hook if hooks are provided
+        if hooks:
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(self, service_registry=registry)
+                hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+            except Exception as e:
+                # Log hook execution error but don't fail actor creation
+                import logging
+                logging.warning(f"Actor created successfully but lifecycle hook failed: {e}")
+
         return True
 
     def modify(self, creator: str | None = None) -> bool:
@@ -327,9 +375,9 @@ class Actor:
             "Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8"),
         }
         try:
-            response = urlfetch.delete(url=peer_data["baseuri"], headers=headers)
+            response = requests.delete(url=peer_data["baseuri"], headers=headers, timeout=(5, 10))
             self.last_response_code = response.status_code
-            self.last_response_message = response.content
+            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
         except Exception:
             logging.debug("Not able to delete peer actor remotely due to network issues")
             self.last_response_code = 408
@@ -382,14 +430,15 @@ class Actor:
             logging.debug(f"Creating peer actor at factory({factory}) with data({data})")
             response = None
             try:
-                response = urlfetch.post(
+                response = requests.post(
                     url=factory,
                     data=data,
+                    timeout=(5, 10),
                     headers={"Content-Type": "application/json"},
                 )
                 if response:
                     self.last_response_code = response.status_code
-                    self.last_response_message = response.content
+                    self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
             except Exception:
                 logging.debug("Not able to create new peer actor")
                 self.last_response_code = 408
@@ -397,7 +446,11 @@ class Actor:
             if self.last_response_code < 200 or self.last_response_code > 299:
                 return None
             try:
-                data = json.loads(response.content.decode("utf-8", "ignore")) if response and response.content else {}
+                if response and response.content:
+                    content_str = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                    data = json.loads(content_str)
+                else:
+                    data = {}
             except (TypeError, ValueError, KeyError):
                 logging.warning(f"Not able to parse response when creating peer at factory({factory})")
                 return None
@@ -456,7 +509,7 @@ class Actor:
             }
             data = json.dumps(params)
             try:
-                response = urlfetch.put(
+                response = requests.put(
                     url=new_peer_data["baseuri"]
                     + "/trust/"
                     + relationship
@@ -464,10 +517,11 @@ class Actor:
                     + (self.id or ""),
                     data=data,
                     headers=headers,
+                    timeout=(5, 10)
                 )
                 if response:
                     self.last_response_code = response.status_code
-                    self.last_response_message = response.content
+                    self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
             except Exception:
                 self.last_response_code = 408
                 self.last_response_message = "Not able to approve peer actor trust remotely"
@@ -508,6 +562,11 @@ class Actor:
         verified=None,
         verification_token=None,
         peer_approved=None,
+        # Client metadata for OAuth2 clients
+        client_name=None,
+        client_version=None,
+        client_platform=None,
+        oauth_client_id=None,
     ):
         """Changes a trust relationship and noties the peer if approval is changed."""
         if not relationship or not peerid:
@@ -534,9 +593,9 @@ class Actor:
             # would do)
             logging.debug("Trust relationship has been approved, notifying peer at url(" + requrl + ")")
             try:
-                response = urlfetch.post(url=requrl, data=data, headers=headers)
+                response = requests.post(url=requrl, data=data, headers=headers, timeout=(5, 10))
                 self.last_response_code = response.status_code
-                self.last_response_message = response.content
+                self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
             except Exception:
                 logging.debug("Not able to notify peer at url(" + requrl + ")")
                 self.last_response_code = 500
@@ -549,10 +608,26 @@ class Actor:
             verified=verified,
             verification_token=verification_token,
             peer_approved=peer_approved,
+            client_name=client_name,
+            client_version=client_version,
+            client_platform=client_platform,
+            oauth_client_id=oauth_client_id,
         )
 
-    def create_reciprocal_trust(self, url, secret=None, desc="", relationship="", trust_type=""):
-        """Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor."""
+    def create_reciprocal_trust(
+        self, 
+        url, 
+        secret=None, 
+        desc="", 
+        relationship="",  # trust type/permission level (e.g., "friend", "admin") - goes in URL
+        trust_type=""     # peer's expected ActingWeb mini-app type for validation (optional)
+    ):
+        """Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
+        
+        Args:
+            relationship: The trust type/permission level to request (friend, admin, etc.)
+            trust_type: Expected peer mini-app type for validation (optional)
+        """
         if len(url) == 0:
             return False
         if not secret or len(secret) == 0:
@@ -579,7 +654,7 @@ class Actor:
             peer_type=peer["type"],
             relationship=relationship,
             approved=True,
-            verified=False,
+            verified=True,  # Requesting actor has verified=True by default per ActingWeb spec
             desc=desc,
         ):
             logging.warning(
@@ -601,15 +676,16 @@ class Actor:
         data = json.dumps(params)
         logging.debug("Creating reciprocal trust at url(" + requrl + ") and body (" + str(data) + ")")
         try:
-            response = urlfetch.post(
+            response = requests.post(
                 url=requrl,
                 data=data,
+                timeout=(5, 10),
                 headers={
                     "Content-Type": "application/json",
                 },
             )
             self.last_response_code = response.status_code
-            self.last_response_message = response.content
+            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
         except Exception:
             logging.debug("Not able to create trust with peer, deleting my trust.")
             dbtrust.delete()
@@ -639,12 +715,17 @@ class Actor:
         approved=False,
         secret=None,
         verification_token=None,
-        trust_type=None,
+        trust_type=None,  # peer's ActingWeb mini-app type (e.g., "urn:actingweb:example.com:banking")
         peer_approved=None,
-        relationship=None,
+        relationship=None,  # trust type/permission level (e.g., "friend", "admin", "partner")
         desc="",
     ):
-        """Creates a new trust when requested and call backs to initiating actor to verify relationship."""
+        """Creates a new trust when requested and call backs to initiating actor to verify relationship.
+        
+        Args:
+            trust_type: The peer's ActingWeb mini-application type URI
+            relationship: The trust type/permission level (friend, admin, etc.)
+        """
         if not peerid or len(baseuri) == 0 or not relationship:
             return False
         requrl = baseuri + "/trust/" + relationship + "/" + self.id
@@ -665,12 +746,13 @@ class Actor:
                 "Verifying trust at requesting peer(" + peerid + ") at url (" + requrl + ") and secret(" + secret + ")"
             )
             try:
-                response = urlfetch.get(url=requrl, headers=headers)
+                response = requests.get(url=requrl, headers=headers, timeout=(5, 10))
                 self.last_response_code = response.status_code
-                self.last_response_message = response.content
+                self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
                 try:
                     logging.debug("Verifying trust response JSON:" + str(response.content))
-                    data = json.loads(response.content.decode("utf-8", "ignore"))
+                    content_str = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                    data = json.loads(content_str)
                     if data["verification_token"] == verification_token:
                         verified = True
                     else:
@@ -705,7 +787,23 @@ class Actor:
         else:
             rels = self.get_trust_relationships(peerid=peerid)
         for rel in rels:
-            if delete_peer:
+            # For OAuth2-established trusts, there is no remote actor endpoint to call.
+            # Skip remote deletion and delete locally only.
+            is_oauth2_trust = (
+                (rel.get("established_via") == "oauth2")
+                or (rel.get("established_via") == "oauth2_client")
+                or (rel.get("type") == "oauth2")
+                or (rel.get("type") == "oauth2_client")
+                or (str(rel.get("peerid", "")).startswith("oauth2:"))
+                or (str(rel.get("peerid", "")).startswith("oauth2_client:"))
+            )
+            # Additional safety check: prevent self-deletion if baseuri points to this actor
+            is_self_deletion = (
+                rel.get("baseuri", "").endswith(f"/{self.id}") or
+                rel.get("baseuri", "") == f"{self.config.root}{self.id}" if self.config else False
+            )
+            
+            if delete_peer and not is_oauth2_trust and not is_self_deletion:
                 url = rel["baseuri"] + "/trust/" + rel["relationship"] + "/" + self.id
                 headers = {}
                 if rel["secret"]:
@@ -714,7 +812,7 @@ class Actor:
                     }
                 logging.debug("Deleting reciprocal relationship at url(" + url + ")")
                 try:
-                    response = urlfetch.delete(url=url, headers=headers)
+                    response = requests.delete(url=url, headers=headers, timeout=(5, 10))
                 except Exception:
                     logging.debug("Failed to delete reciprocal relationship at url(" + url + ")")
                     failed_once = True
@@ -725,6 +823,11 @@ class Actor:
                     continue
                 else:
                     success_once = True
+            elif delete_peer and (is_oauth2_trust or is_self_deletion):
+                # Treat as successful remote delete for OAuth2 trusts and self-deletions
+                reason = "OAuth2-established trust" if is_oauth2_trust else "self-deletion detected"
+                logging.debug(f"Skipping remote delete for {reason}; deleting locally only")
+                success_once = True
             if not self.subs_list:
                 self.subs_list = subscription.Subscriptions(actor_id=self.id, config=self.config).fetch()
             # Delete this peer's subscriptions
@@ -796,9 +899,9 @@ class Actor:
         }
         try:
             logging.debug("Creating remote subscription at url(" + requrl + ") with body (" + str(data) + ")")
-            response = urlfetch.post(url=requrl, data=data, headers=headers)
+            response = requests.post(url=requrl, data=data, headers=headers, timeout=(5, 10))
             self.last_response_code = response.status_code
-            self.last_response_message = response.content
+            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
         except Exception:
             return None
         try:
@@ -809,7 +912,8 @@ class Actor:
                 + str(response.content)
                 + ")"
             )
-            data = json.loads(response.content.decode("utf-8", "ignore"))
+            content_str = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+            data = json.loads(content_str)
         except ValueError:
             return None
         if "subscriptionid" in data:
@@ -892,9 +996,9 @@ class Actor:
         }
         try:
             logging.debug("Deleting remote subscription at url(" + url + ")")
-            response = urlfetch.delete(url=url, headers=headers)
+            response = requests.delete(url=url, headers=headers, timeout=(5, 10))
             self.last_response_code = response.status_code
-            self.last_response_message = response.content
+            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
             if response.status_code == 204:
                 return True
             else:
@@ -961,14 +1065,14 @@ class Actor:
         }
         try:
             logging.debug("Doing a callback on subscription at url(" + requrl + ") with body(" + str(data) + ")")
-            response = urlfetch.post(url=requrl, data=data.encode("utf-8"), headers=headers)
+            response = requests.post(url=requrl, data=data.encode("utf-8"), headers=headers, timeout=(5, 10))
         except Exception:
             logging.debug("Peer did not respond to callback on url(" + requrl + ")")
             self.last_response_code = 0
             self.last_response_message = "No response from peer for subscription callback"
             return
         self.last_response_code = response.status_code
-        self.last_response_message = response.content
+        self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
         if response.status_code == 204 and sub["granularity"] == "high":
             if not sub_obj:
                 logging.warning("About to clear diff without having subobj set")

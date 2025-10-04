@@ -1,9 +1,13 @@
+# mypy: disable-error-code="override"
 import os
-from typing import Any, Optional, Union, Dict
+import logging
+from typing import Any, Optional, Dict
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
+
+logger = logging.getLogger(__name__)
 
 """
     DbProperty handles all db operations for a property
@@ -16,7 +20,7 @@ class PropertyIndex(GlobalSecondaryIndex[Any]):
     Secondary index on property
     """
 
-    class Meta:
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         index_name = "property-index"
         read_capacity_units = 2
         write_capacity_units = 1
@@ -30,7 +34,7 @@ class Property(Model):
     DynamoDB data model for a property
     """
 
-    class Meta:
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_properties"
         read_capacity_units = 26
         write_capacity_units = 2
@@ -100,16 +104,17 @@ class DbProperty:
         """Sets a new value for the property name"""
         if not name:
             return False
-            
+
         # Convert non-string values to JSON strings for storage
         import json
+
         if value is not None and not isinstance(value, str):
             try:
                 value = json.dumps(value)
             except (TypeError, ValueError):
                 value = str(value)
-        
-        if not value or (hasattr(value, '__len__') and len(value) == 0):
+
+        if not value or (hasattr(value, "__len__") and len(value) == 0):
             if self.get(actor_id=actor_id, name=name):
                 self.delete()
             return True
@@ -142,6 +147,8 @@ class DbPropertyList:
         self.handle: Optional[Any] = None
         self.actor_id: Optional[str] = None
         self.props: Optional[Dict[str, str]] = None
+        if not Property.exists():
+            Property.create_table(wait=True)
 
     def fetch(self, actor_id: Optional[str] = None) -> Optional[Dict[str, str]]:
         """Retrieves the properties of an actor_id from the database"""
@@ -152,8 +159,24 @@ class DbPropertyList:
         if self.handle:
             self.props = {}
             for d in self.handle:
-                self.props[d.name] = d.value
+                # Filter out list properties (they have "list:" prefix)
+                if not d.name.startswith("list:"):
+                    self.props[d.name] = d.value
             return self.props
+        else:
+            return None
+
+    def fetch_all_including_lists(self, actor_id: Optional[str] = None) -> Optional[Dict[str, str]]:
+        """Retrieves ALL properties including list properties - for internal PropertyListStore use"""
+        if not actor_id:
+            return None
+        self.actor_id = actor_id
+        self.handle = Property.scan(Property.id == actor_id)
+        if self.handle:
+            props = {}
+            for d in self.handle:
+                props[d.name] = d.value
+            return props
         else:
             return None
 

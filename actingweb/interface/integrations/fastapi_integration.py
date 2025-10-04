@@ -26,14 +26,13 @@ from ...handlers import (
     devtest,
     subscription,
     resources,
-    oauth,
-    callback_oauth,
     bot,
     www,
     factory,
     methods,
     actions,
     mcp,
+    services,
 )
 
 if TYPE_CHECKING:
@@ -252,14 +251,15 @@ def create_oauth_redirect_response(
                 if clear_cookie:
                     # Clear the expired oauth_token cookie
                     redirect_response.delete_cookie("oauth_token", path="/")
-                    logging.info("Cleared expired oauth_token cookie")
+                    logging.debug("Cleared expired oauth_token cookie")
                 return redirect_response
     except Exception as e:
         logging.error(f"Error creating OAuth2 redirect: {e}")
 
     # Fallback to 401 if OAuth2 not configured
     response = Response(content="Authentication required", status_code=401)
-    response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
+    # Prefer dynamic header based on configured OAuth2 provider if available
+    add_www_authenticate_header(response, config)
     return response
 
 
@@ -294,15 +294,15 @@ async def check_authentication_and_redirect(request: Request, config: Any) -> Op
     # Check for Bearer token
     bearer_token = await get_bearer_token(request)
     if bearer_token:
-        # Verify the Bearer token
-        auth_result = await authenticate_google_oauth(request, config)
-        if auth_result:
-            return None  # Valid Bearer token
+        # If a Bearer token is present, let the underlying handlers verify it.
+        # This supports both OAuth2 tokens and ActingWeb trust secret tokens
+        # without forcing an OAuth2 redirect here.
+        return None
 
     # Check for OAuth token cookie (for session-based authentication)
     oauth_cookie = request.cookies.get("oauth_token")
     if oauth_cookie:
-        logging.info(f"Found oauth_token cookie with length {len(oauth_cookie)}")
+        logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
         # Validate the OAuth cookie token
         try:
             from ...oauth2 import create_oauth2_authenticator
@@ -313,12 +313,12 @@ async def check_authentication_and_redirect(request: Request, config: Any) -> Op
                 if user_info:
                     email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
                     if email:
-                        logging.info(f"OAuth cookie validation successful for {email}")
+                        logging.debug(f"OAuth cookie validation successful for {email}")
                         return None  # Valid OAuth cookie
-                logging.info("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
+                logging.debug("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
                 # Token expired/invalid - fall through to create redirect response with cookie cleanup
         except Exception as e:
-            logging.info(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
+            logging.debug(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
             # Validation failed - fall through to redirect
 
     # No valid authentication - redirect to OAuth2 provider
@@ -391,13 +391,17 @@ class FastAPIIntegration:
 
         @self.fastapi_app.post("/")
         async def app_root_post(request: Request) -> Response:
-            # For POST requests, extract email and redirect to OAuth2 with email hint
-            return await self._handle_factory_post_with_oauth_redirect(request)
+            # Check if this is a JSON API request or web form request
+            content_type = request.headers.get("content-type", "")
+            accepts_json = request.headers.get("accept", "").find("application/json") >= 0
+            is_json_request = "application/json" in content_type
 
-        # OAuth callback (legacy)
-        @self.fastapi_app.get("/oauth")
-        async def app_oauth_callback(request: Request) -> Response:
-            return await self._handle_oauth_callback(request)
+            if is_json_request or accepts_json:
+                # Handle JSON API requests with the standard factory handler
+                return await self._handle_factory_request(request)
+            else:
+                # For web form requests, extract email and redirect to OAuth2 with email hint
+                return await self._handle_factory_post_with_oauth_redirect(request)
 
         # Google OAuth callback
         @self.fastapi_app.get("/oauth/callback")
@@ -409,30 +413,30 @@ class FastAPIIntegration:
             error = request.query_params.get("error", "")
 
             # Check if this is an MCP OAuth2 callback (encrypted state)
-            self.logger.info(
+            self.logger.debug(
                 f"OAuth callback received - code: {bool(code)}, error: {error}, state: {state[:100]}..."
             )  # Log first 100 chars
 
             # Debug: Check if MCP is enabled
             config = self.aw_app.get_config()
             mcp_enabled = getattr(config, "mcp", False)
-            self.logger.info(f"MCP enabled in config: {mcp_enabled}")
+            self.logger.debug(f"MCP enabled in config: {mcp_enabled}")
 
             try:
                 from ...oauth2_server.state_manager import get_oauth2_state_manager
 
                 state_manager = get_oauth2_state_manager(self.aw_app.get_config())
-                self.logger.info(f"State manager created successfully")
+                self.logger.debug(f"State manager created successfully")
 
                 mcp_context = state_manager.extract_mcp_context(state)
-                self.logger.info(f"MCP context extraction result: {mcp_context is not None}")
+                self.logger.debug(f"MCP context extraction result: {mcp_context is not None}")
 
                 if mcp_context:
-                    self.logger.info(f"Using MCP OAuth2 callback handler with context: {mcp_context}")
+                    self.logger.debug(f"Using MCP OAuth2 callback handler with context: {mcp_context}")
                     # This is an MCP OAuth2 callback
                     return await self._handle_oauth2_endpoint(request, "callback")
                 else:
-                    self.logger.info("No MCP context found, using standard OAuth2 callback")
+                    self.logger.debug("No MCP context found, using standard OAuth2 callback")
             except Exception as e:
                 # Not an MCP callback or state manager not available
                 self.logger.error(f"Error checking MCP context: {e}")
@@ -442,15 +446,17 @@ class FastAPIIntegration:
                 pass
 
             # Default to Google OAuth2 callback for ActingWeb
-            self.logger.info("Using standard Google OAuth2 callback handler")
+            self.logger.debug("Using standard Google OAuth2 callback handler")
             return await self._handle_google_oauth_callback(request)
 
         # OAuth2 server endpoints for MCP clients
         @self.fastapi_app.post("/oauth/register")
+        @self.fastapi_app.options("/oauth/register")
         async def oauth2_register(request: Request) -> Response:
             return await self._handle_oauth2_endpoint(request, "register")
 
         @self.fastapi_app.get("/oauth/authorize")
+        @self.fastapi_app.options("/oauth/authorize")
         async def oauth2_authorize_get(request: Request) -> Response:
             return await self._handle_oauth2_endpoint(request, "authorize")
 
@@ -459,13 +465,17 @@ class FastAPIIntegration:
             return await self._handle_oauth2_endpoint(request, "authorize")
 
         @self.fastapi_app.post("/oauth/token")
+        @self.fastapi_app.options("/oauth/token")
         async def oauth2_token(request: Request) -> Response:
             return await self._handle_oauth2_endpoint(request, "token")
 
-        # OAuth2 discovery endpoint
-        @self.fastapi_app.get("/.well-known/oauth-authorization-server")
-        async def oauth2_discovery(request: Request) -> Response:
-            return await self._handle_oauth2_endpoint(request, ".well-known/oauth-authorization-server")
+        @self.fastapi_app.get("/oauth/logout")
+        @self.fastapi_app.post("/oauth/logout")
+        @self.fastapi_app.options("/oauth/logout")
+        async def oauth2_logout(request: Request) -> Response:
+            return await self._handle_oauth2_endpoint(request, "logout")
+
+        # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
 
         # Bot endpoint
         @self.fastapi_app.post("/bot")
@@ -483,19 +493,19 @@ class FastAPIIntegration:
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
         @self.fastapi_app.get("/.well-known/oauth-authorization-server")
         @self.fastapi_app.options("/.well-known/oauth-authorization-server")
-        async def oauth_discovery(request: Request) -> Dict[str, Any]:
+        async def oauth_discovery(request: Request) -> JSONResponse:
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-authorization-server")
 
         @self.fastapi_app.get("/.well-known/oauth-protected-resource")
         @self.fastapi_app.options("/.well-known/oauth-protected-resource")
-        async def oauth_protected_resource_discovery(request: Request) -> Dict[str, Any]:
+        async def oauth_protected_resource_discovery(request: Request) -> JSONResponse:
             """OAuth2 Protected Resource discovery endpoint."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-protected-resource")
 
         @self.fastapi_app.get("/.well-known/oauth-protected-resource/mcp")
         @self.fastapi_app.options("/.well-known/oauth-protected-resource/mcp")
-        async def oauth_protected_resource_mcp_discovery(request: Request) -> Dict[str, Any]:
+        async def oauth_protected_resource_mcp_discovery(request: Request) -> JSONResponse:
             """OAuth2 Protected Resource discovery endpoint for MCP."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-protected-resource/mcp")
 
@@ -520,21 +530,8 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/{actor_id}/meta")
         @self.fastapi_app.get("/{actor_id}/meta/{path:path}")
         async def app_meta(actor_id: str, request: Request, path: str = "") -> Response:
-            # Check authentication and redirect to Google OAuth2 if needed
-            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
-            if auth_redirect:
-                return auth_redirect
+            # Meta endpoint should be public for peer discovery - no authentication required
             return await self._handle_actor_request(request, actor_id, "meta", path=path)
-
-        # Actor OAuth
-        @self.fastapi_app.get("/{actor_id}/oauth")
-        @self.fastapi_app.get("/{actor_id}/oauth/{path:path}")
-        async def app_oauth(actor_id: str, request: Request, path: str = "") -> Response:
-            # Check authentication and redirect to Google OAuth2 if needed
-            auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
-            if auth_redirect:
-                return auth_redirect
-            return await self._handle_actor_request(request, actor_id, "oauth", path=path)
 
         # Actor www
         @self.fastapi_app.get("/{actor_id}/www")
@@ -584,6 +581,15 @@ class FastAPIIntegration:
         ) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "trust", relationship=relationship, peerid=peerid
+            )
+
+        # Trust permission management endpoints
+        @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}/permissions")
+        async def app_trust_permissions(actor_id: str, request: Request, relationship: str, peerid: str) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
             )
 
         # Actor subscriptions
@@ -671,6 +677,24 @@ class FastAPIIntegration:
         async def app_actions(actor_id: str, request: Request, name: str = "") -> Response:
             return await self._handle_actor_request(request, actor_id, "actions", name=name)
 
+        # Third-party service OAuth2 callbacks and management
+        @self.fastapi_app.get("/{actor_id}/services/{service_name}/callback")
+        async def app_services_callback(
+            actor_id: str,
+            service_name: str,
+            request: Request,
+            code: Optional[str] = None,
+            state: Optional[str] = None,
+            error: Optional[str] = None,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "services", name=service_name, code=code, state=state, error=error
+            )
+
+        @self.fastapi_app.delete("/{actor_id}/services/{service_name}")
+        async def app_services_revoke(actor_id: str, service_name: str, request: Request) -> Response:
+            return await self._handle_actor_request(request, actor_id, "services", name=service_name)
+
     async def _normalize_request(self, request: Request) -> Dict[str, Any]:
         """Convert FastAPI request to ActingWeb format."""
         # Read body asynchronously
@@ -698,6 +722,12 @@ class FastAPIIntegration:
                 headers["Content-Type"] = v
             else:
                 headers[k] = v
+
+        # If no Authorization header but we have an oauth_token cookie (web UI session),
+        # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
+        if "Authorization" not in headers and "oauth_token" in cookies:
+            headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
+            self.logger.debug("FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request")
 
         # Get query parameters and form data (similar to Flask's request.values)
         params = {}
@@ -737,6 +767,7 @@ class FastAPIIntegration:
     def _create_fastapi_response(self, webobj: AWWebObj, request: Request) -> Response:
         """Convert ActingWeb response to FastAPI response."""
         if webobj.response.redirect:
+            logging.debug(f"_create_fastapi_response: Creating redirect response to {webobj.response.redirect}")
             response: Response = RedirectResponse(url=webobj.response.redirect, status_code=302)
         else:
             # Create appropriate response based on content type
@@ -790,31 +821,31 @@ class FastAPIIntegration:
 
         # Check if user is already authenticated with Google OAuth2 and redirect to their actor
         oauth_cookie = request.cookies.get("oauth_token")
-        self.logger.info(f"Factory request: method={request.method}, has_oauth_cookie={bool(oauth_cookie)}")
+        self.logger.debug(f"Factory request: method={request.method}, has_oauth_cookie={bool(oauth_cookie)}")
         if oauth_cookie and request.method == "GET":
-            self.logger.info(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
+            self.logger.debug(f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})")
             # User has OAuth session - try to find their actor and redirect
             try:
                 from ...oauth2 import create_oauth2_authenticator
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    self.logger.info("OAuth2 is enabled, validating token...")
+                    self.logger.debug("OAuth2 is enabled, validating token...")
                     # Validate the token and get user info
                     user_info = authenticator.validate_token_and_get_user_info(oauth_cookie)
                     if user_info:
                         email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
                         if email:
-                            self.logger.info(f"Token validation successful for {email}")
+                            self.logger.debug(f"Token validation successful for {email}")
                             # Look up actor by email
                             actor_instance = authenticator.lookup_or_create_actor_by_email(email)
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
                                 redirect_url = f"/{actor_instance.id}/www"
-                                self.logger.info(f"Redirecting authenticated user {email} to {redirect_url}")
+                                self.logger.debug(f"Redirecting authenticated user {email} to {redirect_url}")
                                 return RedirectResponse(url=redirect_url, status_code=302)
                     # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
-                    self.logger.info("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
+                    self.logger.debug("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
                     original_url = str(request.url)
                     oauth_redirect = create_oauth_redirect_response(
                         self.aw_app.get_config(), redirect_after_auth=original_url
@@ -827,7 +858,7 @@ class FastAPIIntegration:
             except Exception as e:
                 self.logger.error(f"OAuth token validation failed in factory: {e}")
                 # Token validation failed - clear cookie and redirect to fresh OAuth
-                self.logger.info("OAuth token validation error - clearing cookie and redirecting to OAuth")
+                self.logger.debug("OAuth token validation error - clearing cookie and redirecting to OAuth")
                 original_url = str(request.url)
                 oauth_redirect = create_oauth_redirect_response(
                     self.aw_app.get_config(), redirect_after_auth=original_url
@@ -836,42 +867,38 @@ class FastAPIIntegration:
                 oauth_redirect.delete_cookie("oauth_token", path="/")
                 return oauth_redirect
 
-        # Check if we have a custom actor factory registered and this is a POST request
-        if request.method == "POST" and self.aw_app.get_actor_factory():
-            # Use the modern actor factory instead of the legacy handler
-            await self._handle_custom_actor_creation(webobj, request)
-        else:
-            handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+        # Always use the standard factory handler
+        handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
 
-            method_name = request.method.lower()
-            handler_method = getattr(handler, method_name, None)
-            if handler_method and callable(handler_method):
-                # Run the synchronous handler in a thread pool to avoid blocking the event loop
-                try:
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(self.executor, handler_method)
-                except (KeyboardInterrupt, SystemExit):
-                    # Don't catch system signals
-                    raise
-                except Exception as e:
-                    # Log the error but let ActingWeb handlers set their own response codes
-                    self.logger.error(f"Error in factory handler: {e}")
+        method_name = request.method.lower()
+        handler_method = getattr(handler, method_name, None)
+        if handler_method and callable(handler_method):
+            # Run the synchronous handler in a thread pool to avoid blocking the event loop
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(self.executor, handler_method)
+            except (KeyboardInterrupt, SystemExit):
+                # Don't catch system signals
+                raise
+            except Exception as e:
+                # Log the error but let ActingWeb handlers set their own response codes
+                self.logger.error(f"Error in factory handler: {e}")
 
-                    # Check if the handler already set an appropriate response code
-                    if webobj.response.status_code != 200:
-                        # Handler already set a status code, respect it
-                        self.logger.debug(f"Handler set status code: {webobj.response.status_code}")
+                # Check if the handler already set an appropriate response code
+                if webobj.response.status_code != 200:
+                    # Handler already set a status code, respect it
+                    self.logger.debug(f"Handler set status code: {webobj.response.status_code}")
+                else:
+                    # For network/SSL errors, set appropriate status codes
+                    error_message = str(e).lower()
+                    if "ssl" in error_message or "certificate" in error_message:
+                        webobj.response.set_status(502, "Bad Gateway - SSL connection failed")
+                    elif "connection" in error_message or "timeout" in error_message:
+                        webobj.response.set_status(503, "Service Unavailable - Connection failed")
                     else:
-                        # For network/SSL errors, set appropriate status codes
-                        error_message = str(e).lower()
-                        if "ssl" in error_message or "certificate" in error_message:
-                            webobj.response.set_status(502, "Bad Gateway - SSL connection failed")
-                        elif "connection" in error_message or "timeout" in error_message:
-                            webobj.response.set_status(503, "Service Unavailable - Connection failed")
-                        else:
-                            webobj.response.set_status(500, "Internal server error")
-            else:
-                raise HTTPException(status_code=405, detail="Method not allowed")
+                        webobj.response.set_status(500, "Internal server error")
+        else:
+            raise HTTPException(status_code=405, detail="Method not allowed")
 
         # Handle template rendering for factory
         if request.method == "GET" and webobj.response.status_code == 200:
@@ -893,82 +920,6 @@ class FastAPIIntegration:
                 )
 
         return self._create_fastapi_response(webobj, request)
-
-    async def _handle_custom_actor_creation(self, webobj: AWWebObj, request: Request) -> None:
-        """Handle actor creation using registered actor factory function."""
-        try:
-            # Parse request data
-            creator = None
-            passphrase = None
-            trustee_root = None
-
-            if webobj.request.body:
-                try:
-                    data = json.loads(webobj.request.body)
-                    creator = data.get("creator")
-                    passphrase = data.get("passphrase", "")
-                    trustee_root = data.get("trustee_root", "")
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-            # Fallback to form data
-            if not creator:
-                creator = webobj.request.get("creator")
-                passphrase = webobj.request.get("passphrase")
-                trustee_root = webobj.request.get("trustee_root")
-
-            if not creator:
-                webobj.response.set_status(400, "Missing creator")
-                return
-
-            # Get the actor factory function
-            factory_func = self.aw_app.get_actor_factory()
-            if not factory_func:
-                webobj.response.set_status(500, "No actor factory registered")
-                return
-
-            # Call the registered actor factory function
-            # Use thread pool to avoid blocking the event loop
-            loop = asyncio.get_running_loop()
-            actor_interface = await loop.run_in_executor(
-                self.executor, lambda: factory_func(creator=creator, passphrase=passphrase)
-            )
-
-            if not actor_interface:
-                webobj.response.set_status(400, "Actor creation failed")
-                return
-
-            # Set trustee_root if provided (mirroring the factory handler behavior)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                # Get the underlying actor from the interface
-                core_actor = actor_interface.core_actor
-                if core_actor and core_actor.store:
-                    core_actor.store.trustee_root = trustee_root
-
-            # Set response data
-            webobj.response.set_status(201, "Created")
-            response_data = {
-                "id": actor_interface.id,
-                "creator": creator,
-                "passphrase": actor_interface.passphrase or passphrase,
-            }
-
-            # Add trustee_root to response if set (mirroring factory handler)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                response_data["trustee_root"] = trustee_root
-
-            self.logger.debug(f"FastAPI actor creation response: {response_data}")
-
-            webobj.response.body = json.dumps(response_data).encode("utf-8")
-            webobj.response.headers["Content-Type"] = "application/json"
-
-            # Add Location header with the actor URL
-            if actor_interface.url:
-                webobj.response.headers["Location"] = actor_interface.url
-
-        except Exception as e:
-            self.logger.error(f"Error in custom actor creation: {e}")
-            webobj.response.set_status(500, "Internal server error")
 
     async def _handle_factory_get_request(self, request: Request) -> Response:
         """Handle GET requests to factory route - just show the email form."""
@@ -1021,7 +972,7 @@ class FastAPIIntegration:
                 else:
                     raise HTTPException(status_code=400, detail="Email is required")
 
-            self.logger.info(f"Factory POST with email: {email}")
+            self.logger.debug(f"Factory POST with email: {email}")
 
             # Create OAuth2 redirect with email hint
             try:
@@ -1029,13 +980,14 @@ class FastAPIIntegration:
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    # Create authorization URL with email hint
+                    # Create authorization URL with email hint and User-Agent
                     redirect_after_auth = str(request.url)  # Redirect back to factory after auth
+                    user_agent = request.headers.get("user-agent", "")
                     auth_url = authenticator.create_authorization_url(
-                        redirect_after_auth=redirect_after_auth, email_hint=email
+                        redirect_after_auth=redirect_after_auth, email_hint=email, user_agent=user_agent
                     )
 
-                    self.logger.info(f"Redirecting to OAuth2 with email hint: {email}")
+                    self.logger.debug(f"Redirecting to OAuth2 with email hint: {email}")
                     return RedirectResponse(url=auth_url, status_code=302)
                 else:
                     self.logger.warning("OAuth2 not configured - falling back to standard actor creation")
@@ -1045,7 +997,7 @@ class FastAPIIntegration:
             except Exception as e:
                 self.logger.error(f"Error creating OAuth2 redirect: {e}")
                 # Fall back to standard actor creation if OAuth2 setup fails
-                self.logger.info("OAuth2 setup failed - falling back to standard actor creation")
+                self.logger.debug("OAuth2 setup failed - falling back to standard actor creation")
                 return await self._handle_factory_post_without_oauth(request, email)
 
         except HTTPException:
@@ -1057,96 +1009,36 @@ class FastAPIIntegration:
     async def _handle_factory_post_without_oauth(self, request: Request, email: str) -> Response:
         """Handle POST to factory route without OAuth2 - standard actor creation."""
         try:
-            # Get the actor factory function
-            factory_func = self.aw_app.get_actor_factory()
-            if factory_func:
-                # Use the registered actor factory function
-                actor_interface = factory_func(creator=email)
-                if actor_interface:
-                    self.logger.info(f"Actor created successfully: {actor_interface.id} for {email}")
+            # Always use the standard factory handler
+            req_data = await self._normalize_request(request)
+            webobj = AWWebObj(
+                url=req_data["url"],
+                params=req_data["values"],
+                body=req_data["data"],
+                headers=req_data["headers"],
+                cookies=req_data["cookies"],
+            )
 
-                    # Check if this is a JSON request or web form request
-                    content_type = request.headers.get("content-type", "")
-                    accepts_json = request.headers.get("accept", "").find("application/json") >= 0
-                    is_json_request = "application/json" in content_type
+            # Use the standard factory handler
+            handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
 
-                    if is_json_request or accepts_json or not request.headers.get("accept"):
-                        # Return JSON response for API clients and test suite
-                        response_data = {
-                            "id": actor_interface.id,
-                            "creator": email,
-                            "passphrase": getattr(actor_interface, "passphrase", ""),
-                        }
+            # Run the synchronous handler in a thread pool
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(self.executor, handler.post)
 
-                        # Add Location header with the actor URL
-                        headers = {}
-                        if hasattr(actor_interface, "url") and actor_interface.url:
-                            headers["Location"] = actor_interface.url
-                        else:
-                            # Construct URL from config and actor ID
-                            config = self.aw_app.get_config()
-                            if config:
-                                headers["Location"] = f"{config.proto}{config.fqdn}/{actor_interface.id}"
+            # Handle template rendering for factory
+            if webobj.response.status_code in [200, 201]:
+                if self.templates:
+                    return self.templates.TemplateResponse(
+                        "aw-root-created.html", {"request": request, **webobj.response.template_values}
+                    )
+            elif webobj.response.status_code == 400:
+                if self.templates:
+                    return self.templates.TemplateResponse(
+                        "aw-root-failed.html", {"request": request, **webobj.response.template_values}
+                    )
 
-                        return Response(
-                            content=json.dumps(response_data),
-                            status_code=201,
-                            media_type="application/json",
-                            headers=headers,
-                        )
-                    else:
-                        # Return HTML template for web browsers
-                        if self.templates:
-                            return self.templates.TemplateResponse(
-                                "aw-root-created.html",
-                                {
-                                    "request": request,
-                                    "id": actor_interface.id,
-                                    "creator": email,
-                                    "passphrase": getattr(actor_interface, "passphrase", "N/A"),
-                                },
-                            )
-                        else:
-                            return Response(f"Actor created successfully: {actor_interface.id}", status_code=201)
-                else:
-                    self.logger.error(f"Actor creation failed for {email}")
-                    if self.templates:
-                        return self.templates.TemplateResponse(
-                            "aw-root-failed.html", {"request": request, "error": "Actor creation failed"}
-                        )
-                    else:
-                        raise HTTPException(status_code=400, detail="Actor creation failed")
-            else:
-                # No custom factory - use the standard factory handler
-                req_data = await self._normalize_request(request)
-                webobj = AWWebObj(
-                    url=req_data["url"],
-                    params=req_data["values"],
-                    body=req_data["data"],
-                    headers=req_data["headers"],
-                    cookies=req_data["cookies"],
-                )
-
-                # Use the standard factory handler
-                handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-
-                # Run the synchronous handler in a thread pool
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(self.executor, handler.post)
-
-                # Handle template rendering for factory
-                if webobj.response.status_code in [200, 201]:
-                    if self.templates:
-                        return self.templates.TemplateResponse(
-                            "aw-root-created.html", {"request": request, **webobj.response.template_values}
-                        )
-                elif webobj.response.status_code == 400:
-                    if self.templates:
-                        return self.templates.TemplateResponse(
-                            "aw-root-failed.html", {"request": request, **webobj.response.template_values}
-                        )
-
-                return self._create_fastapi_response(webobj, request)
+            return self._create_fastapi_response(webobj, request)
 
         except Exception as e:
             self.logger.error(f"Error in standard actor creation: {e}")
@@ -1156,25 +1048,6 @@ class FastAPIIntegration:
                 )
             else:
                 raise HTTPException(status_code=500, detail="Actor creation failed")
-
-    async def _handle_oauth_callback(self, request: Request) -> Response:
-        """Handle OAuth callback."""
-        req_data = await self._normalize_request(request)
-        webobj = AWWebObj(
-            url=req_data["url"],
-            params=req_data["values"],
-            body=req_data["data"],
-            headers=req_data["headers"],
-            cookies=req_data["cookies"],
-        )
-
-        handler = callback_oauth.CallbackOauthHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-
-        # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self.executor, handler.get)
-
-        return self._create_fastapi_response(webobj, request)
 
     async def _handle_google_oauth_callback(self, request: Request) -> Response:
         """Handle Google OAuth2 callback."""
@@ -1238,12 +1111,12 @@ class FastAPIIntegration:
 
         # Check if handler set template values (for HTML response)
         if hasattr(webobj.response, "template_values") and webobj.response.template_values:
-            self.logger.info(f"OAuth2 template values found: {webobj.response.template_values}")
+            self.logger.debug(f"OAuth2 template values found: {webobj.response.template_values}")
             if self.templates:
                 # This is an HTML template response
                 template_name = "aw-oauth-authorization-form.html"  # Default OAuth2 template
                 try:
-                    self.logger.info(f"Attempting to render template: {template_name}")
+                    self.logger.debug(f"Attempting to render template: {template_name}")
                     return self.templates.TemplateResponse(
                         template_name, {"request": request, **webobj.response.template_values}
                     )
@@ -1268,12 +1141,27 @@ class FastAPIIntegration:
             if redirect_url:
                 from fastapi.responses import RedirectResponse
 
-                return RedirectResponse(url=redirect_url, status_code=302)
+                # Add CORS headers for OAuth2 redirect responses
+                cors_headers = {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+                }
 
-        # Return the OAuth2 result as JSON
+                return RedirectResponse(url=redirect_url, status_code=302, headers=cors_headers)
+
+        # Return the OAuth2 result as JSON with CORS headers
         from fastapi.responses import JSONResponse
 
-        return JSONResponse(content=result)
+        # Add CORS headers for OAuth2 endpoints
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+            "Access-Control-Max-Age": "86400",
+        }
+
+        return JSONResponse(content=result, headers=cors_headers)
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""
@@ -1331,7 +1219,7 @@ class FastAPIIntegration:
         # Create JSON response
         return JSONResponse(content=result, status_code=200)
 
-    async def _handle_oauth2_discovery_endpoint(self, request: Request, endpoint: str) -> Dict[str, Any]:
+    async def _handle_oauth2_discovery_endpoint(self, request: Request, endpoint: str) -> JSONResponse:
         """Handle OAuth2 discovery endpoints that return JSON directly."""
         req_data = await self._normalize_request(request)
         webobj = AWWebObj(
@@ -1354,7 +1242,15 @@ class FastAPIIntegration:
         else:
             result = await loop.run_in_executor(self.executor, handler.get, endpoint)
 
-        return result
+        # Add CORS headers directly for OAuth2 discovery endpoints
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+            "Access-Control-Max-Age": "86400",
+        }
+
+        return JSONResponse(content=result, headers=cors_headers)
 
     async def _handle_actor_request(self, request: Request, actor_id: str, endpoint: str, **kwargs: Any) -> Response:
         """Handle actor-specific requests."""
@@ -1378,15 +1274,36 @@ class FastAPIIntegration:
         if handler_method and callable(handler_method):
             # Build positional arguments based on endpoint and kwargs
             args = [actor_id]
+            extra_kwargs = {}  # Initialize extra_kwargs for all endpoints
+
             if endpoint == "meta":
                 args.append(kwargs.get("path", ""))
             elif endpoint == "trust":
                 # Only pass path parameters if they exist, let handler read query params from request
-                if kwargs.get("relationship"):
-                    args.append(kwargs["relationship"])
-                    if kwargs.get("peerid"):
-                        args.append(kwargs["peerid"])
-                self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
+                relationship = kwargs.get("relationship")
+                peerid = kwargs.get("peerid")
+
+                # Support UI forms that send GET /trust/<peerid>?_method=DELETE|PUT
+                # by interpreting the single path segment as a peer ID.
+                # We detect this when:
+                #  - there is only one path param provided
+                #  - a method override is present requesting DELETE or PUT
+                #  - no explicit peerid path param is provided
+                method_override = (webobj.request.get("_method") or "").upper()
+                if relationship and not peerid and method_override in ("DELETE", "PUT"):
+                    # Heuristic: treat the "relationship" path part as a peer ID.
+                    # Pass empty relationship (type) and the detected peer ID.
+                    args.append("")
+                    args.append(relationship)
+                    self.logger.debug(
+                        f"Trust handler args adjusted for method override: {args} (peerid assumed from single segment)"
+                    )
+                else:
+                    if relationship:
+                        args.append(relationship)
+                        if peerid:
+                            args.append(peerid)
+                    self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
             elif endpoint == "subscriptions":
                 if kwargs.get("peerid"):
                     args.append(kwargs["peerid"])
@@ -1394,15 +1311,35 @@ class FastAPIIntegration:
                     args.append(kwargs["subid"])
                 if kwargs.get("seqnr"):
                     args.append(kwargs["seqnr"])
-            elif endpoint in ["www", "properties", "callbacks", "resources", "devtest", "methods", "actions"]:
+            elif endpoint in [
+                "www",
+                "properties",
+                "callbacks",
+                "resources",
+                "devtest",
+                "methods",
+                "actions",
+                "services",
+            ]:
                 # These endpoints take a path/name parameter
                 param_name = "path" if endpoint in ["www", "devtest"] else "name"
                 args.append(kwargs.get(param_name, ""))
 
+                # Services need additional kwargs for OAuth callback parameters
+                if endpoint == "services":
+                    # Pass code, state, error as kwargs to the handler
+                    extra_kwargs = {
+                        k: v for k, v in kwargs.items() if k in ["code", "state", "error"] and v is not None
+                    }
+
             # Run the synchronous handler in a thread pool to avoid blocking the event loop
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(self.executor, handler_method, *args)
+                if extra_kwargs:
+                    # For services endpoint, pass extra kwargs
+                    await loop.run_in_executor(self.executor, lambda: handler_method(*args, **extra_kwargs))
+                else:
+                    await loop.run_in_executor(self.executor, handler_method, *args)
             except (KeyboardInterrupt, SystemExit):
                 # Don't catch system signals
                 raise
@@ -1435,8 +1372,15 @@ class FastAPIIntegration:
                 "properties": "aw-actor-www-properties.html",
                 "property": "aw-actor-www-property.html",
                 "trust": "aw-actor-www-trust.html",
+                "trust/new": "aw-actor-www-trust-new.html",
             }
             template_name = template_map.get(path)
+
+            # Handle individual property pages like "properties/notes", "properties/demo_version"
+            if not template_name and path.startswith("properties/"):
+                # This is an individual property page
+                template_name = "aw-actor-www-property.html"
+
             if template_name:
                 return self.templates.TemplateResponse(
                     template_name, {"request": request, **webobj.response.template_values}
@@ -1451,7 +1395,6 @@ class FastAPIIntegration:
         handlers = {
             "root": lambda: root.RootHandler(webobj, config, hooks=self.aw_app.hooks),
             "meta": lambda: meta.MetaHandler(webobj, config, hooks=self.aw_app.hooks),
-            "oauth": lambda: oauth.OauthHandler(webobj, config, hooks=self.aw_app.hooks),
             "www": lambda: www.WwwHandler(webobj, config, hooks=self.aw_app.hooks),
             "properties": lambda: properties.PropertiesHandler(webobj, config, hooks=self.aw_app.hooks),
             "resources": lambda: resources.ResourcesHandler(webobj, config, hooks=self.aw_app.hooks),
@@ -1459,6 +1402,7 @@ class FastAPIIntegration:
             "devtest": lambda: devtest.DevtestHandler(webobj, config, hooks=self.aw_app.hooks),
             "methods": lambda: methods.MethodsHandler(webobj, config, hooks=self.aw_app.hooks),
             "actions": lambda: actions.ActionsHandler(webobj, config, hooks=self.aw_app.hooks),
+            "services": lambda: self._create_services_handler(webobj, config),
         }
 
         # Special handling for trust endpoint
@@ -1485,10 +1429,19 @@ class FastAPIIntegration:
 
             self.logger.debug(f"Trust handler selection - path_parts: {path_parts}, len: {len(path_parts)}")
 
-            if len(path_parts) == 0:
+            # Check for permissions endpoint
+            if kwargs.get("permissions"):
+                self.logger.debug("Selecting TrustPermissionHandler for permission management")
+                return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
+            elif len(path_parts) == 0:
                 self.logger.debug("Selecting TrustHandler for query parameter request")
                 return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
+                # Special case: UI may call /trust/<peerid>?_method=DELETE|PUT
+                method_override = (webobj.request.get("_method") or "").upper()
+                if method_override in ("DELETE", "PUT"):
+                    self.logger.debug("Selecting TrustPeerHandler for single path parameter with method override")
+                    return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
                 self.logger.debug("Selecting TrustRelationshipHandler for single path parameter")
                 return trust.TrustRelationshipHandler(webobj, config, hooks=self.aw_app.hooks)
             else:
@@ -1516,8 +1469,6 @@ class FastAPIIntegration:
 
     def _create_oauth_discovery_response(self) -> Dict[str, Any]:
         """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
@@ -1554,34 +1505,27 @@ class FastAPIIntegration:
 
     def _create_mcp_info_response(self) -> Dict[str, Any]:
         """Create MCP information response."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
-        oauth_config = getattr(config, "oauth", {})
-        oauth_client_id = oauth_config.get("client_id") if oauth_config else None
-        oauth_client_secret = oauth_config.get("client_secret") if oauth_config else None
 
         return {
             "mcp_enabled": True,
             "mcp_endpoint": "/mcp",
             "authentication": {
                 "type": "oauth2",
-                "provider": oauth_provider,
-                "required_scopes": ["openid", "email", "profile"] if oauth_provider == "google" else ["user:email"],
+                "provider": "actingweb",
+                "required_scopes": ["mcp"],
                 "flow": "authorization_code",
-                "auth_url": "https://accounts.google.com/o/oauth2/v2/auth"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/authorize",
-                "token_url": "https://oauth2.googleapis.com/token"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/access_token",
+                "auth_url": f"{base_url}/oauth/authorize",
+                "token_url": f"{base_url}/oauth/token",
                 "callback_url": f"{base_url}/oauth/callback",
                 "registration_endpoint": f"{base_url}/oauth/register",
                 "authorization_endpoint": f"{base_url}/oauth/authorize",
                 "token_endpoint": f"{base_url}/oauth/token",
-                "enabled": bool(oauth_client_id and oauth_client_secret),
+                "discovery_url": f"{base_url}/.well-known/oauth-authorization-server",
+                "resource_discovery_url": f"{base_url}/.well-known/oauth-protected-resource",
+                "enabled": True,
             },
             "supported_features": ["tools", "prompts"],
             "tools_count": 4,  # search, fetch, create_note, create_reminder
@@ -1589,3 +1533,10 @@ class FastAPIIntegration:
             "actor_lookup": "email_based",
             "description": f"ActingWeb MCP Demo - AI can interact with actors through MCP protocol using {oauth_provider.title()} OAuth2",
         }
+
+    def _create_services_handler(self, webobj: AWWebObj, config) -> Any:
+        """Create services handler with service registry injection."""
+        handler = services.ServicesHandler(webobj, config, hooks=self.aw_app.hooks)
+        # Inject service registry into the handler so it can access it
+        handler._service_registry = self.aw_app.get_service_registry()
+        return handler

@@ -13,13 +13,8 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id)
             return
-        (myself, check) = auth.init_actingweb(appreq=self, actor_id=actor_id, path="subscriptions", config=self.config)
-        if not myself or not check or check.response["code"] != 200:
-            return
-        if not check.check_authorisation(path="subscriptions", method="GET"):
-            if self.response:
-                if self.response:
-                    self.response.set_status(403)
+        myself = self.require_authenticated_actor(actor_id, "subscriptions", "GET")
+        if not myself:
             return
         peerid = self.request.get("peerid")
         target = self.request.get("target")
@@ -42,13 +37,8 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             self.response.set_status(200, "Ok")
 
     def post(self, actor_id):
-        (myself, check) = auth.init_actingweb(appreq=self, actor_id=actor_id, path="subscriptions", config=self.config)
-        if not myself or not check or check.response["code"] != 200:
-            return
-        if not check.check_authorisation(path="subscriptions", method="POST"):
-            if self.response:
-                if self.response:
-                    self.response.set_status(403)
+        myself = self.require_authenticated_actor(actor_id, "subscriptions", "POST")
+        if not myself:
             return
         try:
             body = self.request.body
@@ -113,10 +103,19 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id, peerid)
             return
-        (myself, check) = auth.init_actingweb(appreq=self, actor_id=actor_id, path="subscriptions", config=self.config)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions")
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="subscriptions", method="GET", peerid=peerid):
+        myself = auth_result.actor
+
+        # Check authorization - peers can access their own subscriptions
+        if not auth_result.auth_obj.check_authorisation(
+            path="subscriptions",
+            subpath="<id>",
+            method="GET",
+            peerid=peerid,
+            approved=False  # Allow access even if not fully approved
+        ):
             if self.response:
                 self.response.set_status(403)
             return
@@ -141,12 +140,11 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(200, "Ok")
 
     def post(self, actor_id, peerid):
-        (myself, check) = auth.init_actingweb(appreq=self, actor_id=actor_id, path="subscriptions", config=self.config)
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions")
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="subscriptions", subpath="<id>", method="POST", peerid=peerid):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("POST", "subscriptions", "<id>"):
             return
         try:
             body = self.request.body
@@ -177,18 +175,18 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "No json body")
             return
-        if peerid != check.acl["peerid"]:
-            logging.warning("Peer " + peerid + " tried to create a subscription for peer " + check.acl["peerid"])
+        if peerid != auth_result.auth_obj.acl["peerid"]:
+            logging.warning("Peer " + peerid + " tried to create a subscription for peer " + auth_result.auth_obj.acl["peerid"])
             if self.response:
                 self.response.set_status(403, "Forbidden. Wrong peer id in request")
             return
         # We need to validate that this peer has GET rights on what it wants to subscribe to
-        if not check.check_authorisation(path=target, subpath=subtarget or "", method="GET", peerid=peerid):
+        if not auth_result.auth_obj.check_authorisation(path=target, subpath=subtarget or "", method="GET", peerid=peerid):
             if self.response:
                 self.response.set_status(403)
             return
         new_sub = myself.create_subscription(
-            peerid=check.acl["peerid"],
+            peerid=auth_result.auth_obj.acl["peerid"],
             target=target,
             subtarget=subtarget,
             resource=resource,
@@ -231,18 +229,11 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "DELETE":
             self.delete(actor_id, peerid, subid)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="subscriptions",
-            subpath=peerid + "/" + subid,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="subscriptions", subpath="<id>/<id>", method="GET", peerid=peerid):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
             return
         sub = myself.get_subscription_obj(peerid=peerid, subid=subid)
         if not sub:
@@ -287,18 +278,11 @@ class SubscriptionHandler(base_handler.BaseHandler):
             self.response.set_status(200, "Ok")
 
     def put(self, actor_id, peerid, subid):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="subscriptions",
-            subpath=peerid + "/" + subid,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="subscriptions", subpath="<id>/<id>", method="GET", peerid=peerid):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
             return
         try:
             body = self.request.body
@@ -335,21 +319,14 @@ class SubscriptionHandler(base_handler.BaseHandler):
         return
 
     def delete(self, actor_id, peerid, subid):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="subscriptions",
-            subpath=peerid + "/" + subid,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="subscriptions", subpath="<id>/<id>", method="GET", peerid=peerid):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
             return
         # Do not delete remote subscription if this is from our peer
-        if len(check.acl["peerid"]) == 0:
+        if len(auth_result.auth_obj.acl["peerid"]) == 0:
             myself.delete_remote_subscription(peerid=peerid, subid=subid)
         if not myself.delete_subscription(peerid=peerid, subid=subid):
             self.response.set_status(404)
@@ -364,18 +341,11 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
     /subscriptions/<peerid>/<subid>/112"""
 
     def get(self, actor_id, peerid, subid, seqnr):
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="subscriptions",
-            subpath=peerid + "/" + subid + "/" + str(seqnr),
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid + "/" + str(seqnr))
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="subscriptions", subpath="<id>/<id>", method="GET", peerid=peerid):
-            if self.response:
-                self.response.set_status(403)
+        myself = auth_result.actor
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
             return
         sub = myself.get_subscription_obj(peerid=peerid, subid=subid)
         if not sub:

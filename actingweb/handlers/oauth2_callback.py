@@ -16,7 +16,8 @@ from .base_handler import BaseHandler
 if TYPE_CHECKING:
     from ..interface.hooks import HookRegistry
     from .. import aw_web_request
-from ..oauth2 import create_oauth2_authenticator, parse_state_parameter
+from ..oauth2 import create_oauth2_authenticator, create_oauth2_trust_relationship
+from ..oauth_state import decode_state, validate_expected_email
 from .. import config as config_class
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,14 @@ class OAuth2CallbackHandler(BaseHandler):
         state = self.request.get("state")
         if not state:
             state = ""
-        _, redirect_url, actor_id = parse_state_parameter(state)
-        logger.debug(f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}'")
+        _, redirect_url, actor_id, trust_type, expected_email, user_agent = decode_state(state)
+        logger.debug(f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}'")
+        
+        # Critical debug: Check if trust_type was parsed correctly
+        if trust_type:
+            logger.debug(f"Trust type '{trust_type}' found in state - will create trust relationship")
+        else:
+            logger.warning(f"No trust_type found in parsed state - trust relationship will NOT be created")
         
         # Exchange code for access token
         token_data = self.authenticator.exchange_code_for_token(code, state)
@@ -103,7 +110,7 @@ class OAuth2CallbackHandler(BaseHandler):
             return self.error_response(502, "Email extraction failed")
         
         # Validate that the authenticated email matches the expected email from the form
-        if not self.authenticator.validate_email_from_state(state, email):
+        if not validate_expected_email(state, email):
             logger.error(f"Email validation failed - authenticated as {email} but expected different email from form")
             return self.error_response(403, "Authentication email does not match the email provided in the form")
         
@@ -118,13 +125,20 @@ class OAuth2CallbackHandler(BaseHandler):
                     logger.warning(f"Actor {actor_id} from state not found, will lookup/create by email")
                     actor_instance = None
                 else:
-                    logger.info(f"Using existing actor {actor_id} from state parameter")
+                    logger.debug(f"Using existing actor {actor_id} from state parameter")
             except Exception as e:
                 logger.warning(f"Failed to load actor {actor_id} from state: {e}, will lookup/create by email")
                 actor_instance = None
         
         # If no actor from state or loading failed, lookup/create by email
+        is_new_actor = False
         if not actor_instance:
+            # Check if actor exists before attempting creation (same logic as in authenticator)
+            from actingweb.actor import Actor as CoreActor
+            existing_check_actor = CoreActor(config=self.config)
+            actor_exists = existing_check_actor.get_from_creator(email)
+            is_new_actor = not actor_exists
+            
             actor_instance = self.authenticator.lookup_or_create_actor_by_email(email)
             if not actor_instance:
                 logger.error(f"Failed to lookup or create actor for email {email}")
@@ -138,21 +152,112 @@ class OAuth2CallbackHandler(BaseHandler):
             if refresh_token:
                 actor_instance.store.oauth_refresh_token = refresh_token
             actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+
+        # Extract client metadata for trust relationship storage
+        client_name = None
+        client_version = None
+        client_platform = user_agent  # Use User-Agent as platform info
+
+        if user_agent:
+            try:
+                # Generate session key using same logic as MCP handler
+                client_ip = getattr(self.request, "remote_addr", "unknown")
+                session_key = f"{client_ip}:{hash(user_agent)}"
+
+                # Import here to avoid circular dependencies
+                from .mcp import MCPHandler
+                stored_client_info = MCPHandler.get_stored_client_info(session_key)
+
+                if stored_client_info and stored_client_info.get("client_info"):
+                    mcp_client_info = stored_client_info["client_info"]
+                    client_name = mcp_client_info.get("name", "MCP Client")
+                    client_version = mcp_client_info.get("version")
+
+                    # Use implementation info for better platform detection
+                    if "implementation" in mcp_client_info:
+                        impl = mcp_client_info["implementation"]
+                        if isinstance(impl, dict):
+                            impl_name = impl.get("name", "Unknown")
+                            impl_version = impl.get("version", "")
+                            client_platform = f"{impl_name} {impl_version}".strip()
+
+                    logger.debug(f"Extracted MCP client metadata: {client_name} v{client_version} on {client_platform}")
+
+            except Exception as e:
+                logger.debug(f"Could not retrieve MCP client info during OAuth callback: {e}")
+                # Continue with User-Agent as platform info
+                # Non-critical, don't fail the OAuth flow
+        
+        # Create trust relationship if trust_type was specified in state
+        logger.debug(f"About to check trust_type for relationship creation: trust_type='{trust_type}'")
+        if trust_type:
+            logger.info(f"Creating trust relationship for trust_type='{trust_type}' and email='{email}'")
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
+                
+                # Prepare OAuth tokens for secure storage
+                oauth_tokens = {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires_at": int(time.time()) + expires_in if expires_in else 0,
+                    "token_type": token_data.get("token_type", "Bearer")
+                }
+                
+                # Create trust relationship with automatic approval and client metadata
+                trust_created = create_oauth2_trust_relationship(
+                    actor_interface,
+                    email,
+                    trust_type,
+                    oauth_tokens,
+                    client_name=client_name,
+                    client_version=client_version,
+                    client_platform=client_platform
+                )
+                
+                if trust_created:
+                    logger.info(f"Successfully created trust relationship: {email} -> {trust_type}")
+                else:
+                    logger.warning(f"Failed to create trust relationship for {email} with type {trust_type}")
+                    
+            except Exception as e:
+                logger.error(f"Error creating OAuth2 trust relationship: {e}")
+                # Don't fail the OAuth flow - just log the error
+        
+        # Execute actor_created lifecycle hook for new actors
+        if is_new_actor and self.hooks:
+            try:
+                # Convert core Actor to ActorInterface for hook consistency
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
+                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for actor_created: {e}")
         
         # Execute OAuth success lifecycle hook
         oauth_valid = True
         if self.hooks:
             try:
+                # Convert core Actor to ActorInterface for hook consistency
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
+                
                 result = self.hooks.execute_lifecycle_hooks(
                     "oauth_success", 
-                    actor_instance, 
+                    actor_interface, 
                     email=email,
                     access_token=access_token,
                     token_data=token_data
                 )
                 oauth_valid = bool(result) if result is not None else True
             except Exception as e:
-                logger.error(f"Error executing oauth_success hook: {e}")
+                logger.error(f"Error in lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
         
         if not oauth_valid:
@@ -175,11 +280,11 @@ class OAuth2CallbackHandler(BaseHandler):
         # For interactive authentication, always redirect to actor's www page
         # This avoids authentication loops with the original URL
         final_redirect = f"/{actor_instance.id}/www"
-        logger.info(f"Redirecting to actor www page: {final_redirect}")
+        logger.debug(f"Redirecting to actor www page: {final_redirect}")
         
         # Log the original URL for reference but don't use it
         if redirect_url:
-            logger.info(f"Original URL was: {redirect_url} (redirecting to www page instead)")
+            logger.debug(f"Original URL was: {redirect_url} (redirecting to www page instead)")
         
         # Set session cookie so user stays authenticated after redirect
         # The cookie should match the token stored in the actor (oauth_token)
@@ -196,7 +301,7 @@ class OAuth2CallbackHandler(BaseHandler):
             secure=True
         )
         
-        logger.info(f"Set oauth_token cookie with token length {len(str(stored_token))} and max_age {cookie_max_age}")
+        logger.debug(f"Set oauth_token cookie with token length {len(str(stored_token))} and max_age {cookie_max_age}")
         
         # Perform the redirect for interactive authentication
         self.response.set_status(302, "Found")
@@ -219,7 +324,7 @@ class OAuth2CallbackHandler(BaseHandler):
             except Exception as e:
                 logger.error(f"Error executing oauth_completed hook: {e}")
         
-        logger.info(f"OAuth2 authentication completed successfully for {email} -> {actor_instance.id}")
+        logger.debug(f"OAuth2 authentication completed successfully for {email} -> {actor_instance.id}")
         return response_data
     
     

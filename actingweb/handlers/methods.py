@@ -11,15 +11,63 @@ from typing import Any, Dict, Optional, Union
 
 from actingweb import auth
 from actingweb.handlers import base_handler
+from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
 
 
 class MethodsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/methods endpoint."""
+    
+    
+    def _check_method_permission(self, actor_id: str, auth_obj, method_name: str) -> bool:
+        """
+        Check method permission using the unified access control system.
+        
+        Args:
+            actor_id: The actor ID
+            auth_obj: Auth object from authentication
+            method_name: Method name to check access for
+            
+        Returns:
+            True if access is allowed, False otherwise
+        """
+        # Get peer ID from auth object (if authenticated via trust relationship)
+        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
+        
+        if not peer_id:
+            # No peer relationship - fall back to legacy authorization for basic/oauth auth
+            return auth_obj.check_authorisation(path="methods", subpath=method_name, method="GET")
+        
+        # Use permission evaluator for peer-based access
+        try:
+            evaluator = get_permission_evaluator(self.config)
+            result = evaluator.evaluate_method_access(actor_id, peer_id, method_name)
+            
+            if result == PermissionResult.ALLOWED:
+                return True
+            elif result == PermissionResult.DENIED:
+                logging.info(f"Method access denied: {actor_id} -> {peer_id} -> {method_name}")
+                return False
+            else:  # NOT_FOUND
+                # No specific permission rule - fall back to legacy for backward compatibility
+                return auth_obj.check_authorisation(path="methods", subpath=method_name, method="GET")
+                
+        except Exception as e:
+            logging.error(f"Error in method permission evaluation for {actor_id}:{peer_id}:{method_name}: {e}")
+            # Fall back to legacy authorization on errors
+            return auth_obj.check_authorisation(path="methods", subpath=method_name, method="GET")
+    
+    def _create_auth_context(self, auth_obj) -> Dict[str, Any]:
+        """Create auth context for hook execution with peer information."""
+        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
+        return {
+            'peer_id': peer_id,
+            'config': self.config
+        }
 
     def get(self, actor_id: str, name: str = "") -> None:
         """
         Handle GET requests to methods endpoint.
-        
+
         GET /methods - List available methods
         GET /methods/method_name - Get method info/schema
         """
@@ -29,20 +77,17 @@ class MethodsHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
             return
-            
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="methods",
-            add_response=False,
-            config=self.config,
-        )
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+
+        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name, add_response=False)
+        if not auth_result.actor or not auth_result.auth_obj or (
+            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
-        if not check.check_authorisation(path="methods", subpath=name, method="GET"):
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+        # Use unified access control system for permission checking
+        if not self._check_method_permission(actor_id, check, name):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -56,7 +101,8 @@ class MethodsHandler(base_handler.BaseHandler):
                     # Return list of available methods
                     result = {"methods": list(self.hooks._method_hooks.keys())}
                 else:
-                    result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "GET"})
+                    auth_context = self._create_auth_context(check)
+                    result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "GET"}, auth_context)
         
         if result is not None:
             if self.response:
@@ -70,22 +116,19 @@ class MethodsHandler(base_handler.BaseHandler):
     def post(self, actor_id: str, name: str = "") -> None:
         """
         Handle POST requests to methods endpoint.
-        
+
         POST /methods/method_name - Execute method with JSON-RPC support
         """
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="methods",
-            add_response=False,
-            config=self.config,
-        )
-        if not myself or not check or (
-            check.response["code"] != 200 and check.response["code"] != 401
+        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name, add_response=False)
+        if not auth_result.actor or not auth_result.auth_obj or (
+            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
         ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
-        if not check.check_authorisation(path="methods", subpath=name, method="POST"):
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+        # Use unified access control system for permission checking
+        if not self._check_method_permission(actor_id, check, name):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -110,14 +153,15 @@ class MethodsHandler(base_handler.BaseHandler):
         
         if is_jsonrpc:
             # Handle JSON-RPC request
-            result = self._handle_jsonrpc_request(params, name, myself)
+            result = self._handle_jsonrpc_request(params, name, myself, check)
         else:
             # Handle regular method call
             result = None
             if self.hooks:
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface:
-                    result = self.hooks.execute_method_hooks(name, actor_interface, params)
+                    auth_context = self._create_auth_context(check)
+                    result = self.hooks.execute_method_hooks(name, actor_interface, params, auth_context)
             
         if result is not None:
             if self.response:
@@ -135,17 +179,15 @@ class MethodsHandler(base_handler.BaseHandler):
     def delete(self, actor_id: str, name: str = "") -> None:
         """
         Handle DELETE requests to methods endpoint.
-        
+
         DELETE /methods/method_name - Remove method (if supported)
         """
-        (myself, check) = auth.init_actingweb(
-            appreq=self, actor_id=actor_id, path="methods", config=self.config
-        )
-        if not myself or not check or check.response["code"] != 200:
+        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name)
+        if not auth_result.success:
             return
-        if not check.check_authorisation(path="methods", subpath=name, method="DELETE"):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+        if not auth_result.authorize("DELETE", "methods", name):
             return
             
         # Execute method delete hook
@@ -153,7 +195,8 @@ class MethodsHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                hook_result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "DELETE"})
+                auth_context = self._create_auth_context(check)
+                hook_result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "DELETE"}, auth_context)
                 result = hook_result is not None
         
         if result:
@@ -163,7 +206,7 @@ class MethodsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
 
-    def _handle_jsonrpc_request(self, params: Dict[str, Any], method_name: str, myself) -> Optional[Dict[str, Any]]:
+    def _handle_jsonrpc_request(self, params: Dict[str, Any], method_name: str, myself, auth_obj) -> Optional[Dict[str, Any]]:
         """
         Handle JSON-RPC 2.0 request.
         
@@ -208,7 +251,8 @@ class MethodsHandler(base_handler.BaseHandler):
             if self.hooks:
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface:
-                    result = self.hooks.execute_method_hooks(params["method"], actor_interface, method_params)
+                    auth_context = self._create_auth_context(auth_obj)
+                    result = self.hooks.execute_method_hooks(params["method"], actor_interface, method_params, auth_context)
             
             if result is not None:
                 # Success response

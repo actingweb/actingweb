@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.2.1"
+version = "3.3"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@greger.io>"]
 maintainers = ["Greger Wedel <support@greger.io>"]
@@ -27,7 +27,7 @@ packages = [{ include = "actingweb" }]
 python = "^3.11"
 pynamodb = "^6.0.0"
 boto3 = "^1.40.6"
-urlfetch = "^2.0.1"
+requests = "^2.31.0"
 typing-extensions = "^4.0.0"
 oauthlib = "^3.2.0"
 cryptography = "^45.0.6"
@@ -48,6 +48,8 @@ all = ["mcp", "flask", "werkzeug", "jinja2", "fastapi", "pydantic", "uvicorn"]
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
 pytest-cov = "^6.2.1"
+pytest-timeout = "^2.1.0"
+responses = "^0.23.0"
 black = "^25.1.0"
 mypy = "^1.0.0"
 ruff = "^0.12.8"
@@ -56,6 +58,7 @@ pre-commit = "^4.2.0"
 [tool.poetry.group.docs.dependencies]
 sphinx = "^8.2.3"
 sphinx-rtd-theme = "^3.0.2"
+sphinx-copybutton = "^0.5.2"
 
 [build-system]
 requires = ["poetry-core"]
@@ -121,8 +124,11 @@ warn_unreachable = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = ["urlfetch.*", "pynamodb.*", "boto3.*", "botocore.*", "mcp.*"]
+module = ["pynamodb.*", "boto3.*", "botocore.*", "mcp.*"]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+relative_files = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

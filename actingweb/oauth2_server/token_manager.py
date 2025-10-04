@@ -5,13 +5,19 @@ This module manages ActingWeb tokens that are separate from Google OAuth2 tokens
 These tokens are issued to MCP clients and validated by MCP endpoints.
 """
 
-import json
 import logging
 import secrets
 import time
 from typing import Dict, Any, Optional, Tuple
-from .. import actor as actor_module
+import hashlib
+import base64
 from .. import config as config_class
+from ..constants import (
+    OAUTH2_SYSTEM_ACTOR,
+    AUTH_CODE_INDEX_BUCKET,
+    ACCESS_TOKEN_INDEX_BUCKET,
+    REFRESH_TOKEN_INDEX_BUCKET,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +33,25 @@ class ActingWebTokenManager:
 
     def __init__(self, config: config_class.Config):
         self.config = config
-        self.tokens_property = "_mcp_tokens"  # Actor property to store tokens
-        self.auth_codes_property = "_mcp_auth_codes"  # Temporary auth codes
+        # Use Attributes system for private storage instead of underscore properties
+        self.tokens_bucket = "mcp_tokens"  # Private attribute bucket for tokens
+        self.refresh_tokens_bucket = "mcp_refresh_tokens"  # Private attribute bucket for refresh tokens
+        self.auth_codes_bucket = "mcp_auth_codes"  # Private attribute bucket for auth codes
+        self.google_tokens_bucket = "mcp_google_tokens"  # Private attribute bucket for Google tokens
         self.token_prefix = "aw_"  # Prefix to distinguish from Google tokens
         self.default_expires_in = 3600  # 1 hour
         self.refresh_token_expires_in = 2592000  # 30 days
 
-    def create_authorization_code(self, actor_id: str, client_id: str, google_token_data: Dict[str, Any]) -> str:
+    def create_authorization_code(
+        self,
+        actor_id: str,
+        client_id: str,
+        google_token_data: Dict[str, Any],
+        user_email: Optional[str] = None,
+        trust_type: Optional[str] = None,
+        code_challenge: Optional[str] = None,
+        code_challenge_method: Optional[str] = None,
+    ) -> str:
         """
         Create a temporary authorization code for OAuth2 flow.
 
@@ -48,10 +66,10 @@ class ActingWebTokenManager:
         # Generate authorization code
         auth_code = f"ac_{secrets.token_urlsafe(32)}"
 
-        # Store Google token data separately to avoid DynamoDB size limits
-        google_token_key = f"_google_token_{auth_code}"
+        # Store Google token data in private attributes
+        google_token_key = f"google_token_{auth_code}"
         self._store_google_token_data(actor_id, google_token_key, google_token_data)
-        
+
         # Store minimal authorization data (expires in 10 minutes)
         auth_data = {
             "code": auth_code,
@@ -61,15 +79,21 @@ class ActingWebTokenManager:
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + 600,  # 10 minutes
             "used": False,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
         }
+        if user_email:
+            auth_data["user_email"] = user_email
+        if trust_type:
+            auth_data["trust_type"] = trust_type
 
         self._store_auth_code(actor_id, auth_code, auth_data)
 
-        logger.info(f"Created authorization code for client {client_id}, actor {actor_id}")
+        logger.debug(f"Created authorization code for client {client_id}, actor {actor_id}")
         return auth_code
 
     def exchange_authorization_code(
-        self, code: str, client_id: str, client_secret: Optional[str] = None
+        self, code: str, client_id: str, client_secret: Optional[str] = None, code_verifier: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Exchange authorization code for ActingWeb access token.
@@ -78,6 +102,7 @@ class ActingWebTokenManager:
             code: Authorization code from authorize endpoint
             client_id: MCP client identifier
             client_secret: MCP client secret (for confidential clients)
+            code_verifier: PKCE code verifier (for public clients using PKCE)
 
         Returns:
             Token response with ActingWeb access token or None if invalid
@@ -111,6 +136,20 @@ class ActingWebTokenManager:
             logger.warning(f"Client ID mismatch for code {code}")
             return None
 
+        # PKCE validation
+        stored_challenge = auth_data.get("code_challenge")
+        stored_method = str(auth_data.get("code_challenge_method"))
+
+        if stored_challenge:  # PKCE was used in authorization
+            if not code_verifier:
+                logger.warning(f"PKCE code_verifier required but not provided for code {code}")
+                return None
+
+            # Validate code_verifier against stored challenge
+            if not self._validate_pkce(code_verifier, stored_challenge, stored_method):
+                logger.warning(f"PKCE validation failed for code {code}")
+                return None
+
         # Mark code as used
         auth_data["used"] = True
         self._store_auth_code(auth_data["actor_id"], code, auth_data)
@@ -133,12 +172,19 @@ class ActingWebTokenManager:
         self._remove_auth_code(code)
 
         # Return token response
+        # Prepare extra context for trust creation at token issuance
+        user_email = auth_data.get("user_email")
+        trust_type = auth_data.get("trust_type", "mcp_client")
+
         return {
             "access_token": access_token["token"],
             "token_type": "Bearer",
             "expires_in": access_token["expires_in"],
             "refresh_token": refresh_token["token"],
             "scope": "mcp",  # MCP scope
+            "actor_id": auth_data["actor_id"],
+            "email": user_email,
+            "trust_type": trust_type,
         }
 
     def validate_access_token(self, token: str) -> Optional[Tuple[str, str, Dict[str, Any]]]:
@@ -201,11 +247,8 @@ class ActingWebTokenManager:
         if old_token_id:
             self._revoke_access_token_by_id(old_token_id)
 
-        # Get Google token data for new access token
-        google_token_data = refresh_data.get("google_token_data", {})
-
-        # Create new access token
-        access_token = self._create_access_token(refresh_data["actor_id"], client_id, google_token_data)
+        # Create new access token without Google token data (refresh flow)
+        access_token = self._create_access_token_from_refresh(refresh_data["actor_id"], client_id)
 
         # Update refresh token with new access token reference
         refresh_data["access_token_id"] = access_token["token_id"]
@@ -259,8 +302,8 @@ class ActingWebTokenManager:
         token_id = secrets.token_hex(16)
         token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
 
-        # Store Google token data separately to avoid size limits
-        google_token_key = f"_google_token_access_{token_id}"
+        # Store Google token data in private attributes
+        google_token_key = f"google_token_access_{token_id}"
         self._store_google_token_data(actor_id, google_token_key, google_token_data)
 
         token_data = {
@@ -278,8 +321,28 @@ class ActingWebTokenManager:
         self._store_access_token(actor_id, token, token_data)
         return token_data
 
+    def _create_access_token_from_refresh(self, actor_id: str, client_id: str) -> Dict[str, Any]:
+        """Create an ActingWeb access token from refresh token (no Google token data needed)."""
+        token_id = secrets.token_hex(16)
+        token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
+
+        token_data = {
+            "token_id": token_id,
+            "token": token,
+            "actor_id": actor_id,
+            "client_id": client_id,
+            "created_at": int(time.time()),
+            "expires_at": int(time.time()) + self.default_expires_in,
+            "expires_in": self.default_expires_in,
+            "scope": "mcp",
+            # No Google token data needed for refresh flow
+        }
+
+        self._store_access_token(actor_id, token, token_data)
+        return token_data
+
     def _create_refresh_token(self, actor_id: str, client_id: str, access_token_id: str) -> Dict[str, Any]:
-        """Create a refresh token."""
+        """Create an ActingWeb refresh token."""
         token = f"rt_{secrets.token_urlsafe(32)}"
 
         refresh_data = {
@@ -295,31 +358,21 @@ class ActingWebTokenManager:
         return refresh_data
 
     def _store_auth_code(self, actor_id: str, code: str, auth_data: Dict[str, Any]) -> None:
-        """Store authorization code as individual property."""
+        """Store authorization code in private attributes."""
         try:
-            actor_obj = actor_module.Actor(actor_id, self.config)
-
-            # Load the actor data and ensure it exists
-            actor_data = actor_obj.get(actor_id)
-            if not actor_data or len(actor_data) == 0:
-                logger.error(f"Actor {actor_id} does not exist or has no data")
-                raise RuntimeError(f"Actor {actor_id} not found")
-
-            if not actor_obj.property:
-                logger.error(f"Actor {actor_id} does not have property object initialized")
-                raise RuntimeError(f"Actor {actor_id} has no property object")
-
-            # Store each auth code as its own property to avoid size limits
-            auth_code_property = f"{self.auth_codes_property}_{code}"
-            actor_obj.property[auth_code_property] = json.dumps(auth_data)
-
-            # Also store in global index for efficient lookup
             from .. import attribute
 
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="auth_code_index", config=self.config)
+            # Store auth code in private attributes bucket
+            auth_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.auth_codes_bucket, config=self.config)
+            auth_bucket.set_attr(name=code, data=auth_data)
+
+            # Also store in global index for efficient lookup
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+            )
             index_bucket.set_attr(name=code, data=actor_id)
 
-            logger.info(f"Successfully stored auth code for actor {actor_id}")
+            logger.debug(f"Successfully stored auth code for actor {actor_id}")
 
         except Exception as e:
             logger.error(f"Error storing auth code for actor {actor_id}: {e}")
@@ -341,37 +394,34 @@ class ActingWebTokenManager:
             from .. import attribute
 
             # Create a global index bucket for auth codes
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="auth_code_index", config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+            )
 
             # Look up which actor has this code
             found_actor_data = index_bucket.get_attr(name=code)
             if not found_actor_data or "data" not in found_actor_data:
                 logger.debug(f"Auth code {code} not found in global index")
                 return None
-                
+
             found_actor_id = found_actor_data["data"]
             if not found_actor_id:
                 logger.debug(f"Auth code {code} has no actor ID in global index")
                 return None
 
-            # Load the actual auth code data from the actor
-            actor_obj = actor_module.Actor(found_actor_id, self.config)
-            actor_data = actor_obj.get(found_actor_id)
-            if not actor_data or not actor_obj.property:
-                logger.error(f"Actor {found_actor_id} not found or has no properties")
-                return None
+            # Load the actual auth code data from private attributes
+            auth_bucket = attribute.Attributes(
+                actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config
+            )
+            auth_attr = auth_bucket.get_attr(name=code)
 
-            # Get the specific auth code property
-            auth_code_property = f"{self.auth_codes_property}_{code}"
-            auth_code_json = actor_obj.property[auth_code_property] if actor_obj.property else None
-            
-            if auth_code_json is None:
+            if not auth_attr or "data" not in auth_attr:
                 logger.warning(f"Auth code {code} found in index but not in actor {found_actor_id}")
                 # Clean up the stale index entry
                 index_bucket.delete_attr(name=code)
                 return None
 
-            auth_data = json.loads(auth_code_json)
+            auth_data = auth_attr["data"]
             if isinstance(auth_data, dict):
                 logger.debug(f"Found auth code {code} in actor {found_actor_id}")
                 return auth_data
@@ -389,19 +439,19 @@ class ActingWebTokenManager:
             # First find which actor has this code
             from .. import attribute
 
-            index_bucket = attribute.Attributes(actor_id="_mcp_system", bucket="auth_code_index", config=self.config)
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+            )
 
             found_actor_data = index_bucket.get_attr(name=code)
             if found_actor_data and "data" in found_actor_data:
                 found_actor_id = found_actor_data["data"]
-                # Remove from actor properties
-                actor_obj = actor_module.Actor(found_actor_id, self.config)
-                actor_data = actor_obj.get(found_actor_id)
-                if actor_data and actor_obj.property:
-                    # Remove the specific auth code property
-                    auth_code_property = f"{self.auth_codes_property}_{code}"
-                    actor_obj.property[auth_code_property] = None  # Delete the property
-                    logger.debug(f"Removed auth code {code} from actor {found_actor_id}")
+                # Remove from private attributes
+                auth_bucket = attribute.Attributes(
+                    actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config
+                )
+                auth_bucket.delete_attr(name=code)
+                logger.debug(f"Removed auth code {code} from actor {found_actor_id}")
 
             # Remove from global index
             index_bucket.delete_attr(name=code)
@@ -411,77 +461,72 @@ class ActingWebTokenManager:
             logger.error(f"Error removing auth code {code}: {e}")
 
     def _store_google_token_data(self, actor_id: str, token_key: str, google_token_data: Dict[str, Any]) -> None:
-        """Store Google OAuth2 token data separately to avoid size limits."""
+        """Store Google OAuth2 token data in private attributes."""
         try:
-            actor_obj = actor_module.Actor(actor_id, self.config)
-            actor_data = actor_obj.get(actor_id)
-            if not actor_data or not actor_obj.property:
-                logger.error(f"Actor {actor_id} not found or has no properties")
-                raise RuntimeError(f"Actor {actor_id} not found")
-            
-            # Store Google token data directly as a property
-            actor_obj.property[token_key] = json.dumps(google_token_data)
+            from .. import attribute
+
+            # Store Google token data in private attributes bucket
+            google_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
+            )
+            google_bucket.set_attr(name=token_key, data=google_token_data)
             logger.debug(f"Stored Google token data for actor {actor_id} with key {token_key}")
-            
+
         except Exception as e:
             logger.error(f"Error storing Google token data for actor {actor_id}: {e}")
             raise
-    
+
     def _load_google_token_data(self, actor_id: str, token_key: str) -> Optional[Dict[str, Any]]:
-        """Load Google OAuth2 token data."""
+        """Load Google OAuth2 token data from private attributes."""
         try:
-            actor_obj = actor_module.Actor(actor_id, self.config)
-            actor_data = actor_obj.get(actor_id)
-            if not actor_data or not actor_obj.property:
-                logger.error(f"Actor {actor_id} not found or has no properties")
-                return None
-            
-            # Load Google token data from property
-            token_json = actor_obj.property[token_key] if actor_obj.property else None
-            if token_json is None:
+            from .. import attribute
+
+            # Load Google token data from private attributes bucket
+            google_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
+            )
+            token_attr = google_bucket.get_attr(name=token_key)
+
+            if not token_attr or "data" not in token_attr:
                 logger.warning(f"Google token data not found for key {token_key}")
                 return None
-            
-            parsed_data = json.loads(token_json)
-            return parsed_data if isinstance(parsed_data, dict) else None
-            
+
+            token_data = token_attr["data"]
+            return token_data if isinstance(token_data, dict) else None
+
         except Exception as e:
             logger.error(f"Error loading Google token data for actor {actor_id}, key {token_key}: {e}")
             return None
-    
+
     def _remove_google_token_data(self, actor_id: str, token_key: str) -> None:
-        """Remove Google OAuth2 token data."""
+        """Remove Google OAuth2 token data from private attributes."""
         try:
-            actor_obj = actor_module.Actor(actor_id, self.config)
-            actor_data = actor_obj.get(actor_id)
-            if actor_data and actor_obj.property:
-                actor_obj.property[token_key] = None  # Delete the property
-                logger.debug(f"Removed Google token data for actor {actor_id} with key {token_key}")
+            from .. import attribute
+
+            # Remove Google token data from private attributes bucket
+            google_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
+            )
+            google_bucket.delete_attr(name=token_key)
+            logger.debug(f"Removed Google token data for actor {actor_id} with key {token_key}")
         except Exception as e:
             logger.error(f"Error removing Google token data for actor {actor_id}, key {token_key}: {e}")
 
     def _store_access_token(self, actor_id: str, token: str, token_data: Dict[str, Any]) -> None:
-        """Store access token as individual property."""
+        """Store access token in private attributes."""
         try:
-            actor_obj = actor_module.Actor(actor_id, self.config)
-            actor_data = actor_obj.get(actor_id)
-            if not actor_data or not actor_obj.property:
-                logger.error(f"Actor {actor_id} not found or has no properties")
-                raise RuntimeError(f"Actor {actor_id} not found")
-
-            # Store each access token as its own property to avoid size limits
-            token_property = f"{self.tokens_property}_{token}"
-            actor_obj.property[token_property] = json.dumps(token_data)
-            
-            # Also store in global index for efficient lookup
             from .. import attribute
+
+            # Store access token in private attributes bucket
+            tokens_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.tokens_bucket, config=self.config)
+            tokens_bucket.set_attr(name=token, data=token_data)
+
+            # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
-                actor_id="_mcp_system", 
-                bucket="access_token_index", 
-                config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
             )
             index_bucket.set_attr(name=token, data=actor_id)
-            
+
             logger.debug(f"Stored access token for actor {actor_id}")
 
         except Exception as e:
@@ -498,43 +543,34 @@ class ActingWebTokenManager:
         try:
             # Use the system actor to store a global index of access tokens
             from .. import attribute
-            
+
             # Create a global index bucket for access tokens
             index_bucket = attribute.Attributes(
-                actor_id="_mcp_system", 
-                bucket="access_token_index", 
-                config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
             )
-            
+
             # Look up which actor has this token
             found_actor_data = index_bucket.get_attr(name=token)
             if not found_actor_data or "data" not in found_actor_data:
                 logger.debug(f"Access token {token} not found in global index")
                 return None
-                
+
             found_actor_id = found_actor_data["data"]
             if not found_actor_id:
                 logger.debug(f"Access token {token} has no actor ID in global index")
                 return None
 
-            # Load the actual token data from the actor
-            actor_obj = actor_module.Actor(found_actor_id, self.config)
-            actor_data = actor_obj.get(found_actor_id)
-            if not actor_data or not actor_obj.property:
-                logger.error(f"Actor {found_actor_id} not found or has no properties")
-                return None
+            # Load the actual token data from private attributes
+            tokens_bucket = attribute.Attributes(actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config)
+            token_attr = tokens_bucket.get_attr(name=token)
 
-            # Get the specific token property
-            token_property = f"{self.tokens_property}_{token}"
-            token_json = actor_obj.property[token_property] if actor_obj.property else None
-            
-            if token_json is None:
+            if not token_attr or "data" not in token_attr:
                 logger.warning(f"Access token {token} found in index but not in actor {found_actor_id}")
                 # Clean up the stale index entry
                 index_bucket.delete_attr(name=token)
                 return None
 
-            token_data = json.loads(token_json)
+            token_data = token_attr["data"]
             if isinstance(token_data, dict):
                 logger.debug(f"Found access token {token} in actor {found_actor_id}")
                 return token_data
@@ -546,64 +582,275 @@ class ActingWebTokenManager:
             logger.error(f"Error searching for access token {token}: {e}")
             return None
 
+    def _search_refresh_token_in_actors(self, token: str) -> Optional[Dict[str, Any]]:
+        """Search for refresh token across actors."""
+        try:
+            # Use the system actor to store a global index of refresh tokens
+            from .. import attribute
+
+            # Create a global index bucket for refresh tokens
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
+            )
+
+            # Look up which actor has this token
+            found_actor_data = index_bucket.get_attr(name=token)
+            if not found_actor_data or "data" not in found_actor_data:
+                logger.debug(f"Refresh token {token} not found in global index")
+                return None
+
+            found_actor_id = found_actor_data["data"]
+            if not found_actor_id:
+                logger.debug(f"Refresh token {token} has no actor ID in global index")
+                return None
+
+            # Load the actual token data from private attributes
+            refresh_bucket = attribute.Attributes(
+                actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+            )
+            token_attr = refresh_bucket.get_attr(name=token)
+
+            if not token_attr or "data" not in token_attr:
+                logger.warning(f"Refresh token {token} found in index but not in actor {found_actor_id}")
+                # Clean up the stale index entry
+                index_bucket.delete_attr(name=token)
+                return None
+
+            token_data = token_attr["data"]
+            if isinstance(token_data, dict):
+                logger.debug(f"Found refresh token {token} in actor {found_actor_id}")
+                return token_data
+            else:
+                logger.warning(f"Invalid refresh token data format for {token}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error searching for refresh token {token}: {e}")
+            return None
+
     def _remove_access_token(self, token: str) -> None:
         """Remove access token."""
         try:
             # First load token data to get Google token key
             token_data = self._load_access_token(token)
-            
+
             # First find which actor has this token
             from .. import attribute
-            
+
             index_bucket = attribute.Attributes(
-                actor_id="_mcp_system", 
-                bucket="access_token_index", 
-                config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
             )
-            
+
             found_actor_data = index_bucket.get_attr(name=token)
             if found_actor_data and "data" in found_actor_data:
                 found_actor_id = found_actor_data["data"]
-                # Remove from actor properties
-                actor_obj = actor_module.Actor(found_actor_id, self.config)
-                actor_data = actor_obj.get(found_actor_id)
-                if actor_data and actor_obj.property:
-                    # Remove the specific token property
-                    token_property = f"{self.tokens_property}_{token}"
-                    actor_obj.property[token_property] = None  # Delete the property
-                    logger.debug(f"Removed access token {token} from actor {found_actor_id}")
-                    
-                    # Also remove associated Google token data
-                    if token_data and "google_token_key" in token_data:
-                        self._remove_google_token_data(found_actor_id, token_data["google_token_key"])
-            
+                # Remove from private attributes
+                tokens_bucket = attribute.Attributes(
+                    actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config
+                )
+                tokens_bucket.delete_attr(name=token)
+                logger.debug(f"Removed access token {token} from actor {found_actor_id}")
+
+                # Also remove associated Google token data
+                if token_data and "google_token_key" in token_data:
+                    self._remove_google_token_data(found_actor_id, token_data["google_token_key"])
+
             # Remove from global index
             index_bucket.delete_attr(name=token)
             logger.debug(f"Removed access token {token} from global index")
-            
+
         except Exception as e:
             logger.error(f"Error removing access token {token}: {e}")
 
     def _store_refresh_token(self, actor_id: str, token: str, refresh_data: Dict[str, Any]) -> None:
-        """Store refresh token."""
-        # Similar to access token storage
-        pass  # Placeholder
+        """Store refresh token in private attributes."""
+        try:
+            from .. import attribute
+
+            # Store refresh token in private attributes bucket
+            refresh_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+            )
+            refresh_bucket.set_attr(name=token, data=refresh_data)
+
+            # Also store in global index for efficient lookup
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
+            )
+            index_bucket.set_attr(name=token, data=actor_id)
+
+            logger.debug(f"Stored refresh token for actor {actor_id}")
+
+        except Exception as e:
+            logger.error(f"Error storing refresh token for actor {actor_id}: {e}")
+            raise
 
     def _load_refresh_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Load refresh token data."""
-        return None  # Placeholder
+        # Search through actors for the token
+        return self._search_refresh_token_in_actors(token)
 
     def _remove_refresh_token(self, token: str) -> None:
         """Remove refresh token."""
-        pass  # Placeholder
+        try:
+            # First find which actor has this token
+            from .. import attribute
+
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
+            )
+
+            found_actor_data = index_bucket.get_attr(name=token)
+            if found_actor_data and "data" in found_actor_data:
+                found_actor_id = found_actor_data["data"]
+                # Remove from private attributes
+                refresh_bucket = attribute.Attributes(
+                    actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+                )
+                refresh_bucket.delete_attr(name=token)
+                logger.debug(f"Removed refresh token {token} from actor {found_actor_id}")
+
+            # Remove from global index
+            index_bucket.delete_attr(name=token)
+            logger.debug(f"Removed refresh token {token} from global index")
+
+        except Exception as e:
+            logger.error(f"Error removing refresh token {token}: {e}")
 
     def _revoke_access_token_by_id(self, token_id: str) -> None:
         """Revoke access token by ID."""
-        pass  # Placeholder
+        try:
+            # Search through the access token index to find tokens with this ID
+            from .. import attribute
+
+            # We need to search through all access tokens to find the one with this token_id
+            # This is inefficient but necessary given the current storage structure
+            index_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+            )
+
+            # Get all tokens from the index (this could be optimized with a reverse index)
+            # For now, we'll search through actors' tokens
+            logger.debug(f"Attempting to revoke access token with ID: {token_id}")
+
+            # Since we don't have a reverse index by token_id, we'll need to search
+            # This is a limitation of the current design - in production you'd want a proper index
+            logger.warning(
+                f"Access token revocation by ID {token_id} requires full search - not implemented for efficiency"
+            )
+
+        except Exception as e:
+            logger.error(f"Error revoking access token by ID {token_id}: {e}")
 
     def _revoke_refresh_tokens_for_access_token(self, token_id: str) -> None:
         """Revoke refresh tokens associated with access token."""
-        pass  # Placeholder
+        try:
+            # Search through refresh tokens to find ones referencing this access token ID
+            from .. import attribute
+
+            logger.debug(f"Attempting to revoke refresh tokens for access token ID: {token_id}")
+
+            # Similar to _revoke_access_token_by_id, this requires searching through all refresh tokens
+            # This is a limitation of the current design - in production you'd want proper indexing
+            logger.warning(
+                f"Refresh token revocation for access token ID {token_id} requires full search - not implemented for efficiency"
+            )
+
+        except Exception as e:
+            logger.error(f"Error revoking refresh tokens for access token ID {token_id}: {e}")
+
+    def _validate_pkce(self, code_verifier: str, code_challenge: str, code_challenge_method: str) -> bool:
+        """
+        Validate PKCE code_verifier against stored code_challenge.
+
+        Args:
+            code_verifier: The code verifier provided in token request
+            code_challenge: The code challenge stored from authorization request
+            code_challenge_method: The method used for the challenge (plain or S256)
+
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            # Basic format validation
+            if not code_verifier or len(code_verifier) < 43 or len(code_verifier) > 128:
+                logger.warning(f"Invalid PKCE code_verifier length: {len(code_verifier) if code_verifier else 0}")
+                return False
+
+            if not code_challenge or len(code_challenge) < 43:
+                logger.warning(f"Invalid PKCE code_challenge length: {len(code_challenge) if code_challenge else 0}")
+                return False
+
+            # Validate based on method
+            if code_challenge_method == "plain":
+                return code_verifier == code_challenge
+            elif code_challenge_method == "S256":
+                # Create SHA256 hash of code_verifier and base64url encode it
+                digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+                expected_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+                return expected_challenge == code_challenge
+            else:
+                logger.warning(f"Unsupported PKCE challenge method: {code_challenge_method}")
+                return False
+        except Exception as e:
+            logger.error(f"Error validating PKCE: {e}")
+            return False
+
+    def create_access_token(
+        self,
+        actor_id: str,
+        client_id: str,
+        scope: str = "mcp",
+        trust_type: str = "mcp_client",
+        grant_type: str = "client_credentials",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create an access token for client credentials flow.
+
+        Args:
+            actor_id: The actor this token is for
+            client_id: The client requesting the token
+            scope: The requested scope
+            trust_type: The trust relationship type
+            grant_type: The grant type (client_credentials)
+
+        Returns:
+            Token response dictionary or None if failed
+        """
+        try:
+            token_id = secrets.token_hex(16)
+            token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
+            current_time = int(time.time())
+
+            token_data = {
+                "token_id": token_id,
+                "token": token,
+                "actor_id": actor_id,
+                "client_id": client_id,
+                "scope": scope,
+                "trust_type": trust_type,
+                "grant_type": grant_type,
+                "created_at": current_time,
+                "expires_at": current_time + self.default_expires_in,
+            }
+
+            # Store token in actor's private attributes
+            self._store_access_token(actor_id, token, token_data)
+
+            # Return standard OAuth2 token response
+            response = {
+                "access_token": token,
+                "token_type": "Bearer",
+                "expires_in": self.default_expires_in,
+                "scope": scope,
+            }
+
+            logger.info(f"Created access token for client credentials flow: {client_id} -> {actor_id}")
+            return response
+
+        except Exception as e:
+            logger.error(f"Error creating access token for client credentials: {e}")
+            return None
 
 
 # Global token manager

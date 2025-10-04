@@ -19,14 +19,13 @@ from ...handlers import (
     devtest,
     subscription,
     resources,
-    oauth,
-    callback_oauth,
     bot,
     www,
     factory,
     methods,
     actions,
     mcp,
+    services,
 )
 
 if TYPE_CHECKING:
@@ -56,13 +55,16 @@ class FlaskIntegration:
 
         @self.flask_app.route("/", methods=["POST"])
         def app_root_post() -> Union[Response, WerkzeugResponse, str]:
-            # For POST requests, extract email and redirect to OAuth2 with email hint
-            return self._handle_factory_post_with_oauth_redirect()
+            # Check if this is a JSON API request or web form request
+            is_json_request = request.content_type and "application/json" in request.content_type
+            accepts_json = request.headers.get("Accept", "").find("application/json") >= 0
 
-        # OAuth callback (legacy)
-        @self.flask_app.route("/oauth", methods=["GET"])
-        def app_oauth_callback() -> Union[Response, WerkzeugResponse, str]:
-            return self._handle_oauth_callback()
+            if is_json_request or accepts_json:
+                # Handle JSON API requests with the standard factory handler
+                return self._handle_factory_request()
+            else:
+                # For web form requests, extract email and redirect to OAuth2 with email hint
+                return self._handle_factory_post_with_oauth_redirect()
 
         # OAuth2 callback - handles both ActingWeb and MCP OAuth2 flows
         @self.flask_app.route("/oauth/callback", methods=["GET"])
@@ -70,41 +72,42 @@ class FlaskIntegration:
             # Handle both Google OAuth2 callback (for ActingWeb) and MCP OAuth2 callback
             # Determine which flow based on state parameter
             from flask import request
+
             state = request.args.get("state", "")
-            
+
             # Check if this is an MCP OAuth2 callback (encrypted state)
             try:
                 from ...oauth2_server.state_manager import get_oauth2_state_manager
+
                 state_manager = get_oauth2_state_manager(self.aw_app.get_config())
                 mcp_context = state_manager.extract_mcp_context(state)
-                
+
                 if mcp_context:
                     # This is an MCP OAuth2 callback
                     return self._handle_oauth2_endpoint("callback")
             except Exception:
                 # Not an MCP callback or state manager not available
                 pass
-            
+
             # Default to Google OAuth2 callback for ActingWeb
             return self._handle_oauth2_callback()
 
         # OAuth2 server endpoints for MCP clients
-        @self.flask_app.route("/oauth/register", methods=["POST"])
+        @self.flask_app.route("/oauth/register", methods=["POST", "OPTIONS"])
         def oauth2_register() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("register")
 
-        @self.flask_app.route("/oauth/authorize", methods=["GET", "POST"])
+        @self.flask_app.route("/oauth/authorize", methods=["GET", "POST", "OPTIONS"])
         def oauth2_authorize() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("authorize")
 
-        @self.flask_app.route("/oauth/token", methods=["POST"])
+        @self.flask_app.route("/oauth/token", methods=["POST", "OPTIONS"])
         def oauth2_token() -> Union[Response, WerkzeugResponse, str]:
             return self._handle_oauth2_endpoint("token")
-        
-        # OAuth2 discovery endpoint
-        @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET"])
-        def oauth2_discovery() -> Union[Response, WerkzeugResponse, str]:
-            return self._handle_oauth2_endpoint(".well-known/oauth-authorization-server")
+
+        @self.flask_app.route("/oauth/logout", methods=["GET", "POST", "OPTIONS"])
+        def oauth2_logout() -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_oauth2_endpoint("logout")
 
         # Bot endpoint
         @self.flask_app.route("/bot", methods=["POST"])
@@ -120,19 +123,19 @@ class FlaskIntegration:
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
         @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"])
-        def oauth_discovery() -> Response:
+        def oauth_discovery() -> Union[Response, WerkzeugResponse, str]:
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
-            return self._handle_oauth2_endpoint(".well-known/oauth-authorization-server")
+            return self._handle_oauth2_discovery_endpoint(".well-known/oauth-authorization-server")
 
         @self.flask_app.route("/.well-known/oauth-protected-resource", methods=["GET", "OPTIONS"])
-        def oauth_protected_resource_discovery() -> Response:
+        def oauth_protected_resource_discovery() -> Union[Response, WerkzeugResponse, str]:
             """OAuth2 Protected Resource discovery endpoint."""
-            return self._handle_oauth2_endpoint(".well-known/oauth-protected-resource")
+            return self._handle_oauth2_discovery_endpoint(".well-known/oauth-protected-resource")
 
         @self.flask_app.route("/.well-known/oauth-protected-resource/mcp", methods=["GET", "OPTIONS"])
-        def oauth_protected_resource_mcp_discovery() -> Response:
+        def oauth_protected_resource_mcp_discovery() -> Union[Response, WerkzeugResponse, str]:
             """OAuth2 Protected Resource discovery endpoint for MCP."""
-            return self._handle_oauth2_endpoint(".well-known/oauth-protected-resource/mcp")
+            return self._handle_oauth2_discovery_endpoint(".well-known/oauth-protected-resource/mcp")
 
         # MCP information endpoint
         @self.flask_app.route("/mcp/info", methods=["GET"])
@@ -143,6 +146,10 @@ class FlaskIntegration:
         # Actor root
         @self.flask_app.route("/<actor_id>", methods=["GET", "POST", "DELETE"])
         def app_actor_root(actor_id: str) -> Union[Response, WerkzeugResponse, str]:
+            # Align with FastAPI: protect actor root with OAuth when enabled
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
             return self._handle_actor_request(actor_id, "root")
 
         # Actor meta
@@ -151,11 +158,6 @@ class FlaskIntegration:
         def app_meta(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
             return self._handle_actor_request(actor_id, "meta", path=path)
 
-        # Actor OAuth
-        @self.flask_app.route("/<actor_id>/oauth", methods=["GET"])
-        @self.flask_app.route("/<actor_id>/oauth/<path:path>", methods=["GET"])
-        def app_oauth(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
-            return self._handle_actor_request(actor_id, "oauth", path=path)
 
         # Actor www with OAuth2 authentication
         @self.flask_app.route("/<actor_id>/www", methods=["GET", "POST", "DELETE"])
@@ -171,6 +173,10 @@ class FlaskIntegration:
         @self.flask_app.route("/<actor_id>/properties", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/properties/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
         def app_properties(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
+            # Align with FastAPI: protect properties with OAuth when enabled
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
             return self._handle_actor_request(actor_id, "properties", name=name)
 
         # Actor trust
@@ -181,6 +187,15 @@ class FlaskIntegration:
             actor_id: str, relationship: Optional[str] = None, peerid: Optional[str] = None
         ) -> Union[Response, WerkzeugResponse, str]:
             return self._handle_actor_request(actor_id, "trust", relationship=relationship, peerid=peerid)
+
+        # Trust permission management endpoints
+        @self.flask_app.route("/<actor_id>/trust/<relationship>/<peerid>/permissions", methods=["GET", "PUT", "DELETE"])
+        def app_trust_permissions(
+            actor_id: str, relationship: str, peerid: str
+        ) -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_actor_request(
+                actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
+            )
 
         # Actor subscriptions
         @self.flask_app.route("/<actor_id>/subscriptions", methods=["GET", "POST", "DELETE", "PUT"])
@@ -222,6 +237,18 @@ class FlaskIntegration:
         def app_actions(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
             return self._handle_actor_request(actor_id, "actions", name=name)
 
+        # Third-party service OAuth2 callbacks and management
+        @self.flask_app.route("/<actor_id>/services/<service_name>/callback", methods=["GET"])
+        def app_services_callback(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_actor_request(actor_id, "services", name=service_name,
+                                            code=request.args.get('code'),
+                                            state=request.args.get('state'),
+                                            error=request.args.get('error'))
+
+        @self.flask_app.route("/<actor_id>/services/<service_name>", methods=["DELETE"])
+        def app_services_revoke(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_actor_request(actor_id, "services", name=service_name)
+
     def _normalize_request(self) -> Dict[str, Any]:
         """Convert Flask request to ActingWeb format."""
         cookies = {}
@@ -236,14 +263,26 @@ class FlaskIntegration:
         for k, v in request.headers.items():
             headers[k] = v
 
+        # If no Authorization header but we have an oauth_token cookie (web UI session),
+        # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
+        if "Authorization" not in headers and cookies.get("oauth_token"):
+            headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
+
         params = {}
         for k, v in request.values.items():
             params[k] = v
 
+        # Handle form data: Flask parses form-encoded bodies into request.form,
+        # leaving request.data empty. Reconstruct the form-encoded body for OAuth2 handlers.
+        data = request.data
+        if not data and request.form:
+            from urllib.parse import urlencode
+            data = urlencode(request.form).encode('utf-8')
+
         return {
             "method": request.method,
             "path": request.path,
-            "data": request.data,
+            "data": data,
             "headers": headers,
             "cookies": cookies,
             "values": params,
@@ -266,7 +305,11 @@ class FlaskIntegration:
         # Set cookies
         for cookie in webobj.response.cookies:
             response.set_cookie(
-                cookie["name"], cookie["value"], max_age=cookie.get("max_age"), secure=cookie.get("secure", False)
+                cookie["name"],
+                cookie["value"],
+                max_age=cookie.get("max_age"),
+                secure=cookie.get("secure", False),
+                httponly=cookie.get("httponly", False),
             )
 
         return response
@@ -304,7 +347,7 @@ class FlaskIntegration:
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
                                 redirect_url = f"/{actor_instance.id}/www"
-                                logging.info(f"Redirecting authenticated user {email} to {redirect_url}")
+                                logging.debug(f"Redirecting authenticated user {email} to {redirect_url}")
                                 return redirect(redirect_url, code=302)
                     # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
                     logging.debug("OAuth token expired or invalid - clearing cookie and redirecting to OAuth")
@@ -325,23 +368,30 @@ class FlaskIntegration:
                 )
                 return oauth_redirect
 
-        # Check if we have a custom actor factory registered and this is a POST request
-        if request.method == "POST" and self.aw_app.get_actor_factory():
-            # Use the modern actor factory instead of the legacy handler
-            return self._handle_custom_actor_creation(webobj)
-        else:
-            handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+        # Use the standard factory handler
+        handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
 
-            try:
-                method_name = request.method.lower()
-                handler_method = getattr(handler, method_name, None)
-                if handler_method and callable(handler_method):
-                    handler_method()
+        try:
+            method_name = request.method.lower()
+            handler_method = getattr(handler, method_name, None)
+            if handler_method and callable(handler_method):
+                handler_method()
+            else:
+                return Response(status=405)
+        except Exception as e:
+            logging.error(f"Error in factory handler: {e}")
+            # Map common network/SSL errors to clearer status codes if handler didn't set one
+            if webobj.response.status_code != 200:
+                pass
+            else:
+                error_message = str(e).lower()
+                if "ssl" in error_message or "certificate" in error_message:
+                    webobj.response.set_status(502, "Bad Gateway - SSL connection failed")
+                elif "connection" in error_message or "timeout" in error_message:
+                    webobj.response.set_status(503, "Service Unavailable - Connection failed")
                 else:
-                    return Response(status=405)
-            except Exception as e:
-                logging.error(f"Error in factory handler: {e}")
-                return Response(status=500)
+                    webobj.response.set_status(500, "Internal server error")
+            return self._create_flask_response(webobj)
 
         # Handle template rendering for factory
         if request.method == "GET" and webobj.response.status_code == 200:
@@ -362,82 +412,6 @@ class FlaskIntegration:
                     return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
                 except Exception:
                     pass  # Fall back to default response
-
-        return self._create_flask_response(webobj)
-
-    def _handle_custom_actor_creation(self, webobj: AWWebObj) -> Union[Response, WerkzeugResponse, str]:
-        """Handle actor creation using registered actor factory function."""
-        try:
-            import json
-
-            # Parse request data
-            creator = None
-            passphrase = None
-            trustee_root = None
-
-            if webobj.request.body:
-                try:
-                    data = json.loads(webobj.request.body)
-                    creator = data.get("creator")
-                    passphrase = data.get("passphrase", "")
-                    trustee_root = data.get("trustee_root", "")
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-            # Fallback to form data
-            if not creator:
-                creator = webobj.request.get("creator")
-                passphrase = webobj.request.get("passphrase")
-                trustee_root = webobj.request.get("trustee_root")
-
-            if not creator:
-                webobj.response.set_status(400, "Missing creator")
-                return self._create_flask_response(webobj)
-
-            # Get the actor factory function
-            factory_func = self.aw_app.get_actor_factory()
-            if not factory_func:
-                webobj.response.set_status(500, "No actor factory registered")
-                return self._create_flask_response(webobj)
-
-            # Call the registered actor factory function
-            actor_interface = factory_func(creator=creator, passphrase=passphrase)
-
-            if not actor_interface:
-                webobj.response.set_status(400, "Actor creation failed")
-                return self._create_flask_response(webobj)
-
-            # Set trustee_root if provided (mirroring the factory handler behavior)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                # Get the underlying actor from the interface
-                core_actor = getattr(actor_interface, "core_actor", None)
-                if core_actor and hasattr(core_actor, "store") and core_actor.store:
-                    core_actor.store.trustee_root = trustee_root
-
-            # Set response data
-            webobj.response.set_status(201, "Created")
-            response_data = {
-                "id": actor_interface.id,
-                "creator": creator,
-                "passphrase": actor_interface.passphrase or passphrase,
-            }
-
-            # Add trustee_root to response if set (mirroring factory handler)
-            if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                response_data["trustee_root"] = trustee_root
-
-            logging.debug(f"Flask actor creation response: {response_data}")
-
-            webobj.response.body = json.dumps(response_data).encode("utf-8")
-            webobj.response.headers["Content-Type"] = "application/json"
-
-            # Add Location header with the actor URL
-            if actor_interface.url:
-                webobj.response.headers["Location"] = actor_interface.url
-
-        except Exception as e:
-            logging.error(f"Error in custom actor creation: {e}")
-            webobj.response.set_status(500, "Internal server error")
 
         return self._create_flask_response(webobj)
 
@@ -500,13 +474,14 @@ class FlaskIntegration:
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    # Create authorization URL with email hint
+                    # Create authorization URL with email hint and User-Agent
                     redirect_after_auth = request.url  # Redirect back to factory after auth
+                    user_agent = request.headers.get("User-Agent", "")
                     auth_url = authenticator.create_authorization_url(
-                        redirect_after_auth=redirect_after_auth, email_hint=email
+                        redirect_after_auth=redirect_after_auth, email_hint=email, user_agent=user_agent
                     )
 
-                    logging.info(f"Redirecting to OAuth2 with email hint: {email}")
+                    logging.debug(f"Redirecting to OAuth2 with email hint: {email}")
                     return redirect(auth_url)
                 else:
                     logging.warning("OAuth2 not configured - falling back to standard actor creation")
@@ -523,133 +498,36 @@ class FlaskIntegration:
             logging.error(f"Error in factory POST handler: {e}")
             return Response("Internal server error", status=500)
 
-    def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:  # pylint: disable=unused-argument
         """Handle POST to factory route without OAuth2 - standard actor creation."""
         try:
-            # Get the actor factory function
-            factory_func = self.aw_app.get_actor_factory()
-            if factory_func:
-                # Use the registered actor factory function
+            # Always use the standard factory handler
+            req_data = self._normalize_request()
+            webobj = AWWebObj(
+                url=req_data["url"],
+                params=req_data["values"],
+                body=req_data["data"],
+                headers=req_data["headers"],
+                cookies=req_data["cookies"],
+            )
+
+            # Use the standard factory handler
+            handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+            handler.post()
+
+            # Handle template rendering for factory
+            if webobj.response.status_code in [200, 201]:
                 try:
-                    logging.debug(f"Calling actor factory with creator: {email}")
-                    actor_interface = factory_func(creator=email)
-                    logging.debug(f"Actor factory returned: {type(actor_interface)} - {actor_interface}")
+                    return Response(render_template("aw-root-created.html", **webobj.response.template_values))
+                except Exception:
+                    pass  # Fall back to default response
+            elif webobj.response.status_code == 400:
+                try:
+                    return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
+                except Exception:
+                    pass  # Fall back to default response
 
-                    # Check if we have additional parameters like trustee_root in the request
-                    # Parse the full request to get any additional parameters
-                    req_data = self._normalize_request()
-                    trustee_root = None
-                    passphrase = None
-
-                    # Try to get trustee_root from JSON body or form data
-                    if req_data["data"]:
-                        import json
-
-                        try:
-                            data = json.loads(req_data["data"])
-                            trustee_root = data.get("trustee_root")
-                            passphrase = data.get("passphrase")
-                        except (json.JSONDecodeError, ValueError):
-                            pass
-
-                    if not trustee_root:
-                        trustee_root = req_data["values"].get("trustee_root")
-                    if not passphrase:
-                        passphrase = req_data["values"].get("passphrase")
-
-                    # Set trustee_root if provided (like the factory handler does)
-                    if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
-                        core_actor = getattr(actor_interface, "core_actor", None)
-                        if core_actor and hasattr(core_actor, "store") and core_actor.store:
-                            core_actor.store.trustee_root = trustee_root
-                            logging.debug(f"Set trustee_root to: {trustee_root}")
-                except Exception as factory_error:
-                    logging.error(f"Actor factory function failed: {factory_error}", exc_info=True)
-                    try:
-                        return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
-                    except Exception:
-                        return Response("Actor creation failed", status=400)
-
-                if actor_interface and hasattr(actor_interface, "id"):
-                    logging.info(f"Actor created successfully: {actor_interface.id} for {email}")
-
-                    # Check if this is a JSON request or web form request
-                    is_json_request = request.content_type and "application/json" in request.content_type
-                    accepts_json = request.headers.get("Accept", "").find("application/json") >= 0
-
-                    if is_json_request or accepts_json or not request.headers.get("Accept"):
-                        # Return JSON response for API clients and test suite
-                        import json
-
-                        response_data = {
-                            "id": actor_interface.id,
-                            "creator": email,
-                            "passphrase": getattr(actor_interface, "passphrase", ""),
-                        }
-
-                        # Add Location header with the actor URL
-                        headers = {"Content-Type": "application/json"}
-                        if hasattr(actor_interface, "url") and actor_interface.url:
-                            headers["Location"] = actor_interface.url
-                        else:
-                            # Construct URL from config and actor ID
-                            config = self.aw_app.get_config()
-                            if config:
-                                headers["Location"] = f"{config.proto}{config.fqdn}/{actor_interface.id}"
-
-                        return Response(response=json.dumps(response_data), status=201, headers=headers)
-                    else:
-                        # Return HTML template for web browsers
-                        try:
-                            actor_id = actor_interface.id
-                            actor_url = getattr(actor_interface, "url", None)
-                            passphrase = getattr(actor_interface, "passphrase", "N/A")
-                            logging.debug(
-                                f"Rendering template with id={actor_id}, creator={email}, passphrase={passphrase}"
-                            )
-                            return Response(
-                                render_template(
-                                    "aw-root-created.html", id=actor_id, creator=email, passphrase=passphrase
-                                ),
-                                status=201,
-                            )
-                        except Exception as e:
-                            logging.error(f"Template rendering failed: {e}", exc_info=True)
-                            return Response(f"Actor created successfully: {actor_interface.id}", status=201)
-                else:
-                    logging.error(f"Actor creation failed for {email} - returned: {type(actor_interface)}")
-                    try:
-                        return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
-                    except Exception:
-                        return Response("Actor creation failed", status=400)
-            else:
-                # No custom factory - use the standard factory handler
-                req_data = self._normalize_request()
-                webobj = AWWebObj(
-                    url=req_data["url"],
-                    params=req_data["values"],
-                    body=req_data["data"],
-                    headers=req_data["headers"],
-                    cookies=req_data["cookies"],
-                )
-
-                # Use the standard factory handler
-                handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-                handler.post()
-
-                # Handle template rendering for factory
-                if webobj.response.status_code in [200, 201]:
-                    try:
-                        return Response(render_template("aw-root-created.html", **webobj.response.template_values))
-                    except Exception:
-                        pass  # Fall back to default response
-                elif webobj.response.status_code == 400:
-                    try:
-                        return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
-                    except Exception:
-                        pass  # Fall back to default response
-
-                return self._create_flask_response(webobj)
+            return self._create_flask_response(webobj)
 
         except Exception as e:
             logging.error(f"Error in standard actor creation: {e}")
@@ -657,22 +535,6 @@ class FlaskIntegration:
                 return Response(render_template("aw-root-failed.html", error="Actor creation failed"))
             except Exception:
                 return Response("Actor creation failed", status=500)
-
-    def _handle_oauth_callback(self) -> Union[Response, WerkzeugResponse, str]:
-        """Handle OAuth callback."""
-        req_data = self._normalize_request()
-        webobj = AWWebObj(
-            url=req_data["url"],
-            params=req_data["values"],
-            body=req_data["data"],
-            headers=req_data["headers"],
-            cookies=req_data["cookies"],
-        )
-
-        handler = callback_oauth.CallbackOauthHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-        handler.get()
-
-        return self._create_flask_response(webobj)
 
     def _handle_bot_request(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle bot requests."""
@@ -716,7 +578,7 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_oauth2_endpoint(self, endpoint: str) -> Response:
+    def _handle_oauth2_endpoint(self, endpoint: str) -> Union[Response, WerkzeugResponse, str]:
         """Handle OAuth2 endpoints (register, authorize, token)."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -739,7 +601,7 @@ class FlaskIntegration:
             result = handler.get(endpoint)
 
         # Check if handler set template values (for HTML response)
-        if hasattr(webobj.response, 'template_values') and webobj.response.template_values:
+        if hasattr(webobj.response, "template_values") and webobj.response.template_values:
             # This is an HTML template response
             template_name = "aw-oauth-authorization-form.html"  # Default OAuth2 template
             try:
@@ -747,15 +609,75 @@ class FlaskIntegration:
             except Exception as e:
                 # Template not found or rendering error - fall back to JSON
                 from flask import jsonify
-                return jsonify({
-                    "error": "template_error", 
-                    "error_description": f"Failed to render template: {str(e)}",
-                    "template_values": webobj.response.template_values
-                })
-        
-        # Return the OAuth2 result as JSON
+
+                return jsonify(
+                    {
+                        "error": "template_error",
+                        "error_description": f"Failed to render template: {str(e)}",
+                        "template_values": webobj.response.template_values,
+                    }
+                )
+
+        # Handle redirect responses (e.g., OAuth2 callbacks)
+        if isinstance(result, dict) and result.get("status") == "redirect":
+            redirect_url = result.get("location")
+            if redirect_url:
+                redirect_response = redirect(redirect_url, code=302)
+                
+                # Add CORS headers for OAuth2 redirect responses  
+                redirect_response.headers["Access-Control-Allow-Origin"] = "*"
+                redirect_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                redirect_response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+                
+                return redirect_response
+
+        # Return the OAuth2 result as JSON with CORS headers
         from flask import jsonify
-        return jsonify(result)
+
+        json_response = jsonify(result)
+
+        # Use the status code from the handler if set
+        if hasattr(webobj.response, 'status_code') and webobj.response.status_code:
+            json_response.status_code = webobj.response.status_code
+
+        # Add CORS headers for OAuth2 endpoints
+        json_response.headers["Access-Control-Allow-Origin"] = "*"
+        json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        json_response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+        json_response.headers["Access-Control-Max-Age"] = "86400"
+
+        return json_response
+
+    def _handle_oauth2_discovery_endpoint(self, endpoint: str) -> Union[Response, WerkzeugResponse, str]:
+        """Handle OAuth2 discovery endpoints that return JSON directly."""
+        req_data = self._normalize_request()
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_endpoints import OAuth2EndpointsHandler
+
+        handler = OAuth2EndpointsHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        if request.method == "OPTIONS":
+            result = handler.options(endpoint)
+        else:
+            result = handler.get(endpoint)
+
+        # Add CORS headers directly for OAuth2 discovery endpoints
+        from flask import jsonify
+
+        response = jsonify(result)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+        response.headers["Access-Control-Max-Age"] = "86400"
+
+        return response
 
     def _handle_mcp_request(self) -> Union[Response, WerkzeugResponse, str]:
         """Handle MCP requests."""
@@ -803,23 +725,14 @@ class FlaskIntegration:
 
         # Check for Bearer token
         if auth_header and auth_header.startswith("Bearer "):
-            # Verify the Bearer token
-            bearer_token = auth_header[7:]
-            try:
-                from ...oauth2 import create_oauth2_authenticator
-
-                authenticator = create_oauth2_authenticator(self.aw_app.get_config())
-                if authenticator.is_enabled():
-                    user_info = authenticator.validate_token_and_get_user_info(bearer_token)
-                    if user_info:
-                        return None  # Valid Bearer token
-            except Exception as e:
-                logging.error(f"Bearer token validation error: {e}")
+            # Align with FastAPI: if a Bearer token is present, let the underlying handlers verify it.
+            # This supports both OAuth2 tokens and ActingWeb trust secret tokens without forcing redirect here.
+            return None
 
         # Check for OAuth token cookie (for session-based authentication)
         oauth_cookie = request.cookies.get("oauth_token")
         if oauth_cookie:
-            logging.info(f"Found oauth_token cookie with length {len(oauth_cookie)}")
+            logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
             # Validate the OAuth cookie token
             try:
                 from ...oauth2 import create_oauth2_authenticator
@@ -830,11 +743,11 @@ class FlaskIntegration:
                     if user_info:
                         email = authenticator.get_email_from_user_info(user_info, oauth_cookie)
                         if email:
-                            logging.info(f"OAuth cookie validation successful for {email}")
+                            logging.debug(f"OAuth cookie validation successful for {email}")
                             return None  # Valid OAuth cookie
-                    logging.info("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
+                    logging.debug("OAuth cookie token is expired or invalid - will redirect to fresh OAuth")
             except Exception as e:
-                logging.info(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
+                logging.debug(f"OAuth cookie validation error: {e} - will redirect to fresh OAuth")
 
         # No valid authentication - redirect to OAuth2
         original_url = request.url
@@ -855,7 +768,7 @@ class FlaskIntegration:
                     if clear_cookie:
                         # Clear the expired oauth_token cookie
                         response.delete_cookie("oauth_token", path="/")
-                        logging.info("Cleared expired oauth_token cookie")
+                        logging.debug("Cleared expired oauth_token cookie")
                     return response
         except Exception as e:
             logging.error(f"Error creating OAuth2 redirect: {e}")
@@ -910,9 +823,6 @@ class FlaskIntegration:
                         args.append(kwargs["subid"])
                     if kwargs.get("seqnr"):
                         args.append(kwargs["seqnr"])
-                elif endpoint == "oauth":
-                    # OauthHandler.get(actor_id, path) - path defaults to "" if not provided
-                    args.append(kwargs.get("path", ""))
                 elif endpoint == "www":
                     # WwwHandler.get(actor_id, path) - path defaults to "" if not provided
                     args.append(kwargs.get("path", ""))
@@ -934,13 +844,32 @@ class FlaskIntegration:
                 elif endpoint == "actions":
                     # ActionsHandler.get(actor_id, name) - name defaults to "" if not provided
                     args.append(kwargs.get("name", ""))
+                elif endpoint == "services":
+                    # ServicesHandler.get(actor_id, service_name, **kwargs) - service_name from name parameter
+                    service_name = kwargs.get("name", "")
+                    args.append(service_name)
+                    # For services, we need to pass additional kwargs (code, state, error)
+                    for key in ["code", "state", "error"]:
+                        if key in kwargs:
+                            kwargs[key] = kwargs[key]
 
-                handler_method(*args)
+                handler_method(*args, **{k: v for k, v in kwargs.items() if k in ["code", "state", "error"]})
             else:
                 return Response(status=405)
         except Exception as e:
             logging.error(f"Error in {endpoint} handler: {e}")
-            return Response(status=500)
+            # Map common network/SSL errors to clearer status codes if handler didn't set one
+            if webobj.response.status_code != 200:
+                pass
+            else:
+                error_message = str(e).lower()
+                if "ssl" in error_message or "certificate" in error_message:
+                    webobj.response.set_status(502, "Bad Gateway - SSL connection failed")
+                elif "connection" in error_message or "timeout" in error_message:
+                    webobj.response.set_status(503, "Service Unavailable - Connection failed")
+                else:
+                    webobj.response.set_status(500, "Internal server error")
+            return self._create_flask_response(webobj)
 
         # Special handling for www endpoint templates
         if endpoint == "www" and request.method == "GET" and webobj.response.status_code == 200:
@@ -955,6 +884,11 @@ class FlaskIntegration:
                     return Response(render_template("aw-actor-www-properties.html", **template_values))
                 elif path == "property":
                     return Response(render_template("aw-actor-www-property.html", **template_values))
+                elif path == "trust/new":
+                    return Response(render_template("aw-actor-www-trust-new.html", **template_values))
+                elif path.startswith("properties/"):
+                    # Handle individual property pages like "properties/notes", "properties/demo_version"
+                    return Response(render_template("aw-actor-www-property.html", **template_values))
                 elif path == "trust":
                     return Response(render_template("aw-actor-www-trust.html", **template_values))
             except Exception:
@@ -963,15 +897,14 @@ class FlaskIntegration:
         return self._create_flask_response(webobj)
 
     def _get_handler(
-        self, endpoint: str, webobj: AWWebObj, actor_id: str, **kwargs: Any
-    ) -> Optional[Any]:  # pylint: disable=unused-argument
+        self, endpoint: str, webobj: AWWebObj, actor_id: str, **kwargs: Any  # pylint: disable=unused-argument
+    ) -> Optional[Any]:
         """Get the appropriate handler for an endpoint."""
         config = self.aw_app.get_config()
 
         handlers = {
             "root": lambda: root.RootHandler(webobj, config, hooks=self.aw_app.hooks),
             "meta": lambda: meta.MetaHandler(webobj, config, hooks=self.aw_app.hooks),
-            "oauth": lambda: oauth.OauthHandler(webobj, config, hooks=self.aw_app.hooks),
             "www": lambda: www.WwwHandler(webobj, config, hooks=self.aw_app.hooks),
             "properties": lambda: properties.PropertiesHandler(webobj, config, hooks=self.aw_app.hooks),
             "resources": lambda: resources.ResourcesHandler(webobj, config, hooks=self.aw_app.hooks),
@@ -979,11 +912,30 @@ class FlaskIntegration:
             "devtest": lambda: devtest.DevtestHandler(webobj, config, hooks=self.aw_app.hooks),
             "methods": lambda: methods.MethodsHandler(webobj, config, hooks=self.aw_app.hooks),
             "actions": lambda: actions.ActionsHandler(webobj, config, hooks=self.aw_app.hooks),
+            "services": lambda: self._create_services_handler(webobj, config),
         }
 
         # Special handling for trust endpoint
         if endpoint == "trust":
-            path_parts = [p for p in [kwargs.get("relationship"), kwargs.get("peerid")] if p]
+            relationship = kwargs.get("relationship")
+            peerid = kwargs.get("peerid")
+            
+            # Check for permissions endpoint
+            if kwargs.get("permissions"):
+                return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
+            
+            # For trust endpoint, we need to distinguish between path parameters and query parameters
+            # If peerid appears in query params but not as path param, it's a query-based request
+            query_peerid = webobj.request.get("peerid")
+            
+            # Only count actual path parameters (non-None, non-empty)
+            path_parts = []
+            if relationship is not None and relationship != "":
+                path_parts.append(relationship)
+            # Only count peerid as path param if it's not a query param request
+            if peerid is not None and peerid != "" and not query_peerid:
+                path_parts.append(peerid)
+            
             if len(path_parts) == 0:
                 return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
@@ -1012,8 +964,6 @@ class FlaskIntegration:
 
     def _create_oauth_discovery_response(self) -> Dict[str, Any]:
         """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
@@ -1050,34 +1000,27 @@ class FlaskIntegration:
 
     def _create_mcp_info_response(self) -> Dict[str, Any]:
         """Create MCP information response."""
-        import os
-
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
         oauth_provider = getattr(config, "oauth2_provider", "google")
-        oauth_config = getattr(config, "oauth", {})
-        oauth_client_id = oauth_config.get("client_id") if oauth_config else None
-        oauth_client_secret = oauth_config.get("client_secret") if oauth_config else None
 
         return {
             "mcp_enabled": True,
             "mcp_endpoint": "/mcp",
             "authentication": {
                 "type": "oauth2",
-                "provider": oauth_provider,
-                "required_scopes": ["openid", "email", "profile"] if oauth_provider == "google" else ["user:email"],
+                "provider": "actingweb",
+                "required_scopes": ["mcp"],
                 "flow": "authorization_code",
-                "auth_url": "https://accounts.google.com/o/oauth2/v2/auth"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/authorize",
-                "token_url": "https://oauth2.googleapis.com/token"
-                if oauth_provider == "google"
-                else "https://github.com/login/oauth/access_token",
+                "auth_url": f"{base_url}/oauth/authorize",
+                "token_url": f"{base_url}/oauth/token",
                 "callback_url": f"{base_url}/oauth/callback",
                 "registration_endpoint": f"{base_url}/oauth/register",
                 "authorization_endpoint": f"{base_url}/oauth/authorize",
                 "token_endpoint": f"{base_url}/oauth/token",
-                "enabled": bool(oauth_client_id and oauth_client_secret),
+                "discovery_url": f"{base_url}/.well-known/oauth-authorization-server",
+                "resource_discovery_url": f"{base_url}/.well-known/oauth-protected-resource",
+                "enabled": True,
             },
             "supported_features": ["tools", "prompts"],
             "tools_count": 4,  # search, fetch, create_note, create_reminder
@@ -1085,3 +1028,10 @@ class FlaskIntegration:
             "actor_lookup": "email_based",
             "description": f"ActingWeb MCP Demo - AI can interact with actors through MCP protocol using {oauth_provider.title()} OAuth2",
         }
+
+    def _create_services_handler(self, webobj: AWWebObj, config) -> Any:
+        """Create services handler with service registry injection."""
+        handler = services.ServicesHandler(webobj, config, hooks=self.aw_app.hooks)
+        # Inject service registry into the handler so it can access it
+        handler._service_registry = self.aw_app.get_service_registry()
+        return handler

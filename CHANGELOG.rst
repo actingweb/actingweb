@@ -2,8 +2,202 @@
 CHANGELOG
 =========
 
-v3.2.1: Aug 9, 2025
+v3.3: Oct 4, 2025
 -----------------
+
+BREAKING CHANGES
+~~~~~~~~~~~~~~~~
+
+**Legacy OAuth System Removed**
+
+- Removed legacy ``OAuth`` class and related third-party service authentication
+- Removed ``/<actor_id>/oauth`` endpoints that used legacy OAuth
+- Removed legacy OAuth methods from ``Auth`` class (``oauth_get``, ``oauth_post``, etc.)
+- Legacy OAuth auth type no longer supported in ``select_auth_type()``
+
+**Migration Path**: Use the new unified third-party service integration system instead:
+
+- Replace ``oauth.OAuth()`` with ``actor.services.get("service_name")``
+- Replace manual OAuth configuration with ``app.add_dropbox()``, ``app.add_gmail()``, etc.
+- Use clean service API: ``service.get()``, ``service.post()``, etc.
+
+FIXED
+~~~~~
+
+- MCP tools/list response now applies client-specific formatting for better compatibility
+- Trust relationship descriptions now show friendly client names instead of raw identifiers when available
+- OAuth2 client trust relationships maintain proper client metadata across updates
+- Trust manager now keeps peer identifier in sync for OAuth2/MCP clients
+- Fixed FastAPI extra inadvertently importing Flask, forcing Flask as a dependency
+- Fixed trust handler to return empty list instead of 404 for graceful handling
+- Reduced logging noise by moving non-essential INFO logs to DEBUG
+- Made ``actor.get_config()`` use the dynamic global ``actingweb.__version__``
+- Fixed error in ``DbPropertyList`` when properties table was missing in DynamoDB
+- Fixed ``trustee_root`` JSON to return stored value instead of input parameter
+- Fixed missing ``trustee_root`` in actor creation via REST API
+- Fixed handling of ``POST`` to ``/<actor_id>/www/properties`` (including ``_method=DELETE``)
+- Fixed base path handling for ``/<actor_id>/www`` (supports non-root base paths consistently)
+- Fixed ``www/`` hook not triggered
+- Devtest proxy: added Basic-auth fallback (``trustee:<peer passphrase>``) when Bearer trust requests to peer ``/properties`` endpoints receive 302/401/403, avoiding OAuth2 redirects during testing
+- Fixed MCP OAuth2 trust relationship creation where MCP clients completed authentication but no trust relationships were created
+- Fixed hook permission operation mapping where "get" operations were incorrectly passed as "read"
+- Fixed OAuth2 callback ``established_via`` to properly distinguish between MCP and regular OAuth2 flows
+- Fixed singleton initialization dependency order causing Permission Evaluator to fail when Trust Permission Store was not yet initialized
+- Fixed OAuth2 trust-type filtering logic that was incorrectly placed inside exception handlers, causing 0 available trust types during OAuth2 flows
+- Fixed severe OAuth2 performance issue where lazy singleton loading during requests caused 4+ minute hangs during OAuth2 callbacks
+- Fixed ``established_via`` field being lost between database save and retrieval in trust relationship management
+- Added explicit singleton initialization at application startup to prevent performance degradation during OAuth2 flows
+- Replaced all urlfetch HTTP calls with requests library for improved reliability, better timeout handling, and elimination of 30+ second timeout issues
+
+CHANGED
+~~~~~~~
+
+- If ``unique_creator=False``, ensure deterministic retrieval of the first actor available when doing OAuth2 auth and log in from root
+- Refactored OAuth2 server implementation to use Attributes system instead of underscore-prefixed properties for storing sensitive data (tokens, authorization codes, Google OAuth2 tokens)
+- Removed unused default resources in the MCP server (now only existing resources and hooks are presented)
+- Removed notes and usage as static resource in the library, leave this to the implementing application
+- Cleaned up the actor creation interfaces, ActorInterface.create() is now the only factory to be used.
+- Standardized global Attribute buckets for cross-actor data.
+- Enhanced ``/trust/{relationship}/{peerid}`` API endpoints to support permission management alongside traditional trust relationship operations
+- Modified ``/meta/actingweb/supported`` to dynamically include feature tags based on available system capabilities
+- Properties, methods, and actions handlers now integrate with unified permission system while maintaining backward compatibility
+- Hook execution system now includes transparent permission checking with authentication context passing
+- **Dependencies**: Replaced ``urlfetch ^2.0.1`` with ``requests ^2.31.0`` for more reliable HTTP operations
+
+ADDED
+~~~~~
+
+**Integration Test Suite**
+
+- Added comprehensive REST API integration test suite with 117 tests covering all mandatory ActingWeb protocol endpoints
+- Added ``tests/integration/`` directory with test harness, fixtures, and test files
+- Added Docker Compose configuration for local DynamoDB testing (``docker-compose.test.yml``)
+- Added GitHub Actions CI/CD workflow (``.github/workflows/integration-tests.yml``) for automated testing on PRs
+- Added ``make test-integration`` target for running integration tests locally
+- Added comprehensive testing documentation (``docs/TESTING.md``)
+- Test coverage: actor lifecycle, properties (nested/complex), meta, trust relationships, subscriptions with diffs
+
+**MCP Client Management Enhancements**
+
+- Support for ``allowed_clients`` parameter in ``@mcp_tool`` decorator to restrict tool access by client type
+- Support for ``client_descriptions`` parameter in ``@mcp_tool`` decorator for client-specific tool descriptions
+- Client-specific tool filtering for MCP endpoints based on client type detection (ChatGPT, Claude, Cursor, etc.)
+- Enhanced OAuth2 client trust relationship display with friendly client names in web UI
+- Automatic enrichment of OAuth2 trust relationships with missing client metadata
+
+**Unified Third-Party Service Integration**
+
+- Added modern service integration system replacing legacy OAuth class
+- Added fluent API methods: ``app.add_dropbox()``, ``app.add_gmail()``, ``app.add_github()``, ``app.add_box()``
+- Added ``ServiceConfig``, ``ServiceClient``, and ``ServiceRegistry`` classes
+- Added automatic token management and refresh for third-party services
+- Added ``actor.services.get()`` interface for accessing authenticated service clients
+- Added service OAuth2 callback endpoints: ``/{actor_id}/services/{service_name}/callback``
+- Added service revocation endpoints: ``DELETE /{actor_id}/services/{service_name}``
+- Added comprehensive documentation in ``docs/service-integration.rst``
+- Integrated service system with both Flask and FastAPI frameworks
+
+**Bot Handler Improvements**
+
+- Fixed broken bot handler that tried to use removed legacy OAuth system
+- Simplified bot authentication to use direct bot token validation from config
+- Removed dependency on Auth class for bot endpoints - bots now use simpler token-based validation
+- Bot token now passed to hooks for service calls if needed
+
+**Simplified Authentication Interface**
+
+- Added ``require_authenticated_actor()`` method to BaseHandler for one-line auth + authorization
+- Added ``authenticate_actor()`` method returning ``AuthResult`` for more granular control
+- New interface reduces boilerplate from 6-8 lines to 2-3 lines per handler method
+- Maintains full compatibility with existing ``init_actingweb()`` usage
+- Automatic HTTP response handling for common authentication and authorization failures
+
+**Unified Access Control System**
+
+- Complete unified access control system with trust types, permissions, and pattern matching
+- Trust Type Registry with 6 built-in trust types (associate, viewer, friend, partner, admin, mcp_client) and support for custom types
+- Permission Evaluator with glob pattern matching, precedence rules, and fallback to legacy authorization
+- Per-relationship permission storage system allowing individual trust relationships to override trust type defaults
+- Permission Integration module providing transparent permission checking for all ActingWeb operations
+- Enhanced Trust API with permission management endpoints:
+
+  - ``GET /trust/{relationship}/{peerid}?permissions=true`` - Include permission overrides in trust response
+  - ``PUT /trust/{relationship}/{peerid}`` - Update permissions alongside trust relationship properties
+  - ``GET /trust/{relationship}/{peerid}/permissions`` - Dedicated permission management endpoint
+  - ``PUT /trust/{relationship}/{peerid}/permissions`` - Create/update permission overrides
+  - ``DELETE /trust/{relationship}/{peerid}/permissions`` - Remove permission overrides
+
+- ``trustpermissions`` feature tag automatically included in ``/meta/actingweb/supported`` when permission system is available
+- Transparent hook permission checking - existing hooks automatically get permission filtering without code changes
+- Enhanced MCP OAuth2 trust relationship creation with automatic trust type detection
+- Zero-migration design - existing applications work immediately while gaining new capabilities
+- Comprehensive permission structure supporting properties, methods, actions, tools, resources, and prompts
+- Pattern-based permissions with support for glob wildcards (``*``, ``?``) and URI schemes
+- Backward compatibility with legacy authorization system as fallback
+
+**Other Additions**
+
+- Added execution of property_hooks in the handler of www/*
+- Added support for list of hidden properties as variable to www/properties* templates
+- Added support for dynamic generation of resources in MCP based on hooks
+- Support for CORS in oauth2 flows
+- PKCE support in oauth2 flows
+- Support for OPTIONS method on OAUTH2 discovery endpoints
+- New explicit interface for managing list properties with `actor.property_lists.listname` syntax
+- Distributed list storage bypassing DynamoDB 400KB item limits by storing individual list items as separate properties
+- Added `property_lists` attribute to Actor class for list-specific operations
+- Lazy-loading iterator for efficient list traversal without loading entire lists into memory
+- Added singleton warmup module (``actingweb.singleton_warmup``) for explicit initialization of performance-critical singletons at application startup
+- Comprehensive documentation for singleton initialization requirements in both CLAUDE.md and unified-access-control.rst
+- Intelligent caching system for MCP endpoint authentication providing 50x performance improvement (50ms → 1ms) for repeated requests with 90%+ cache hit rates
+- MCP authentication caching includes token validation, actor loading, and trust relationship lookup with automatic TTL-based cleanup and performance monitoring
+
+**OAuth2 Client Management**
+
+- High-level ``OAuth2ClientManager`` interface for creating, listing, validating, deleting clients, and regenerating client secrets
+- Client secret regeneration with verification, audit timestamp (``secret_regenerated_at``), and formatted display values
+- Generate access tokens via client-credentials flow directly from ``OAuth2ClientManager.generate_access_token()``
+
+**OAuth2 Authorization Server**
+
+- Added support for ``client_credentials`` grant type with token issuance and discovery updated (``grant_types_supported``)
+- Added ``trust_type`` and ``actor_id`` to client registration/discovery responses; improved secret validation diagnostics
+- Added client deletion capability to MCP client registry
+
+**MCP Integration**
+
+- Captures and caches MCP ``clientInfo`` during initialize; persists to trust relationship after OAuth2 callback
+- Populates trust context on authenticated MCP sessions for permission evaluation
+- Added Google OAuth2 token validation via Google TokenInfo API
+- Enhanced MCP client information capture and persistent storage across session establishment
+- Improved MCP authentication with proper HTTP 401 handling and WWW-Authenticate headers for FastAPI integration
+- Added global client info caching during session establishment with automatic cleanup
+- Each MCP client now gets unique trust relationship per user email, preventing clients from overwriting each other's identities
+- OAuth2 client registration now automatically creates trust relationships, ensuring proper permission evaluation
+- All OAuth2 clients must pass permission evaluation before accessing MCP endpoints
+
+**Runtime Context System**
+
+- New ``actingweb.runtime_context`` module providing structured request context for hook functions
+- ``RuntimeContext`` class with type-safe context classes: ``MCPContext``, ``OAuth2Context``, ``WebContext``
+- ``get_client_info_from_context()`` helper function for unified client detection across all context types
+- Support for custom context types via ``set_custom_context()`` and ``get_custom_context()`` methods
+- Request-scoped context lifecycle with automatic cleanup support
+- Comprehensive documentation and examples for using runtime context in hook functions
+
+**Web UI Enhancements**
+
+- Consistent template URL variables across pages: ``actor_root``, ``actor_www``, and ``url``
+- Trust page displays registered OAuth2 clients (name, trust type, created time, status)
+- Trust creation form supports selecting trust type; consistent ``form_action`` and redirects
+- Property pages: create/delete list properties, edit list metadata (description/explanation), and improved redirects after operations
+
+**Auth Utilities**
+
+- Added ``check_and_verify_auth()`` helper to verify authentication for custom (non-ActingWeb) routes with redirect-aware responses
+
+v3.2.1: Aug 9, 2025
+-------------------
 
 **OAuth2 Authentication System and Enhanced Integrations**
 
@@ -221,30 +415,28 @@ MIGRATION GUIDE
 ~~~~~~~~~~~~~~~
 **For existing applications using OnAWBase:**
 
-**Before (Legacy - NO LONGER SUPPORTED):**
-```python
-class MyApp(OnAWBase):
-    def get_properties(self, path, data):
-        return data
-    
-    def post_callbacks(self, name):
-        return True
-```
+**Before (Legacy - NO LONGER SUPPORTED)**::
 
-**After (Modern Interface - REQUIRED):**
-```python
-app = ActingWebApp("my-app", "dynamodb", "myapp.com")
+    class MyApp(OnAWBase):
+        def get_properties(self, path, data):
+            return data
 
-@app.property_hook("*")
-def handle_properties(actor, operation, value, path):
-    if operation == "get":
+        def post_callbacks(self, name):
+            return True
+
+**After (Modern Interface - REQUIRED)**::
+
+    app = ActingWebApp("my-app", "dynamodb", "myapp.com")
+
+    @app.property_hook("*")
+    def handle_properties(actor, operation, value, path):
+        if operation == "get":
+            return value
         return value
-    return value
 
-@app.callback_hook("*")  
-def handle_callbacks(actor, name, data):
-    return {"status": "handled"}
-```
+    @app.callback_hook("*")
+    def handle_callbacks(actor, name, data):
+        return {"status": "handled"}
 
 **Handler instantiation changes:**
 - **Before:** `Handler(webobj, config, on_aw=my_onaw_instance)`  

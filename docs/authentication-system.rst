@@ -1,6 +1,5 @@
-============================
 ActingWeb Authentication System
-============================
+===============================
 
 This document describes the comprehensive OAuth2 authentication system in ActingWeb, including support for multiple providers like Google and GitHub.
 
@@ -284,6 +283,267 @@ The authentication system integrates seamlessly with ActingWeb's Model Context P
 **401 Responses:**
     Unauthenticated requests receive proper ``WWW-Authenticate`` headers with OAuth2 authorization URLs.
 
+Custom Route Authentication
+============================
+
+For custom application routes that don't go through the standard ActingWeb handler system, use the ``check_and_verify_auth()`` function to provide proper authentication verification.
+
+The ``check_and_verify_auth()`` Function
+-----------------------------------------
+
+**Location:** ``actingweb.auth.check_and_verify_auth()``
+
+This function performs authentication checks and is designed for use in custom application routes. It supports:
+
+- **Bearer Token Authentication**: OAuth2 tokens, ActingWeb trust secret tokens
+- **Basic Authentication**: Username/password authentication
+- **OAuth2 Cookie Sessions**: Web UI session authentication
+- **OAuth2 Redirects**: Proper redirect handling for unauthenticated users
+
+Function Signature
+------------------
+
+.. code-block:: python
+
+    def check_and_verify_auth(appreq=None, actor_id=None, config=None):
+        """Check and verify authentication for non-ActingWeb routes.
+        
+        Args:
+            appreq: Request object (same format as used by ActingWeb handlers)
+            actor_id: Actor ID to verify authentication against
+            config: ActingWeb config object
+            
+        Returns:
+            dict with:
+            - 'authenticated': bool - True if authentication successful
+            - 'actor': Actor object if authentication successful, None otherwise
+            - 'auth': Auth object with authentication details
+            - 'response': dict with response details {'code': int, 'text': str, 'headers': dict}
+            - 'redirect': str - redirect URL if authentication requires redirect
+        """
+
+Usage Example
+-------------
+
+Here's how to use ``check_and_verify_auth()`` in a FastAPI custom route:
+
+.. code-block:: python
+
+    from fastapi import FastAPI, Request, HTTPException
+    from fastapi.responses import RedirectResponse
+    from actingweb import auth
+    from actingweb.aw_web_request import AWWebObj
+
+    @fastapi_app.get("/{actor_id}/dashboard/memory")
+    async def dashboard_memory(actor_id: str, request: Request):
+        """Custom dashboard route with proper authentication."""
+        
+        # Convert FastAPI request to ActingWeb format
+        req_data = await normalize_fastapi_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+        
+        # Use ActingWeb's proper authentication system
+        auth_result = auth.check_and_verify_auth(
+            appreq=webobj, 
+            actor_id=actor_id, 
+            config=app.get_config()
+        )
+        
+        if not auth_result['authenticated']:
+            # Handle different authentication failure scenarios
+            response_code = auth_result['response']['code']
+            
+            if response_code == 404:
+                raise HTTPException(status_code=404, detail="Actor not found")
+            elif response_code == 302 and auth_result['redirect']:
+                # OAuth redirect required
+                raise HTTPException(
+                    status_code=302,
+                    detail="OAuth redirect required",
+                    headers={"Location": auth_result['redirect']}
+                )
+            elif response_code == 401:
+                # Authentication required
+                headers = auth_result['response']['headers']
+                raise HTTPException(
+                    status_code=401, 
+                    detail="Authentication required",
+                    headers=headers
+                )
+            else:
+                # Other authentication failures
+                raise HTTPException(
+                    status_code=response_code,
+                    detail=auth_result['response']['text']
+                )
+        
+        # Authentication successful - use the actor
+        actor_interface = ActorInterface(auth_result['actor'])
+        
+        # Your custom route logic here...
+        return {"message": f"Dashboard for actor {actor_interface.id}"}
+
+Request Normalization Helper
+----------------------------
+
+For FastAPI applications, you'll need a helper function to convert FastAPI requests to ActingWeb format:
+
+.. code-block:: python
+
+    async def normalize_fastapi_request(request: Request) -> dict:
+        """Convert FastAPI request to ActingWeb format."""
+        # Read body asynchronously
+        body = await request.body()
+
+        # Parse cookies
+        cookies = {}
+        raw_cookies = request.headers.get("cookie")
+        if raw_cookies:
+            for cookie in raw_cookies.split("; "):
+                if "=" in cookie:
+                    name, value = cookie.split("=", 1)
+                    cookies[name] = value
+
+        # Convert headers (preserve case-sensitive header names)
+        headers = {}
+        for k, v in request.headers.items():
+            if k.lower() == "authorization":
+                headers["Authorization"] = v
+            elif k.lower() == "content-type":
+                headers["Content-Type"] = v
+            else:
+                headers[k] = v
+
+        # If no Authorization header but we have an oauth_token cookie,
+        # provide it as a Bearer token for web UI requests
+        if "Authorization" not in headers and "oauth_token" in cookies:
+            headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
+
+        # Get query parameters and form data
+        params = {}
+        for k, v in request.query_params.items():
+            params[k] = v
+
+        return {
+            "method": request.method,
+            "path": str(request.url.path),
+            "data": body,
+            "headers": headers,
+            "cookies": cookies,
+            "values": params,
+            "url": str(request.url),
+        }
+
+Authentication Flow
+-------------------
+
+The ``check_and_verify_auth()`` function follows this authentication flow:
+
+1. **Bearer Token Check**: Validates Authorization header for Bearer tokens (OAuth2 or ActingWeb trust tokens)
+2. **Basic Authentication**: For API clients using username/password
+3. **OAuth2 Cookie**: For web UI sessions with oauth_token cookie
+4. **OAuth2 Redirect**: If all methods fail and OAuth2 is configured, creates redirect to OAuth2 provider
+
+Response Codes
+--------------
+
+The function returns different response codes based on authentication results:
+
+- **200**: Authentication successful
+- **401**: Authentication required (with proper WWW-Authenticate headers)
+- **302**: OAuth2 redirect required (with Location header)
+- **403**: Forbidden (authentication failed)
+- **404**: Actor not found
+
+Security Considerations
+-----------------------
+
+When implementing custom routes with authentication:
+
+- **Always validate actor_id**: Ensure users can only access their own actor data
+- **Use HTTPS**: OAuth2 tokens and cookies should only be transmitted over secure connections
+- **Handle errors gracefully**: Don't expose sensitive information in error messages
+- **Log authentication attempts**: For security monitoring and debugging
+
+Framework Integration
+---------------------
+
+The ``check_and_verify_auth()`` function works with any Python web framework:
+
+**Flask Example:**
+
+.. code-block:: python
+
+    from flask import Flask, request
+    from actingweb import auth
+    from actingweb.aw_web_request import AWWebObj
+
+    @app.route("/<actor_id>/dashboard/memory")
+    def dashboard_memory(actor_id):
+        webobj = AWWebObj(
+            url=request.url,
+            params=request.values,
+            body=request.get_data(),
+            headers=dict(request.headers),
+            cookies=request.cookies,
+        )
+        
+        auth_result = auth.check_and_verify_auth(
+            appreq=webobj, 
+            actor_id=actor_id, 
+            config=app.get_config()
+        )
+        
+        if not auth_result['authenticated']:
+            # Handle authentication failure
+            return handle_auth_failure(auth_result)
+        
+        # Use authenticated actor
+        actor = ActorInterface(auth_result['actor'])
+        return render_dashboard(actor)
+
+**Django Example:**
+
+.. code-block:: python
+
+    from django.http import JsonResponse, HttpResponseRedirect
+    from actingweb import auth
+    from actingweb.aw_web_request import AWWebObj
+
+    def dashboard_memory(request, actor_id):
+        webobj = AWWebObj(
+            url=request.build_absolute_uri(),
+            params=request.GET.dict(),
+            body=request.body,
+            headers=dict(request.META),
+            cookies=request.COOKIES,
+        )
+        
+        auth_result = auth.check_and_verify_auth(
+            appreq=webobj, 
+            actor_id=actor_id, 
+            config=get_actingweb_config()
+        )
+        
+        if not auth_result['authenticated']:
+            if auth_result['response']['code'] == 302:
+                return HttpResponseRedirect(auth_result['redirect'])
+            else:
+                return JsonResponse(
+                    {"error": auth_result['response']['text']}, 
+                    status=auth_result['response']['code']
+                )
+        
+        # Use authenticated actor
+        actor = ActorInterface(auth_result['actor'])
+        return render_dashboard(request, actor)
+
 Implementation Files
 ====================
 
@@ -299,7 +559,7 @@ Core Files
     - Utility functions for token and state handling
 
 **actingweb/auth.py**
-    Updated authentication module that integrates the new OAuth2 system with legacy authentication methods.
+    Updated authentication module that integrates the new OAuth2 system with legacy authentication methods. Contains the ``check_and_verify_auth()`` function for custom route authentication.
 
 **actingweb/handlers/oauth2_callback.py**
     Unified OAuth2 callback handler that processes callbacks from any OAuth2 provider.
@@ -472,3 +732,23 @@ The authentication system is designed for extensibility:
     - Integration testing utilities
 
 This implementation provides a solid foundation for multi-provider OAuth2 support in ActingWeb while maintaining backward compatibility and enabling future authentication enhancements.
+Roles
+-----
+
+ActingWeb commonly plays two roles with OAuth2:
+
+- OAuth2 Client (login): Used for interactive login to the web UI (``/<actor_id>/www``) and app flows. The app redirects users to a provider (Google/GitHub) and receives a callback.
+- OAuth2‑Protected Resource (MCP): The ``/mcp`` endpoint requires OAuth2 access. Unauthenticated requests receive 401 with a proper ``WWW-Authenticate`` header and discovery endpoints are exposed under ``/.well-known/``.
+
+Discovery Endpoints (served by integrations):
+
+- ``/.well-known/oauth-authorization-server``
+- ``/.well-known/oauth-protected-resource``
+- ``/.well-known/oauth-protected-resource/mcp``
+
+
+Provider Differences (Cheat Sheet)
+----------------------------------
+
+- Google: refresh tokens supported (use ``access_type=offline`` + ``prompt=consent``), OpenID scopes (``openid email profile``).
+- GitHub: set ``User-Agent`` and ``Accept: application/json`` headers, no refresh tokens (short‑lived tokens), email may be private.

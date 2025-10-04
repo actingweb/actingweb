@@ -14,7 +14,7 @@ proxying user authentication to Google OAuth2.
 import json
 import logging
 from typing import Dict, Any, Optional, TYPE_CHECKING, Union
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 from .base_handler import BaseHandler
 
@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from ..interface.hooks import HookRegistry
     from .. import aw_web_request
     from .. import config as config_class
+
+# TrustTypeRegistry imported locally where needed
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +79,12 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._handle_token_request()
         elif path == "authorize":
             return self._handle_authorization_request("POST")
+        elif path == "logout":
+            return self._handle_logout_request("POST")
         else:
             return self.error_response(404, f"Unknown OAuth2 endpoint: {path}")
 
-    def options(self, path: str = "") -> Dict[str, Any]:
+    def options(self, _path: str = "") -> Dict[str, Any]:
         """
         Handle OPTIONS requests (CORS preflight).
 
@@ -93,7 +97,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         # Set CORS headers
         self.response.headers["Access-Control-Allow-Origin"] = "*"
         self.response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
         self.response.headers["Access-Control-Max-Age"] = "86400"  # 24 hours
 
         return {"status": "ok"}
@@ -117,8 +121,14 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._handle_authorization_request("GET")
         elif path == "callback":
             return self._handle_oauth_callback()
+        elif path == "logout":
+            return self._handle_logout_request("GET")
         elif path == ".well-known/oauth-authorization-server":
             return self._handle_authorization_server_discovery()
+        elif path == ".well-known/oauth-protected-resource":
+            return self._handle_protected_resource_discovery()
+        elif path == ".well-known/oauth-protected-resource/mcp":
+            return self._handle_protected_resource_mcp_discovery()
         else:
             return self.error_response(404, f"Unknown OAuth2 endpoint: {path}")
 
@@ -151,7 +161,9 @@ class OAuth2EndpointsHandler(BaseHandler):
             # Register the client using OAuth2 server
             try:
                 client_response = self.oauth2_server.handle_client_registration(registration_data)
-                logger.info(f"Registered MCP client: {client_response['client_id']}")
+                logger.debug(f"Registered MCP client: {client_response['client_id']}")
+                # Set status to 201 Created per RFC 7591
+                self.response.set_status(201, "Created")
                 return client_response
 
             except ValueError as e:
@@ -212,15 +224,16 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "scope": form_data.get("scope", [""])[0],
                     "state": form_data.get("state", [""])[0],
                     "email": form_data.get("email", [""])[0],
+                    "trust_type": form_data.get("trust_type", ["mcp_client"])[0],  # Default to mcp_client
                 }
 
             # Debug logging for MCP OAuth2 flow
-            logger.info(f"OAuth2 authorization {method} request with params: {dict(params)}")
+            logger.debug(f"OAuth2 authorization {method} request with params: {dict(params)}")
 
             # Handle using OAuth2 server
             server_response = self.oauth2_server.handle_authorization_request(params, method)
 
-            logger.info(f"OAuth2 server response: {server_response}")
+            logger.debug(f"OAuth2 server response: {server_response}")
 
             if server_response.get("action") == "show_form":
                 # Show email form (preserve existing UX)
@@ -283,6 +296,10 @@ class OAuth2EndpointsHandler(BaseHandler):
 
             form_data = parse_qs(body_str)
 
+            # Debug: log received form data
+            logger.debug(f"Token request form data keys: {list(form_data.keys())}")
+            logger.debug(f"Token request body: {body_str[:200]}...")  # First 200 chars
+
             # Extract parameters (parse_qs returns lists)
             params = {
                 "grant_type": form_data.get("grant_type", [""])[0],
@@ -291,7 +308,30 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "redirect_uri": form_data.get("redirect_uri", [""])[0],
                 "client_id": form_data.get("client_id", [""])[0],
                 "client_secret": form_data.get("client_secret", [""])[0],
+                "code_verifier": form_data.get("code_verifier", [""])[0],
             }
+
+            # Check for client_id in Authorization header if not in form data
+            if not params["client_id"]:
+                if not self.request.headers:
+                    return self.error_response(400, f"invalid_request: No Authorization headsers")
+                auth_header = self.request.headers.get("Authorization", "") or self.request.headers.get(
+                    "authorization", ""
+                )
+                if auth_header.startswith("Basic "):
+                    try:
+                        import base64
+
+                        encoded_creds = auth_header[6:]  # Remove "Basic "
+                        decoded_creds = base64.b64decode(encoded_creds).decode("utf-8")
+                        if ":" in decoded_creds:
+                            client_id, client_secret = decoded_creds.split(":", 1)
+                            params["client_id"] = client_id
+                            if not params["client_secret"]:
+                                params["client_secret"] = client_secret
+                            logger.debug(f"Extracted client_id from Authorization header: {client_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse Authorization header: {e}")
 
             # Handle using OAuth2 server
             token_response = self.oauth2_server.handle_token_request(params)
@@ -310,7 +350,7 @@ class OAuth2EndpointsHandler(BaseHandler):
 
                 return self.error_response(status, f"{error}: {description}")
 
-            logger.info(f"Token request successful for client {params.get('client_id', 'unknown')}")
+            logger.debug(f"Token request successful for client {params.get('client_id', 'unknown')}")
             return token_response
 
         except Exception as e:
@@ -324,6 +364,11 @@ class OAuth2EndpointsHandler(BaseHandler):
         Returns:
             ActingWeb OAuth2 authorization server metadata
         """
+        # Set CORS headers for discovery endpoint
+        self.response.headers["Access-Control-Allow-Origin"] = "*"
+        self.response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+
         return self.oauth2_server.handle_discovery_request()
 
     def _handle_oauth_callback(self) -> Dict[str, Any]:
@@ -386,6 +431,126 @@ class OAuth2EndpointsHandler(BaseHandler):
         )
 
         if is_browser_request:
+            # Get available trust types for selection
+            available_trust_types = []
+            requested_scope = form_data.get("scope", "")
+            client_id = form_data.get("client_id", "")
+            
+            # Initialize oauth2_config to avoid unbound variable error
+            oauth2_config = getattr(self.config, '_oauth2_trust_types', None)
+            
+            if oauth2_config is None:
+                logger.info("No OAuth2 trust type configuration found - using default behavior")
+                # Use default behavior - show all trust types  
+                oauth2_config = {"allowed": None, "default": "mcp_client"}
+            
+            # Get trust types from registry with graceful fallback
+            trust_types = []
+            try:
+                from actingweb.trust_type_registry import get_registry
+                registry = get_registry(self.config)
+                trust_types = registry.list_types()
+            except RuntimeError:
+                logger.debug("Trust type registry not initialized - using default trust types")
+                # Fallback to default trust types for OAuth2
+                trust_types = [
+                    type('TrustType', (), {
+                        'name': 'mcp_client',
+                        'display_name': 'AI Assistant (MCP Client)', 
+                        'description': 'AI assistants with controlled tool access',
+                        'oauth_scope': 'actingweb.mcp_client'
+                    })(),
+                    type('TrustType', (), {
+                        'name': 'web_user',
+                        'display_name': 'Web User',
+                        'description': 'Standard web application user',
+                        'oauth_scope': 'actingweb.web_user'
+                    })()
+                ]
+            except Exception as e:
+                logger.warning(f"Error accessing trust type registry: {e}")
+                trust_types = []
+                
+            # Get developer-configured OAuth2 trust type restrictions (already initialized above)
+            allowed_by_developer = oauth2_config.get("allowed") if oauth2_config else None
+                
+            logger.debug(f"Trust type filtering: oauth2_config={oauth2_config}, allowed_by_developer={allowed_by_developer}")
+            logger.debug(f"Available trust types from registry: {[tt.name for tt in trust_types]}")
+            
+            # Filter trust types based on multiple criteria
+            for trust_type in trust_types:
+                should_include = True
+                
+                # Option 1: Filter by developer configuration (highest priority)
+                if allowed_by_developer is not None:
+                    if trust_type.name not in allowed_by_developer:
+                        should_include = False
+                
+                # Option 2: Filter by OAuth2 scope if specified
+                # Skip scope filtering if no scope is requested (show all allowed types)
+                if requested_scope and trust_type.oauth_scope and should_include:
+                    # Check if requested scope matches or includes this trust type's scope
+                    requested_scopes = set(requested_scope.split())
+                    trust_type_scopes = set(trust_type.oauth_scope.split())
+                    
+                    # More flexible scope matching for compatibility
+                    scope_matches = False
+                    if trust_type_scopes & requested_scopes:  # Direct intersection
+                        scope_matches = True
+                    else:
+                        # Check for partial matches (e.g., "mcp" matches "actingweb.mcp_client")
+                        for req_scope in requested_scopes:
+                            for tt_scope in trust_type_scopes:
+                                if req_scope in tt_scope or tt_scope in req_scope:
+                                    scope_matches = True
+                                    break
+                            if scope_matches:
+                                break
+                    
+                    if not scope_matches:
+                        should_include = False
+                
+                # Option 3: Check client-specific trust type restrictions
+                # Developers can register clients with allowed_trust_types
+                if client_id and should_include:
+                    try:
+                        client_data = self.oauth2_server.client_registry.validate_client(client_id)
+                        if client_data and "allowed_trust_types" in client_data:
+                            allowed_types = client_data["allowed_trust_types"]
+                            if isinstance(allowed_types, list) and trust_type.name not in allowed_types:
+                                should_include = False
+                    except Exception:
+                        pass  # Continue if client lookup fails
+                
+                if should_include:
+                    available_trust_types.append({
+                        "name": trust_type.name,
+                        "display_name": trust_type.display_name,
+                        "description": trust_type.description,
+                        "oauth_scope": trust_type.oauth_scope or ""
+                    })
+                    logger.debug(f"Trust type {trust_type.name} included")
+                else:
+                    logger.debug(f"Trust type {trust_type.name} excluded")
+            
+            # If no trust types available, provide at least one fallback
+            logger.debug(f"Final available_trust_types count: {len(available_trust_types)}")
+            if not available_trust_types:
+                logger.warning("No trust types available after filtering - using fallback")
+                available_trust_types = [{
+                    "name": "mcp_client",
+                    "display_name": "AI Assistant (MCP Client)", 
+                    "description": "AI assistants with controlled tool access",
+                    "oauth_scope": "actingweb.mcp_client"
+                }]
+            
+            # Determine default trust type from developer configuration
+            default_trust_type = "mcp_client"  # Fallback default
+            if oauth2_config:
+                configured_default = oauth2_config.get("default")
+                if configured_default and any(tt["name"] == configured_default for tt in available_trust_types):
+                    default_trust_type = configured_default
+            
             # Set template values for HTML rendering (like factory handler does)
             self.response.template_values = {
                 "client_id": form_data.get("client_id", ""),
@@ -395,6 +560,9 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "form_action": "/oauth/authorize",
                 "form_method": "POST",
                 "message": f"Authorize {form_data.get('client_name', 'MCP Client')} to access your ActingWeb data",
+                "trust_types": available_trust_types,
+                "default_trust_type": default_trust_type,
+                "oauth2_trust_control_enabled": True,  # Indicate that trust type control is available
             }
             return None  # Template will be rendered by framework
 
@@ -412,6 +580,203 @@ class OAuth2EndpointsHandler(BaseHandler):
             "template": "oauth_authorization_form",  # Template to render
             "message": f"Authorize {form_data.get('client_name', 'MCP Client')} to access your ActingWeb data",
         }
+
+    def _handle_protected_resource_discovery(self) -> Dict[str, Any]:
+        """
+        Handle OAuth2 Protected Resource Discovery (RFC 8705).
+
+        Returns:
+            Protected resource metadata
+        """
+        # Set CORS headers for discovery endpoint
+        self.response.headers["Access-Control-Allow-Origin"] = "*"
+        self.response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+
+        base_url = f"{self.config.proto}{self.config.fqdn}"
+
+        return {
+            "resource": base_url,
+            "authorization_servers": [base_url],
+            "scopes_supported": ["mcp"],
+            "bearer_methods_supported": ["header"],
+            "resource_documentation": f"{base_url}/mcp/info",
+            "resource_policy_uri": f"{base_url}",
+        }
+
+    def _handle_protected_resource_mcp_discovery(self) -> Dict[str, Any]:
+        """
+        Handle OAuth2 Protected Resource Discovery for MCP-specific metadata.
+
+        Returns:
+            MCP-specific protected resource metadata
+        """
+        # Set CORS headers for discovery endpoint
+        self.response.headers["Access-Control-Allow-Origin"] = "*"
+        self.response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        self.response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
+
+        base_url = f"{self.config.proto}{self.config.fqdn}"
+
+        return {
+            "resource": f"{base_url}/mcp",
+            "authorization_servers": [base_url],
+            "scopes_supported": ["mcp"],
+            "bearer_methods_supported": ["header"],
+            "resource_documentation": f"{base_url}/mcp/info",
+            "resource_policy_uri": f"{base_url}",
+            "mcp_version": "2024-11-05",
+            "capabilities": {
+                "tools": True,
+                "prompts": True,
+                "resources": False,
+                "roots": False,
+            },
+        }
+
+    def _handle_logout_request(self, method: str = "GET") -> Dict[str, Any]:
+        """
+        Handle OAuth2 logout request.
+        
+        This endpoint revokes the current access token and clears session cookies.
+        Works for both GET and POST requests.
+        
+        Args:
+            method: HTTP method (GET or POST)
+            
+        Returns:
+            Response dict with success and redirect information
+        """
+        try:
+            logger.info(f"Logout request started: method={method}")
+            
+            # Extract token from Authorization header or cookie
+            auth_header = None
+            if self.request.headers:
+                auth_header = self.request.headers.get("Authorization") or self.request.headers.get("authorization")
+            token = None
+            
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header[7:]  # Remove "Bearer " prefix
+                logger.debug(f"Found token in Authorization header: {token[:20]}...")
+            else:
+                # Try to get token from cookies (for web sessions)
+                token = self.request.cookies.get("oauth_token") if self.request.cookies else None
+                if token:
+                    logger.debug(f"Found token in cookies: {token[:20]}...")
+                else:
+                    logger.debug("No token found in cookies or Authorization header")
+                    logger.debug(f"Available cookies: {list(self.request.cookies.keys()) if self.request.cookies else []}")
+            
+            # Handle Google OAuth2 token logout (web UI authentication)
+            try:
+                if token:
+                    response = self._handle_google_token_logout(token)
+                else:
+                    # No token provided - just clear cookies
+                    response = {
+                        "action": "success",
+                        "message": "Successfully logged out",
+                        "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                        "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+                    }
+                    
+                # Clear MCP token cache if the token was cached there
+                if token and response.get("action") == "success":
+                    try:
+                        from .mcp import MCPHandler
+                        MCPHandler.clear_token_from_cache(token)
+                    except Exception as cache_error:
+                        logger.warning(f"Failed to clear MCP token cache: {cache_error}")
+                        # Non-critical - token will expire from cache naturally
+            except Exception as logout_error:
+                logger.error(f"Google token logout error: {logout_error}")
+                import traceback
+                logger.error(f"Full Google logout error: {traceback.format_exc()}")
+                # Continue with basic logout even if Google revocation fails
+                response = {
+                    "action": "success",
+                    "message": "Logged out (token revocation failed)",
+                    "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                    "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+                }
+            
+            if response["action"] == "success":
+                # Clear cookies
+                self.response.set_status(200)
+                
+                # Clear OAuth cookies by setting them to expire immediately
+                for cookie_name in response.get("clear_cookies", []):
+                    try:
+                        # Clear both secure and non-secure versions of cookies
+                        self.response.set_cookie(cookie_name, "", max_age=-1, path="/", secure=False)
+                        self.response.set_cookie(cookie_name, "", max_age=-1, path="/", secure=True)
+                    except Exception as cookie_error:
+                        logger.warning(f"Failed to clear cookie {cookie_name}: {cookie_error}")
+                
+                # Return JSON response
+                return {
+                    "success": True,
+                    "message": response["message"],
+                    "redirect_url": response["redirect_url"],
+                    "method": method,
+                    "cleared_cookies": response.get("clear_cookies", [])
+                }
+            else:
+                logger.error(f"Logout failed with response: {response}")
+                return self.error_response(500, "Logout failed")
+                
+        except Exception as e:
+            logger.error(f"Logout request error: {e}")
+            import traceback
+            logger.error(f"Full logout handler traceback: {traceback.format_exc()}")
+            return self.error_response(500, "Internal server error during logout")
+
+    def _handle_google_token_logout(self, google_token: str) -> Dict[str, Any]:
+        """
+        Handle logout for Google OAuth2 tokens.
+        
+        Google tokens need to be revoked directly with Google's revocation endpoint
+        to ensure they are immediately invalidated.
+        
+        Args:
+            google_token: Google OAuth2 access token
+            
+        Returns:
+            Response dict indicating logout success/failure
+        """
+        try:
+            # Revoke the token with Google
+            revocation_successful = False
+            try:
+                from ..oauth2 import OAuth2Authenticator
+                authenticator = OAuth2Authenticator(self.config)
+                revocation_successful = authenticator.revoke_token(google_token)
+            except Exception as revoke_error:
+                logger.error(f"Error during Google token revocation: {revoke_error}")
+                # Continue with logout even if Google revocation fails
+            
+            # Always return success and clear cookies, even if Google revocation failed
+            # The user should be logged out from the local session regardless
+            return {
+                "action": "success",
+                "message": "Successfully logged out" + ("" if revocation_successful else " (Google token revocation failed)"),
+                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling Google token logout: {e}")
+            import traceback
+            logger.error(f"Google token logout error traceback: {traceback.format_exc()}")
+            
+            # Still return success to clear cookies and log user out locally
+            return {
+                "action": "success", 
+                "message": "Logged out (with errors)",
+                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                "redirect_url": f"{self.config.proto}{self.config.fqdn}/"
+            }
 
     def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
         """Create OAuth2 error response."""

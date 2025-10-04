@@ -44,11 +44,49 @@ class RootFactoryHandler(base_handler.BaseHandler):
             trustee_root = self.request.get("trustee_root")
             passphrase = self.request.get("passphrase")
             
-        # Create actor using direct method
+        # Normalise creator when using email login flow
+        if isinstance(creator, str):
+            creator = creator.strip()
+            if "@" in creator:
+                creator = creator.lower()
+
+        if not is_json and creator:
+            existing_actor = actor.Actor(config=self.config)
+            if existing_actor.get_from_creator(creator):
+                actor_id = existing_actor.id or ""
+                redirect_target = f"/{actor_id}/www"
+                if self.response:
+                    self.response.set_redirect(redirect_target)
+                    self.response.headers["Location"] = f"{self.config.root}{actor_id}/www"
+                    self.response.set_status(302, "Found")
+                return
+
+        # Create actor using enhanced method with hooks and trustee_root
         myself = actor.Actor(config=self.config)
         if not myself.create(
-            url=self.request.url or "", creator=creator, passphrase=passphrase
+            url=self.request.url or "",
+            creator=creator,
+            passphrase=passphrase,
+            trustee_root=trustee_root,
+            hooks=self.hooks
         ):
+            # Check if this is a unique creator constraint violation
+            if self.config and self.config.unique_creator and creator:
+                # Check if creator already exists
+                in_db = self.config.DbActor.DbActor()
+                exists = in_db.get_by_creator(creator=creator)
+                if exists:
+                    self.response.set_status(403, "Creator already exists")
+                    logging.warning(
+                        "Creator already exists, cannot create new Actor("
+                        + str(self.request.url)
+                        + " "
+                        + str(creator)
+                        + ")"
+                    )
+                    return
+
+            # Generic creation failure
             self.response.set_status(400, "Not created")
             logging.warning(
                 "Was not able to create new Actor("
@@ -58,15 +96,6 @@ class RootFactoryHandler(base_handler.BaseHandler):
                 + ")"
             )
             return
-        
-        # Execute actor_created lifecycle hook if hooks are available
-        if self.hooks:
-            actor_interface = self._get_actor_interface(myself)
-            if actor_interface:
-                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-        
-        if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0 and myself.store:
-            myself.store.trustee_root = trustee_root
         self.response.headers["Location"] = str(self.config.root + (myself.id or ""))
         if self.config.www_auth == "oauth" and not is_json:
             self.response.set_redirect(self.config.root + (myself.id or "") + "/www")

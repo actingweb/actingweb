@@ -22,6 +22,17 @@ The latest documentation for the released version (release branch) of this libra
 The master branch of the library has the latest features and bug fixes and the updated documentation can be found at
 `http://actingweb.readthedocs.io/en/master <http://actingweb.readthedocs.io/en/master>`_.
 
+Contributing
+------------
+
+See ``CONTRIBUTING.rst`` for local setup, dev workflow, testing, coding standards, and devtest endpoint usage.
+
+Public Demo Application
+-----------------------
+
+For a full example application and reference while developing, see the public demo repo:
+https://github.com/actingweb/actingwebdemo
+
 
 Why use actingweb?
 ---------------------
@@ -78,11 +89,10 @@ The library now provides a modern fluent API interface that simplifies applicati
     )
 
     # Decorator-based hooks instead of classes
-    @app.actor_factory
-    def create_actor(creator: str, **kwargs) -> ActorInterface:
-        actor = ActorInterface.create(creator=creator, config=app.get_config())
-        actor.properties.email = creator
-        return actor
+    @app.lifecycle_hook("actor_created")
+    def on_actor_created(actor: ActorInterface, **kwargs):
+        # Initialize new actors
+        actor.properties.email = actor.creator
 
     @app.property_hook("email")
     def handle_email_property(actor, operation, value, path):
@@ -209,7 +219,7 @@ Dependencies:
 
 - ``pynamodb`` - DynamoDB ORM for AWS DynamoDB backend
 - ``boto3`` - AWS SDK for Python (DynamoDB support)
-- ``urlfetch`` - HTTP client library
+- ``requests`` - HTTP client library
 
 Development dependencies:
 

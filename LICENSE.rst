@@ -1,25 +1,51 @@
+.. _project-license:
+
 License
-=======
+-------
 
-Copyright -2016 Cisco Systems Inc
-Copyright 2017, 2018 Greger Teigre Wedel
+.. image:: https://img.shields.io/badge/License-BSD%203--Clause-blue.svg
+   :target: https://opensource.org/licenses/BSD-3-Clause
+   :alt: License: BSD 3-Clause
 
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
-following conditions are met:
+This project is licensed under the **BSD 3-Clause License**
+(SPDX identifier: ``BSD-3-Clause``). See the `LICENSE <LICENSE>`_ file
+for the complete license text. For machine-readable tooling, files in
+this repository may include the following header:
 
-1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following
-disclaimer.
+.. code-block:: text
 
-2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the
-following disclaimer in the documentation and/or other materials provided with the distribution.
+   SPDX-License-Identifier: BSD-3-Clause
 
-3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote
-products derived from this software without specific prior written permission.
+**Copyright notices**
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
-INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+- © 2016 Cisco Systems, Inc.
+- © 2017–2025 Greger Teigre Wedel
+
+**Summary of terms (non-exhaustive)**
+
+- You may use, modify, and redistribute the software, including in
+  proprietary works, provided you:
+
+  - retain the copyright notice, license text, and disclaimer in source
+    redistributions; and
+
+  - reproduce them in documentation and/or other materials for binary
+    redistributions.
+- Neither the names of the copyright holders nor contributors may be
+  used to endorse or promote derived products without prior written
+  permission.
+- The software is provided **“AS IS”**, without warranties or conditions
+  of any kind; the authors are not liable for damages.
+
+
+**References**
+
+- OSI: The 3-Clause BSD License — https://opensource.org/licenses/BSD-3-Clause
+- SPDX License List entry — https://spdx.org/licenses/BSD-3-Clause.html
+
+**Notes for redistributors**
+
+If you ship binaries, include the license and disclaimer in your
+documentation or “About/Legal” screen, and keep this notice intact.
+If the repository includes third-party components, add attributions in
+a `NOTICE <NOTICE>`_ file (if present).

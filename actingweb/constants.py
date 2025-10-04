@@ -85,3 +85,36 @@ DEFAULT_FETCH_DEADLINE = 20  # seconds
 DEFAULT_COOKIE_MAX_AGE = 1209600  # 14 days
 MINIMUM_TOKEN_ENTROPY = 80  # bits
 DEFAULT_REFRESH_TOKEN_EXPIRY = 365 * 24 * 3600  # 1 year in seconds
+
+# System Actor IDs for Global Data Storage
+# ==========================================
+# These actor IDs are used for storing global data in attribute buckets
+# that need to be accessible across the entire ActingWeb system.
+
+# Primary system actor for core ActingWeb functionality
+ACTINGWEB_SYSTEM_ACTOR = "_actingweb_system"
+
+# OAuth2/MCP system actor for authentication-related data
+OAUTH2_SYSTEM_ACTOR = "_actingweb_oauth2"
+
+# Standard Bucket Names for Global Data
+# =====================================
+# These bucket names are used consistently across the system
+
+# Trust and relationship management
+TRUST_TYPES_BUCKET = "trust_types"
+TRUST_PERMISSIONS_BUCKET = "trust_permissions"
+
+# OAuth2 and authentication indexes
+AUTH_CODE_INDEX_BUCKET = "auth_code_index"
+ACCESS_TOKEN_INDEX_BUCKET = "access_token_index"
+REFRESH_TOKEN_INDEX_BUCKET = "refresh_token_index"
+CLIENT_INDEX_BUCKET = "client_index"
+
+# OAuth2 token storage (per-trust)
+OAUTH_TOKENS_PREFIX = "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREFIX + peer_id]
+
+# Establishment methods for trust relationships
+ESTABLISHED_VIA_ACTINGWEB = "actingweb"  # Traditional ActingWeb protocol handshake
+ESTABLISHED_VIA_OAUTH2_INTERACTIVE = "oauth2_interactive"  # OAuth2 interactive user authentication flow
+ESTABLISHED_VIA_OAUTH2_CLIENT = "oauth2_client"  # OAuth2 client credentials flow (MCP clients)

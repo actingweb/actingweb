@@ -1,5 +1,5 @@
 =====================================
-ActingWeb Specification - version 1.0
+ActingWeb Specification - version 1.1
 =====================================
 
 Introduction
@@ -19,7 +19,7 @@ reading specifications in this format and it is a well-proven approach*.
 Copyright Notice
 -----------------------------
 
-This specification is Copyright, Greger Teigre Wedel, 2007-2016.
+This specification is Copyright, Greger Teigre Wedel, 2007-2025.
 
 Permission is granted to copy, distribute, or communicate this
 specification without modification. No modification of this
@@ -350,53 +350,46 @@ functionality as specified in this specification (i.e extensions). The
 option tags to indicate which OPTIONAL functionalities that the
 mini-application has implemented and thus the actor supports.
 
-The below table summarises all the option tags (and thus optional parts)
-in this specification. Only the basic creation and deletion of an actor
-and the /properties and /meta paths are mandatory to implement, thus
-allowing the implementation of a very simple actor. Most actors will
-also support /callbacks and maybe /www to allow interaction using web
-pages and getting callback data from third party services. Third party
-interactions will often be coupled with implementation of /oauth to
-allow use of OAuth to get access.
+The following option tags (optional parts) may be advertised. Only actor creation/deletion and the
+``/properties`` and ``/meta`` paths are mandatory. Many actors also support ``/callbacks`` and
+``/www`` for web interaction; third‑party integrations often use ``/oauth``.
 
-+------------------+-----------------------------------------------------------------------------------+
-| **Tag**          | **Description**                                                                   |
-+==================+===================================================================================+
-| trust            | The trust endpoint is available to request and establish regular, two-way trust   |
-|                  | relationships between actors. If trust is available, the actor should also be     |
-|                  | able to receive callbacks on /callbacks                                           |
-+------------------+-----------------------------------------------------------------------------------+
-| onewaytrust      | The version of trust implemented is more restrictive and although one actor A     |
-|                  | has a trust relationship with another actor B giving A access to B’s              |
-|                  | functionality, the reverse is not true                                            |
-+------------------+-----------------------------------------------------------------------------------+
-| subscriptions    | The subscriptions endpoint can be used to establish subscriptions on the actor’s  |
-|                  | data, actions, or resources                                                       |
-+------------------+-----------------------------------------------------------------------------------+
-| actions          | The actions path is available and offers ways of triggering something to happen.  |
-|                  | Example:\ * /actions/turn-lights-off*                                             |
-+------------------+-----------------------------------------------------------------------------------+
-| resources        | The resources path is available and non-actingweb data, but relevant to the actor |
-|                  | can be found under the resources path. Example: GET /resources/lights to get all  |
-|                  | lights available.                                                                 |
-+------------------+-----------------------------------------------------------------------------------+
-| methods          | The methods path is available and offers non-REST based API access.               |
-|                  | Example: */methods/soap/sendMessage*                                              |
-+------------------+-----------------------------------------------------------------------------------+
-| sessions         | The sessions path is available and offers access to session-based functionality.  |
-|                  | Example: */sessions/SIP/2f2ag-2696f-42gga*                                        |
-+------------------+-----------------------------------------------------------------------------------+
-| www              | The www path is available for human web-based interaction with the actor          |
-+------------------+-----------------------------------------------------------------------------------+
-| oauth            | The oauth path is available to do an OAuth2 authorisation flow. The /oauth path   |
-|                  | should give a redirect to the 3\ :sup:`rd` party authorisation web page that can  |
-|                  | be presented to the user                                                          |
-+------------------+-----------------------------------------------------------------------------------+
-| proxy            | The actor implements capabilities to be a proxy                                   |
-+------------------+-----------------------------------------------------------------------------------+
-| nestedproperties | Announce support for deeper, nested json structures in /properties (beyond the    |
-|                  | mandatory attribute/value pairs)                                                  |
-+------------------+-----------------------------------------------------------------------------------+
+trust
+  The trust endpoint is available to request and establish regular, two‑way trust relationships
+  between actors. If trust is available, the actor SHOULD be able to receive callbacks on ``/callbacks``.
+
+onewaytrust
+  A more restrictive trust model: A can have trust to B without implying the reverse.
+
+subscriptions
+  The subscriptions endpoint is available to establish subscriptions on the actor’s data, actions, or resources.
+
+actions
+  The ``/actions`` path is available for triggering operations (e.g., ``/actions/turn-lights-off``).
+
+resources
+  The ``/resources`` path is available for non‑ActingWeb data relevant to the actor (e.g., ``GET /resources/lights``).
+
+methods
+  The ``/methods`` path is available for non‑REST API access (e.g., ``/methods/soap/sendMessage``).
+
+sessions
+  The ``/sessions`` path is available for session‑based functionality (e.g., ``/sessions/SIP/<id>``).
+
+www
+  The ``/www`` path is available for human web‑based interaction with the actor.
+
+oauth
+  The ``/oauth`` path is available to perform OAuth2 authorization flows; typically redirects to a provider page.
+
+proxy
+  The actor implements proxy capabilities.
+
+nestedproperties
+  Support for deeper, nested JSON structures in ``/properties`` (beyond basic attribute/value pairs).
+
+trustpermissions
+  The trust endpoint supports per‑relationship permission management (enhanced trust API and ``/permissions``).
 
 The Actor
 ==========
@@ -1031,194 +1024,70 @@ service can be done.
 Overview
 -----------------------------
 
-The /mcp endpoint enables ActingWeb actors to expose their functionality
-through the Model Context Protocol (MCP), allowing them to be accessed by
-AI language models and MCP-compatible clients. This provides a standardized
-way for AI systems to interact with actors' resources, execute actions, and
-use actor methods as prompts.
+ActingWeb actors MAY expose their capabilities through the Model Context Protocol (MCP) so that MCP clients can discover and use actor functionality.
 
-The mapping between ActingWeb and MCP concepts is as follows:
+Concept mapping between ActingWeb and MCP:
 
-- **ActingWeb Actions** (/actions) → **MCP Tools** (functions with side effects)
-- **ActingWeb Resources** (/resources) → **MCP Resources** (data retrieval)
-- **ActingWeb Methods** (/methods) → **MCP Prompts** (templated interactions)
+- **Actions** (/actions) → **Tools** (operations with side effects)
+- **Resources** (/resources) → **Resources** (data retrieval/streaming)
+- **Methods** (/methods) → **Prompts** (templated interactions)
 
-MCP Integration Model
+Normative Requirements
 -----------------------------
 
-When the MCP endpoint is enabled, an actor MUST expose an MCP server at the
-/mcp endpoint that translates between the ActingWeb REST protocol and the MCP
-JSON-RPC protocol. The MCP server acts as a bridge, allowing MCP clients to
-discover and interact with the actor's capabilities without needing to understand
-the ActingWeb protocol directly.
+If an actor supports MCP, the implementation MUST:
 
-The integration follows these principles:
+1. Provide a bridge that translates between ActingWeb semantics and MCP messages according to the MCP specification (transport and message framing follow MCP).
+2. Enforce the actor’s trust and permission model for all MCP operations identically to REST access control.
+3. Only expose actions/resources/methods that the actor is explicitly configured to make available via MCP.
+4. Bind each MCP session to a specific actor context before serving any tool/resource/prompt requests. The mechanism for authentication and actor selection is implementation-defined.
+5. Advertise MCP support via the standard capability mechanism (e.g., include "mcp" in the options returned by meta discovery).
 
-1. **Selective Exposure**: Not all actions, resources, or methods need to be
-   exposed through MCP. Actors use the hook system to explicitly mark which
-   endpoints should be available via MCP.
+Transport and Endpoint Location
+--------------------------------
 
-2. **OAuth2 Authentication**: MCP endpoints use OAuth2 with an external
-   authentication provider. The server validates Bearer tokens with the
-   provider's APIs and retrieves the user's email address to look up the
-   corresponding ActingWeb actor.
+This specification does not mandate a path or transport. Implementations MAY expose MCP over any MCP-compliant transport (e.g., WebSocket, Server-Sent Events, stdio, or others supported by MCP) and at any URL or connection point appropriate for the deployment.
 
-3. **Protocol Translation**: The MCP server translates between MCP's JSON-RPC
-   messages and ActingWeb's RESTful endpoints, handling data transformation
-   and error mapping.
+Authentication and Actor Binding
+--------------------------------
 
-4. **Web-Only Transport**: The MCP server is exposed as a web service endpoint,
-   not via stdio or other transports. Clients connect via HTTP/HTTPS using
-   standard web protocols (WebSocket or Server-Sent Events).
+How a requester authenticates and how that identity maps to an actor is implementation-defined. Examples include OAuth2-based web authentication, session cookies, API tokens, or mutual trust credentials. Regardless of method, the authenticated principal MUST resolve to a single actor identity for the lifetime of the MCP session.
 
-MCP Endpoint Structure
------------------------------
+Feature Exposure
+----------------
 
-The /mcp endpoint MUST be exposed at the application root level (similar to /bot)
-and use authentication to determine the actor context:
-
-**/mcp**
-  The /mcp endpoint serves as the MCP server connection point. It MUST:
-  
-  - Be accessible at the root level without requiring an actor ID in the path
-  - Use OAuth2 Bearer tokens from an external authentication provider
-  - Validate Bearer tokens with the provider's token validation API
-  - Retrieve user email from the provider's user information API
-  - Look up the ActingWeb actor based on the authenticated email address
-  - Return OAuth2 redirect response if no valid Bearer token is provided
-  - Accept WebSocket connections for bidirectional MCP communication
-  - Alternatively support Server-Sent Events (SSE) for server-to-client messages
-    with a separate POST endpoint for client-to-server messages
-  - Handle MCP JSON-RPC messages according to the MCP specification
-  - Provide proper CORS headers for browser-based clients
-
-  OAuth2 authentication and actor resolution:
-  
-  ::
-
-    # OAuth2 Bearer token authentication
-    GET /mcp HTTP/1.1
-    Authorization: Bearer <oauth2-access-token>
-    Upgrade: websocket
-    Connection: Upgrade
-    
-    # The server:
-    # 1. Validates the Bearer token with the provider's token validation API
-    # 2. Retrieves user email from the provider's user information API  
-    # 3. Looks up the corresponding ActingWeb actor by email
-    # 4. Establishes MCP session for that actor
-
-  If no valid Bearer token is provided, the server MUST return an OAuth2
-  redirect response:
-  
-  ::
-
-    HTTP/1.1 401 Unauthorized
-    Content-Type: application/json
-    
-    {
-      "error": "authentication_required",
-      "auth_url": "https://provider.example.com/oauth2/auth?client_id=...&redirect_uri=...&scope=openid+email+profile&response_type=code",
-      "message": "Please authenticate with the configured OAuth2 provider to access MCP"
-    }
-
-  Connection negotiation with OAuth2:
-  
-  ::
-
-    # WebSocket connection with OAuth2
-    GET /mcp HTTP/1.1
-    Authorization: Bearer <oauth2-access-token>
-    Upgrade: websocket
-    Connection: Upgrade
-    
-    # Or SSE connection with OAuth2
-    GET /mcp HTTP/1.1
-    Authorization: Bearer <oauth2-access-token>
-    Accept: text/event-stream
-
-Hook-based MCP Exposure
------------------------------
-
-Actors control which functionality is exposed through MCP using decorators
-or configuration. The following attributes on hooks indicate MCP exposure:
-
-::
-
-  @action_hook("send_notification")
-  @mcp_tool(description="Send a notification to the user")
-  def handle_notification(actor, action_name, data):
-      # Implementation
-      return {"status": "sent"}
-
-  @resource_hook("config")
-  @mcp_resource(uri_template="config://{path}")
-  def get_config(actor, path):
-      # Implementation
-      return config_data
-
-  @method_hook("generate_report")
-  @mcp_prompt(title="Generate Report", 
-              arguments=["report_type", "date_range"])
-  def generate_report_prompt(actor, method_name, data):
-      # Implementation
-      return prompt_template
-
-MCP Feature Mapping
------------------------------
-
-**Tools (from Actions)**
-
-ActingWeb actions that trigger external effects map naturally to MCP tools.
-The MCP server MUST:
-
-- Generate tool schemas from action definitions
-- Handle parameter validation and type conversion
-- Execute actions through the standard /actions endpoint
-- Return structured results in MCP format
-
-**Resources (from Resources)**
-
-ActingWeb resources provide data access, mapping to MCP resources. The
-MCP server MUST:
-
-- Create resource URIs following MCP conventions
-- Support resource discovery and listing
-- Transform ActingWeb resource responses to MCP format
-- Handle resource subscriptions if supported
-
-**Prompts (from Methods)**
-
-ActingWeb methods that generate templated responses or interactions map
-to MCP prompts. The MCP server MUST:
-
-- Extract prompt templates from method implementations
-- Support argument substitution
-- Return formatted prompt content
+Implementations MUST provide a configuration mechanism to select which actions, resources, and methods are exposed as MCP tools, resources, and prompts. Implementations SHOULD support per-item descriptions, schemas, and argument validation to match MCP expectations.
 
 Security Considerations
 -----------------------------
 
-MCP integration introduces additional security considerations:
+1. **Consent and Scope**: Do not expose functionality through MCP without explicit configuration. Limit scope to least privilege.
+2. **Access Control**: Apply the actor’s trust/permission rules to all MCP requests and responses.
+3. **Rate Limiting**: Consider rate limits and resource usage safeguards for automated clients.
+4. **Auditability**: Maintain logs sufficient to trace MCP interactions where appropriate.
 
-1. **Consent**: Actors MUST NOT expose any functionality through MCP without
-   explicit configuration or user consent.
+Implementation Guidance (Non‑Normative)
+---------------------------------------
 
-2. **Access Control**: The MCP server MUST respect ActingWeb's trust model,
-   only exposing functionality appropriate to the authenticated client's
-   trust level.
+- Deployments commonly offer a convenient connection point (for example, a web path like "/mcp"), but this is not required.
+- Web transports (WebSocket/SSE) are frequently used in hosted environments; local tools may use stdio.
+- Exposed tools/resources/prompts should include human-readable descriptions to aid client discovery.
 
-3. **Rate Limiting**: MCP endpoints SHOULD implement rate limiting to prevent
-   abuse by AI systems making excessive requests.
-
-4. **Audit Trail**: All MCP interactions SHOULD be logged for security and
-   debugging purposes.
-
-Option Tag
+Option Tags
 -----------------------------
 
-Actors supporting MCP MUST include "mcp" in their supported option tags
-returned by /meta/actingweb/supported.
+Actors supporting MCP MUST indicate this through their capability discovery so that clients can adapt accordingly.
+
+**Trust Permission Management**
+
+Actors supporting per-relationship permission management SHOULD include 
+"trustpermissions" in their supported option tags returned by 
+/meta/actingweb/supported. This indicates support for:
+
+* Enhanced trust relationship endpoints with permission query parameters
+* Dedicated permission management endpoints (``/trust/{relationship}/{peerid}/permissions``)
+* Per-relationship permission overrides that modify trust type defaults
+* Standardized permission structures for interoperability
 
 /trust - Trust Relationships (OPTIONAL)
 =======================================
@@ -1778,11 +1647,138 @@ A mini-application MAY implement assigning of rights to a specific
 instance of a trust relationship (i.e. rights per actor). This allows
 granular access control. For example allowing home contact information
 to be available to some actors, while others only get access to business
-information. Whether this granular access control is implemented
-assigning a new type of trust relationship to a defined access group or
-on an individual basis is outside the scope of this specification. The
-same holds for how to determine which relationship to get upgraded or
-reduced rights.
+information.
+
+**Permission Management API (RECOMMENDED)**
+
+To support per-relationship permission customization, mini-applications 
+SHOULD implement the following API extensions to the /trust endpoint:
+
+**Enhanced Trust Relationship Endpoint**
+
+The GET /trust/{relationship}/{peerid} endpoint MAY support a 
+``permissions`` query parameter to include permission override information:
+
+GET /{actorid}/trust/{relationship}/{peerid}?permissions=true
+
+If permission overrides exist for the relationship, the response SHOULD include
+a ``permissions`` field containing the custom permission rules.
+
+The PUT /trust/{relationship}/{peerid} endpoint MAY accept a ``permissions``
+field in the request body to update permission overrides alongside standard
+trust relationship properties.
+
+**Dedicated Permission Management Endpoints (OPTIONAL)**
+
+For applications requiring extensive permission customization, the following
+endpoints provide dedicated permission management:
+
+``GET /{actorid}/trust/{relationship}/{peerid}/permissions``
+  Retrieve effective permissions for a specific trust relationship.
+  Returns either custom permission overrides or default permissions from the trust type.
+  Includes ``is_custom`` and ``source`` fields to indicate permission origin.
+
+``PUT /{actorid}/trust/{relationship}/{peerid}/permissions``  
+  Create or update permission overrides for a trust relationship.
+  Requires the trust relationship to exist.
+
+``DELETE /{actorid}/trust/{relationship}/{peerid}/permissions``
+  Remove permission overrides, reverting to trust type defaults.
+
+**Permission Structure**
+
+Permission overrides SHOULD follow this structure to ensure interoperability:
+
+``properties``
+  Controls access to actor property storage with patterns, operations, and 
+  excluded patterns for fine-grained property access control.
+
+``methods``
+  Controls ActingWeb method calls with allowed and denied lists supporting
+  glob patterns for method name matching.
+
+``actions``  
+  Controls ActingWeb action execution with allowed and denied lists for
+  specific action permissions.
+
+``tools`` (for MCP clients)
+  Controls MCP tool access with allowed and denied lists for tool-specific
+  permissions.
+
+``resources`` (for MCP clients)
+  Controls MCP resource access with URI patterns and operations for
+  resource-specific permissions.
+
+``prompts`` (for MCP clients)
+  Controls MCP prompt access with allowed patterns for prompt-specific
+  permissions.
+
+**Permission Response Format**
+
+The GET permissions endpoint SHOULD return a JSON response with these additional fields:
+
+``is_custom`` (boolean)
+  True if the permissions are custom overrides, false if using trust type defaults.
+
+``source`` (string)  
+  Indicates the source of permissions: "custom_override" for custom permissions
+  or "trust_type_default" for default permissions from the trust type registry.
+
+``created_by`` (string, optional)
+  User or system that created the custom permissions (if is_custom is true).
+
+``updated_at`` (string, optional)
+  Timestamp when custom permissions were last updated (if is_custom is true).
+
+``notes`` (string, optional)
+  Description or notes about the permissions.
+
+Example response with custom permissions::
+
+    {
+        "actor_id": "actor123",
+        "peer_id": "peer456", 
+        "trust_type": "mcp_power_user",
+        "tools": {
+            "allowed": ["search", "fetch", "create_note"],
+            "denied": ["delete_*"]
+        },
+        "is_custom": true,
+        "source": "custom_override",
+        "created_by": "user@example.com",
+        "updated_at": "2024-01-15T10:30:00Z",
+        "notes": "Enhanced permissions for power user"
+    }
+
+Example response with default permissions::
+
+    {
+        "actor_id": "actor123", 
+        "peer_id": "peer456",
+        "trust_type": "mcp_power_user",
+        "tools": {
+            "allowed": ["search", "fetch", "create_note", "update_note", "analyze"]
+        },
+        "is_custom": false,
+        "source": "trust_type_default",
+        "created_by": "system",
+        "updated_at": null,
+        "notes": "Default permissions for AI Assistant (Power User)"
+    }
+
+**Permission Evaluation**
+
+When evaluating permissions for a trust relationship, the system SHOULD:
+
+1. Start with base permissions defined by the trust type
+2. Apply any per-relationship permission overrides  
+3. Evaluate patterns using glob matching with ``*`` (any characters) and ``?`` (single character)
+4. Apply precedence: explicit deny > explicit allow > trust type defaults
+5. Default to deny if no matching rule is found
+
+This approach provides standardized per-relationship permission management
+while maintaining backward compatibility with existing trust relationship
+implementations.
 
 Using a Trustee To Manage Relationships
 ---------------------------------------

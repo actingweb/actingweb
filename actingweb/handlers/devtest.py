@@ -14,14 +14,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         try:
             body = self.request.body
@@ -66,14 +65,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         paths = path.split("/")
         if paths[0] == "proxy":
@@ -108,14 +106,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         paths = path.split("/")
         if paths[0] == "proxy":
@@ -186,14 +183,13 @@ class DevtestHandler(base_handler.BaseHandler):
         if not self.config.devtest:
             self.response.set_status(404)
             return
-        (myself, check) = auth.init_actingweb(
-            appreq=self,
-            actor_id=actor_id,
-            path="devtest",
-            subpath=path,
-            config=self.config,
-        )
-        if not myself or not check or check.response["code"] != 200:
+        # For devtest endpoints, only require authentication, not specific authorization
+        # since devtest is a special testing endpoint that should work for creators
+        auth_result = self.authenticate_actor(actor_id, "devtest", subpath=path)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        if not myself:
             return
         try:
             body = self.request.body
@@ -220,25 +216,20 @@ class DevtestHandler(base_handler.BaseHandler):
                     self.response.headers["Location"] = str(mytwin["baseuri"])
                     self.response.set_status(200)
                     return
-        elif paths[0] == "ping":
-            self.response.set_status(204)
-            return
         elif paths[0] == "attribute":
-            if paths[1] and len(paths[1]) > 0:
+            if len(paths) > 1:
                 bucket = attribute.Attributes(
                     actor_id=myself.id, bucket=paths[1], config=self.config
                 )
-                if params:
-                    for k, v in params.items():
-                        bucket.set_attr(k, v, timestamp=datetime.datetime.utcnow())
+                # Create bucket with optional attributes from params
+                if params and isinstance(params, dict):
+                    for key, value in params.items():
+                        bucket.set_attr(key, value, timestamp=datetime.datetime.utcnow())
+                    # Return the created content as JSON
                     out = json.dumps(params)
                     if self.response:
                         self.response.write(out)
-                else:
-                    if self.response:
-                        self.response.set_status(400)
-                    return
-                self.response.headers["Content-Type"] = "application/json"
+                    self.response.headers["Content-Type"] = "application/json"
                 self.response.set_status(200)
                 return
         self.response.set_status(404)

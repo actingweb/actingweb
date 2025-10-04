@@ -1,6 +1,8 @@
 Getting Started
 ===============
 
+This is a longer, step‑by‑step tutorial that builds on the short Quickstart. If you’re new to ActingWeb, do the Quickstart first (minimal Flask/FastAPI app, create an actor), then come back here for deeper patterns, hooks, and integration details.
+
 The easiest way to get started is to use the modern ActingWeb interface that provides a clean, fluent API for building ActingWeb applications. For a complete example, see the actingwebdemo mini-application at `http://acting-web-demo.readthedocs.io/ <http://acting-web-demo.readthedocs.io/>`_.
 
 Quick Start
@@ -19,12 +21,11 @@ Create a basic ActingWeb application:
         fqdn="myapp.example.com"
     ).with_web_ui().with_devtest()
 
-    # Define actor factory
-    @app.actor_factory
-    def create_actor(creator: str, **kwargs) -> ActorInterface:
-        actor = ActorInterface.create(creator=creator, config=app.get_config())
-        actor.properties.email = creator
-        return actor
+    # Initialize actors after creation
+    @app.lifecycle_hook("actor_created")
+    def on_actor_created(actor: ActorInterface, **kwargs):
+        # Set the creator email as a property
+        actor.properties.email = actor.creator
 
     # Add property hooks
     @app.property_hook("email")
@@ -64,6 +65,32 @@ For production applications, integrate with Flask:
 
     if __name__ == "__main__":
         flask_app.run()
+
+FastAPI Integration (non‑MCP)
+-----------------------------
+
+If you prefer FastAPI and do not need MCP features:
+
+.. code-block:: python
+
+    from fastapi import FastAPI
+    from actingweb.interface import ActingWebApp
+
+    app = FastAPI()
+
+    aw = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com",
+    ).with_web_ui(enable=True)
+
+    # Explicitly disable MCP exposure for this app
+    aw.with_mcp(enable=False)
+
+    # Auto-generate all ActingWeb routes under the FastAPI app
+    aw.integrate_fastapi(app, templates_dir="templates")
+
+    # Run with: uvicorn main:app --reload
 
 How it works
 ------------
@@ -280,6 +307,15 @@ ActingWeb currently supports DynamoDB as the database backend. For local develop
     )
 
 For production, ensure your AWS credentials are properly configured and DynamoDB tables are created with the appropriate permissions.
+
+For DynamoDB Local, set the following environment variables before running your app:
+
+.. code-block:: bash
+
+    export AWS_ACCESS_KEY_ID=local
+    export AWS_SECRET_ACCESS_KEY=local
+    export AWS_DEFAULT_REGION=us-east-1
+    export AWS_DB_HOST=http://localhost:8000
 
 Testing
 -------

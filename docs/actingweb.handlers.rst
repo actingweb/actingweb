@@ -36,14 +36,6 @@ actingweb.handlers.callbacks module
     :undoc-members:
     :show-inheritance:
 
-actingweb.handlers.devtest module
----------------------------------
-
-.. automodule:: actingweb.handlers.devtest
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 actingweb.handlers.factory module
 ---------------------------------
 
@@ -60,10 +52,18 @@ actingweb.handlers.meta module
     :undoc-members:
     :show-inheritance:
 
-actingweb.handlers.oauth module
--------------------------------
+actingweb.handlers.oauth2\_callback module
+-------------------------------------------
 
-.. automodule:: actingweb.handlers.oauth
+.. automodule:: actingweb.handlers.oauth2_callback
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+actingweb.handlers.oauth2\_endpoints module
+--------------------------------------------
+
+.. automodule:: actingweb.handlers.oauth2_endpoints
     :members:
     :undoc-members:
     :show-inheritance:
@@ -115,4 +115,3 @@ actingweb.handlers.www module
     :members:
     :undoc-members:
     :show-inheritance:
-

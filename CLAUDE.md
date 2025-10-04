@@ -200,6 +200,70 @@ Add type checking to your CI pipeline:
 
 This ensures type safety is maintained across all contributions and prevents type-related runtime errors.
 
+## Singleton Initialization
+
+**CRITICAL:** ActingWeb's unified access control system requires explicit initialization of singletons at application startup to prevent performance issues during OAuth2 flows.
+
+### Required at Application Startup
+
+Add this to your application immediately after creating the ActingWeb app:
+
+```python
+from actingweb.interface import ActingWebApp
+from actingweb.singleton_warmup import initialize_actingweb_singletons
+
+# Create your ActingWeb app
+app = ActingWebApp(...)
+
+# CRITICAL: Initialize singletons at startup
+try:
+    initialize_actingweb_singletons(app.get_config())
+    logger.info("ActingWeb singletons initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize ActingWeb singletons: {e}")
+    # Continue anyway - the system will fall back gracefully
+```
+
+### What Gets Initialized
+
+The singleton initialization sets up:
+
+1. **Trust Type Registry** - Loads default and custom trust types
+2. **Permission Evaluator** - Compiles patterns and sets up caches  
+3. **Trust Permission Store** - Initializes attribute bucket access
+
+### Performance Impact
+
+**Without initialization:**
+- OAuth2 flows take 4+ minutes (lazy loading blocks on first use)
+- Permission checks cause delays during first MCP requests
+- Database operations block request threads
+
+**With initialization:**
+- OAuth2 flows complete in <1 second
+- Permission checks are fast from first use
+- No blocking during request processing
+
+### Debugging Initialization Issues
+
+If initialization fails, check:
+
+```bash
+# Verify database connectivity
+aws dynamodb list-tables
+
+# Check environment variables
+env | grep AWS
+
+# Test basic ActingWeb functionality
+python -c "from actingweb import actor; print('ActingWeb imports OK')"
+```
+
+Common issues:
+- Missing AWS credentials or DynamoDB access
+- Network connectivity problems
+- Database table creation permissions
+
 ### Documentation
 The project uses Sphinx for documentation:
 ```bash
@@ -293,7 +357,7 @@ Key configuration options in `actingweb/config.py` (for legacy applications):
 Core dependencies (from setup.py):
 - `pynamodb`: DynamoDB ORM
 - `boto3`: AWS SDK
-- `urlfetch`: HTTP client library
+- `requests`: HTTP client library
 
 ## API Endpoints and Behavior
 
@@ -330,6 +394,59 @@ app = (
     # Comment out .with_oauth() to disable OAuth2
 )
 ```
+
+## Singleton Initialization
+
+**CRITICAL**: For applications using the unified access control system, you MUST initialize ActingWeb singletons at application startup to avoid severe performance issues.
+
+### Performance Impact
+
+Without proper initialization:
+- OAuth2 flows may hang for 4+ minutes
+- First requests trigger expensive singleton initialization
+- Database operations, system actor creation, and pattern compilation block request threads
+
+### Required Initialization
+
+Add this code at application startup, before serving requests:
+
+```python
+# CRITICAL: Initialize ActingWeb singletons at application startup
+try:
+    from actingweb.singleton_warmup import initialize_actingweb_singletons
+    initialize_actingweb_singletons(app.get_config())
+    logger.info("ActingWeb singletons initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize ActingWeb singletons: {e}")
+    # Continue anyway - system will fall back gracefully with degraded performance
+    logger.warning("Continuing with degraded performance - singletons will initialize lazily")
+```
+
+### What Gets Initialized
+
+1. **Trust Type Registry**: Pre-compiles all trust types and their permissions
+2. **Permission Evaluator**: Pre-loads system patterns and rule engine
+3. **Trust Permission Store**: Initializes custom permission overrides system
+
+### Debugging Singleton Issues
+
+If you see these symptoms:
+- OAuth2 callbacks hanging for minutes
+- First requests extremely slow after startup
+- Logs showing "Initializing trust type registry..." during requests
+
+Then singleton initialization is happening during request processing instead of at startup.
+
+**Check initialization logs:**
+```
+ActingWeb singletons initialized successfully
+Trust type registry initialized with X types
+Permission evaluator initialized successfully  
+Trust permission store initialized
+```
+
+**Handle initialization failures:**
+The system includes graceful fallbacks - if singleton initialization fails at startup, individual components will fall back to lazy loading with warnings.
 
 ## Security Notes
 
@@ -480,6 +597,164 @@ To maintain code quality and avoid pylint/pylance issues, follow these guideline
       return True
   ```
 
+## Runtime Context System
+
+ActingWeb provides a runtime context system to solve the architectural constraint where hook functions have fixed signatures but need access to request-specific context.
+
+### The Problem
+
+**Hook Function Signatures Are Fixed:**
+```python
+def hook_function(actor, action_name, data) -> Any
+```
+
+**But Multiple Clients Access Same Actor:**
+- MCP clients (ChatGPT, Claude, Cursor)
+- Web browsers with different sessions
+- OAuth2 API clients
+- Each needs different behavior/formatting
+
+### The Solution
+
+**Runtime Context Attachment:**
+```python
+# During request authentication:
+from actingweb.runtime_context import RuntimeContext
+
+runtime_context = RuntimeContext(actor)
+runtime_context.set_mcp_context(
+    client_id="mcp_abc123",
+    trust_relationship=trust_obj,
+    peer_id="oauth2_client:user@example.com:mcp_abc123"
+)
+
+# In hook functions:
+def handle_search(actor, action_name, data):
+    from actingweb.runtime_context import RuntimeContext, get_client_info_from_context
+
+    # Get client info for customization
+    client_info = get_client_info_from_context(actor)
+    if client_info:
+        client_type = client_info["type"]  # "mcp", "oauth2", "web"
+        client_name = client_info["name"]  # "Claude", "ChatGPT", etc.
+
+        # Customize response based on client
+        if client_type == "mcp" and "claude" in client_name.lower():
+            # Use Claude-optimized formatting
+            pass
+```
+
+### Context Types
+
+**MCP Context** (for Model Context Protocol clients):
+```python
+runtime_context.set_mcp_context(
+    client_id="mcp_abc123",
+    trust_relationship=trust_record,  # Contains client_name, client_version
+    peer_id="oauth2_client:user@example.com:mcp_abc123",
+    token_data={"scope": "mcp", "expires_at": 1234567890}
+)
+```
+
+**OAuth2 Context** (for API clients):
+```python
+runtime_context.set_oauth2_context(
+    client_id="web_app_123",
+    user_email="user@example.com",
+    scopes=["read", "write"],
+    token_data={"access_token": "...", "refresh_token": "..."}
+)
+```
+
+**Web Context** (for browser sessions):
+```python
+runtime_context.set_web_context(
+    session_id="sess_abc123",
+    user_agent="Mozilla/5.0...",
+    ip_address="192.168.1.1",
+    authenticated_user="user@example.com"
+)
+```
+
+### Helper Functions
+
+**Unified Client Detection:**
+```python
+from actingweb.runtime_context import get_client_info_from_context
+
+def detect_client_type(actor):
+    client_info = get_client_info_from_context(actor)
+    if client_info:
+        return {
+            "name": client_info["name"],      # "Claude", "ChatGPT", "Web Browser"
+            "version": client_info["version"], # Client version if available
+            "type": client_info["type"],      # "mcp", "oauth2", "web"
+            "platform": client_info["platform"] # User agent or platform info
+        }
+    return None
+```
+
+### Request Type Detection
+
+```python
+def handle_action(actor, action_name, data):
+    runtime_context = RuntimeContext(actor)
+    request_type = runtime_context.get_request_type()
+
+    if request_type == "mcp":
+        # Handle MCP client request
+        mcp_context = runtime_context.get_mcp_context()
+        trust_relationship = mcp_context.trust_relationship
+
+    elif request_type == "oauth2":
+        # Handle API client request
+        oauth2_context = runtime_context.get_oauth2_context()
+
+    elif request_type == "web":
+        # Handle web browser request
+        web_context = runtime_context.get_web_context()
+```
+
+### Lifecycle Management
+
+**Context is Request-Scoped:**
+- Set during authentication/request processing
+- Available throughout the request lifecycle
+- Should be cleaned up after request completion
+- Does not persist between requests
+
+**Cleanup (Optional):**
+```python
+# Clean up after request processing (framework usually handles this)
+runtime_context.clear_context()
+```
+
+### Extension for Custom Context
+
+```python
+# Add custom context types
+runtime_context.set_custom_context("my_service", {
+    "service_id": "svc_123",
+    "api_version": "v2",
+    "features": ["advanced_search", "export"]
+})
+
+# Access custom context
+my_context = runtime_context.get_custom_context("my_service")
+```
+
+### Design Rationale
+
+This approach was chosen because:
+
+1. **Fixed Hook Signatures**: Can't modify `hook(actor, action_name, data)` without breaking compatibility
+2. **Multi-Client Support**: Same actor serves multiple clients simultaneously
+3. **No Framework Changes**: Works within existing ActingWeb architecture
+4. **Type Safety**: Provides structured, documented context types
+5. **Extensibility**: Can add new context types without breaking existing code
+
+The runtime context is a pragmatic solution to the architectural constraint while maintaining clean, documented APIs.
+
 ### Before Committing
 Always run these checks before committing code:
 1. Ensure all pylance/mypy issues are resolved
@@ -487,3 +762,4 @@ Always run these checks before committing code:
 3. Test that method overrides maintain compatibility
 4. Verify None checks are in place for optional values
 5. Use correct hook types for application-level vs actor-level callbacks
+6. Use RuntimeContext for request-specific context instead of ad-hoc attributes

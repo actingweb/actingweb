@@ -259,6 +259,9 @@ The library uses modern Python development practices with Poetry:
     # Install development dependencies:
     poetry install --with dev,docs
 
+    # Install git hooks (recommended for contributors):
+    bash scripts/install-git-hooks.sh
+
     # Run tests:
     poetry run pytest
 
@@ -273,3 +276,29 @@ The library uses modern Python development practices with Poetry:
 
     # Activate virtual environment:
     poetry shell
+
+Git Hooks
+^^^^^^^^^
+
+The repository includes a pre-commit hook that automatically regenerates ``docs/requirements.txt``
+when ``pyproject.toml`` is modified. This ensures ReadTheDocs can build documentation with the
+correct dependencies.
+
+**Install the hook:**
+
+::
+
+    bash scripts/install-git-hooks.sh
+
+**What it does:**
+
+- Detects when ``pyproject.toml`` is changed in a commit
+- Runs ``poetry export --with docs --without-hashes -o docs/requirements.txt``
+- Automatically stages the updated ``docs/requirements.txt``
+- Fails the commit if export fails
+
+**Manual regeneration:**
+
+::
+
+    poetry export --with docs --without-hashes -o docs/requirements.txt

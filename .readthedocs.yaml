@@ -9,19 +9,16 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.13"
+  jobs:
+    pre_install:
+      - pip install poetry
+    post_install:
+      - poetry install --with docs
 
 # Build documentation in the docs/ directory with Sphinx
 sphinx:
   configuration: conf.py
   fail_on_warning: false
-
-# Optionally declare the Python requirements required to build your docs
-python:
-  install:
-    - method: poetry
-      path: .
-      groups:
-        - docs
 
 # Formats to build (PDF and ePub disabled for faster builds)
 formats: []

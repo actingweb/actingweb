@@ -14,11 +14,18 @@ build:
       - pip install poetry
     post_install:
       - poetry install --with docs
+      - poetry run pip install sphinx-rtd-theme sphinx-copybutton
 
-# Build documentation in the docs/ directory with Sphinx
+# Build documentation with Sphinx
 sphinx:
   configuration: conf.py
   fail_on_warning: false
+
+# Install Python dependencies into the same environment Sphinx uses
+python:
+  install:
+    - method: pip
+      path: .
 
 # Formats to build (PDF and ePub disabled for faster builds)
 formats: []

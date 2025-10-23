@@ -1161,7 +1161,9 @@ class FastAPIIntegration:
             "Access-Control-Max-Age": "86400",
         }
 
-        return JSONResponse(content=result, headers=cors_headers)
+        # Use status code from handler if set (e.g., 201 for client registration)
+        status_code = webobj.response.status_code if hasattr(webobj.response, 'status_code') else 200
+        return JSONResponse(content=result, headers=cors_headers, status_code=status_code)
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""
@@ -1195,11 +1197,9 @@ class FastAPIIntegration:
 
         handler = mcp.MCPHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
 
-        # Execute appropriate method based on request method
+        # Execute appropriate method based on request method (now async!)
         if request.method == "GET":
-            # Run the synchronous handler in a thread pool
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self.executor, handler.get)
+            result = await handler.get()
         elif request.method == "POST":
             # Parse JSON body for POST requests
             try:
@@ -1210,9 +1210,7 @@ class FastAPIIntegration:
             except (json.JSONDecodeError, ValueError):
                 data = {}
 
-            # Run the synchronous handler in a thread pool
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self.executor, handler.post, data)
+            result = await handler.post(data)
         else:
             raise HTTPException(status_code=405, detail="Method not allowed")
 

@@ -59,6 +59,6 @@ Base Paths
 Notes
 =====
 
-- Optional MCP endpoints are controlled by with_mcp(enable=...); see :doc:`mcp-applications`.
+- Optional MCP endpoints are controlled by with_mcp(enable=...) and **require FastAPI integration**; see :doc:`mcp-applications`.
 - Development routes are available when with_devtest(True) is set.
 

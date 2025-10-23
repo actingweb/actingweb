@@ -39,8 +39,8 @@ The library follows a micro-services model where each user gets their own "actor
 
 ### Modern Interface
 - **ActingWebApp** (`actingweb/interface/app.py`): Fluent API for application configuration
-- **Flask Integration** (`actingweb/interface/integrations/flask_integration.py`): Auto Flask route generation
-- **FastAPI Integration** (`actingweb/interface/integrations/fastapi_integration.py`): Async FastAPI support with OpenAPI docs
+- **Flask Integration** (`actingweb/interface/integrations/flask_integration.py`): Auto Flask route generation (MCP not supported - use FastAPI)
+- **FastAPI Integration** (`actingweb/interface/integrations/fastapi_integration.py`): Async FastAPI support with OpenAPI docs (REQUIRED for MCP)
 - **Actor Interface** (`actingweb/interface/actor_interface.py`): Modern actor management wrapper
 - **Hook Registry** (`actingweb/interface/hook_registry.py`): Decorator-based event handling
 
@@ -295,6 +295,34 @@ make html
 
 # Other Sphinx commands available via make
 make help
+```
+
+## MCP (Model Context Protocol) Support
+
+**IMPORTANT: MCP requires FastAPI integration.** Flask integration does not support MCP due to async/await requirements.
+
+### Why FastAPI-Only for MCP?
+
+The official MCP SDK is built on async/await patterns:
+- All MCP server handlers are async functions
+- Optimal performance for I/O-bound operations
+- Proper event loop management for concurrent requests
+- Native support in FastAPI, not in Flask
+
+### Using MCP
+
+```python
+from fastapi import FastAPI
+from actingweb.interface import ActingWebApp
+
+# Create ActingWeb app with MCP enabled
+app = ActingWebApp(...).with_mcp(enable=True)
+
+# MUST use FastAPI integration
+fastapi_app = FastAPI()
+app.integrate_fastapi(fastapi_app, templates_dir="templates")
+
+# Flask integration will return HTTP 501 for /mcp endpoints
 ```
 
 ## Configuration

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authorize Access</title>
+</head>
+<body>
+    <h1>Authorize {{ client_name }}</h1>
+    <p>{{ client_name }} wants to access your ActingWeb actor.</p>
+    <form action="/oauth/authorize" method="post">
+        <input type="hidden" name="client_id" value="{{ client_id }}" />
+        <input type="hidden" name="state" value="{{ state }}" />
+        <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}" />
+        <button type="submit" name="authorized" value="true">Allow</button>
+        <button type="submit" name="authorized" value="false">Deny</button>
+    </form>
+</body>
+</html>

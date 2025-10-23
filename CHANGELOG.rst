@@ -2,6 +2,40 @@
 CHANGELOG
 =========
 
+v3.4: TBD
+-----------------
+
+BREAKING CHANGES
+~~~~~~~~~~~~~~~~
+
+**MCP Now Requires FastAPI Integration**
+
+- MCP endpoints now require FastAPI integration due to async/await requirements
+- Flask integration returns HTTP 501 for ``/mcp`` endpoints with instructions to use FastAPI
+- Test harness migrated from Flask to FastAPI for MCP support
+- The official MCP Python SDK uses async handlers which are not compatible with Flask's synchronous model
+
+**Migration Path**: If using MCP, switch from Flask to FastAPI integration:
+
+.. code-block:: python
+
+    # Old (Flask - no longer supports MCP)
+    from flask import Flask
+    flask_app = Flask(__name__)
+    aw_app.integrate_flask(flask_app)
+
+    # New (FastAPI - required for MCP)
+    from fastapi import FastAPI
+    fastapi_app = FastAPI()
+    aw_app.integrate_fastapi(fastapi_app, templates_dir="templates")
+
+FIXED
+~~~~~
+
+- Fixed MCP handler missing ``get_server_manager()`` call, causing coroutine serialization errors
+- Fixed integration tests to use FastAPI instead of Flask for proper MCP async support
+
+
 v3.3: Oct 4, 2025
 -----------------
 

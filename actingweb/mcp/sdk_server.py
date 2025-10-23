@@ -84,6 +84,9 @@ class ActingWebMCPServer:
     def _setup_handlers(self) -> None:
         """Set up MCP protocol handlers."""
 
+        # Store handler references for direct access
+        self.handlers = {}
+
         # Tools handler - expose action hooks as MCP tools
         @self.server.list_tools()
         async def handle_list_tools() -> List[Tool]:
@@ -137,8 +140,11 @@ class ActingWebMCPServer:
             logger.debug(f"Listed {len(tools)} tools for actor {self.actor_id} (after permission filtering)")
             return tools
 
+        # Store handler reference
+        self.handlers['tools/list'] = handle_list_tools
+
         @self.server.call_tool()
-        async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
+        async def handle_call_tool(name: str, arguments: Dict[str, Any]):
             """Execute a tool (ActingWeb action hook) with permission checking."""
             if not self.hooks:
                 raise ValueError("No hooks registry available")
@@ -173,22 +179,49 @@ class ActingWebMCPServer:
                                     if asyncio.iscoroutine(result):
                                         result = await result
 
-                                    # Format result as text content
-                                    if isinstance(result, dict):
-                                        import json
+                                    # Format result based on MCP content structure
+                                    # Per MCP SDK docs:
+                                    # - Return dict -> goes into structuredContent + serialized JSON in content
+                                    # - Return List[ContentBlock] -> goes into content only
 
-                                        result_text = json.dumps(result, indent=2)
+                                    if isinstance(result, dict):
+                                        # Check if result has structuredContent field
+                                        if "structuredContent" in result:
+                                            # Return the structuredContent dict directly
+                                            # MCP SDK will handle putting it in both structuredContent and content
+                                            logger.debug(f"Tool {name} returned structuredContent, returning as dict for MCP SDK")
+                                            return result["structuredContent"]
+
+                                        # Check if result has content array (for storage confirmations, errors)
+                                        elif "content" in result and isinstance(result.get("content"), list):
+                                            logger.debug(f"Tool {name} returned content array, converting to TextContent list")
+                                            # Extract TextContent items from content array
+                                            content_items = result["content"]
+                                            text_contents = []
+                                            for item in content_items:
+                                                if isinstance(item, dict) and item.get("type") == "text":
+                                                    text_contents.append(TextContent(type="text", text=item["text"]))
+                                            return text_contents if text_contents else [TextContent(type="text", text="")]
+
+                                        # Standard dict response - return as-is for structuredContent
+                                        else:
+                                            logger.debug(f"Tool {name} returned dict, will be wrapped as structuredContent by MCP SDK")
+                                            return result
+
+                                    # Non-dict result - wrap as text content
                                     else:
                                         result_text = str(result)
-
-                                    logger.debug(f"Tool {name} executed successfully for actor {self.actor_id}")
-                                    return [TextContent(type="text", text=result_text)]
+                                        logger.debug(f"Tool {name} returned non-dict, wrapping as TextContent")
+                                        return [TextContent(type="text", text=result_text)]
 
                                 except Exception as e:
                                     logger.error(f"Error executing tool {name}: {e}")
                                     return [TextContent(type="text", text=f"Error: {str(e)}")]
 
             raise ValueError(f"Tool not found: {name}")
+
+        # Store handler reference
+        self.handlers['tools/call'] = handle_call_tool
 
         # Resources handler - expose resources from hooks or static resources
         @self.server.list_resources()
@@ -236,6 +269,9 @@ class ActingWebMCPServer:
 
             logger.debug(f"Listed {len(resources)} resources for actor {self.actor_id} (after permission filtering)")
             return resources
+
+        # Store handler reference
+        self.handlers['resources/list'] = handle_list_resources
 
         @self.server.read_resource()
         async def handle_read_resource(uri: AnyUrl) -> str:
@@ -321,6 +357,9 @@ class ActingWebMCPServer:
                 logger.error(f"Error reading resource {uri}: {e}")
                 raise ValueError(f"Error reading resource {uri}: {str(e)}")
 
+        # Store handler reference
+        self.handlers['resources/read'] = handle_read_resource
+
         # Prompts handler - expose method hooks as MCP prompts
         @self.server.list_prompts()
         async def handle_list_prompts() -> List[Prompt]:
@@ -371,6 +410,9 @@ class ActingWebMCPServer:
 
             logger.debug(f"Listed {len(prompts)} prompts for actor {self.actor_id} (after permission filtering)")
             return prompts
+
+        # Store handler reference
+        self.handlers['prompts/list'] = handle_list_prompts
 
         @self.server.get_prompt()
         async def handle_get_prompt(name: str, arguments: Dict[str, str] | None) -> GetPromptResult:
@@ -435,6 +477,9 @@ class ActingWebMCPServer:
                                     raise ValueError(f"Error generating prompt {name}: {str(e)}")
 
             raise ValueError(f"Prompt not found: {name}")
+
+        # Store handler reference
+        self.handlers['prompts/get'] = handle_get_prompt
 
 
 class MCPServerManager:

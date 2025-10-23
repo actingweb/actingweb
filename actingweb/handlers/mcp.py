@@ -28,6 +28,21 @@ from ..interface.hooks import HookRegistry
 from ..interface.actor_interface import ActorInterface
 from ..runtime_context import RuntimeContext
 
+# Import MCP SDK types for proper JSON-RPC handling
+try:
+    from mcp import JSONRPCResponse, JSONRPCError
+    from mcp.types import ErrorData, TextContent, LATEST_PROTOCOL_VERSION
+    from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+    MCP_SDK_AVAILABLE = True
+except ImportError:
+    MCP_SDK_AVAILABLE = False
+    # Fallback types
+    JSONRPCResponse = dict
+    JSONRPCError = dict
+    ErrorData = dict
+    TextContent = dict
+    LATEST_PROTOCOL_VERSION = "2024-11-05"
+    SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +70,8 @@ class MCPHandler(BaseHandler):
     This handler:
     1. Authenticates the request to determine the actor
     2. Loads the appropriate actor instance based on auth context
-    3. Creates or retrieves the MCP server for that actor
-    4. Delegates the request to the FastMCP server
+    3. Delegates requests to ActingWebMCPServer (SDK-based server)
+    4. Converts MCP SDK responses to JSON-RPC format
     """
 
     def __init__(
@@ -66,7 +81,6 @@ class MCPHandler(BaseHandler):
         hooks: Optional[HookRegistry] = None,
     ) -> None:
         super().__init__(webobj, config, hooks)
-        self.server_manager = get_server_manager()
 
     def _cleanup_expired_cache_entries(self) -> None:
         """Remove expired entries from all caches."""
@@ -95,7 +109,7 @@ class MCPHandler(BaseHandler):
                 f"Cleaned up {len(expired_tokens)} expired tokens and {len(expired_actors)} expired actors from MCP cache"
             )
 
-    def get(self) -> Dict[str, Any]:
+    async def get(self) -> Dict[str, Any]:
         """
         Handle GET requests to /mcp endpoint.
 
@@ -106,14 +120,14 @@ class MCPHandler(BaseHandler):
             # For initial discovery, don't require authentication
             # Return basic server information that MCP clients can use
             return {
-                "version": "2024-11-05",
+                "version": LATEST_PROTOCOL_VERSION,
                 "server_name": "actingweb-mcp",
                 "capabilities": {
                     "tools": True,  # We support tools
                     "resources": True,  # We support resources
                     "prompts": True,  # We support prompts
                 },
-                "transport": {"type": "http", "endpoint": "/mcp", "supported_versions": ["2024-11-05"]},
+                "transport": {"type": "http", "endpoint": "/mcp", "supported_versions": SUPPORTED_PROTOCOL_VERSIONS},
                 "authentication": {
                     "required": True,
                     "type": "oauth2",
@@ -125,7 +139,7 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error handling MCP GET request: {e}")
             return self.error_response(500, f"Internal server error: {str(e)}")
 
-    def post(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def post(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle POST requests to /mcp endpoint.
 
@@ -165,18 +179,22 @@ class MCPHandler(BaseHandler):
             # MCP access is controlled granularly through individual permission types
             # (tools, resources, prompts) - no need for separate MCP access check
 
+            # Get or create SDK server for this actor
+            sdk_server = get_server_manager().get_server(actor.id, self.hooks, actor)
+
+            # Delegate to SDK server based on method
             if method == "tools/list":
-                return self._handle_tools_list(request_id, actor)
+                return await self._delegate_tools_list(request_id, sdk_server)
             elif method == "resources/list":
-                return self._handle_resources_list(request_id, actor)
+                return await self._delegate_resources_list(request_id, sdk_server)
             elif method == "prompts/list":
-                return self._handle_prompts_list(request_id, actor)
+                return await self._delegate_prompts_list(request_id, sdk_server)
             elif method == "tools/call":
-                return self._handle_tool_call(request_id, params, actor)
+                return await self._delegate_tool_call(request_id, params, sdk_server)
             elif method == "prompts/get":
-                return self._handle_prompt_get(request_id, params, actor)
+                return await self._delegate_prompt_get(request_id, params, sdk_server)
             elif method == "resources/read":
-                return self._handle_resource_read(request_id, params, actor)
+                return await self._delegate_resource_read(request_id, params, sdk_server)
             else:
                 return self._create_jsonrpc_error(request_id, -32601, f"Method not found: {method}")
 
@@ -276,577 +294,11 @@ class MCPHandler(BaseHandler):
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
                 "capabilities": capabilities,
                 "serverInfo": {"name": "ActingWeb MCP Server", "version": "1.0.0"},
             },
         }
-
-    def _handle_tools_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
-        """Handle MCP tools/list request with permission filtering and client filtering."""
-        global _mcp_client_info_cache
-        tools = []
-
-        if self.hooks:
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-            from ..permission_evaluator import (
-                get_permission_evaluator,
-                PermissionType,
-                PermissionResult,
-            )
-
-            # Resolve peer_id from runtime context (set during auth)
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-
-            # Get evaluator if the permission system is initialized
-            evaluator = None
-            try:
-                evaluator = get_permission_evaluator(self.config) if peer_id else None
-            except Exception as e:
-                logger.debug(f"Permission evaluator unavailable during tools/list: {e}")
-                evaluator = None
-
-            # Detect client type for filtering
-            client_type = None
-            try:
-                from ..runtime_context import get_client_info_from_context
-                client_info = get_client_info_from_context(actor)
-                if client_info and client_info.get("name"):
-                    client_name = client_info["name"].lower()
-                    # Classify client type based on name patterns
-                    if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
-                        client_type = "chatgpt"
-                    elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
-                        client_type = "claude"
-                    elif "cursor" in client_name:
-                        client_type = "cursor"
-                    elif "mcp-inspector" in client_name:
-                        client_type = "mcp_inspector"
-                    else:
-                        client_type = "universal"
-                    logger.debug(f"Detected client type for tools filtering: {client_type}")
-                else:
-                    # Fallback: Check global client info cache like the other handler does
-                    session_key = self._get_session_key()
-                    if session_key in _mcp_client_info_cache:
-                        cached_info = _mcp_client_info_cache[session_key]
-                        if cached_info and "client_info" in cached_info:
-                            fallback_client_info = cached_info["client_info"]
-                            if fallback_client_info.get("name"):
-                                client_name = fallback_client_info["name"].lower()
-                                if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
-                                    client_type = "chatgpt"
-                                elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
-                                    client_type = "claude"
-                                elif "cursor" in client_name:
-                                    client_type = "cursor"
-                                elif "mcp-inspector" in client_name:
-                                    client_type = "mcp_inspector"
-                                else:
-                                    client_type = "universal"
-                                logger.debug(f"Detected client type for tools filtering: {client_type}")
-
-                    if not client_type:
-                        client_type = "universal"
-            except Exception as e:
-                logger.debug(f"Could not detect client type for tools filtering: {e}")
-                client_type = "universal"
-
-            # Discover MCP tools from action hooks
-            for action_name, hooks in self.hooks._action_hooks.items():
-                for hook in hooks:
-                    if not is_mcp_exposed(hook):
-                        continue
-                    metadata = get_mcp_metadata(hook)
-                    if not (metadata and metadata.get("type") == "tool"):
-                        continue
-
-                    tool_name = metadata.get("name") or action_name
-
-                    # Filter by client restrictions
-                    allowed_clients = metadata.get("allowed_clients")
-                    if allowed_clients and client_type:
-                        if client_type not in allowed_clients:
-                            logger.debug(f"Tool '{tool_name}' filtered out for client type '{client_type}' (allowed: {allowed_clients})")
-                            continue
-
-                    # Filter by permissions when we have context
-                    if peer_id and evaluator:
-                        try:
-                            decision = evaluator.evaluate_permission(
-                                actor.id,
-                                peer_id,
-                                PermissionType.TOOLS,
-                                tool_name,
-                                operation="use",
-                            )
-                            if decision != PermissionResult.ALLOWED:
-                                logger.debug(f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})")
-                                continue
-                        except Exception as e:
-                            logger.warning(f"Error evaluating tool permission for '{tool_name}': {e}")
-                            # Fail-open on evaluation errors to avoid hard lockouts
-
-                    # Use client-specific description if available
-                    client_descriptions = metadata.get("client_descriptions", {})
-                    if client_type and client_type in client_descriptions:
-                        description = client_descriptions[client_type]
-                    else:
-                        description = metadata.get("description") or f"Execute {action_name} action"
-
-                    tool_def = {
-                        "name": tool_name,
-                        "description": description,
-                    }
-
-                    input_schema = metadata.get("input_schema")
-                    if input_schema:
-                        tool_def["inputSchema"] = input_schema
-
-                    tools.append(tool_def)
-
-        # Apply client-specific formatting for tools/list response
-        tools_result = {"tools": tools}
-
-        # Get client info from trust relationship to determine formatting
-        try:
-            from ..runtime_context import get_client_info_from_context
-
-            client_info = get_client_info_from_context(actor)
-
-            # Fallback: Check global client info cache if trust relationship doesn't have client info yet
-            if not client_info:
-                session_key = self._get_session_key()
-                if session_key in _mcp_client_info_cache:
-                    cached_info = _mcp_client_info_cache[session_key]
-                    if cached_info and "client_info" in cached_info:
-                        fallback_client_info = cached_info["client_info"]
-                        if fallback_client_info.get("name"):
-                            client_info = {
-                                "name": fallback_client_info["name"],
-                                "version": fallback_client_info.get("version", ""),
-                                "platform": "",
-                                "type": "mcp"
-                            }
-                            logger.debug(f"Using fallback client info from cache: {client_info}")
-
-            if client_info and client_info.get("name"):
-                client_name = client_info["name"].lower()
-
-                # Apply ChatGPT-specific formatting if needed
-                if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
-                    # ChatGPT MCP specification requires direct JSON structure for tools/list (not JSON-encoded text)
-                    logger.debug(f"Applying ChatGPT formatting for tools/list: {len(tools)} tools (client: {client_name})")
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": tools_result
-                    }
-        except Exception as e:
-            logger.debug(f"Could not apply client-specific formatting for tools/list: {e}")
-            # Fall back to standard formatting
-
-        return {"jsonrpc": "2.0", "id": request_id, "result": tools_result}
-
-    def _handle_resources_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
-        """Handle MCP resources/list request with permission filtering."""
-        resources = []
-
-        if self.hooks:
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-            from ..permission_evaluator import (
-                get_permission_evaluator,
-                PermissionType,
-                PermissionResult,
-            )
-
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-
-            evaluator = None
-            try:
-                evaluator = get_permission_evaluator(self.config) if peer_id else None
-            except Exception as e:
-                logger.debug(f"Permission evaluator unavailable during resources/list: {e}")
-                evaluator = None
-
-            # Discover MCP resources from method hooks
-            for method_name, hooks in self.hooks._method_hooks.items():
-                for hook in hooks:
-                    if not is_mcp_exposed(hook):
-                        continue
-                    metadata = get_mcp_metadata(hook)
-                    if not (metadata and metadata.get("type") == "resource"):
-                        continue
-
-                    # Decorator stores 'uri_template'; fall back to actingweb://{method_name}
-                    uri_template = metadata.get("uri_template") or f"actingweb://{method_name}"
-
-                    # Filter by permissions when available
-                    if peer_id and evaluator:
-                        try:
-                            decision = evaluator.evaluate_permission(
-                                actor.id,
-                                peer_id,
-                                PermissionType.RESOURCES,
-                                uri_template,
-                                operation="read",
-                            )
-                            if decision != PermissionResult.ALLOWED:
-                                logger.debug(
-                                    f"Resource '{uri_template}' filtered out for peer {peer_id} (actor {actor.id})"
-                                )
-                                continue
-                        except Exception as e:
-                            logger.warning(f"Error evaluating resource permission for '{uri_template}': {e}")
-
-                    resource_def = {
-                        "uri": uri_template,
-                        "name": metadata.get("name") or method_name.replace("_", " ").title(),
-                        "description": metadata.get("description") or f"Access {method_name} resource",
-                        # Output key follows MCP spec; decorator uses 'mime_type'
-                        "mimeType": metadata.get("mime_type", "application/json"),
-                    }
-                    resources.append(resource_def)
-
-        return {"jsonrpc": "2.0", "id": request_id, "result": {"resources": resources}}
-
-    def _handle_prompts_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
-        """Handle MCP prompts/list request with permission filtering."""
-        prompts = []
-
-        if self.hooks:
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-            from ..permission_evaluator import (
-                get_permission_evaluator,
-                PermissionType,
-                PermissionResult,
-            )
-
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-
-            evaluator = None
-            try:
-                evaluator = get_permission_evaluator(self.config) if peer_id else None
-            except Exception as e:
-                logger.debug(f"Permission evaluator unavailable during prompts/list: {e}")
-                evaluator = None
-
-            # Discover MCP prompts from method hooks
-            for method_name, hooks in self.hooks._method_hooks.items():
-                for hook in hooks:
-                    if not is_mcp_exposed(hook):
-                        continue
-                    metadata = get_mcp_metadata(hook)
-                    if not (metadata and metadata.get("type") == "prompt"):
-                        continue
-
-                    prompt_name = metadata.get("name") or method_name
-
-                    # Filter by permissions when available
-                    if peer_id and evaluator:
-                        try:
-                            decision = evaluator.evaluate_permission(
-                                actor.id,
-                                peer_id,
-                                PermissionType.PROMPTS,
-                                prompt_name,
-                                operation="invoke",
-                            )
-                            if decision != PermissionResult.ALLOWED:
-                                logger.debug(
-                                    f"Prompt '{prompt_name}' filtered out for peer {peer_id} (actor {actor.id})"
-                                )
-                                continue
-                        except Exception as e:
-                            logger.warning(f"Error evaluating prompt permission for '{prompt_name}': {e}")
-
-                    prompt_def = {
-                        "name": prompt_name,
-                        "description": metadata.get("description") or f"Generate prompt for {method_name}",
-                    }
-
-                    # Add arguments if provided
-                    arguments = metadata.get("arguments")
-                    if arguments:
-                        prompt_def["arguments"] = arguments
-
-                    prompts.append(prompt_def)
-
-        return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": prompts}}
-
-    def _handle_tool_call(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
-        """Handle MCP tools/call request."""
-        tool_name = params.get("name")
-        arguments = params.get("arguments", {})
-
-        if not tool_name:
-            return self._create_jsonrpc_error(request_id, -32602, "Missing tool name")
-
-        if not self.hooks:
-            return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
-
-        # Check permission before finding/dispatching the hook
-        try:
-            from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
-
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-            if peer_id:
-                evaluator = get_permission_evaluator(self.config)
-                decision = evaluator.evaluate_permission(
-                    actor.id, peer_id, PermissionType.TOOLS, tool_name, operation="use"
-                )
-                if decision != PermissionResult.ALLOWED:
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32003,
-                        f"Access denied: You don't have permission to use tool '{tool_name}'",
-                    )
-        except Exception as e:
-            # Don't block execution if permission system not initialized; log and continue
-            logger.debug(f"Skipping tool permission check due to error: {e}")
-
-        # Find the corresponding action hook
-        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-
-        for action_name, hooks in self.hooks._action_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "tool":
-                        mcp_tool_name = metadata.get("name") or action_name
-                        if mcp_tool_name == tool_name:
-                            try:
-                                # Actor is already an ActorInterface from authenticate_and_get_actor_cached()
-                                # No need to wrap it again
-
-                                # Execute the action hook
-                                result = hook(actor, action_name, arguments)
-
-                                # Check if result is already properly structured MCP content
-                                if isinstance(result, dict) and "content" in result:
-                                    # Result is already MCP-formatted, use it directly
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": result,
-                                    }
-                                else:
-                                    # Legacy handling: wrap in text item
-                                    if not isinstance(result, dict):
-                                        result = {"result": result}
-
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": {"content": [{"type": "text", "text": str(result)}]},
-                                    }
-                            except Exception as e:
-                                logger.error(f"Error executing tool {tool_name}: {e}")
-                                return self._create_jsonrpc_error(
-                                    request_id, -32603, f"Tool execution failed: {str(e)}"
-                                )
-
-        return self._create_jsonrpc_error(request_id, -32601, f"Tool not found: {tool_name}")
-
-    def _handle_prompt_get(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
-        """Handle MCP prompts/get request."""
-        prompt_name = params.get("name")
-        arguments = params.get("arguments", {})
-
-        if not prompt_name:
-            return self._create_jsonrpc_error(request_id, -32602, "Missing prompt name")
-
-        if not self.hooks:
-            return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
-
-        # Check permission before finding/dispatching the hook
-        try:
-            from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
-
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-            if peer_id:
-                evaluator = get_permission_evaluator(self.config)
-                decision = evaluator.evaluate_permission(
-                    actor.id, peer_id, PermissionType.PROMPTS, prompt_name, operation="invoke"
-                )
-                if decision != PermissionResult.ALLOWED:
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32003,
-                        f"Access denied: You don't have permission to use prompt '{prompt_name}'",
-                    )
-        except Exception as e:
-            logger.debug(f"Skipping prompt permission check due to error: {e}")
-
-        # Find the corresponding method hook
-        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-
-        for method_name, hooks in self.hooks._method_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "prompt":
-                        mcp_prompt_name = metadata.get("name") or method_name
-                        if mcp_prompt_name == prompt_name:
-                            try:
-                                # Actor is already an ActorInterface from authenticate_and_get_actor_cached()
-                                # No need to wrap it again
-
-                                # Execute the method hook
-                                result = hook(actor, method_name, arguments)
-
-                                # Convert result to string for prompt
-                                if isinstance(result, dict):
-                                    if "prompt" in result:
-                                        prompt_text = str(result["prompt"])
-                                    else:
-                                        prompt_text = str(result)
-                                else:
-                                    prompt_text = str(result)
-
-                                return {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "result": {
-                                        "description": metadata.get(
-                                            "description", f"Generated prompt for {method_name}"
-                                        ),
-                                        "messages": [
-                                            {"role": "user", "content": {"type": "text", "text": prompt_text}}
-                                        ],
-                                    },
-                                }
-                            except Exception as e:
-                                logger.error(f"Error generating prompt {prompt_name}: {e}")
-                                return self._create_jsonrpc_error(
-                                    request_id, -32603, f"Prompt generation failed: {str(e)}"
-                                )
-
-        return self._create_jsonrpc_error(request_id, -32601, f"Prompt not found: {prompt_name}")
-
-    def _handle_resource_read(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
-        """Handle MCP resources/read request."""
-        uri = params.get("uri")
-
-        if not uri:
-            return self._create_jsonrpc_error(request_id, -32602, "Missing resource URI")
-
-        if not self.hooks:
-            return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
-
-        try:
-            # Check permission before accessing resource
-            try:
-                from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
-
-                trust_context = getattr(actor, "_mcp_trust_context", None)
-                peer_id = trust_context.get("peer_id") if trust_context else None
-                if peer_id and uri:
-                    evaluator = get_permission_evaluator(self.config)
-                    decision = evaluator.evaluate_permission(
-                        actor.id, peer_id, PermissionType.RESOURCES, uri, operation="read"
-                    )
-                    if decision != PermissionResult.ALLOWED:
-                        return self._create_jsonrpc_error(
-                            request_id,
-                            -32003,
-                            f"Access denied: You don't have permission to access resource '{uri}'",
-                        )
-            except Exception as e:
-                logger.debug(f"Skipping resource permission check due to error: {e}")
-
-            # Find the corresponding resource hook
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
-
-            # Reuse URI template matching from SDK server implementation
-            from ..mcp.sdk_server import _match_uri_template
-
-            for method_name, hooks in self.hooks._method_hooks.items():
-                for hook in hooks:
-                    if is_mcp_exposed(hook):
-                        metadata = get_mcp_metadata(hook)
-                        if metadata and metadata.get("type") == "resource":
-                            # Prefer 'uri_template' from decorator; fall back to legacy
-                            resource_uri = (
-                                metadata.get("uri_template") or metadata.get("uri") or f"actingweb://{method_name}"
-                            )
-                            uri_pattern = metadata.get("uri_pattern")
-
-                            # Check for template/pattern match
-                            uri_matches = False
-                            variables: Dict[str, str] | None = None
-                            try:
-                                variables = _match_uri_template(str(resource_uri), str(uri))
-                            except Exception:
-                                variables = None
-                            if variables is not None:
-                                uri_matches = True
-                            elif uri_pattern:
-                                try:
-                                    if re.match(uri_pattern, str(uri)):
-                                        uri_matches = True
-                                except re.error:
-                                    logger.warning(f"Invalid URI pattern in resource metadata: {uri_pattern}")
-
-                            if uri_matches:
-                                try:
-                                    # Actor is already an ActorInterface from authenticate_and_get_actor()
-                                    # No need to wrap it again
-
-                                    # Execute the resource hook
-                                    result = hook(actor, method_name, params)
-
-                                    # Handle different result formats
-                                    if isinstance(result, dict):
-                                        if "contents" in result:
-                                            # Result is already MCP-formatted
-                                            return {
-                                                "jsonrpc": "2.0",
-                                                "id": request_id,
-                                                "result": result,
-                                            }
-                                        else:
-                                            # Convert dict to JSON content
-                                            content_text = json.dumps(result, indent=2)
-                                    else:
-                                        # Convert other types to string
-                                        content_text = str(result)
-
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": {
-                                            "contents": [
-                                                {
-                                                    "uri": uri,
-                                                    # Output key follows MCP spec; decorator uses 'mime_type'
-                                                    "mimeType": metadata.get("mime_type", "application/json"),
-                                                    "text": content_text,
-                                                }
-                                            ]
-                                        },
-                                    }
-                                except Exception as e:
-                                    logger.error(f"Error executing resource {uri}: {e}")
-                                    return self._create_jsonrpc_error(
-                                        request_id, -32603, f"Resource execution failed: {str(e)}"
-                                    )
-
-            return self._create_jsonrpc_error(request_id, -32601, f"Resource not found: {uri}")
-
-        except Exception as e:
-            logger.error(f"Error reading resource {uri}: {e}")
-            return self._create_jsonrpc_error(request_id, -32603, f"Resource read failed: {str(e)}")
 
     def _handle_notifications_initialized(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle MCP notifications/initialized request."""
@@ -864,6 +316,179 @@ class MCPHandler(BaseHandler):
         logger.debug("MCP ping received")
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
+
+    # SDK Server Delegation Methods
+    # These methods delegate to the ActingWebMCPServer (SDK-based) and convert responses
+
+    async def _delegate_tools_list(self, request_id: Any, sdk_server) -> Dict[str, Any]:
+        """Delegate tools/list to SDK server and convert response to JSON-RPC."""
+        try:
+            # Call SDK server's list_tools handler
+            tools = await sdk_server.handlers["tools/list"]()
+
+            # Convert MCP Tool objects to JSON-serializable dicts
+            tools_list = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.inputSchema
+                }
+                for tool in tools
+            ]
+
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools_list}}
+        except Exception as e:
+            logger.error(f"Error in _delegate_tools_list: {e}")
+            return self._create_jsonrpc_error(request_id, -32603, f"Internal error: {str(e)}")
+
+    async def _delegate_resources_list(self, request_id: Any, sdk_server) -> Dict[str, Any]:
+        """Delegate resources/list to SDK server and convert response to JSON-RPC."""
+        try:
+            # Call SDK server's list_resources handler
+            resources = await sdk_server.handlers["resources/list"]()
+
+            # Convert MCP Resource objects to JSON-serializable dicts
+            resources_list = [
+                {
+                    "uri": str(resource.uri),
+                    "name": resource.name,
+                    "description": resource.description,
+                    "mimeType": resource.mimeType
+                }
+                for resource in resources
+            ]
+
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"resources": resources_list}}
+        except Exception as e:
+            logger.error(f"Error in _delegate_resources_list: {e}")
+            return self._create_jsonrpc_error(request_id, -32603, f"Internal error: {str(e)}")
+
+    async def _delegate_prompts_list(self, request_id: Any, sdk_server) -> Dict[str, Any]:
+        """Delegate prompts/list to SDK server and convert response to JSON-RPC."""
+        try:
+            # Call SDK server's list_prompts handler
+            prompts = await sdk_server.handlers["prompts/list"]()
+
+            # Convert MCP Prompt objects to JSON-serializable dicts
+            prompts_list = [
+                {
+                    "name": prompt.name,
+                    "description": prompt.description,
+                    "arguments": prompt.arguments if hasattr(prompt, 'arguments') else []
+                }
+                for prompt in prompts
+            ]
+
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": prompts_list}}
+        except Exception as e:
+            logger.error(f"Error in _delegate_prompts_list: {e}")
+            return self._create_jsonrpc_error(request_id, -32603, f"Internal error: {str(e)}")
+
+    async def _delegate_tool_call(self, request_id: Any, params: Dict[str, Any], sdk_server) -> Dict[str, Any]:
+        """Delegate tools/call to SDK server and convert response to JSON-RPC."""
+        try:
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+
+            if not tool_name:
+                return self._create_jsonrpc_error(request_id, -32602, "Missing tool name")
+
+            # Call SDK server's call_tool handler
+            result = await sdk_server.handlers["tools/call"](name=tool_name, arguments=arguments)
+
+            # Convert MCP result to JSON-RPC format
+            # Result can be: dict (structuredContent), List[TextContent], or other
+            if isinstance(result, dict):
+                # Already a dict - return with structuredContent wrapper
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": result}}
+            elif isinstance(result, list):
+                # List of TextContent objects - convert to content array
+                content_list = []
+                for item in result:
+                    if hasattr(item, 'type') and hasattr(item, 'text'):
+                        content_list.append({"type": item.type, "text": item.text})
+                    else:
+                        content_list.append({"type": "text", "text": str(item)})
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"content": content_list}}
+            else:
+                # Unexpected format - wrap as text
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": str(result)}]}}
+
+        except ValueError as e:
+            # SDK server raises ValueError for access denied or not found
+            return self._create_jsonrpc_error(request_id, -32003, str(e))
+        except Exception as e:
+            logger.error(f"Error in _delegate_tool_call: {e}")
+            return self._create_jsonrpc_error(request_id, -32603, f"Tool execution failed: {str(e)}")
+
+    async def _delegate_prompt_get(self, request_id: Any, params: Dict[str, Any], sdk_server) -> Dict[str, Any]:
+        """Delegate prompts/get to SDK server and convert response to JSON-RPC."""
+        try:
+            prompt_name = params.get("name")
+            arguments = params.get("arguments", {})
+
+            if not prompt_name:
+                return self._create_jsonrpc_error(request_id, -32602, "Missing prompt name")
+
+            # Call SDK server's get_prompt handler
+            result = await sdk_server.handlers["prompts/get"](name=prompt_name, arguments=arguments)
+
+            # Convert GetPromptResult to JSON-RPC format
+            messages = []
+            for msg in result.messages:
+                messages.append({
+                    "role": msg.role,
+                    "content": {"type": msg.content.type, "text": msg.content.text}
+                })
+
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "description": result.description,
+                    "messages": messages
+                }
+            }
+        except ValueError as e:
+            return self._create_jsonrpc_error(request_id, -32003, str(e))
+        except Exception as e:
+            logger.error(f"Error in _delegate_prompt_get: {e}")
+            return self._create_jsonrpc_error(request_id, -32603, f"Prompt generation failed: {str(e)}")
+
+    async def _delegate_resource_read(self, request_id: Any, params: Dict[str, Any], sdk_server) -> Dict[str, Any]:
+        """Delegate resources/read to SDK server and convert response to JSON-RPC."""
+        try:
+            uri = params.get("uri")
+
+            if not uri:
+                return self._create_jsonrpc_error(request_id, -32602, "Missing resource URI")
+
+            # Convert uri string to AnyUrl for SDK
+            from pydantic import AnyUrl
+            uri_obj = AnyUrl(uri)
+
+            # Call SDK server's read_resource handler
+            content = await sdk_server.handlers["resources/read"](uri=uri_obj)
+
+            # Content is returned as a string from SDK server
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "contents": [
+                        {
+                            "uri": uri,
+                            "mimeType": "application/json",
+                            "text": content
+                        }
+                    ]
+                }
+            }
+        except ValueError as e:
+            return self._create_jsonrpc_error(request_id, -32003, str(e))
+        except Exception as e:
+            logger.error(f"Error in _delegate_resource_read: {e}")
+            return self._create_jsonrpc_error(request_id, -32603, f"Resource read failed: {str(e)}")
 
     def _create_jsonrpc_error(self, request_id: Any, code: int, message: str) -> Dict[str, Any]:
         """Create a JSON-RPC error response."""

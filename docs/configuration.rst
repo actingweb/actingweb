@@ -115,6 +115,8 @@ MCP Capability
 
 - Toggle with ``ActingWebApp.with_mcp(enable=True|False)``.
 - When enabled, ``mcp`` appears in supported options returned by meta discovery.
+- **Requires FastAPI integration** - Flask integration does not support MCP due to async/await requirements.
+- See :doc:`mcp-quickstart` for setup guide.
 
 Notes
 -----

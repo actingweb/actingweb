@@ -24,7 +24,6 @@ from ...handlers import (
     factory,
     methods,
     actions,
-    mcp,
     services,
 )
 
@@ -158,7 +157,6 @@ class FlaskIntegration:
         def app_meta(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
             return self._handle_actor_request(actor_id, "meta", path=path)
 
-
         # Actor www with OAuth2 authentication
         @self.flask_app.route("/<actor_id>/www", methods=["GET", "POST", "DELETE"])
         @self.flask_app.route("/<actor_id>/www/<path:path>", methods=["GET", "POST", "DELETE"])
@@ -240,10 +238,14 @@ class FlaskIntegration:
         # Third-party service OAuth2 callbacks and management
         @self.flask_app.route("/<actor_id>/services/<service_name>/callback", methods=["GET"])
         def app_services_callback(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
-            return self._handle_actor_request(actor_id, "services", name=service_name,
-                                            code=request.args.get('code'),
-                                            state=request.args.get('state'),
-                                            error=request.args.get('error'))
+            return self._handle_actor_request(
+                actor_id,
+                "services",
+                name=service_name,
+                code=request.args.get("code"),
+                state=request.args.get("state"),
+                error=request.args.get("error"),
+            )
 
         @self.flask_app.route("/<actor_id>/services/<service_name>", methods=["DELETE"])
         def app_services_revoke(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
@@ -277,7 +279,8 @@ class FlaskIntegration:
         data = request.data
         if not data and request.form:
             from urllib.parse import urlencode
-            data = urlencode(request.form).encode('utf-8')
+
+            data = urlencode(request.form).encode("utf-8")
 
         return {
             "method": request.method,
@@ -498,7 +501,9 @@ class FlaskIntegration:
             logging.error(f"Error in factory POST handler: {e}")
             return Response("Internal server error", status=500)
 
-    def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:  # pylint: disable=unused-argument
+    def _handle_factory_post_without_oauth(
+        self, email: str
+    ) -> Union[Response, WerkzeugResponse, str]:  # pylint: disable=unused-argument
         """Handle POST to factory route without OAuth2 - standard actor creation."""
         try:
             # Always use the standard factory handler
@@ -623,12 +628,14 @@ class FlaskIntegration:
             redirect_url = result.get("location")
             if redirect_url:
                 redirect_response = redirect(redirect_url, code=302)
-                
-                # Add CORS headers for OAuth2 redirect responses  
+
+                # Add CORS headers for OAuth2 redirect responses
                 redirect_response.headers["Access-Control-Allow-Origin"] = "*"
                 redirect_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-                redirect_response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
-                
+                redirect_response.headers["Access-Control-Allow-Headers"] = (
+                    "Authorization, Content-Type, mcp-protocol-version"
+                )
+
                 return redirect_response
 
         # Return the OAuth2 result as JSON with CORS headers
@@ -637,7 +644,7 @@ class FlaskIntegration:
         json_response = jsonify(result)
 
         # Use the status code from the handler if set
-        if hasattr(webobj.response, 'status_code') and webobj.response.status_code:
+        if hasattr(webobj.response, "status_code") and webobj.response.status_code:
             json_response.status_code = webobj.response.status_code
 
         # Add CORS headers for OAuth2 endpoints
@@ -680,41 +687,22 @@ class FlaskIntegration:
         return response
 
     def _handle_mcp_request(self) -> Union[Response, WerkzeugResponse, str]:
-        """Handle MCP requests."""
-        req_data = self._normalize_request()
-        webobj = AWWebObj(
-            url=req_data["url"],
-            params=req_data["values"],
-            body=req_data["data"],
-            headers=req_data["headers"],
-            cookies=req_data["cookies"],
-        )
+        """
+        Handle MCP requests - not supported in Flask integration.
 
-        handler = mcp.MCPHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
-
-        # Execute appropriate method based on request method
-        if request.method == "GET":
-            result = handler.get()
-        elif request.method == "POST":
-            import json
-
-            # Parse JSON body for POST requests
-            try:
-                if webobj.request.body:
-                    data = json.loads(webobj.request.body)
-                else:
-                    data = {}
-            except (json.JSONDecodeError, ValueError):
-                data = {}
-
-            result = handler.post(data)
-        else:
-            return Response(status=405)
-
-        # Create JSON response
+        MCP requires async/await support for optimal performance and proper
+        event loop management. Use FastAPI integration for MCP functionality.
+        """
         from flask import jsonify
 
-        return jsonify(result)
+        response = jsonify(
+            {
+                "error": "not_implemented",
+                "error_description": "MCP is only supported with FastAPI integration. Flask does not support the async operations required by MCP. Please use ActingWebApp.integrate_fastapi() instead of integrate_flask().",
+            }
+        )
+        response.status_code = 501
+        return response
 
     def _check_authentication_and_redirect(self) -> Optional[Union[Response, WerkzeugResponse, str]]:
         """Check if request is authenticated, if not return OAuth2 redirect."""
@@ -919,15 +907,15 @@ class FlaskIntegration:
         if endpoint == "trust":
             relationship = kwargs.get("relationship")
             peerid = kwargs.get("peerid")
-            
+
             # Check for permissions endpoint
             if kwargs.get("permissions"):
                 return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
-            
+
             # For trust endpoint, we need to distinguish between path parameters and query parameters
             # If peerid appears in query params but not as path param, it's a query-based request
             query_peerid = webobj.request.get("peerid")
-            
+
             # Only count actual path parameters (non-None, non-empty)
             path_parts = []
             if relationship is not None and relationship != "":
@@ -935,7 +923,7 @@ class FlaskIntegration:
             # Only count peerid as path param if it's not a query param request
             if peerid is not None and peerid != "" and not query_peerid:
                 path_parts.append(peerid)
-            
+
             if len(path_parts) == 0:
                 return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:

@@ -114,13 +114,32 @@ class ActingWebMCPServer:
                         logger.warning(f"Error accessing permission evaluator: {e}")
                         evaluator = None
                 
+                # Detect client type for description selection
+                client_type = None
+                try:
+                    from ..runtime_context import get_client_info_from_context
+                    client_info = get_client_info_from_context(self.actor)
+                    if client_info and client_info.get("name"):
+                        client_name = client_info["name"].lower()
+                        # Classify client type based on name patterns
+                        if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
+                            client_type = "chatgpt"
+                        elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
+                            client_type = "claude"
+                        elif "cursor" in client_name:
+                            client_type = "cursor"
+                        logger.debug(f"Detected client type for SDK server: {client_type}")
+                except Exception as e:
+                    logger.debug(f"Could not detect client type: {e}")
+                    client_type = None
+
                 for action_name, hook_list in self.hooks._action_hooks.items():
                     for hook in hook_list:
                         if is_mcp_exposed(hook):
                             metadata = get_mcp_metadata(hook)
                             if metadata and metadata.get("type") == "tool":
                                 tool_name = metadata.get("name") or action_name
-                                
+
                                 # Check permission for this tool
                                 if peer_id and evaluator:
                                     permission_result = evaluator.evaluate_permission(
@@ -129,11 +148,19 @@ class ActingWebMCPServer:
                                     if permission_result != PermissionResult.ALLOWED:
                                         logger.debug(f"Tool '{tool_name}' filtered out - access denied for peer {peer_id}")
                                         continue
-                                
+
+                                # Use client-specific description if available
+                                client_descriptions = metadata.get("client_descriptions", {})
+                                if client_type and client_type in client_descriptions:
+                                    description = client_descriptions[client_type]
+                                    logger.debug(f"Using {client_type}-specific description for tool '{tool_name}'")
+                                else:
+                                    description = metadata.get("description", f"Execute {action_name} action")
+
                                 # Build Tool object with all available metadata fields
                                 tool_kwargs = {
                                     "name": tool_name,
-                                    "description": metadata.get("description", f"Execute {action_name} action"),
+                                    "description": description,
                                     "inputSchema": metadata.get(
                                         "input_schema", {"type": "object", "properties": {}, "required": []}
                                     ),

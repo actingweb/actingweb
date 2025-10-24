@@ -16,6 +16,7 @@ import logging
 import json
 import re
 import time
+import asyncio
 
 # Global cache for MCP client info during session establishment
 _mcp_client_info_cache: Dict[str, Dict[str, Any]] = {}
@@ -160,7 +161,9 @@ class MCPHandler(BaseHandler):
                 return self._handle_ping(request_id, params)
 
             # All other methods require authentication
-            actor = self.authenticate_and_get_actor_cached()
+            # Run blocking auth in thread pool to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            actor = await loop.run_in_executor(None, self.authenticate_and_get_actor_cached)
             if not actor:
                 # Set proper HTTP 401 response headers for framework-agnostic handling
                 base_url = f"{self.config.proto}{self.config.fqdn}"
@@ -174,7 +177,8 @@ class MCPHandler(BaseHandler):
 
             # Extract and update client info if provided in the request
             # MCP clients send clientInfo with many requests, not just initialize
-            self._update_actor_client_info(actor, data)
+            # Run in thread pool to avoid blocking (does DB write)
+            await loop.run_in_executor(None, self._update_actor_client_info, actor, data)
 
             # MCP access is controlled granularly through individual permission types
             # (tools, resources, prompts) - no need for separate MCP access check
@@ -290,7 +294,7 @@ class MCPHandler(BaseHandler):
         if self._has_mcp_prompts():
             capabilities["prompts"] = {"listChanged": True}  # Prompts can be dynamically discovered
 
-        return {
+        response = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
@@ -299,6 +303,8 @@ class MCPHandler(BaseHandler):
                 "serverInfo": {"name": "ActingWeb MCP Server", "version": "1.0.0"},
             },
         }
+        logger.debug(f"initialize response: {json.dumps(response, indent=2)}")
+        return response
 
     def _handle_notifications_initialized(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle MCP notifications/initialized request."""
@@ -355,9 +361,11 @@ class MCPHandler(BaseHandler):
 
                 tools_list.append(tool_dict)
 
-            return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools_list}}
+            response = {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools_list}}
+            logger.debug(f"tools/list: Returned {len(tools_list)} tools")
+            return response
         except Exception as e:
-            logger.error(f"Error in _delegate_tools_list: {e}")
+            logger.error(f"Error in _delegate_tools_list: {e}", exc_info=True)
             return self._create_jsonrpc_error(request_id, -32603, f"Internal error: {str(e)}")
 
     async def _delegate_resources_list(self, request_id: Any, sdk_server) -> Dict[str, Any]:

@@ -100,6 +100,44 @@ Call the tool:
    curl -s http://localhost:5000/mcp -H 'Content-Type: application/json' \
      -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_note","arguments":{"title":"Hello","content":"World"}}}'
 
+Tool Safety Annotations
+-----------------------
+
+**IMPORTANT**: For production MCP servers, always add safety annotations to your tools. ChatGPT and other MCP clients use these to evaluate server safety:
+
+.. code-block:: python
+
+   @aw.action_hook("search")
+   @mcp_tool(
+       description="Search your notes",
+       annotations={
+           "readOnlyHint": True,       # Only reads, never modifies
+           "destructiveHint": False,   # Doesn't delete data
+       }
+   )
+   def search(actor, action_name, data):
+       pass
+
+   @aw.action_hook("delete_note")
+   @mcp_tool(
+       description="Delete a note permanently",
+       annotations={
+           "destructiveHint": True,    # Destroys data - needs confirmation
+           "readOnlyHint": False,
+       }
+   )
+   def delete_note(actor, action_name, data):
+       pass
+
+**Key annotations:**
+
+- ``destructiveHint: True`` - Tool can permanently delete/destroy data
+- ``readOnlyHint: True`` - Tool only reads, never modifies data
+- ``idempotentHint: True`` - Same input always gives same result
+- ``openWorldHint: True`` - Tool accesses external services
+
+See the `MCP Applications Guide <mcp-applications.html#tool-safety-annotations>`_ for complete documentation.
+
 Recommendations
 ---------------
 

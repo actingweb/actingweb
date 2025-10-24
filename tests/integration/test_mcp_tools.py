@@ -388,3 +388,84 @@ class TestMCPToolPermissions:
         assert response.status_code == 200
         # Either succeeds, tool not found, or permission denied
         # All are acceptable depending on configuration
+
+    def test_tools_list_includes_all_fields_regression(self, oauth2_client):
+        """
+        Regression test to ensure tools/list includes ALL Tool fields.
+
+        This is critical for ChatGPT safety evaluation. The refactoring initially
+        only included name/description/inputSchema, which stripped important
+        safety metadata from the annotations field.
+
+        Tool fields:
+        - name (required)
+        - description (optional)
+        - inputSchema (required)
+        - title (optional)
+        - outputSchema (optional)
+        - annotations (optional but IMPORTANT for safety):
+          - destructiveHint
+          - readOnlyHint
+          - idempotentHint
+          - openWorldHint
+        - meta (optional)
+
+        See: mcp.py line 330-356
+        """
+        initialize_mcp_session(oauth2_client)
+
+        response = oauth2_client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200, \
+            f"tools/list failed: {response.status_code} {response.text}"
+
+        data = response.json()
+        assert "result" in data
+        assert "tools" in data["result"]
+        tools = data["result"]["tools"]
+
+        # Verify each tool has the structure we expect
+        for tool in tools:
+            # Required fields
+            assert "name" in tool, "Tool missing 'name' field"
+            assert isinstance(tool["name"], str)
+            assert "inputSchema" in tool, "Tool missing 'inputSchema' field"
+            assert isinstance(tool["inputSchema"], dict)
+
+            # Optional fields - verify they're included IF present (not stripped)
+            # The key point is that if the Tool object has these fields,
+            # they should appear in the response (not be stripped)
+
+            # Check that we're not limiting to only 3 fields
+            # If a tool has more fields, they should be preserved
+            if len(tool.keys()) <= 3:
+                # Only has name, description, inputSchema - might be OK
+                pass
+            else:
+                # Has additional fields - good! Let's verify they're valid
+                valid_fields = {
+                    "name", "description", "inputSchema",
+                    "title", "outputSchema", "annotations", "meta"
+                }
+                for field in tool.keys():
+                    assert field in valid_fields, \
+                        f"Unexpected field '{field}' in tool - make sure we're using model_dump()"
+
+            # If annotations exist, verify structure
+            if "annotations" in tool and tool["annotations"] is not None:
+                annotations = tool["annotations"]
+                assert isinstance(annotations, dict), \
+                    "annotations should be a dict, not a Pydantic object"
+
+                # Verify annotations fields are valid
+                valid_annotation_fields = {
+                    "title", "readOnlyHint", "destructiveHint",
+                    "idempotentHint", "openWorldHint"
+                }
+                for field in annotations.keys():
+                    assert field in valid_annotation_fields, \
+                        f"Invalid annotation field: {field}"

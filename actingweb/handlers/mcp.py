@@ -327,14 +327,33 @@ class MCPHandler(BaseHandler):
             tools = await sdk_server.handlers["tools/list"]()
 
             # Convert MCP Tool objects to JSON-serializable dicts
-            tools_list = [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.inputSchema
-                }
-                for tool in tools
-            ]
+            # Use model_dump() to include all fields including annotations (safety metadata)
+            tools_list = []
+            for tool in tools:
+                if hasattr(tool, 'model_dump'):
+                    # Pydantic v2 - use model_dump, exclude None values
+                    tool_dict = tool.model_dump(exclude_none=True)
+                elif hasattr(tool, 'dict'):
+                    # Pydantic v1 - use dict, exclude None values
+                    tool_dict = tool.dict(exclude_none=True)
+                else:
+                    # Fallback - manually construct dict
+                    tool_dict = {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "inputSchema": tool.inputSchema
+                    }
+                    # Include optional fields if present
+                    if hasattr(tool, 'title') and tool.title is not None:
+                        tool_dict["title"] = tool.title
+                    if hasattr(tool, 'outputSchema') and tool.outputSchema is not None:
+                        tool_dict["outputSchema"] = tool.outputSchema
+                    if hasattr(tool, 'annotations') and tool.annotations is not None:
+                        tool_dict["annotations"] = tool.annotations
+                    if hasattr(tool, 'meta') and tool.meta is not None:
+                        tool_dict["meta"] = tool.meta
+
+                tools_list.append(tool_dict)
 
             return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools_list}}
         except Exception as e:
@@ -370,14 +389,36 @@ class MCPHandler(BaseHandler):
             prompts = await sdk_server.handlers["prompts/list"]()
 
             # Convert MCP Prompt objects to JSON-serializable dicts
-            prompts_list = [
-                {
+            prompts_list = []
+            for prompt in prompts:
+                prompt_dict = {
                     "name": prompt.name,
                     "description": prompt.description,
-                    "arguments": prompt.arguments if hasattr(prompt, 'arguments') else []
                 }
-                for prompt in prompts
-            ]
+
+                # Convert PromptArgument objects to dicts
+                if hasattr(prompt, 'arguments') and prompt.arguments:
+                    # Each argument is a Pydantic PromptArgument - convert to dict
+                    arguments_list = []
+                    for arg in prompt.arguments:
+                        if hasattr(arg, 'model_dump'):
+                            # Pydantic v2 - use model_dump()
+                            arguments_list.append(arg.model_dump())
+                        elif hasattr(arg, 'dict'):
+                            # Pydantic v1 - use dict()
+                            arguments_list.append(arg.dict())
+                        else:
+                            # Fallback - manually extract fields
+                            arguments_list.append({
+                                "name": arg.name,
+                                "description": getattr(arg, 'description', None),
+                                "required": getattr(arg, 'required', None)
+                            })
+                    prompt_dict["arguments"] = arguments_list
+                else:
+                    prompt_dict["arguments"] = []
+
+                prompts_list.append(prompt_dict)
 
             return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": prompts_list}}
         except Exception as e:

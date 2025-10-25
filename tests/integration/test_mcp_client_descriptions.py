@@ -18,6 +18,7 @@ Spec: Client-specific tool descriptions in MCP SDK server
 
 import pytest
 import json
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client, client_name="Test Client"):
@@ -29,7 +30,7 @@ def initialize_mcp_session(oauth2_client, client_name="Test Client"):
             "jsonrpc": "2.0",
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": client_name, "version": "1.0.0"},
             },

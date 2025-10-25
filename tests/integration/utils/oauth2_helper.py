@@ -92,7 +92,6 @@ class OAuth2TestHelper:
             "client_secret": self.client_secret,
             "scope": scope,
         }
-        print(f"DEBUG oauth2_helper: Sending form data: {form_data}")
 
         response = requests.post(
             f"{self.base_url}/oauth/token",
@@ -100,14 +99,9 @@ class OAuth2TestHelper:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
-        # Debug: Check response
-        print(f"DEBUG oauth2_helper: Token response status={response.status_code}")
-        print(f"DEBUG oauth2_helper: Token response={response.text[:300]}")
-
         if response.status_code == 200:
             token_data = response.json()
             self.access_token = token_data["access_token"]
-            print(f"DEBUG oauth2_helper: Got access_token starting with: {self.access_token[:10]}")
             return self.access_token
         else:
             # Token endpoint returned error - this means grant_type parsing failed

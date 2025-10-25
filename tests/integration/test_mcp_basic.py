@@ -11,6 +11,7 @@ This test suite demonstrates the pattern for testing OAuth2-protected endpoints:
 
 import pytest
 import json
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client):
@@ -26,7 +27,7 @@ def initialize_mcp_session(oauth2_client):
             "jsonrpc": "2.0",
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "Test Client", "version": "1.0.0"},
             },
@@ -102,7 +103,7 @@ class TestMCPAuthentication:
                 "jsonrpc": "2.0",
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
                     "capabilities": {},
                     "clientInfo": {"name": "Test Client", "version": "1.0.0"},
                 },
@@ -126,18 +127,11 @@ class TestMCPAuthentication:
         """
         initialize_mcp_session(oauth2_client)
 
-        # Debug: Print token being used
-        print(f"\nDEBUG: Using access_token: {oauth2_client.access_token[:50]}...")
-        print(f"DEBUG: Token starts with: {oauth2_client.access_token[:10]}")
-
         response = oauth2_client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "method": "tools/list", "id": 2},
             headers={"Content-Type": "application/json"},
         )
-
-        print(f"DEBUG: Response status: {response.status_code}")
-        print(f"DEBUG: Response: {response.json()}")
 
         assert response.status_code == 200
         data = response.json()

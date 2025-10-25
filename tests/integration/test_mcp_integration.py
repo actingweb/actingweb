@@ -9,6 +9,7 @@ These tests verify the entire MCP stack works together correctly.
 
 import pytest
 import json
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client):
@@ -20,7 +21,7 @@ def initialize_mcp_session(oauth2_client):
             "jsonrpc": "2.0",
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "Test Client", "version": "1.0.0"},
             },
@@ -67,7 +68,7 @@ class TestMCPCompleteWorkflow:
                 "jsonrpc": "2.0",
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
                     "capabilities": {
                         "roots": {"listChanged": True},
                         "sampling": {},
@@ -243,7 +244,7 @@ class TestMCPProtocolCompliance:
                 "jsonrpc": "2.0",
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
                     "capabilities": {},
                     "clientInfo": {"name": "Test", "version": "1.0"},
                 },
@@ -328,7 +329,7 @@ class TestMCPCapabilities:
                 "jsonrpc": "2.0",
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
                     "capabilities": {
                         "roots": {"listChanged": True},
                     },
@@ -359,7 +360,7 @@ class TestMCPCapabilities:
                 "jsonrpc": "2.0",
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
                     "capabilities": {},
                     "clientInfo": {"name": "Test", "version": "1.0"},
                 },

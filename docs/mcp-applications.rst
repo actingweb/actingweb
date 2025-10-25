@@ -678,15 +678,12 @@ ActingWeb v3.3+ includes intelligent caching for MCP endpoints that provides sig
 
 **Permission Initialization (Automatic):**
 
-The ActingWeb permission system is **automatically initialized** when you integrate with FastAPI - no manual setup required:
+The ActingWeb permission system is **automatically initialized** when you integrate with Flask or FastAPI - no manual setup required:
 
 .. code-block:: python
 
     # Automatic initialization happens here - nothing else needed!
     integration = app.integrate_fastapi(fastapi_app, templates_dir=templates_dir)
-
-.. note::
-   **MCP requires FastAPI integration.** Flask integration does not support MCP endpoints due to async/await requirements. The ``/mcp`` endpoint will return HTTP 501 with Flask.
 
 **Manual Initialization (Optional):**
 

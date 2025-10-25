@@ -1106,6 +1106,8 @@ class FastAPIIntegration:
         loop = asyncio.get_running_loop()
         if request.method == "POST":
             result = await loop.run_in_executor(self.executor, handler.post, endpoint)
+        elif request.method == "OPTIONS":
+            result = await loop.run_in_executor(self.executor, handler.options, endpoint)
         else:
             result = await loop.run_in_executor(self.executor, handler.get, endpoint)
 

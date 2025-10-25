@@ -34,6 +34,7 @@ try:
     from mcp import JSONRPCResponse, JSONRPCError
     from mcp.types import ErrorData, TextContent, LATEST_PROTOCOL_VERSION
     from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+
     MCP_SDK_AVAILABLE = True
 except ImportError:
     MCP_SDK_AVAILABLE = False
@@ -303,7 +304,6 @@ class MCPHandler(BaseHandler):
                 "serverInfo": {"name": "ActingWeb MCP Server", "version": "1.0.0"},
             },
         }
-        logger.debug(f"initialize response: {json.dumps(response, indent=2)}")
         return response
 
     def _handle_notifications_initialized(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -336,27 +336,23 @@ class MCPHandler(BaseHandler):
             # Use model_dump() to include all fields including annotations (safety metadata)
             tools_list = []
             for tool in tools:
-                if hasattr(tool, 'model_dump'):
+                if hasattr(tool, "model_dump"):
                     # Pydantic v2 - use model_dump, exclude None values
                     tool_dict = tool.model_dump(exclude_none=True)
-                elif hasattr(tool, 'dict'):
+                elif hasattr(tool, "dict"):
                     # Pydantic v1 - use dict, exclude None values
                     tool_dict = tool.dict(exclude_none=True)
                 else:
                     # Fallback - manually construct dict
-                    tool_dict = {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "inputSchema": tool.inputSchema
-                    }
+                    tool_dict = {"name": tool.name, "description": tool.description, "inputSchema": tool.inputSchema}
                     # Include optional fields if present
-                    if hasattr(tool, 'title') and tool.title is not None:
+                    if hasattr(tool, "title") and tool.title is not None:
                         tool_dict["title"] = tool.title
-                    if hasattr(tool, 'outputSchema') and tool.outputSchema is not None:
+                    if hasattr(tool, "outputSchema") and tool.outputSchema is not None:
                         tool_dict["outputSchema"] = tool.outputSchema
-                    if hasattr(tool, 'annotations') and tool.annotations is not None:
+                    if hasattr(tool, "annotations") and tool.annotations is not None:
                         tool_dict["annotations"] = tool.annotations
-                    if hasattr(tool, 'meta') and tool.meta is not None:
+                    if hasattr(tool, "meta") and tool.meta is not None:
                         tool_dict["meta"] = tool.meta
 
                 tools_list.append(tool_dict)
@@ -380,7 +376,7 @@ class MCPHandler(BaseHandler):
                     "uri": str(resource.uri),
                     "name": resource.name,
                     "description": resource.description,
-                    "mimeType": resource.mimeType
+                    "mimeType": resource.mimeType,
                 }
                 for resource in resources
             ]
@@ -405,23 +401,25 @@ class MCPHandler(BaseHandler):
                 }
 
                 # Convert PromptArgument objects to dicts
-                if hasattr(prompt, 'arguments') and prompt.arguments:
+                if hasattr(prompt, "arguments") and prompt.arguments:
                     # Each argument is a Pydantic PromptArgument - convert to dict
                     arguments_list = []
                     for arg in prompt.arguments:
-                        if hasattr(arg, 'model_dump'):
+                        if hasattr(arg, "model_dump"):
                             # Pydantic v2 - use model_dump()
                             arguments_list.append(arg.model_dump())
-                        elif hasattr(arg, 'dict'):
+                        elif hasattr(arg, "dict"):
                             # Pydantic v1 - use dict()
                             arguments_list.append(arg.dict())
                         else:
                             # Fallback - manually extract fields
-                            arguments_list.append({
-                                "name": arg.name,
-                                "description": getattr(arg, 'description', None),
-                                "required": getattr(arg, 'required', None)
-                            })
+                            arguments_list.append(
+                                {
+                                    "name": arg.name,
+                                    "description": getattr(arg, "description", None),
+                                    "required": getattr(arg, "required", None),
+                                }
+                            )
                     prompt_dict["arguments"] = arguments_list
                 else:
                     prompt_dict["arguments"] = []
@@ -454,14 +452,18 @@ class MCPHandler(BaseHandler):
                 # List of TextContent objects - convert to content array
                 content_list = []
                 for item in result:
-                    if hasattr(item, 'type') and hasattr(item, 'text'):
+                    if hasattr(item, "type") and hasattr(item, "text"):
                         content_list.append({"type": item.type, "text": item.text})
                     else:
                         content_list.append({"type": "text", "text": str(item)})
                 return {"jsonrpc": "2.0", "id": request_id, "result": {"content": content_list}}
             else:
                 # Unexpected format - wrap as text
-                return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": str(result)}]}}
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"content": [{"type": "text", "text": str(result)}]},
+                }
 
         except ValueError as e:
             # SDK server raises ValueError for access denied or not found
@@ -485,18 +487,12 @@ class MCPHandler(BaseHandler):
             # Convert GetPromptResult to JSON-RPC format
             messages = []
             for msg in result.messages:
-                messages.append({
-                    "role": msg.role,
-                    "content": {"type": msg.content.type, "text": msg.content.text}
-                })
+                messages.append({"role": msg.role, "content": {"type": msg.content.type, "text": msg.content.text}})
 
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "result": {
-                    "description": result.description,
-                    "messages": messages
-                }
+                "result": {"description": result.description, "messages": messages},
             }
         except ValueError as e:
             return self._create_jsonrpc_error(request_id, -32003, str(e))
@@ -514,6 +510,7 @@ class MCPHandler(BaseHandler):
 
             # Convert uri string to AnyUrl for SDK
             from pydantic import AnyUrl
+
             uri_obj = AnyUrl(uri)
 
             # Call SDK server's read_resource handler
@@ -523,15 +520,7 @@ class MCPHandler(BaseHandler):
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "result": {
-                    "contents": [
-                        {
-                            "uri": uri,
-                            "mimeType": "application/json",
-                            "text": content
-                        }
-                    ]
-                }
+                "result": {"contents": [{"uri": uri, "mimeType": "application/json", "text": content}]},
             }
         except ValueError as e:
             return self._create_jsonrpc_error(request_id, -32003, str(e))

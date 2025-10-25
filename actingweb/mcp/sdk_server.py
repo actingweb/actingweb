@@ -9,20 +9,21 @@ protocol handling.
 import logging
 import asyncio
 import re
+import json
 from typing import Dict, Any, List, Optional
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mcp.server import Server
-    from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage
+    from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage, CallToolResult
     from pydantic import AnyUrl
 
     MCP_AVAILABLE = True
 else:
     try:
         from mcp.server import Server
-        from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage
+        from mcp.types import Tool, Resource, Prompt, TextContent, GetPromptResult, PromptMessage, CallToolResult
         from pydantic import AnyUrl
 
         MCP_AVAILABLE = True
@@ -115,23 +116,42 @@ class ActingWebMCPServer:
                         evaluator = None
                 
                 # Detect client type for description selection
+                # Need to reload trust from database to get fresh client_name (may have been updated after initial auth)
                 client_type = None
-                try:
-                    from ..runtime_context import get_client_info_from_context
-                    client_info = get_client_info_from_context(self.actor)
-                    if client_info and client_info.get("name"):
-                        client_name = client_info["name"].lower()
-                        # Classify client type based on name patterns
-                        if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
-                            client_type = "chatgpt"
-                        elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
-                            client_type = "claude"
-                        elif "cursor" in client_name:
-                            client_type = "cursor"
-                        logger.debug(f"Detected client type for SDK server: {client_type}")
-                except Exception as e:
-                    logger.debug(f"Could not detect client type: {e}")
-                    client_type = None
+                if peer_id:
+                    try:
+                        # Reload trust relationship from database to get latest client info
+                        from ..db_dynamodb.db_trust import DbTrust
+                        db_trust = DbTrust()
+                        fresh_trust = db_trust.get(actor_id=self.actor_id, peerid=peer_id)
+
+                        if fresh_trust:
+                            client_name = getattr(fresh_trust, "client_name", "") or fresh_trust.get("client_name", "")
+                            if client_name:
+                                client_name_lower = client_name.lower()
+                                logger.debug(f"SDK server: Retrieved client_name from trust DB: {client_name}")
+
+                                # Classify client type based on name patterns
+                                if any(pattern in client_name_lower for pattern in ["openai", "chatgpt", "gpt"]):
+                                    client_type = "chatgpt"
+                                elif any(pattern in client_name_lower for pattern in ["claude", "anthropic"]):
+                                    client_type = "claude"
+                                elif "cursor" in client_name_lower:
+                                    client_type = "cursor"
+
+                                if client_type:
+                                    logger.debug(f"Detected client type for SDK server: {client_type}")
+                                else:
+                                    logger.debug(f"SDK server: client_name '{client_name}' did not match any known patterns")
+                            else:
+                                logger.debug("SDK server: No client_name found in trust relationship")
+                        else:
+                            logger.debug(f"SDK server: Could not load trust relationship for peer {peer_id}")
+                    except Exception as e:
+                        logger.debug(f"Could not detect client type: {e}", exc_info=True)
+                        client_type = None
+                else:
+                    logger.debug("SDK server: No peer_id available for client type detection")
 
                 for action_name, hook_list in self.hooks._action_hooks.items():
                     for hook in hook_list:
@@ -229,24 +249,43 @@ class ActingWebMCPServer:
                                     # Per MCP SDK docs:
                                     # - Return dict -> goes into structuredContent + serialized JSON in content
                                     # - Return List[ContentBlock] -> goes into content only
+                                    # - Return CallToolResult -> full control including isError flag
 
                                     if isinstance(result, dict):
                                         # Check if result has structuredContent field
                                         if "structuredContent" in result:
-                                            # Return the structuredContent dict directly
-                                            # MCP SDK will handle putting it in both structuredContent and content
-                                            logger.debug(f"Tool {name} returned structuredContent, returning as dict for MCP SDK")
-                                            return result["structuredContent"]
+                                            # For ChatGPT: MCP SDK can't give us both content and structuredContent
+                                            # Try returning TextContent with JSON - ChatGPT might be able to parse it
+                                            structured_data = result["structuredContent"]
+
+                                            # Serialize as JSON text
+                                            content_text = json.dumps(structured_data, ensure_ascii=False)
+
+                                            # Return list of TextContent with the JSON string
+                                            # This will populate the content field, ChatGPT will parse the JSON
+                                            logger.debug(f"Tool {name} returning TextContent list with JSON ({len(content_text)} bytes)")
+                                            return [TextContent(type="text", text=content_text)]
 
                                         # Check if result has content array (for storage confirmations, errors)
                                         elif "content" in result and isinstance(result.get("content"), list):
-                                            logger.debug(f"Tool {name} returned content array, converting to TextContent list")
+                                            logger.debug(f"Tool {name} returned content array with metadata")
                                             # Extract TextContent items from content array
                                             content_items = result["content"]
                                             text_contents = []
                                             for item in content_items:
                                                 if isinstance(item, dict) and item.get("type") == "text":
                                                     text_contents.append(TextContent(type="text", text=item["text"]))
+
+                                            # Preserve isError flag if present by returning CallToolResult
+                                            if "isError" in result:
+                                                is_error = result["isError"]
+                                                logger.debug(f"Tool {name} has isError={is_error}, returning CallToolResult")
+                                                return CallToolResult(
+                                                    content=text_contents if text_contents else [TextContent(type="text", text="")],
+                                                    isError=is_error
+                                                )
+
+                                            # No isError flag - return content only
                                             return text_contents if text_contents else [TextContent(type="text", text="")]
 
                                         # Standard dict response - return as-is for structuredContent

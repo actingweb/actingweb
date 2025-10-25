@@ -15,7 +15,10 @@ def mcp_tool(
     description: Optional[str] = None,
     input_schema: Optional[Dict[str, Any]] = None,
     allowed_clients: Optional[List[str]] = None,
-    client_descriptions: Optional[Dict[str, str]] = None
+    client_descriptions: Optional[Dict[str, str]] = None,
+    title: Optional[str] = None,
+    output_schema: Optional[Dict[str, Any]] = None,
+    annotations: Optional[Dict[str, Any]] = None
 ) -> Callable[..., Any]:
     """
     Decorator to expose an ActingWeb action as an MCP tool.
@@ -29,15 +32,33 @@ def mcp_tool(
                         Example: ["chatgpt", "claude", "cursor"]
         client_descriptions: Client-specific descriptions for safety/clarity.
                            Example: {"chatgpt": "Search your personal notes", "claude": "Search and store information"}
+        title: Human-readable title for the tool (optional)
+        output_schema: JSON schema describing the tool's output (optional)
+        annotations: Safety and behavior annotations for the tool.
+                    IMPORTANT: ChatGPT uses these for safety evaluation.
+                    Example: {
+                        "destructiveHint": True,  # Tool can cause destructive changes
+                        "readOnlyHint": False,    # Tool modifies data
+                        "idempotentHint": False,  # Repeated calls have different effects
+                        "openWorldHint": False    # Tool doesn't interact with outside world
+                    }
 
     Example:
-        @action_hook("send_notification")
+        @action_hook("delete_note")
         @mcp_tool(
-            description="Send a notification to the user",
-            client_descriptions={"chatgpt": "Send a safe notification"}
+            description="Delete a note permanently",
+            annotations={"destructiveHint": True, "readOnlyHint": False}
         )
-        def handle_notification(actor, action_name, data):
-            return {"status": "sent"}
+        def handle_delete(actor, action_name, data):
+            return {"status": "deleted"}
+
+        @action_hook("search")
+        @mcp_tool(
+            description="Search your notes",
+            annotations={"readOnlyHint": True, "destructiveHint": False}
+        )
+        def handle_search(actor, action_name, data):
+            return {"results": [...]}
     """
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         setattr(func, '_mcp_type', "tool")
@@ -46,7 +67,10 @@ def mcp_tool(
             "description": description,
             "input_schema": input_schema,
             "allowed_clients": allowed_clients,
-            "client_descriptions": client_descriptions or {}
+            "client_descriptions": client_descriptions or {},
+            "title": title,
+            "output_schema": output_schema,
+            "annotations": annotations
         })
         return func
     return decorator

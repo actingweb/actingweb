@@ -125,13 +125,30 @@ class ActingWebMCPServer:
                                         logger.debug(f"Tool '{tool_name}' filtered out - access denied for peer {peer_id}")
                                         continue
                                 
-                                tool = Tool(
-                                    name=tool_name,
-                                    description=metadata.get("description", f"Execute {action_name} action"),
-                                    inputSchema=metadata.get(
+                                # Build tool with optional fields
+                                tool_kwargs = {
+                                    "name": tool_name,
+                                    "description": metadata.get("description", f"Execute {action_name} action"),
+                                    "inputSchema": metadata.get(
                                         "input_schema", {"type": "object", "properties": {}, "required": []}
                                     ),
-                                )
+                                }
+
+                                # Add optional title
+                                if metadata.get("title"):
+                                    tool_kwargs["title"] = metadata["title"]
+
+                                # Add optional output schema
+                                if metadata.get("output_schema"):
+                                    tool_kwargs["outputSchema"] = metadata["output_schema"]
+
+                                # Add optional annotations for safety metadata
+                                if metadata.get("annotations"):
+                                    from mcp.types import ToolAnnotations
+                                    annotations_dict = metadata["annotations"]
+                                    tool_kwargs["annotations"] = ToolAnnotations(**annotations_dict)
+
+                                tool = Tool(**tool_kwargs)
                                 tools.append(tool)
 
             logger.debug(f"Listed {len(tools)} tools for actor {self.actor_id} (after permission filtering)")

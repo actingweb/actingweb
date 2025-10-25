@@ -1,20 +1,21 @@
 """
 Minimal ActingWeb test harness.
 
-This is a standalone Flask application using the ActingWeb library,
+This is a standalone FastAPI application using the ActingWeb library,
 designed for integration testing. It's completely independent of
 actingwebdemo and actingweb_mcp.
+
+Note: Switched from Flask to FastAPI to support MCP endpoints which
+require async/await functionality.
 """
 
 import os
 import logging
-import json
-import re
-from flask import Flask
+from fastapi import FastAPI
 from actingweb.interface import ActingWebApp
 
-# Suppress Flask debug output
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
+# Suppress uvicorn access logs for cleaner test output
+logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
 
 
 def create_test_app(
@@ -23,7 +24,7 @@ def create_test_app(
     enable_oauth: bool = False,
     enable_mcp: bool = False,
     enable_devtest: bool = True,
-) -> tuple[Flask, ActingWebApp]:
+) -> tuple[FastAPI, ActingWebApp]:
     """
     Create a minimal ActingWeb test harness.
 
@@ -35,7 +36,7 @@ def create_test_app(
         enable_devtest: Enable devtest endpoints (for proxy tests)
 
     Returns:
-        Tuple of (flask_app, actingweb_app)
+        Tuple of (fastapi_app, actingweb_app)
     """
     # Create ActingWeb app with minimal configuration
     aw_app = (
@@ -66,13 +67,13 @@ def create_test_app(
     if enable_mcp:
         aw_app = aw_app.with_mcp(enable=True)
 
-    # Create Flask app with test templates directory
-    import os
+    # Create FastAPI app
+    fastapi_app = FastAPI(title="ActingWeb Test Harness")
+
+    # Get templates directory for FastAPI
     template_dir = os.path.join(os.path.dirname(__file__), 'templates')
-    flask_app = Flask(__name__, template_folder=template_dir)
-    flask_app.config['TESTING'] = True
 
-    # Integrate with Flask (this will automatically initialize system actors)
-    aw_app.integrate_flask(flask_app)
+    # Integrate with FastAPI (this will automatically initialize system actors)
+    aw_app.integrate_fastapi(fastapi_app, templates_dir=template_dir)
 
-    return flask_app, aw_app
+    return fastapi_app, aw_app

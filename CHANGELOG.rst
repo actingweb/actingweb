@@ -2,6 +2,20 @@
 CHANGELOG
 =========
 
+v3.4: TBD
+-----------------
+
+FIXED
+~~~~~
+
+- Fixed OAuth2 CORS preflight (OPTIONS) requests not being routed correctly in FastAPI integration, causing 404 errors on ``/oauth/register`` and ``/oauth/token`` endpoints
+
+CHANGED
+~~~~~~~
+
+- **Dependencies**: Updated Poetry to 2.2.1 and major package upgrades including ``cryptography`` 45.0.6 → 46.0.3, ``fastapi`` 0.116.1 → 0.120.0, ``mcp`` 1.12.4 → 1.19.0, ``pydantic`` 2.11.7 → 2.12.3, ``pytest-cov`` 6.2.1 → 7.0.0, ``ruff`` 0.12.8 → 0.14.2, and 30+ other dependency updates
+
+
 v3.3: Oct 4, 2025
 -----------------
 

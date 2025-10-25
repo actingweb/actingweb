@@ -1106,6 +1106,8 @@ class FastAPIIntegration:
         loop = asyncio.get_running_loop()
         if request.method == "POST":
             result = await loop.run_in_executor(self.executor, handler.post, endpoint)
+        elif request.method == "OPTIONS":
+            result = await loop.run_in_executor(self.executor, handler.options, endpoint)
         else:
             result = await loop.run_in_executor(self.executor, handler.get, endpoint)
 
@@ -1161,7 +1163,9 @@ class FastAPIIntegration:
             "Access-Control-Max-Age": "86400",
         }
 
-        return JSONResponse(content=result, headers=cors_headers)
+        # Use status code from handler if set (e.g., 201 for client registration)
+        status_code = webobj.response.status_code if hasattr(webobj.response, 'status_code') else 200
+        return JSONResponse(content=result, headers=cors_headers, status_code=status_code)
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""

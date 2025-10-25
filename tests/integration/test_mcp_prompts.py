@@ -9,6 +9,7 @@ interactions that can be exposed to MCP clients.
 
 import pytest
 import json
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client):
@@ -20,7 +21,7 @@ def initialize_mcp_session(oauth2_client):
             "jsonrpc": "2.0",
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "Test Client", "version": "1.0.0"},
             },
@@ -333,3 +334,72 @@ class TestMCPPromptsIntegration:
             prompts = data["result"]["prompts"]
             # May be empty if no methods are exposed as prompts
             assert isinstance(prompts, list)
+
+    def test_prompts_list_serialization_regression(self, oauth2_client):
+        """
+        Regression test for PromptArgument serialization bug.
+
+        This tests the fix for a bug where prompts/list would fail with:
+        "TypeError: Object of type PromptArgument is not JSON serializable"
+
+        The issue was that Pydantic PromptArgument objects in the prompt.arguments
+        field were not being converted to dictionaries before JSON serialization.
+
+        See: mcp.py line 381-402
+        """
+        initialize_mcp_session(oauth2_client)
+
+        # This request includes _meta with progressToken to match the user's example
+        response = oauth2_client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "prompts/list",
+                "params": {"_meta": {"progressToken": 10}},
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        # Should not get 500 Internal Server Error
+        assert response.status_code == 200, \
+            f"prompts/list failed with status {response.status_code}: {response.text}"
+
+        data = response.json()
+
+        # Should have a valid JSON-RPC response structure
+        assert "jsonrpc" in data
+        assert data["jsonrpc"] == "2.0"
+        assert "id" in data
+        assert data["id"] == 10
+
+        # Should have result, not error
+        assert "result" in data, \
+            f"Expected 'result' in response, got error: {data.get('error')}"
+        assert "error" not in data
+
+        # Verify prompts structure
+        assert "prompts" in data["result"]
+        prompts = data["result"]["prompts"]
+        assert isinstance(prompts, list)
+
+        # Verify all prompts are properly serialized (including arguments)
+        for prompt in prompts:
+            assert isinstance(prompt, dict), f"Prompt not a dict: {type(prompt)}"
+            assert "name" in prompt
+            assert "description" in prompt
+            assert "arguments" in prompt
+
+            # Verify arguments are serialized as dicts, not Pydantic objects
+            arguments = prompt["arguments"]
+            assert isinstance(arguments, list)
+            for arg in arguments:
+                assert isinstance(arg, dict), \
+                    f"PromptArgument not serialized to dict: {type(arg)}"
+                # Verify standard PromptArgument fields
+                assert "name" in arg
+                # description and required are optional
+                if "description" in arg:
+                    assert isinstance(arg["description"], (str, type(None)))
+                if "required" in arg:
+                    assert isinstance(arg["required"], (bool, type(None)))

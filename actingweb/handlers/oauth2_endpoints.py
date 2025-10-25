@@ -18,6 +18,15 @@ from urllib.parse import urlencode
 
 from .base_handler import BaseHandler
 
+# Import MCP protocol version constants
+try:
+    from mcp.types import LATEST_PROTOCOL_VERSION
+    from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+except ImportError:
+    # Fallback if MCP SDK not available
+    LATEST_PROTOCOL_VERSION = "2024-11-05"
+    SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]
+
 if TYPE_CHECKING:
     from ..interface.hooks import HookRegistry
     from .. import aw_web_request
@@ -625,7 +634,8 @@ class OAuth2EndpointsHandler(BaseHandler):
             "bearer_methods_supported": ["header"],
             "resource_documentation": f"{base_url}/mcp/info",
             "resource_policy_uri": f"{base_url}",
-            "mcp_version": "2024-11-05",
+            "mcp_version": LATEST_PROTOCOL_VERSION,
+            "supported_protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
             "capabilities": {
                 "tools": True,
                 "prompts": True,

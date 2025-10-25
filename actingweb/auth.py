@@ -3,6 +3,9 @@ import logging
 import math
 import time
 from datetime import datetime
+from typing import Union, Optional
+
+from pynamodb.exceptions import PutError, UpdateError, DoesNotExist
 
 from actingweb import actor, trust
 from actingweb import config as config_class
@@ -162,7 +165,7 @@ class Auth:
         self.response["text"] = "Ok"
         return True
 
-    def _record_trust_usage(self, trust_record, via_hint: str | None = None) -> None:
+    def _record_trust_usage(self, trust_record, via_hint: Optional[str] = None) -> None:
         """Persist usage metadata for bearer-token trusts."""
         if not self.actor or not trust_record:
             return
@@ -203,10 +206,14 @@ class Auth:
                 trust_record["created_at"] = usage_time
             if "established_via" in modify_kwargs:
                 trust_record["established_via"] = modify_kwargs["established_via"]
-        except Exception:
-            logging.debug("Unable to record trust usage metadata", exc_info=True)
+        except (PutError, UpdateError) as e:
+            logging.warning(f"Database error recording trust usage metadata: {e}")
+        except DoesNotExist:
+            logging.warning("Trust record no longer exists, skipping metadata update")
+        except Exception as e:
+            logging.error(f"Unexpected error recording trust usage metadata: {e}", exc_info=True)
 
-    def check_token_auth(self, appreq, via_hint: str | None = None):
+    def check_token_auth(self, appreq, via_hint: Optional[str] = None):
         """Validate bearer tokens and optionally record how the connection occurred."""
         if "Authorization" not in appreq.request.headers:
             return False

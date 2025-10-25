@@ -1,17 +1,52 @@
 import logging
-from typing import Any
+from typing import Any, Union, Optional
 
 
-def canonical_connection_method(method: str | None) -> str | None:
-    """Normalize connection hints to canonical channels."""
+def canonical_connection_method(method: Optional[str]) -> Optional[str]:
+    """
+    Normalize connection hints to canonical channels.
+    
+    Args:
+        method: Connection method hint (e.g., "oauth2:interactive", "trust", "mcp")
+        
+    Returns:
+        Canonical connection method or original value if not recognized
+        
+    Examples:
+        - "oauth2:interactive" -> "oauth"
+        - "OAUTH" -> "oauth"
+        - "trust" -> "trust"
+        - "subscription" -> "subscription"
+        - "mcp" -> "mcp"
+        - "unknown_method" -> "unknown_method"
+    """
     if not method:
         return None
 
-    lowered = method.lower()
+    # Validate input is a string
+    if not isinstance(method, str):
+        logging.warning(f"Connection method must be string, got {type(method)}: {method}")
+        return None
+
+    lowered = method.lower().strip()
+    
+    # Handle empty or whitespace-only strings
+    if not lowered:
+        return None
+    
+    # Known canonical methods
+    VALID_CONNECTION_METHODS = {"oauth", "trust", "subscription", "mcp"}
+    
+    # Handle oauth variants (oauth, oauth2, oauth2:interactive, etc.)
     if lowered.startswith("oauth"):
         return "oauth"
-    if lowered in {"trust", "subscription", "mcp"}:
+    
+    # Handle known exact matches
+    if lowered in VALID_CONNECTION_METHODS:
         return lowered
+    
+    # Log unknown methods for monitoring but still return them
+    logging.debug(f"Unknown connection method: {method}")
     return method
 
 

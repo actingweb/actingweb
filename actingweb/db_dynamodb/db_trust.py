@@ -2,6 +2,7 @@ import logging
 import os
 
 from datetime import datetime
+from typing import Union
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
@@ -13,6 +14,34 @@ from actingweb.trust import canonical_connection_method
     DbTrust handles all db operations for a trust
     Google datastore for google is used as a backend.
 """
+
+
+def _parse_timestamp(value: Union[str, datetime, None]) -> datetime:
+    """
+    Parse timestamp value consistently, handling both string and datetime inputs.
+    
+    Args:
+        value: String timestamp (ISO format) or datetime object
+        
+    Returns:
+        datetime object
+        
+    Raises:
+        ValueError: If string cannot be parsed as valid ISO timestamp
+    """
+    if value is None:
+        raise ValueError("Timestamp value cannot be None")
+    if isinstance(value, str):
+        try:
+            # Handle both 'Z' UTC suffix and timezone offset formats
+            normalized = value.replace("Z", "+00:00")
+            return datetime.fromisoformat(normalized)
+        except ValueError as e:
+            raise ValueError(f"Invalid ISO timestamp format: {value}") from e
+    elif isinstance(value, datetime):
+        return value
+    else:
+        raise ValueError(f"Timestamp must be string or datetime, got {type(value)}")
 
 
 class SecretIndex(GlobalSecondaryIndex):
@@ -194,15 +223,17 @@ class DbTrust:
         if established_via is not None:
             self.handle.established_via = established_via
         if created_at is not None:
-            if isinstance(created_at, str):
-                self.handle.created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            else:
-                self.handle.created_at = created_at
+            try:
+                self.handle.created_at = _parse_timestamp(created_at)
+            except ValueError as e:
+                logging.warning(f"Invalid created_at timestamp: {e}")
+                # Keep existing value if parsing fails
         if last_accessed is not None:
-            if isinstance(last_accessed, str):
-                self.handle.last_accessed = datetime.fromisoformat(last_accessed.replace("Z", "+00:00"))
-            else:
-                self.handle.last_accessed = last_accessed
+            try:
+                self.handle.last_accessed = _parse_timestamp(last_accessed)
+            except ValueError as e:
+                logging.warning(f"Invalid last_accessed timestamp: {e}")
+                # Keep existing value if parsing fails
 
         if last_connected_via is not None:
             self.handle.last_connected_via = canonical_connection_method(last_connected_via)

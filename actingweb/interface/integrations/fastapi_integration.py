@@ -1161,7 +1161,9 @@ class FastAPIIntegration:
             "Access-Control-Max-Age": "86400",
         }
 
-        return JSONResponse(content=result, headers=cors_headers)
+        # Use status code from handler if set (e.g., 201 for client registration)
+        status_code = webobj.response.status_code if hasattr(webobj.response, 'status_code') else 200
+        return JSONResponse(content=result, headers=cors_headers, status_code=status_code)
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""

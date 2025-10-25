@@ -208,6 +208,7 @@ Available Templates
     - ``url``: Base URL for navigation
     - ``id``: Actor ID
     - ``trusts``: List of trust relationship objects
+    - ``trust_connections``: Connection metadata for each trust with ``peerid``, ``established_via``, ``created_at``, ``last_connected_at``, and ``last_connected_via``
 
 **aw-actor-www-trust-new.html**
     Add new trust relationship form template

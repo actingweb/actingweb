@@ -136,9 +136,11 @@ Enhanced Trust Model
 The existing trust database model has been extended with new fields while maintaining full backward compatibility:
 
 * ``peer_identifier`` - Generic identifier supporting email, username, UUID, etc.
-* ``established_via`` - Method of establishment: ``actingweb``, ``oauth2``, or ``mcp``
-* ``created_at`` - Trust relationship creation timestamp
-* ``last_accessed`` - Last access timestamp for analytics
+* ``established_via`` - Precise method of establishment (e.g., ``trust``, ``oauth2_interactive``, ``oauth2_client``)
+* ``created_at`` - Original creation timestamp (when relationship was established)
+* ``last_accessed`` - Raw last-access timestamp used for analytics/migrations
+* ``last_connected_at`` - Normalized "last connected" timestamp exposed to templates/clients
+* ``last_connected_via`` - Method used for the most recent connection (``trust``, ``subscription``, ``oauth``, ``mcp``)
 
 System Constants
 ================

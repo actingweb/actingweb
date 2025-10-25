@@ -2,9 +2,13 @@
 Simplified trust relationship management for ActingWeb actors.
 """
 
-from typing import List, Dict, Any, Optional
-from ..actor import Actor as CoreActor
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 import logging
+
+from ..actor import Actor as CoreActor
+from ..trust import canonical_connection_method
 
 
 class TrustRelationship:
@@ -81,7 +85,17 @@ class TrustRelationship:
     @property
     def last_accessed(self) -> Optional[str]:
         """When this trust relationship was last accessed."""
-        return self._data.get("last_accessed")
+        return self._data.get("last_connected_at") or self._data.get("last_accessed")
+
+    @property
+    def last_connected_at(self) -> Optional[str]:
+        """Most recent time the relationship authenticated successfully."""
+        return self._data.get("last_connected_at") or self._data.get("last_accessed")
+
+    @property
+    def last_connected_via(self) -> Optional[str]:
+        """How the trust last connected (trust, subscription, oauth, mcp)."""
+        return self._data.get("last_connected_via")
 
     @property
     def client_name(self) -> Optional[str]:
@@ -329,13 +343,17 @@ class TrustManager:
 
                 db = DbTrust()
                 if db.get(actor_id=self._core_actor.id, peerid=peer_id):
-                    from datetime import datetime
+                    now_iso = datetime.utcnow().isoformat()
 
                     # Always update last_accessed and established_via for OAuth2 trusts
                     modify_kwargs = {
-                        "last_accessed": datetime.utcnow().isoformat(),
+                        "last_accessed": now_iso,
                         "established_via": source,  # Ensure established_via is set correctly
+                        "last_connected_via": canonical_connection_method(source),
                     }
+
+                    if not getattr(db.handle, "created_at", None):
+                        modify_kwargs["created_at"] = now_iso
 
                     # Keep peer identifier in sync for OAuth2/MCP clients
                     if email:
@@ -402,6 +420,8 @@ class TrustManager:
                 if client_id and source == "oauth2_client":
                     client_metadata["oauth_client_id"] = client_id
 
+                now_iso = datetime.utcnow().isoformat()
+
                 created = db.create(
                     actor_id=self._core_actor.id,
                     peerid=peer_id,
@@ -416,6 +436,9 @@ class TrustManager:
                     desc=desc,
                     peer_identifier=email,
                     established_via=source,
+                    created_at=now_iso,
+                    last_accessed=now_iso,
+                    last_connected_via=canonical_connection_method(source),
                     **client_metadata,  # Include client metadata in the trust relationship
                 )
                 if created:

@@ -399,6 +399,7 @@ class WwwHandler(base_handler.BaseHandler):
                 relationships = []
 
             # Build approve URIs and check for custom permissions
+            connection_metadata: List[Dict[str, str | None]] = []
             for t in relationships:
                 if isinstance(t, dict):
                     rel = t.get("relationship", "")
@@ -407,6 +408,18 @@ class WwwHandler(base_handler.BaseHandler):
 
                     # Check if this relationship has custom permissions
                     t["has_custom_permissions"] = self._has_custom_permissions(myself.id or "", peerid)
+
+                    connection_metadata.append(
+                        {
+                            "peerid": peerid,
+                            "established_via": t.get("established_via"),
+                            "created_at": t.get("created_at"),
+                            "last_connected_at": t.get("last_connected_at")
+                            or t.get("last_accessed")
+                            or t.get("created_at"),
+                            "last_connected_via": t.get("last_connected_via"),
+                        }
+                    )
                 else:
                     # Fallback for object-like items
                     rel = getattr(t, "relationship", "")
@@ -416,6 +429,18 @@ class WwwHandler(base_handler.BaseHandler):
                         t.has_custom_permissions = self._has_custom_permissions(myself.id or "", peerid)
                     except Exception:
                         pass
+
+                    connection_metadata.append(
+                        {
+                            "peerid": peerid,
+                            "established_via": getattr(t, "established_via", None),
+                            "created_at": getattr(t, "created_at", None),
+                            "last_connected_at": getattr(t, "last_connected_at", None)
+                            or getattr(t, "last_accessed", None)
+                            or getattr(t, "created_at", None),
+                            "last_connected_via": getattr(t, "last_connected_via", None),
+                        }
+                    )
 
             # Get OAuth2 clients for this actor
             oauth_clients = self._get_oauth_clients_for_actor(actor_id)
@@ -456,6 +481,7 @@ class WwwHandler(base_handler.BaseHandler):
                 "id": myself.id,
                 "trusts": relationships,
                 "oauth_clients": oauth_clients,
+                "trust_connections": connection_metadata,
                 "url": f"{urls['actor_root']}/",
                 "actor_root": urls["actor_root"],
                 "actor_www": urls["actor_www"],

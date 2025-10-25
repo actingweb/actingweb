@@ -2,6 +2,7 @@ import base64
 import logging
 import math
 import time
+from datetime import datetime
 
 from actingweb import actor, trust
 from actingweb import config as config_class
@@ -161,9 +162,52 @@ class Auth:
         self.response["text"] = "Ok"
         return True
 
-    def check_token_auth(self, appreq):
-        """Called with an http request to check the Authorization header and validate if we have a peer with
-        this token."""
+    def _record_trust_usage(self, trust_record, via_hint: str | None = None) -> None:
+        """Persist usage metadata for bearer-token trusts."""
+        if not self.actor or not trust_record:
+            return
+
+        peer_id = trust_record.get("peerid")
+        if not peer_id:
+            return
+
+        try:
+            usage_time = datetime.utcnow().isoformat()
+            modify_kwargs = {"last_accessed": usage_time}
+
+            if not trust_record.get("created_at"):
+                modify_kwargs["created_at"] = usage_time
+
+            if via_hint:
+                canonical_via = trust.canonical_connection_method(via_hint)
+                if canonical_via:
+                    modify_kwargs["last_connected_via"] = canonical_via
+            elif trust_record.get("last_connected_via"):
+                canonical_via = trust.canonical_connection_method(
+                    trust_record.get("last_connected_via")
+                )
+                if canonical_via:
+                    modify_kwargs["last_connected_via"] = canonical_via
+
+            if via_hint and not trust_record.get("established_via"):
+                modify_kwargs["established_via"] = via_hint
+
+            db_trust = trust.Trust(actor_id=self.actor.id, peerid=peer_id, config=self.config)
+            db_trust.modify(**modify_kwargs)
+
+            trust_record["last_accessed"] = usage_time
+            trust_record["last_connected_at"] = usage_time
+            if "last_connected_via" in modify_kwargs:
+                trust_record["last_connected_via"] = modify_kwargs["last_connected_via"]
+            if "created_at" in modify_kwargs:
+                trust_record["created_at"] = usage_time
+            if "established_via" in modify_kwargs:
+                trust_record["established_via"] = modify_kwargs["established_via"]
+        except Exception:
+            logging.debug("Unable to record trust usage metadata", exc_info=True)
+
+    def check_token_auth(self, appreq, via_hint: str | None = None):
+        """Validate bearer tokens and optionally record how the connection occurred."""
         if "Authorization" not in appreq.request.headers:
             return False
         auth = appreq.request.headers["Authorization"]
@@ -212,6 +256,7 @@ class Auth:
             self.response["text"] = "Ok"
             self.token = new_trust["secret"]
             self.trust = new_trust
+            self._record_trust_usage(new_trust, via_hint=via_hint or "trust")
             return True
         else:
             return False
@@ -326,7 +371,8 @@ class Auth:
         """Checks authentication in appreq, redirecting back to path if oauth is done."""
         logging.debug(f"Checking authentication for path: {path}, auth type: {self.type}")
         logging.debug("Checking authentication, token auth...")
-        if self.check_token_auth(appreq):
+        via_hint = self._connection_hint_from_path(path)
+        if self.check_token_auth(appreq, via_hint=via_hint):
             logging.debug("Token auth succeeded")
             return
         elif self.type == "basic":
@@ -351,6 +397,19 @@ class Auth:
         self.response["code"] = 403
         self.response["text"] = "Forbidden"
         return
+
+    def _connection_hint_from_path(self, path: str | None) -> str | None:
+        if not path:
+            return None
+
+        lowered = path.lower()
+        if lowered.startswith("/mcp"):
+            return "mcp"
+        if lowered.startswith("/subscriptions") or lowered.startswith("/subscription"):
+            return "subscription"
+        if lowered.startswith("/trust") or lowered.startswith("/www/trust"):
+            return "trust"
+        return None
 
     def check_authorisation(
         self, path="", subpath="", method="", peerid="", approved=True

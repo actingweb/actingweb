@@ -2,6 +2,19 @@ import logging
 from typing import Any
 
 
+def canonical_connection_method(method: str | None) -> str | None:
+    """Normalize connection hints to canonical channels."""
+    if not method:
+        return None
+
+    lowered = method.lower()
+    if lowered.startswith("oauth"):
+        return "oauth"
+    if lowered in {"trust", "subscription", "mcp"}:
+        return lowered
+    return method
+
+
 class Trust:
     def get(self) -> dict[str, Any] | None:
         """Retrieve a trust relationship with either peerid or token"""
@@ -36,7 +49,9 @@ class Trust:
         # New unified trust attributes
         peer_identifier: str | None = None,
         established_via: str | None = None,
+        created_at: str | None = None,
         last_accessed: str | None = None,
+        last_connected_via: str | None = None,
         # Client metadata for OAuth2 clients
         client_name: str | None = None,
         client_version: str | None = None,
@@ -71,7 +86,9 @@ class Trust:
             # Pass through new unified trust attributes
             peer_identifier=peer_identifier,
             established_via=established_via,
+            created_at=created_at,
             last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
             # Pass through client metadata
             client_name=client_name,
             client_version=client_version,
@@ -90,6 +107,11 @@ class Trust:
         verification_token: str = "",
         desc: str = "",
         peer_approved: bool = False,
+        peer_identifier: str | None = None,
+        established_via: str | None = None,
+        created_at: str | None = None,
+        last_accessed: str | None = None,
+        last_connected_via: str | None = None,
     ) -> bool:
         """Create a new trust relationship"""
         self.trust = {"baseuri": baseuri, "type": peer_type}
@@ -133,6 +155,11 @@ class Trust:
             peer_approved=peer_approved,
             verification_token=self.trust["verification_token"],
             desc=self.trust["desc"],
+            peer_identifier=peer_identifier,
+            established_via=established_via,
+            created_at=created_at,
+            last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
         )
 
     def __init__(

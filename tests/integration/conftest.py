@@ -84,12 +84,13 @@ def docker_services():
 @pytest.fixture(scope="session")
 def test_app(docker_services):
     """
-    Start the test harness Flask application for the test session.
+    Start the test harness FastAPI application for the test session.
 
     Returns the base URL for making requests.
     """
     from .test_harness import create_test_app
     from threading import Thread
+    import uvicorn
 
     # Set environment for DynamoDB
     os.environ["AWS_ACCESS_KEY_ID"] = "test"
@@ -98,7 +99,7 @@ def test_app(docker_services):
     os.environ["AWS_DB_PREFIX"] = "test"
 
     # Create app
-    flask_app, aw_app = create_test_app(
+    fastapi_app, aw_app = create_test_app(
         fqdn=f"{TEST_APP_HOST}:{TEST_APP_PORT}",
         proto="http://",
         enable_oauth=True,
@@ -106,9 +107,14 @@ def test_app(docker_services):
         enable_devtest=True,
     )
 
-    # Run in background thread
+    # Run in background thread with uvicorn
     def run_app():
-        flask_app.run(host="0.0.0.0", port=TEST_APP_PORT, use_reloader=False)
+        uvicorn.run(
+            fastapi_app,
+            host="0.0.0.0",
+            port=TEST_APP_PORT,
+            log_level="error"  # Suppress logs during tests
+        )
 
     thread = Thread(target=run_app, daemon=True)
     thread.start()
@@ -132,13 +138,14 @@ def test_app(docker_services):
 @pytest.fixture(scope="session")
 def www_test_app(docker_services):
     """
-    Start a test harness Flask application WITHOUT OAuth for www template testing.
+    Start a test harness FastAPI application WITHOUT OAuth for www template testing.
 
     This allows testing www templates with basic auth instead of OAuth redirects.
     Returns the base URL for making requests.
     """
     from .test_harness import create_test_app
     from threading import Thread
+    import uvicorn
 
     # Use a different port for www testing
     WWW_TEST_PORT = 5557
@@ -151,7 +158,7 @@ def www_test_app(docker_services):
     os.environ["AWS_DB_PREFIX"] = "test"
 
     # Create app WITHOUT OAuth
-    flask_app, aw_app = create_test_app(
+    fastapi_app, aw_app = create_test_app(
         fqdn=f"{TEST_APP_HOST}:{WWW_TEST_PORT}",
         proto="http://",
         enable_oauth=False,  # Disable OAuth for www testing
@@ -159,9 +166,14 @@ def www_test_app(docker_services):
         enable_devtest=True,
     )
 
-    # Run in background thread
+    # Run in background thread with uvicorn
     def run_app():
-        flask_app.run(host="0.0.0.0", port=WWW_TEST_PORT, use_reloader=False)
+        uvicorn.run(
+            fastapi_app,
+            host="0.0.0.0",
+            port=WWW_TEST_PORT,
+            log_level="error"
+        )
 
     thread = Thread(target=run_app, daemon=True)
     thread.start()
@@ -185,20 +197,21 @@ def www_test_app(docker_services):
 @pytest.fixture(scope="session")
 def peer_app(docker_services):
     """
-    Start a second test harness Flask application on a different port.
+    Start a second test harness FastAPI application on a different port.
 
     This acts as a peer actor for testing trust relationships.
     Returns the base URL for making requests.
     """
     from .test_harness import create_test_app
     from threading import Thread
+    import uvicorn
 
     PEER_APP_HOST = "localhost"
     PEER_APP_PORT = 5556
     PEER_APP_URL = f"http://{PEER_APP_HOST}:{PEER_APP_PORT}"
 
     # Create peer app (shares same DynamoDB as main app)
-    flask_app, aw_app = create_test_app(
+    fastapi_app, aw_app = create_test_app(
         fqdn=f"{PEER_APP_HOST}:{PEER_APP_PORT}",
         proto="http://",
         enable_oauth=True,
@@ -206,9 +219,14 @@ def peer_app(docker_services):
         enable_devtest=True,
     )
 
-    # Run in background thread
+    # Run in background thread with uvicorn
     def run_app():
-        flask_app.run(host="0.0.0.0", port=PEER_APP_PORT, use_reloader=False)
+        uvicorn.run(
+            fastapi_app,
+            host="0.0.0.0",
+            port=PEER_APP_PORT,
+            log_level="error"
+        )
 
     thread = Thread(target=run_app, daemon=True)
     thread.start()

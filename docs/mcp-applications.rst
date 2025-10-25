@@ -172,6 +172,122 @@ Create reusable MCP tools in ``shared_mcp/tools.py`` using the correct decorator
             except Exception as e:
                 return f"Error fetching URL: {e}"
 
+Tool Safety Annotations
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+**IMPORTANT**: MCP clients like ChatGPT use tool annotations to evaluate server safety and apply appropriate permissions. Always include annotations to ensure your tools are properly understood.
+
+The ``@mcp_tool`` decorator supports safety annotations through the ``annotations`` parameter:
+
+.. code-block:: python
+
+    from actingweb.mcp import mcp_tool
+
+    @aw_app.action_hook("search")
+    @mcp_tool(
+        description="Search your personal information",
+        annotations={
+            "readOnlyHint": True,       # Only reads data, never modifies
+            "destructiveHint": False,   # Doesn't delete or destroy data
+            "idempotentHint": False,    # Results may vary over time
+            "openWorldHint": False      # Doesn't access external services
+        }
+    )
+    def search(actor, action_name, params):
+        # Implementation
+        pass
+
+    @aw_app.action_hook("delete_note")
+    @mcp_tool(
+        description="Permanently delete a note",
+        annotations={
+            "readOnlyHint": False,      # Modifies data
+            "destructiveHint": True,    # DESTROYS data permanently
+            "idempotentHint": True,     # Same result if called multiple times
+            "openWorldHint": False      # Doesn't access external services
+        }
+    )
+    def delete_note(actor, action_name, params):
+        # Implementation
+        pass
+
+    @aw_app.action_hook("fetch_url")
+    @mcp_tool(
+        description="Fetch content from external URL",
+        annotations={
+            "readOnlyHint": True,       # Only reads data
+            "destructiveHint": False,   # Doesn't destroy data
+            "idempotentHint": False,    # External content may change
+            "openWorldHint": True       # ACCESSES external services
+        }
+    )
+    def fetch_url(actor, action_name, params):
+        # Implementation
+        pass
+
+Annotation Fields
+^^^^^^^^^^^^^^^^^
+
+- **destructiveHint**: ``True`` if the tool can permanently delete or destroy data (e.g., delete_note, clear_history)
+- **readOnlyHint**: ``True`` if the tool only reads data and never modifies it (e.g., search, fetch, list)
+- **idempotentHint**: ``True`` if calling the tool multiple times with the same input produces the same result
+- **openWorldHint**: ``True`` if the tool interacts with external services or APIs outside the user's data
+
+Impact on MCP Clients
+^^^^^^^^^^^^^^^^^^^^^^
+
+**Without annotations:**
+
+- ChatGPT treats ALL tools as potentially unsafe
+- May apply overly restrictive permissions
+- Provides poor user experience with excessive warnings
+- Server may be flagged as unsafe
+
+**With annotations:**
+
+- ChatGPT can trust read-only tools (``readOnlyHint: True``)
+- Shows appropriate warnings for destructive operations (``destructiveHint: True``)
+- Applies context-appropriate permissions
+- Better user experience and tool usage
+
+Additional Tool Parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``@mcp_tool`` decorator supports additional parameters for enhanced functionality:
+
+.. code-block:: python
+
+    @mcp_tool(
+        name="search",                     # Override action name
+        description="Search your data",
+        title="Advanced Search",           # Human-readable title
+        input_schema={                     # JSON schema for parameters
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"}
+            },
+            "required": ["query"]
+        },
+        output_schema={                    # JSON schema for output
+            "type": "object",
+            "properties": {
+                "results": {"type": "array"},
+                "count": {"type": "integer"}
+            }
+        },
+        annotations={                      # Safety metadata (see above)
+            "readOnlyHint": True,
+            "destructiveHint": False
+        },
+        allowed_clients=["chatgpt", "claude"],  # Restrict to specific clients
+        client_descriptions={               # Client-specific descriptions
+            "chatgpt": "Search your personal notes and memories",
+            "claude": "Search through stored information"
+        }
+    )
+    def search(actor, action_name, params):
+        pass
+
 MCP Prompts Implementation
 --------------------------
 
@@ -562,15 +678,15 @@ ActingWeb v3.3+ includes intelligent caching for MCP endpoints that provides sig
 
 **Permission Initialization (Automatic):**
 
-The ActingWeb permission system is **automatically initialized** when you integrate with Flask or FastAPI - no manual setup required:
+The ActingWeb permission system is **automatically initialized** when you integrate with FastAPI - no manual setup required:
 
 .. code-block:: python
 
     # Automatic initialization happens here - nothing else needed!
     integration = app.integrate_fastapi(fastapi_app, templates_dir=templates_dir)
-    
-    # Or for Flask:
-    integration = app.integrate_flask(flask_app)
+
+.. note::
+   **MCP requires FastAPI integration.** Flask integration does not support MCP endpoints due to async/await requirements. The ``/mcp`` endpoint will return HTTP 501 with Flask.
 
 **Manual Initialization (Optional):**
 

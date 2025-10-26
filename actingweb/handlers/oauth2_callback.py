@@ -25,11 +25,26 @@ logger = logging.getLogger(__name__)
 
 class OAuth2CallbackHandler(BaseHandler):
     """
-    Handles OAuth2 callbacks at /oauth/callback.
-    
-    This endpoint is called by OAuth2 providers after user authentication with:
+    Handles OAuth2 callbacks at /oauth/callback for Google/GitHub OAuth flows.
+
+    This handler processes TWO types of OAuth2 flows:
+
+    1. Web UI Login (no trust_type in state):
+       - User clicks "Login with Google/GitHub" on factory page
+       - After OAuth, creates/looks up actor and redirects to /www
+       - If email is missing, redirects to /oauth/email for manual input
+
+    2. MCP Authorization (trust_type in state, e.g., 'mcp_client'):
+       - OAuth flow initiated with trust_type parameter
+       - After OAuth, creates/looks up actor AND trust relationship
+       - If email is missing, returns error (MCP clients can't use web forms)
+
+    Note: MCP OAuth2 flow where ActingWeb is the auth server uses encrypted
+    state and is routed to OAuth2EndpointsHandler, not this handler.
+
+    Expected query parameters:
     - code: Authorization code to exchange for access token
-    - state: CSRF protection and optional redirect URL
+    - state: CSRF protection and optional redirect URL, actor_id, trust_type
     - error: Error code if authentication failed
     """
     
@@ -106,9 +121,19 @@ class OAuth2CallbackHandler(BaseHandler):
         # Extract email from user info
         email = self.authenticator.get_email_from_user_info(user_info, access_token)
         if not email:
-            logger.warning("Failed to extract email from user info - will redirect to email input form")
+            logger.warning("Failed to extract email from user info")
 
-            # Store OAuth data in temporary session for later completion
+            # Check if this is an MCP authorization flow (trust_type is set)
+            # If so, we cannot redirect to a web form - return error instead
+            if trust_type:
+                logger.error(f"Cannot complete MCP authorization flow (trust_type='{trust_type}') without email")
+                return self.error_response(
+                    502,
+                    f"Email extraction failed. OAuth provider did not provide email address required for {trust_type} authorization."
+                )
+
+            # This is a web UI login flow - redirect to email input form
+            logger.info("Web UI login flow - redirecting to email input form")
             try:
                 from ..oauth_session import get_oauth2_session_manager
 

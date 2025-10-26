@@ -2,9 +2,27 @@
 
 This document describes how to implement "Login with Google" / "Login with GitHub" buttons in your ActingWeb application, where actor creation is postponed until after the OAuth2 flow completes and email is obtained.
 
+## Important: Two Different OAuth2 Flows
+
+ActingWeb supports **TWO distinct OAuth2 flows**. This document covers the **Google/GitHub OAuth flow for web UI login**. For MCP OAuth2 where ActingWeb acts as an authorization server, see the MCP documentation.
+
+### Flow 1: MCP OAuth2 (ActingWeb as Authorization Server)
+- MCP clients dynamically register via `/oauth/register`
+- User authorizes via `/oauth/authorize` with trust type selection
+- ActingWeb proxies to Google/GitHub for user authentication
+- ActingWeb issues its own tokens for `/mcp` endpoint access
+- Uses **encrypted state** - routed to `OAuth2EndpointsHandler`
+
+### Flow 2: Google/GitHub OAuth (This Document)
+- Direct OAuth2 with Google/GitHub providers
+- Used for web UI login at `/www` endpoints
+- Can also establish MCP trust relationships (with `trust_type` parameter)
+- Uses **JSON state** - routed to `OAuth2CallbackHandler`
+- **This is what this document covers**
+
 ## Overview
 
-The ActingWeb library now supports OAuth2 login flows where:
+The ActingWeb library now supports Google/GitHub OAuth2 login flows where:
 
 1. **User clicks "Login with Google/GitHub"** on the factory page
 2. **OAuth2 flow completes** and email is extracted from the provider
@@ -170,12 +188,12 @@ config.oauth2_provider = "google"  # or "github"
 
 ## Complete Flow Examples
 
-### Flow 1: OAuth with Email Successfully Retrieved
+### Flow 2.1: Web UI Login with Email Successfully Retrieved
 
 ```
 1. User visits GET /
    ↓
-   Factory handler returns template_values with oauth_urls
+   Factory handler returns template_values with oauth_urls (no trust_type)
    ↓
    App renders aw-root-factory.html with "Login with Google" button
 
@@ -183,9 +201,11 @@ config.oauth2_provider = "google"  # or "github"
    ↓
    Browser redirects to Google OAuth2
 
-3. Google redirects to /oauth/callback with code
+3. Google redirects to /oauth/callback with code (JSON state, no trust_type)
    ↓
-   OAuth2 callback exchanges code for access token
+   Flask/FastAPI routes to OAuth2CallbackHandler
+   ↓
+   Exchange code for access token
    ↓
    Extract email from user info: user@gmail.com
    ↓
@@ -196,12 +216,12 @@ config.oauth2_provider = "google"  # or "github"
    Redirect to /{actor_id}/www
 ```
 
-### Flow 2: OAuth without Email (GitHub Private Email)
+### Flow 2.2: Web UI Login without Email (GitHub Private Email)
 
 ```
 1. User visits GET /
    ↓
-   Factory handler returns template_values with oauth_urls
+   Factory handler returns template_values with oauth_urls (no trust_type)
    ↓
    App renders aw-root-factory.html with "Login with GitHub" button
 
@@ -209,11 +229,15 @@ config.oauth2_provider = "google"  # or "github"
    ↓
    Browser redirects to GitHub OAuth2
 
-3. GitHub redirects to /oauth/callback with code
+3. GitHub redirects to /oauth/callback with code (JSON state, no trust_type)
    ↓
-   OAuth2 callback exchanges code for access token
+   Flask/FastAPI routes to OAuth2CallbackHandler
+   ↓
+   Exchange code for access token
    ↓
    Email extraction fails (private email)
+   ↓
+   Check: trust_type is NOT set → This is web UI login
    ↓
    Store OAuth tokens in temporary session
    ↓
@@ -235,6 +259,31 @@ config.oauth2_provider = "google"  # or "github"
    ↓
    Redirect to /{actor_id}/www
 ```
+
+### Flow 2.3: MCP Authorization with trust_type (No Email Available)
+
+```
+1. OAuth flow initiated with trust_type='mcp_client' in state
+   ↓
+   Redirect to Google/GitHub OAuth2
+
+2. Google redirects to /oauth/callback with code (JSON state with trust_type)
+   ↓
+   Flask/FastAPI routes to OAuth2CallbackHandler
+   ↓
+   Exchange code for access token
+   ↓
+   Email extraction fails
+   ↓
+   Check: trust_type IS set → This is MCP authorization
+   ↓
+   Return error (cannot redirect to web form for MCP clients)
+   ↓
+   HTTP 502: "Email extraction failed. OAuth provider did not provide
+              email address required for mcp_client authorization."
+```
+
+**Note:** Flow 2.3 demonstrates that MCP authorization flows with `trust_type` cannot fall back to email input forms because MCP clients are programmatic and cannot interact with web UIs. Users should ensure their OAuth provider (Google/GitHub) is configured to provide email addresses publicly.
 
 ## Template Variables Reference
 

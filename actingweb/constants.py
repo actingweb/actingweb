@@ -110,6 +110,7 @@ AUTH_CODE_INDEX_BUCKET = "auth_code_index"
 ACCESS_TOKEN_INDEX_BUCKET = "access_token_index"
 REFRESH_TOKEN_INDEX_BUCKET = "refresh_token_index"
 CLIENT_INDEX_BUCKET = "client_index"
+OAUTH_SESSION_BUCKET = "oauth_sessions"  # Temporary OAuth sessions for postponed actor creation
 
 # OAuth2 token storage (per-trust)
 OAUTH_TOKENS_PREFIX = "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREFIX + peer_id]

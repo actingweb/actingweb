@@ -77,7 +77,7 @@ New module `actingweb.oauth_session` provides:
   - `get_session()`: Retrieve session data
   - `complete_session()`: Complete actor creation with provided email
 
-Sessions are stored in-memory with a 10-minute TTL (can be overridden by applications).
+Sessions are stored in the database using ActingWeb's attribute bucket system with a 10-minute TTL. This provides persistence across multiple containers in distributed deployments.
 
 ### 4. OAuth Email Input Handler
 
@@ -349,28 +349,16 @@ To support both Google and GitHub:
 # by checking additional config flags in factory handler
 ```
 
-### Custom Session Storage
+### Session Storage Architecture
 
-To use database-backed session storage instead of in-memory:
+OAuth sessions are automatically stored in the database using ActingWeb's attribute bucket system:
 
-```python
-from actingweb.oauth_session import OAuth2SessionManager
+- **Storage Location**: `OAUTH2_SYSTEM_ACTOR` actor with bucket `oauth_sessions`
+- **Persistence**: Database-backed for multi-container deployments
+- **TTL**: 10 minutes (configurable via `_SESSION_TTL` constant)
+- **Automatic Cleanup**: Expired sessions are automatically removed on access
 
-class CustomSessionManager(OAuth2SessionManager):
-    def store_session(self, token_data, user_info, state, provider):
-        # Store in database instead of memory
-        session_id = super().store_session(token_data, user_info, state, provider)
-        # Your database logic here
-        return session_id
-
-    def get_session(self, session_id):
-        # Retrieve from database
-        # Your database logic here
-        return session_data
-
-# Use in your application
-session_manager = CustomSessionManager(config)
-```
+No custom session storage implementation is needed - the default implementation handles distributed deployments automatically.
 
 ### Custom Session TTL
 
@@ -387,7 +375,7 @@ actingweb.oauth_session._SESSION_TTL = 1800  # 30 minutes
 
 ## Security Considerations
 
-1. **Session Storage**: Sessions are stored in-memory by default. For production apps with multiple instances, implement database-backed session storage.
+1. **Session Storage**: Sessions are automatically stored in the database using ActingWeb's attribute bucket system, providing persistence across multiple containers.
 
 2. **Session TTL**: Sessions expire after 10 minutes to prevent token leakage. Adjust TTL based on your security requirements.
 

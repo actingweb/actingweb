@@ -3,6 +3,9 @@ OAuth2 session management for postponed actor creation.
 
 This module provides temporary storage for OAuth2 tokens when email cannot be extracted
 from the OAuth provider, allowing apps to prompt users for email before creating actors.
+
+Sessions are stored in the database using ActingWeb's attribute bucket system for
+persistence across multiple containers in distributed deployments.
 """
 
 import logging
@@ -16,9 +19,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Session storage (in-memory for now, apps can override with database-backed storage)
-_oauth_sessions: Dict[str, Dict[str, Any]] = {}
-_SESSION_TTL = 600  # 10 minutes
+# Session TTL - 10 minutes
+_SESSION_TTL = 600
 
 
 class OAuth2SessionManager:
@@ -42,7 +44,7 @@ class OAuth2SessionManager:
         provider: str = "google"
     ) -> str:
         """
-        Store OAuth2 session data temporarily.
+        Store OAuth2 session data temporarily in database.
 
         Args:
             token_data: Token response from OAuth provider
@@ -53,9 +55,12 @@ class OAuth2SessionManager:
         Returns:
             Session ID for retrieving the data later
         """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
         session_id = secrets.token_urlsafe(32)
 
-        _oauth_sessions[session_id] = {
+        session_data = {
             "token_data": token_data,
             "user_info": user_info,
             "state": state,
@@ -63,12 +68,20 @@ class OAuth2SessionManager:
             "created_at": int(time.time()),
         }
 
+        # Store in attribute bucket for persistence across containers
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config
+        )
+        bucket.set_attr(name=session_id, data=session_data)
+
         logger.debug(f"Stored OAuth session {session_id[:8]}... for provider {provider}")
         return session_id
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieve OAuth2 session data.
+        Retrieve OAuth2 session data from database.
 
         Args:
             session_id: Session ID returned by store_session()
@@ -76,19 +89,31 @@ class OAuth2SessionManager:
         Returns:
             Session data or None if not found or expired
         """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
         if not session_id:
             return None
 
-        session = _oauth_sessions.get(session_id)
-        if not session:
+        # Retrieve from attribute bucket
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config
+        )
+        session_attr = bucket.get_attr(name=session_id)
+
+        if not session_attr or "data" not in session_attr:
             logger.debug(f"OAuth session {session_id[:8]}... not found")
             return None
+
+        session = session_attr["data"]
 
         # Check if session has expired
         created_at = session.get("created_at", 0)
         if int(time.time()) - created_at > _SESSION_TTL:
             logger.debug(f"OAuth session {session_id[:8]}... expired")
-            del _oauth_sessions[session_id]
+            bucket.delete_attr(name=session_id)
             return None
 
         return session
@@ -147,8 +172,17 @@ class OAuth2SessionManager:
                 actor_instance.store.oauth_token_timestamp = str(int(time.time()))
                 actor_instance.store.oauth_provider = provider
 
-            # Clean up session
-            del _oauth_sessions[session_id]
+            # Clean up session from database
+            from . import attribute
+            from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
+            bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=OAUTH_SESSION_BUCKET,
+                config=self.config
+            )
+            bucket.delete_attr(name=session_id)
+
             logger.info(f"Completed OAuth session for {email} -> actor {actor_instance.id}")
 
             return actor_instance
@@ -159,21 +193,39 @@ class OAuth2SessionManager:
 
     def clear_expired_sessions(self) -> int:
         """
-        Clear expired sessions from storage.
+        Clear expired sessions from database storage.
 
         Returns:
             Number of sessions cleared
         """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
         current_time = int(time.time())
         expired = []
 
-        for session_id, session in _oauth_sessions.items():
-            created_at = session.get("created_at", 0)
-            if current_time - created_at > _SESSION_TTL:
-                expired.append(session_id)
+        # Get all sessions from the bucket
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config
+        )
+        bucket_data = bucket.get_bucket()
 
+        if not bucket_data:
+            return 0
+
+        # Find expired sessions
+        for session_id, session_attr in bucket_data.items():
+            if session_attr and "data" in session_attr:
+                session = session_attr["data"]
+                created_at = session.get("created_at", 0)
+                if current_time - created_at > _SESSION_TTL:
+                    expired.append(session_id)
+
+        # Delete expired sessions
         for session_id in expired:
-            del _oauth_sessions[session_id]
+            bucket.delete_attr(name=session_id)
 
         if expired:
             logger.debug(f"Cleared {len(expired)} expired OAuth sessions")

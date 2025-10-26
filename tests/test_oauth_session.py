@@ -17,14 +17,55 @@ class TestOAuth2SessionManager:
     def setup_method(self):
         """Set up test fixtures."""
         # Import here to avoid module-level imports that might fail
-        from actingweb.oauth_session import OAuth2SessionManager, _oauth_sessions
+        from actingweb.oauth_session import OAuth2SessionManager
         from actingweb.config import Config
 
-        # Clear any existing sessions
-        _oauth_sessions.clear()
-
-        # Create mock config
+        # Create mock config with database support
         self.config = Mock(spec=Config)
+
+        # Create in-memory storage for testing
+        self._test_storage = {}
+
+        # Mock the DbAttribute class to use in-memory storage
+        class MockDbAttribute:
+            def __init__(test_self):
+                test_self.storage = self._test_storage
+
+            def get_bucket(test_self, actor_id, bucket):
+                key = f"{actor_id}:{bucket}"
+                return test_self.storage.get(key, {})
+
+            def get_attr(test_self, actor_id, bucket, name):
+                key = f"{actor_id}:{bucket}"
+                bucket_data = test_self.storage.get(key, {})
+                return bucket_data.get(name)
+
+            def set_attr(test_self, actor_id, bucket, name, data, timestamp=None):
+                key = f"{actor_id}:{bucket}"
+                if key not in test_self.storage:
+                    test_self.storage[key] = {}
+                test_self.storage[key][name] = {"data": data, "timestamp": timestamp}
+                return True
+
+            def delete_attr(test_self, actor_id, bucket, name):
+                key = f"{actor_id}:{bucket}"
+                if key in test_self.storage and name in test_self.storage[key]:
+                    del test_self.storage[key][name]
+                    return True
+                return False
+
+            def delete_bucket(test_self, actor_id, bucket):
+                key = f"{actor_id}:{bucket}"
+                if key in test_self.storage:
+                    del test_self.storage[key]
+                    return True
+                return False
+
+        # Set up the mock DbAttribute
+        mock_db_module = Mock()
+        mock_db_module.DbAttribute = MockDbAttribute
+        self.config.DbAttribute = mock_db_module
+
         self.manager = OAuth2SessionManager(self.config)
 
     def test_store_session_returns_session_id(self):
@@ -80,7 +121,8 @@ class TestOAuth2SessionManager:
 
     def test_get_session_expired_returns_none(self):
         """Test that get_session returns None for expired sessions."""
-        from actingweb import oauth_session
+        from actingweb import attribute
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
 
         # Store a session
         session_id = self.manager.store_session(
@@ -91,8 +133,18 @@ class TestOAuth2SessionManager:
         )
 
         # Manually set created_at to simulate old session (more than 10 minutes ago)
-        old_time = int(time.time()) - 700  # 11+ minutes ago (TTL is 600 seconds)
-        oauth_session._oauth_sessions[session_id]["created_at"] = old_time
+        # Get the session from the bucket, modify it, and save it back
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config
+        )
+        session_attr = bucket.get_attr(name=session_id)
+        if session_attr and "data" in session_attr:
+            session_data = session_attr["data"]
+            old_time = int(time.time()) - 700  # 11+ minutes ago (TTL is 600 seconds)
+            session_data["created_at"] = old_time
+            bucket.set_attr(name=session_id, data=session_data)
 
         # Try to get expired session
         session = self.manager.get_session(session_id)
@@ -185,7 +237,8 @@ class TestOAuth2SessionManager:
 
     def test_clear_expired_sessions(self):
         """Test that clear_expired_sessions removes old sessions."""
-        from actingweb import oauth_session
+        from actingweb import attribute
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
 
         # Store two sessions
         session_id1 = self.manager.store_session(
@@ -203,9 +256,19 @@ class TestOAuth2SessionManager:
         )
 
         # Manually set created_at to simulate old sessions (more than 10 minutes ago)
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config
+        )
         old_time = int(time.time()) - 700  # 11+ minutes ago (TTL is 600 seconds)
-        oauth_session._oauth_sessions[session_id1]["created_at"] = old_time
-        oauth_session._oauth_sessions[session_id2]["created_at"] = old_time
+
+        for session_id in [session_id1, session_id2]:
+            session_attr = bucket.get_attr(name=session_id)
+            if session_attr and "data" in session_attr:
+                session_data = session_attr["data"]
+                session_data["created_at"] = old_time
+                bucket.set_attr(name=session_id, data=session_data)
 
         # Clear expired sessions
         cleared_count = self.manager.clear_expired_sessions()

@@ -1,5 +1,53 @@
 import logging
-from typing import Any
+from typing import Any, Union, Optional
+
+
+def canonical_connection_method(method: Optional[str]) -> Optional[str]:
+    """
+    Normalize connection hints to canonical channels.
+    
+    Args:
+        method: Connection method hint (e.g., "oauth2:interactive", "trust", "mcp")
+        
+    Returns:
+        Canonical connection method or original value if not recognized
+        
+    Examples:
+        - "oauth2:interactive" -> "oauth"
+        - "OAUTH" -> "oauth"
+        - "trust" -> "trust"
+        - "subscription" -> "subscription"
+        - "mcp" -> "mcp"
+        - "unknown_method" -> "unknown_method"
+    """
+    if not method:
+        return None
+
+    # Validate input is a string
+    if not isinstance(method, str):
+        logging.warning(f"Connection method must be string, got {type(method)}: {method}")
+        return None
+
+    lowered = method.lower().strip()
+    
+    # Handle empty or whitespace-only strings
+    if not lowered:
+        return None
+    
+    # Known canonical methods
+    VALID_CONNECTION_METHODS = {"oauth", "trust", "subscription", "mcp"}
+    
+    # Handle oauth variants (oauth, oauth2, oauth2:interactive, etc.)
+    if lowered.startswith("oauth"):
+        return "oauth"
+    
+    # Handle known exact matches
+    if lowered in VALID_CONNECTION_METHODS:
+        return lowered
+    
+    # Log unknown methods for monitoring but still return them
+    logging.debug(f"Unknown connection method: {method}")
+    return method
 
 
 class Trust:
@@ -36,7 +84,9 @@ class Trust:
         # New unified trust attributes
         peer_identifier: str | None = None,
         established_via: str | None = None,
+        created_at: str | None = None,
         last_accessed: str | None = None,
+        last_connected_via: str | None = None,
         # Client metadata for OAuth2 clients
         client_name: str | None = None,
         client_version: str | None = None,
@@ -71,7 +121,9 @@ class Trust:
             # Pass through new unified trust attributes
             peer_identifier=peer_identifier,
             established_via=established_via,
+            created_at=created_at,
             last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
             # Pass through client metadata
             client_name=client_name,
             client_version=client_version,
@@ -90,6 +142,11 @@ class Trust:
         verification_token: str = "",
         desc: str = "",
         peer_approved: bool = False,
+        peer_identifier: str | None = None,
+        established_via: str | None = None,
+        created_at: str | None = None,
+        last_accessed: str | None = None,
+        last_connected_via: str | None = None,
     ) -> bool:
         """Create a new trust relationship"""
         self.trust = {"baseuri": baseuri, "type": peer_type}
@@ -133,6 +190,11 @@ class Trust:
             peer_approved=peer_approved,
             verification_token=self.trust["verification_token"],
             desc=self.trust["desc"],
+            peer_identifier=peer_identifier,
+            established_via=established_via,
+            created_at=created_at,
+            last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
         )
 
     def __init__(

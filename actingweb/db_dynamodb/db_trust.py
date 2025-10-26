@@ -1,15 +1,47 @@
 import logging
 import os
 
+from datetime import datetime
+from typing import Union
+
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
-from datetime import datetime
+
+from actingweb.trust import canonical_connection_method
 
 """
     DbTrust handles all db operations for a trust
     Google datastore for google is used as a backend.
 """
+
+
+def _parse_timestamp(value: Union[str, datetime, None]) -> datetime:
+    """
+    Parse timestamp value consistently, handling both string and datetime inputs.
+    
+    Args:
+        value: String timestamp (ISO format) or datetime object
+        
+    Returns:
+        datetime object
+        
+    Raises:
+        ValueError: If string cannot be parsed as valid ISO timestamp
+    """
+    if value is None:
+        raise ValueError("Timestamp value cannot be None")
+    if isinstance(value, str):
+        try:
+            # Handle both 'Z' UTC suffix and timezone offset formats
+            normalized = value.replace("Z", "+00:00")
+            return datetime.fromisoformat(normalized)
+        except ValueError as e:
+            raise ValueError(f"Invalid ISO timestamp format: {value}") from e
+    elif isinstance(value, datetime):
+        return value
+    else:
+        raise ValueError(f"Timestamp must be string or datetime, got {type(value)}")
 
 
 class SecretIndex(GlobalSecondaryIndex):
@@ -54,6 +86,7 @@ class Trust(Model):
     established_via = UnicodeAttribute(null=True)  # 'actingweb', 'oauth2_interactive', 'oauth2_client'
     created_at = UTCDateTimeAttribute(null=True)  # When trust was created
     last_accessed = UTCDateTimeAttribute(null=True)  # Last time trust was used
+    last_connected_via = UnicodeAttribute(null=True)  # How the trust was last accessed
 
     # Client metadata for OAuth2 clients (MCP, etc.)
     client_name = UnicodeAttribute(null=True)  # Friendly name of the client (e.g., "ChatGPT", "Claude", "MCP Inspector")
@@ -115,10 +148,19 @@ class DbTrust:
             result["peer_identifier"] = t.peer_identifier
         if hasattr(t, "established_via") and t.established_via:
             result["established_via"] = t.established_via
+        created_at_iso = None
         if hasattr(t, "created_at") and t.created_at:
-            result["created_at"] = t.created_at.isoformat() if t.created_at else None
+            created_at_iso = t.created_at.isoformat()
+            result["created_at"] = created_at_iso
         if hasattr(t, "last_accessed") and t.last_accessed:
-            result["last_accessed"] = t.last_accessed.isoformat() if t.last_accessed else None
+            last_accessed_iso = t.last_accessed.isoformat()
+            result["last_accessed"] = last_accessed_iso
+            result["last_connected_at"] = last_accessed_iso
+        elif created_at_iso:
+            result["last_connected_at"] = created_at_iso
+
+        if hasattr(t, "last_connected_via") and t.last_connected_via:
+            result["last_connected_via"] = canonical_connection_method(t.last_connected_via)
 
         # Add client metadata for OAuth2 clients if they exist
         if hasattr(t, "client_name") and t.client_name:
@@ -144,7 +186,9 @@ class DbTrust:
         # New unified trust attributes
         peer_identifier=None,
         established_via=None,
+        created_at=None,
         last_accessed=None,
+        last_connected_via=None,
         # Client metadata for OAuth2 clients
         client_name=None,
         client_version=None,
@@ -178,13 +222,21 @@ class DbTrust:
             self.handle.peer_identifier = peer_identifier
         if established_via is not None:
             self.handle.established_via = established_via
+        if created_at is not None:
+            try:
+                self.handle.created_at = _parse_timestamp(created_at)
+            except ValueError as e:
+                logging.warning(f"Invalid created_at timestamp: {e}")
+                # Keep existing value if parsing fails
         if last_accessed is not None:
-            if isinstance(last_accessed, str):
-                from datetime import datetime
+            try:
+                self.handle.last_accessed = _parse_timestamp(last_accessed)
+            except ValueError as e:
+                logging.warning(f"Invalid last_accessed timestamp: {e}")
+                # Keep existing value if parsing fails
 
-                self.handle.last_accessed = datetime.fromisoformat(last_accessed.replace("Z", "+00:00"))
-            else:
-                self.handle.last_accessed = last_accessed
+        if last_connected_via is not None:
+            self.handle.last_connected_via = canonical_connection_method(last_connected_via)
 
         # Handle client metadata for OAuth2 clients
         if client_name is not None:
@@ -215,6 +267,9 @@ class DbTrust:
         # New unified trust attributes
         peer_identifier=None,
         established_via=None,
+        created_at=None,
+        last_accessed=None,
+        last_connected_via=None,
         # Client metadata for OAuth2 clients
         client_name=None,
         client_version=None,
@@ -224,8 +279,6 @@ class DbTrust:
         """Create a new trust"""
         if not actor_id or not peerid:
             return False
-        from datetime import datetime
-
         # Create trust with existing attributes
         trust_kwargs = {
             "id": actor_id,
@@ -247,6 +300,11 @@ class DbTrust:
         if established_via is not None:
             trust_kwargs["established_via"] = established_via
 
+        if last_connected_via is not None:
+            trust_kwargs["last_connected_via"] = canonical_connection_method(
+                last_connected_via
+            )
+
         # Add client metadata if provided
         if client_name is not None:
             trust_kwargs["client_name"] = client_name
@@ -257,8 +315,20 @@ class DbTrust:
         if oauth_client_id is not None:
             trust_kwargs["oauth_client_id"] = oauth_client_id
 
-        # Always set created_at for new trusts
-        trust_kwargs["created_at"] = datetime.utcnow()
+        # Always set created_at/last_accessed for new trusts
+        now = datetime.utcnow()
+        created_timestamp = created_at or now
+        if isinstance(created_timestamp, str):
+            created_timestamp = datetime.fromisoformat(created_timestamp.replace("Z", "+00:00"))
+        trust_kwargs["created_at"] = created_timestamp
+
+        last_timestamp = last_accessed or created_timestamp
+        if isinstance(last_timestamp, str):
+            last_timestamp = datetime.fromisoformat(last_timestamp.replace("Z", "+00:00"))
+        trust_kwargs["last_accessed"] = last_timestamp
+
+        if "last_connected_via" not in trust_kwargs and established_via is not None:
+            trust_kwargs["last_connected_via"] = canonical_connection_method(established_via)
 
         self.handle = Trust(**trust_kwargs)
         self.handle.save()
@@ -327,10 +397,21 @@ class DbTrustList:
                     result["peer_identifier"] = t.peer_identifier
                 if hasattr(t, "established_via"):
                     result["established_via"] = t.established_via
+                created_at_iso = None
                 if hasattr(t, "created_at") and t.created_at:
-                    result["created_at"] = t.created_at.isoformat() if t.created_at else None
+                    created_at_iso = t.created_at.isoformat()
+                    result["created_at"] = created_at_iso
                 if hasattr(t, "last_accessed") and t.last_accessed:
-                    result["last_accessed"] = t.last_accessed.isoformat() if t.last_accessed else None
+                    last_accessed_iso = t.last_accessed.isoformat()
+                    result["last_accessed"] = last_accessed_iso
+                    result["last_connected_at"] = last_accessed_iso
+                elif created_at_iso:
+                    result["last_connected_at"] = created_at_iso
+
+                if hasattr(t, "last_connected_via") and t.last_connected_via:
+                    result["last_connected_via"] = canonical_connection_method(
+                        t.last_connected_via
+                    )
 
                 # Add client metadata for OAuth2 clients if they exist (same logic as get() method)
                 if hasattr(t, "client_name") and t.client_name:

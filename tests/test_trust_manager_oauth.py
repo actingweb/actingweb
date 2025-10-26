@@ -34,6 +34,17 @@ class FakeCoreActor:
         return self._trusts.get(peerid)
 
 
+def canonical_via(via: str | None) -> str | None:
+    if via is None:
+        return None
+    lowered = via.lower()
+    if lowered.startswith("oauth"):
+        return "oauth"
+    if lowered in {"trust", "subscription", "mcp"}:
+        return lowered
+    return via
+
+
 def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
     actor = FakeCoreActor()
     tm = TrustManager(actor)
@@ -41,19 +52,43 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
     # Stub DbTrust.create/get/modify used inside TrustManager
     class FakeDbTrust:
         def __init__(self) -> None:
-            self._db: Dict[str, Dict[str, Any]] = {}
+            self._db: Dict[tuple[str, str], Dict[str, Any]] = {}
+            self.handle = None
 
         def get(self, actor_id: str, peerid: str):
-            return self._db.get((actor_id, peerid))
+            record = self._db.get((actor_id, peerid))
+            if record is None:
+                self.handle = None
+                return None
+            self.handle = type("Handle", (), {})()
+            for key, value in record.items():
+                setattr(self.handle, key, value)
+            return record
 
         def create(self, **kwargs):
             key = (kwargs["actor_id"], kwargs["peerid"])  # type: ignore[index]
+            kwargs.setdefault("last_connected_at", kwargs.get("last_accessed"))
+            established = kwargs.get("established_via")
+            if established and not kwargs.get("last_connected_via"):
+                kwargs["last_connected_via"] = canonical_via(established)
             self._db[key] = kwargs  # type: ignore[assignment]
             # also reflect in the actor cache for subsequent reads
             actor._trusts[kwargs["peerid"]] = kwargs  # type: ignore[index]
+            self.get(kwargs["actor_id"], kwargs["peerid"])  # type: ignore[index]
             return True
 
         def modify(self, **kwargs):
+            if not self.handle:
+                return True
+            db_key = (getattr(self.handle, "id"), getattr(self.handle, "peerid"))
+            for key, value in kwargs.items():
+                if key == "last_connected_via":
+                    value = canonical_via(value)
+                    kwargs[key] = value
+                setattr(self.handle, key, value)
+            if db_key in self._db:
+                self._db[db_key].update(kwargs)
+                actor._trusts[self._db[db_key]["peerid"]].update(kwargs)  # type: ignore[index]
             return True
 
     monkeypatch.setitem(__import__("sys").modules, "actingweb.db_dynamodb.db_trust", type("M", (), {"DbTrust": FakeDbTrust}))
@@ -72,6 +107,10 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
     rel = tm.get_relationship(peer_id)
     assert rel is not None
     assert rel.relationship == "mcp_client"
+    assert rel.created_at is not None
+    assert rel.last_connected_at is not None
+    assert rel.established_via == "oauth2"
+    assert rel.last_connected_via == "oauth"
     # token stored
     token_key = f"oauth_tokens:{peer_id}"
     assert actor.store[token_key]["access_token"] == "at"

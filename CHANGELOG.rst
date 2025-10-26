@@ -5,6 +5,13 @@ CHANGELOG
 v3.4: TBD
 -----------------
 
+ADDED
+~~~~~
+
+- Added ``last_accessed`` and ``last_connected_via`` fields to trust relationships for tracking connection activity
+- Handler now updates trust relationship timestamps on each connection with client metadata refresh
+- Trust relationship sorting by most recent connection in web UI (``/www/trust``)
+
 FIXED
 ~~~~~
 

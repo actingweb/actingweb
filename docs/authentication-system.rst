@@ -333,8 +333,6 @@ Applications should provide an ``aw-oauth-email.html`` template for email input.
 
 The email fallback flow is disabled for MCP authorization requests (when ``trust_type`` parameter is present in OAuth state). MCP clients are programmatic and cannot interact with web forms, so these flows return an error if email cannot be extracted.
 
-For detailed implementation guide, see :doc:`oauth-login-flow`.
-
 MCP Integration
 ===============
 

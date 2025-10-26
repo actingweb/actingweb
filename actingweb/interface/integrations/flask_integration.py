@@ -92,6 +92,16 @@ class FlaskIntegration:
             # Default to Google OAuth2 callback for ActingWeb
             return self._handle_oauth2_callback()
 
+        # OAuth2 email input - handles email collection when OAuth provider doesn't provide one
+        @self.flask_app.route("/oauth/email", methods=["GET", "POST"])
+        def app_oauth2_email() -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_oauth2_email()
+
+        # Email verification endpoint - verifies email addresses for OAuth2 actors
+        @self.flask_app.route("/<actor_id>/www/verify_email", methods=["GET", "POST"])
+        def email_verification(actor_id: str) -> Union[Response, WerkzeugResponse, str]:
+            return self._handle_email_verification(actor_id)
+
         # OAuth2 server endpoints for MCP clients
         @self.flask_app.route("/oauth/register", methods=["POST", "OPTIONS"])
         def oauth2_register() -> Union[Response, WerkzeugResponse, str]:
@@ -575,6 +585,143 @@ class FlaskIntegration:
                     return Response(render_template("aw-root-failed.html", **webobj.response.template_values))
                 except Exception:
                     pass  # Fall back to default response
+
+        return self._create_flask_response(webobj)
+
+    def _handle_oauth2_email(self) -> Union[Response, WerkzeugResponse, str]:
+        """Handle OAuth2 email input requests."""
+        req_data = self._normalize_request()
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth_email import OAuth2EmailHandler
+
+        handler = OAuth2EmailHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        if request.method == "POST":
+            result = handler.post()
+        else:
+            result = handler.get()
+
+        # Handle template rendering for email form
+        if hasattr(webobj.response, "template_values") and webobj.response.template_values:
+            try:
+                # App provides aw-oauth-email.html template
+                return Response(render_template("aw-oauth-email.html", **webobj.response.template_values))
+            except Exception as e:
+                # Template not found - provide basic HTML form as fallback
+                logging.warning(f"Template aw-oauth-email.html not found: {e}")
+                session_id = webobj.response.template_values.get("session_id", "")
+                error = webobj.response.template_values.get("error", "")
+                provider = webobj.response.template_values.get("provider_display", "OAuth provider")
+                message = webobj.response.template_values.get("message", f"Your {provider} account does not have a public email. Please enter your email address to continue.")
+
+                fallback_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Enter Email - ActingWeb</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }}
+                        .error {{ color: red; margin-bottom: 15px; }}
+                        .message {{ margin-bottom: 20px; color: #666; }}
+                        input[type="email"] {{ width: 100%; padding: 10px; margin: 10px 0; }}
+                        button {{ padding: 10px 20px; background: #4285f4; color: white; border: none; cursor: pointer; }}
+                        button:hover {{ background: #357ae8; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>Email Required</h1>
+                    <p class="message">{message}</p>
+                    {f'<p class="error">{error}</p>' if error else ''}
+                    <form action="/oauth/email" method="POST">
+                        <input type="hidden" name="session" value="{session_id}" />
+                        <label>Email Address:
+                            <input type="email" name="email" required placeholder="your@email.com" />
+                        </label>
+                        <button type="submit">Continue</button>
+                    </form>
+                </body>
+                </html>
+                """
+                return Response(fallback_html, mimetype="text/html")
+
+        return self._create_flask_response(webobj)
+
+    def _handle_email_verification(self, actor_id: str) -> Union[Response, WerkzeugResponse, str]:
+        """Handle email verification requests."""
+        req_data = self._normalize_request()
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.email_verification import EmailVerificationHandler
+
+        handler = EmailVerificationHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        if request.method == "POST":
+            result = handler.post()
+        else:
+            result = handler.get()
+
+        # Handle template rendering for email verification
+        if hasattr(webobj.response, "template_values") and webobj.response.template_values:
+            try:
+                # App provides aw-verify-email.html template
+                return Response(render_template("aw-verify-email.html", **webobj.response.template_values))
+            except Exception as e:
+                # Template not found - provide basic HTML as fallback
+                logging.warning(f"Template aw-verify-email.html not found: {e}")
+                status = webobj.response.template_values.get("status", "")
+                message = webobj.response.template_values.get("message", "")
+                email = webobj.response.template_values.get("email", "")
+                error = webobj.response.template_values.get("error", "")
+
+                if status == "success":
+                    fallback_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head><title>Email Verified</title></head>
+                    <body>
+                        <h1>✓ Email Verified!</h1>
+                        <p>Your email address <strong>{email}</strong> has been verified.</p>
+                        <p><a href="/{actor_id}/www">Continue to Dashboard</a></p>
+                    </body>
+                    </html>
+                    """
+                elif status == "error":
+                    fallback_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head><title>Verification Failed</title></head>
+                    <body>
+                        <h1>Verification Failed</h1>
+                        <p>{error}</p>
+                        <p><a href="/{actor_id}/www">Return to Dashboard</a></p>
+                    </body>
+                    </html>
+                    """
+                else:
+                    fallback_html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head><title>Email Verification</title></head>
+                    <body>
+                        <h1>Email Verification</h1>
+                        <p>Please check your email for a verification link.</p>
+                    </body>
+                    </html>
+                    """
+                return Response(fallback_html, mimetype="text/html")
 
         return self._create_flask_response(webobj)
 

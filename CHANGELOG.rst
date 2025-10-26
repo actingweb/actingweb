@@ -8,12 +8,36 @@ v3.4: TBD
 ADDED
 ~~~~~
 
+**OAuth2 Security Enhancements**
+
+- Added email verification system for OAuth2 actors when provider cannot verify email ownership
+- Added cross-actor authorization prevention in MCP OAuth2 flows (blocks attackers from authorizing access to other users' actors)
+- Added session fixation prevention in web OAuth2 login flows
+- Added comprehensive security documentation in ``docs/authentication-system.rst``
+- Added security tests in ``tests/integration/test_oauth2_security.py``
+- Added lifecycle hooks: ``email_verification_required`` and ``email_verified``
+- Added email verification endpoint: ``/<actor_id>/www/verify_email``
+- Added verified emails dropdown for GitHub OAuth2 (fetches verified emails via GitHub API)
+- Added provider ID support (stable identifiers like ``google:sub`` or ``github:user_id``) as alternative to email addresses
+- Added 32-byte cryptographic verification tokens with 24-hour expiry
+- Added security logging for all authorization violations
+
+**Trust Relationship Enhancements**
+
 - Added ``last_accessed`` and ``last_connected_via`` fields to trust relationships for tracking connection activity
 - Handler now updates trust relationship timestamps on each connection with client metadata refresh
 - Trust relationship sorting by most recent connection in web UI (``/www/trust``)
 
 FIXED
 ~~~~~
+
+**Security Fixes**
+
+- **CRITICAL**: Fixed OAuth2 callback to validate actor ownership before completing authorization (prevents cross-actor authorization attacks in MCP flows)
+- Fixed potential account hijacking vulnerability when OAuth2 providers don't return verified email addresses
+- Fixed session fixation vulnerability where attackers could trick users into logging into attacker's actor
+
+**OAuth2 and Integration Fixes**
 
 - Fixed OAuth2 CORS preflight (OPTIONS) requests not being routed correctly in FastAPI integration, causing 404 errors on ``/oauth/register`` and ``/oauth/token`` endpoints
 

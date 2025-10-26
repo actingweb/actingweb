@@ -66,7 +66,77 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-- Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_approved``, ``trust_deleted``
+- Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_approved``, ``trust_deleted``, ``email_verification_required``, ``email_verified``
+
+Event Details
+-------------
+
+``actor_created``
+    Triggered when a new actor is created.
+
+    **Signature**: ``func(actor: ActorInterface) -> None``
+
+``actor_deleted``
+    Triggered when an actor is deleted.
+
+    **Signature**: ``func(actor: ActorInterface) -> None``
+
+``oauth_success``
+    Triggered after successful OAuth2 authentication.
+
+    **Signature**: ``func(actor: ActorInterface, email: str, access_token: str, token_data: dict) -> Optional[bool]``
+
+    **Returns**: ``False`` to reject authentication, ``True`` or ``None`` to accept
+
+``trust_approved``
+    Triggered when a trust relationship is approved.
+
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, trust_type: str) -> None``
+
+``trust_deleted``
+    Triggered when a trust relationship is deleted.
+
+    **Signature**: ``func(actor: ActorInterface, peer_id: str) -> None``
+
+``email_verification_required``
+    Triggered when email verification is needed for OAuth2 actors.
+
+    **Signature**: ``func(actor: ActorInterface, email: str, verification_url: str, token: str) -> None``
+
+    **Purpose**: Send verification email to user
+
+    **Required**: Must be implemented when using ``with_email_as_creator(enable=True)``
+
+    **Example**:
+
+    .. code-block:: python
+
+        @app.lifecycle_hook("email_verification_required")
+        def send_verification_email(actor, email, verification_url, token):
+            # Send email with verification_url to the user
+            send_email(
+                to=email,
+                subject="Verify your email",
+                body=f"Click here to verify: {verification_url}"
+            )
+
+``email_verified``
+    Triggered when email verification is successfully completed.
+
+    **Signature**: ``func(actor: ActorInterface, email: str) -> None``
+
+    **Purpose**: Handle post-verification actions (welcome email, grant access, etc.)
+
+    **Optional**: Not required, but useful for tracking and analytics
+
+    **Example**:
+
+    .. code-block:: python
+
+        @app.lifecycle_hook("email_verified")
+        def handle_verification(actor, email):
+            logger.info(f"Email verified: {email} for actor {actor.id}")
+            # Optional: Send welcome email, enable features, etc.
 
 Method Hooks
 ============

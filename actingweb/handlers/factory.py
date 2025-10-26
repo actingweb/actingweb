@@ -13,7 +13,51 @@ class RootFactoryHandler(base_handler.BaseHandler):
             self.post()
             return
         if self.config.ui:
-            self.response.template_values = {}
+            # Provide OAuth login URLs for 3rd party apps to render "Login with Google/GitHub" buttons
+            oauth_urls = {}
+            oauth_providers = []
+
+            # Check if OAuth is configured
+            if self.config.oauth and self.config.oauth.get("client_id"):
+                try:
+                    from actingweb.oauth2 import create_google_authenticator, create_github_authenticator
+
+                    # Determine which provider(s) to support based on configuration
+                    oauth2_provider = getattr(self.config, 'oauth2_provider', 'google')
+
+                    if oauth2_provider == 'google':
+                        google_auth = create_google_authenticator(self.config)
+                        if google_auth.is_enabled():
+                            oauth_urls['google'] = google_auth.create_authorization_url()
+                            oauth_providers.append({
+                                'name': 'google',
+                                'display_name': 'Google',
+                                'url': oauth_urls['google']
+                            })
+                            logging.debug(f"Google OAuth URL generated: {oauth_urls['google'][:100]}...")
+
+                    elif oauth2_provider == 'github':
+                        github_auth = create_github_authenticator(self.config)
+                        if github_auth.is_enabled():
+                            oauth_urls['github'] = github_auth.create_authorization_url()
+                            oauth_providers.append({
+                                'name': 'github',
+                                'display_name': 'GitHub',
+                                'url': oauth_urls['github']
+                            })
+                            logging.debug(f"GitHub OAuth URL generated: {oauth_urls['github'][:100]}...")
+
+                    # Support multiple providers if configured (future enhancement)
+                    # Apps can extend this by checking additional config flags
+
+                except Exception as e:
+                    logging.warning(f"Failed to generate OAuth URLs: {e}")
+
+            self.response.template_values = {
+                'oauth_urls': oauth_urls,  # Dict: {'google': url, 'github': url}
+                'oauth_providers': oauth_providers,  # List of dicts with name, display_name, url
+                'oauth_enabled': bool(oauth_urls)
+            }
         else:
             self.response.set_status(404)
 

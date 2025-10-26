@@ -560,6 +560,67 @@ class OAuth2EndpointsHandler(BaseHandler):
                 if configured_default and any(tt["name"] == configured_default for tt in available_trust_types):
                     default_trust_type = configured_default
             
+            # Generate OAuth provider URLs (like factory handler does)
+            oauth_enabled = False
+            oauth_providers = []
+
+            # Check if OAuth is configured (same check as factory handler)
+            if self.config.oauth and self.config.oauth.get("client_id"):
+                try:
+                    from ..oauth2 import create_google_authenticator, create_github_authenticator
+
+                    # Determine which provider(s) to support based on configuration
+                    oauth2_provider = getattr(self.config, 'oauth2_provider', 'google')
+
+                    # Build MCP context to embed in state using OAuth2Server's state manager
+                    from ..oauth2_server.oauth2_server import get_actingweb_oauth2_server
+
+                    oauth2_server = get_actingweb_oauth2_server(self.config)
+                    mcp_context = {
+                        'client_id': form_data.get("client_id", ""),
+                        'redirect_uri': form_data.get("redirect_uri", ""),
+                        'original_state': form_data.get("state", ""),  # Original MCP state from ChatGPT
+                        'trust_type': default_trust_type,
+                        'flow_type': 'mcp_oauth2'  # Required to identify this as MCP OAuth2 flow
+                    }
+
+                    # Create encrypted state with MCP context embedded
+                    encrypted_state = oauth2_server.state_manager.create_state(mcp_context)
+
+                    if oauth2_provider == 'google':
+                        google_auth = create_google_authenticator(self.config)
+                        if google_auth.is_enabled():
+                            # Pass encrypted state and trust_type as separate parameters
+                            auth_url = google_auth.create_authorization_url(
+                                state=encrypted_state,
+                                trust_type=default_trust_type
+                            )
+                            oauth_providers.append({
+                                "name": "google",
+                                "display_name": "Google",
+                                "url": auth_url
+                            })
+                            oauth_enabled = True
+                            logger.debug(f"Generated Google OAuth authorization URL for MCP client with encrypted state")
+
+                    elif oauth2_provider == 'github':
+                        github_auth = create_github_authenticator(self.config)
+                        if github_auth.is_enabled():
+                            auth_url = github_auth.create_authorization_url(
+                                state=encrypted_state,
+                                trust_type=default_trust_type
+                            )
+                            oauth_providers.append({
+                                "name": "github",
+                                "display_name": "GitHub",
+                                "url": auth_url
+                            })
+                            oauth_enabled = True
+                            logger.debug(f"Generated GitHub OAuth authorization URL for MCP client with encrypted state")
+
+                except Exception as e:
+                    logger.warning(f"Failed to generate OAuth URLs for authorization form: {e}")
+
             # Set template values for HTML rendering (like factory handler does)
             self.response.template_values = {
                 "client_id": form_data.get("client_id", ""),
@@ -572,6 +633,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "trust_types": available_trust_types,
                 "default_trust_type": default_trust_type,
                 "oauth2_trust_control_enabled": True,  # Indicate that trust type control is available
+                "oauth_enabled": oauth_enabled,  # Enable OAuth buttons
+                "oauth_providers": oauth_providers,  # OAuth provider list
             }
             return None  # Template will be rendered by framework
 

@@ -25,11 +25,26 @@ logger = logging.getLogger(__name__)
 
 class OAuth2CallbackHandler(BaseHandler):
     """
-    Handles OAuth2 callbacks at /oauth/callback.
-    
-    This endpoint is called by OAuth2 providers after user authentication with:
+    Handles OAuth2 callbacks at /oauth/callback for Google/GitHub OAuth flows.
+
+    This handler processes TWO types of OAuth2 flows:
+
+    1. Web UI Login (no trust_type in state):
+       - User clicks "Login with Google/GitHub" on factory page
+       - After OAuth, creates/looks up actor and redirects to /www
+       - If email is missing, redirects to /oauth/email for manual input
+
+    2. MCP Authorization (trust_type in state, e.g., 'mcp_client'):
+       - OAuth flow initiated with trust_type parameter
+       - After OAuth, creates/looks up actor AND trust relationship
+       - If email is missing, returns error (MCP clients can't use web forms)
+
+    Note: MCP OAuth2 flow where ActingWeb is the auth server uses encrypted
+    state and is routed to OAuth2EndpointsHandler, not this handler.
+
+    Expected query parameters:
     - code: Authorization code to exchange for access token
-    - state: CSRF protection and optional redirect URL
+    - state: CSRF protection and optional redirect URL, actor_id, trust_type
     - error: Error code if authentication failed
     """
     
@@ -103,18 +118,104 @@ class OAuth2CallbackHandler(BaseHandler):
             logger.error("Failed to validate token or extract user info")
             return self.error_response(502, "Token validation failed")
         
-        # Extract email from user info
-        email = self.authenticator.get_email_from_user_info(user_info, access_token)
-        if not email:
-            logger.error("Failed to extract email from user info")
-            return self.error_response(502, "Email extraction failed")
+        # Determine if email is required based on config
+        require_email = bool(
+            self.config and
+            getattr(self.config, 'force_email_prop_as_creator', False)
+        )
+
+        logger.debug(f"OAuth identifier extraction mode: require_email={require_email}")
+
+        # Extract identifier (email or provider ID) based on config
+        identifier = self.authenticator.get_email_from_user_info(
+            user_info,
+            access_token,
+            require_email=require_email
+        )
+
+        if not identifier:
+            logger.warning("Failed to extract identifier from user info")
+
+            # If in provider ID mode (require_email=False), this is a critical error
+            if not require_email:
+                logger.error("Provider ID mode enabled but no identifier available from OAuth provider")
+                return self.error_response(
+                    502,
+                    "OAuth provider did not return user identifier. Please contact support."
+                )
+
+            # Email required mode - try to get verified emails for dropdown
+            verified_emails: Optional[list[str]] = None
+
+            if self.authenticator.provider.name == "github" and access_token:
+                verified_emails = self.authenticator._get_github_verified_emails(access_token)
+                if verified_emails:
+                    logger.info(f"Found {len(verified_emails)} verified emails from GitHub")
+
+            # Check if this is an MCP authorization flow
+            if trust_type:
+                logger.error(f"Cannot complete MCP authorization without identifier")
+                return self.error_response(
+                    502,
+                    f"Email required but not provided by OAuth provider. "
+                    f"Configure your {self.authenticator.provider.name} account to make email public."
+                )
+
+            # Web UI flow - redirect to email input form
+            logger.info("Web UI login flow - redirecting to email input form")
+            try:
+                from ..oauth_session import get_oauth2_session_manager
+
+                session_manager = get_oauth2_session_manager(self.config)
+                provider_name = getattr(self.config, 'oauth2_provider', 'google')
+                session_id = session_manager.store_session(
+                    token_data=token_data,
+                    user_info=user_info,
+                    state=state,
+                    provider=provider_name,
+                    verified_emails=verified_emails  # NEW: Pass verified emails
+                )
+
+                # Redirect to email input form (app will provide template)
+                email_form_url = f"/oauth/email?session={session_id}"
+                self.response.set_status(302, "Found")
+                self.response.set_redirect(email_form_url)
+
+                return {
+                    "status": "email_required",
+                    "message": "Email could not be extracted from OAuth provider",
+                    "session_id": session_id,
+                    "redirect_url": email_form_url,
+                    "redirect_performed": True
+                }
+
+            except Exception as session_error:
+                logger.error(f"Failed to create OAuth session: {session_error}")
+                # Fall back to error response if session storage fails
+                return self.error_response(502, "Email extraction failed and could not store session")
+
+        # Validate identifier format based on mode
+        if require_email:
+            # Must be a valid email
+            if "@" not in identifier:
+                logger.error(f"force_email_prop_as_creator enabled but got non-email: {identifier}")
+                return self.error_response(
+                    502,
+                    "Configuration requires email but OAuth provider returned non-email identifier"
+                )
+
+            # Validate against expected email from form (if provided)
+            if not validate_expected_email(state, identifier):
+                logger.error(f"Email validation failed - authenticated as {identifier}")
+                return self.error_response(
+                    403,
+                    "Authentication email does not match the email provided in the form"
+                )
+        else:
+            # Provider ID mode - identifier can be anything
+            logger.debug(f"Using provider identifier: {identifier}")
         
-        # Validate that the authenticated email matches the expected email from the form
-        if not validate_expected_email(state, email):
-            logger.error(f"Email validation failed - authenticated as {email} but expected different email from form")
-            return self.error_response(403, "Authentication email does not match the email provided in the form")
-        
-        # Use existing actor from state if provided, otherwise lookup/create by email
+        # Use existing actor from state if provided, otherwise lookup/create by identifier
         actor_instance = None
         if actor_id:
             # Try to use the existing actor from the state parameter
@@ -122,26 +223,56 @@ class OAuth2CallbackHandler(BaseHandler):
             try:
                 actor_instance = actor_module.Actor(config=self.config)
                 if not actor_instance.get(actor_id):
-                    logger.warning(f"Actor {actor_id} from state not found, will lookup/create by email")
+                    logger.warning(f"Actor {actor_id} from state not found, will lookup/create by identifier")
                     actor_instance = None
                 else:
                     logger.debug(f"Using existing actor {actor_id} from state parameter")
+
+                    # SECURITY: Validate that OAuth identifier matches actor creator
+                    # This prevents attackers from:
+                    # 1. MCP flow: Authorizing access to someone else's actor
+                    # 2. Web flow: Session fixation or account takeover attacks
+                    if actor_instance.creator != identifier:
+                        logger.error(
+                            f"Security violation: OAuth identifier '{identifier}' does not match "
+                            f"actor creator '{actor_instance.creator}'. "
+                            f"Flow type: {'MCP authorization' if trust_type else 'Web login'}"
+                        )
+
+                        if trust_type:
+                            # MCP authorization - clear error message
+                            return self.error_response(
+                                403,
+                                f"You cannot authorize MCP access to an actor that doesn't belong to you. "
+                                f"You authenticated as '{identifier}' but this actor belongs to '{actor_instance.creator}'."
+                            )
+                        else:
+                            # Web login - potential session fixation attack
+                            return self.error_response(
+                                403,
+                                f"Authentication failed: You authenticated as '{identifier}' but attempted to "
+                                f"access an actor belonging to '{actor_instance.creator}'. Please log in with the correct account."
+                            )
+
             except Exception as e:
-                logger.warning(f"Failed to load actor {actor_id} from state: {e}, will lookup/create by email")
+                logger.warning(f"Failed to load actor {actor_id} from state: {e}, will lookup/create by identifier")
                 actor_instance = None
-        
-        # If no actor from state or loading failed, lookup/create by email
+
+        # If no actor from state or loading failed, lookup/create by identifier
         is_new_actor = False
         if not actor_instance:
-            # Check if actor exists before attempting creation (same logic as in authenticator)
+            # Check if actor exists before attempting creation
             from actingweb.actor import Actor as CoreActor
             existing_check_actor = CoreActor(config=self.config)
-            actor_exists = existing_check_actor.get_from_creator(email)
+            actor_exists = existing_check_actor.get_from_creator(identifier)
             is_new_actor = not actor_exists
-            
-            actor_instance = self.authenticator.lookup_or_create_actor_by_email(email)
+
+            actor_instance = self.authenticator.lookup_or_create_actor_by_identifier(
+                identifier,
+                user_info=user_info  # Pass user_info for additional metadata
+            )
             if not actor_instance:
-                logger.error(f"Failed to lookup or create actor for email {email}")
+                logger.error(f"Failed to lookup or create actor for identifier {identifier}")
                 return self.error_response(502, "Actor creation failed")
         
         # Store OAuth tokens in actor properties
@@ -191,13 +322,13 @@ class OAuth2CallbackHandler(BaseHandler):
         # Create trust relationship if trust_type was specified in state
         logger.debug(f"About to check trust_type for relationship creation: trust_type='{trust_type}'")
         if trust_type:
-            logger.info(f"Creating trust relationship for trust_type='{trust_type}' and email='{email}'")
+            logger.info(f"Creating trust relationship for trust_type='{trust_type}' and identifier='{identifier}'")
             try:
                 from actingweb.interface.actor_interface import ActorInterface
 
                 registry = getattr(self.config, "service_registry", None)
                 actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
-                
+
                 # Prepare OAuth tokens for secure storage
                 oauth_tokens = {
                     "access_token": access_token,
@@ -205,22 +336,22 @@ class OAuth2CallbackHandler(BaseHandler):
                     "expires_at": int(time.time()) + expires_in if expires_in else 0,
                     "token_type": token_data.get("token_type", "Bearer")
                 }
-                
+
                 # Create trust relationship with automatic approval and client metadata
                 trust_created = create_oauth2_trust_relationship(
                     actor_interface,
-                    email,
+                    identifier,
                     trust_type,
                     oauth_tokens,
                     client_name=client_name,
                     client_version=client_version,
                     client_platform=client_platform
                 )
-                
+
                 if trust_created:
-                    logger.info(f"Successfully created trust relationship: {email} -> {trust_type}")
+                    logger.info(f"Successfully created trust relationship: {identifier} -> {trust_type}")
                 else:
-                    logger.warning(f"Failed to create trust relationship for {email} with type {trust_type}")
+                    logger.warning(f"Failed to create trust relationship for {identifier} with type {trust_type}")
                     
             except Exception as e:
                 logger.error(f"Error creating OAuth2 trust relationship: {e}")
@@ -247,11 +378,11 @@ class OAuth2CallbackHandler(BaseHandler):
 
                 registry = getattr(self.config, "service_registry", None)
                 actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
-                
+
                 result = self.hooks.execute_lifecycle_hooks(
-                    "oauth_success", 
-                    actor_interface, 
-                    email=email,
+                    "oauth_success",
+                    actor_interface,
+                    email=identifier,  # Pass identifier (may be email or provider ID)
                     access_token=access_token,
                     token_data=token_data
                 )
@@ -259,17 +390,17 @@ class OAuth2CallbackHandler(BaseHandler):
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
-        
+
         if not oauth_valid:
-            logger.warning(f"OAuth success hook rejected authentication for {email}")
+            logger.warning(f"OAuth success hook rejected authentication for {identifier}")
             return self.error_response(403, "Authentication rejected")
-        
+
         # Set up successful response
         response_data = {
             "status": "success",
             "message": "Authentication successful",
             "actor_id": actor_instance.id,
-            "email": email,
+            "email": identifier,  # identifier (may be email or provider ID)
             "access_token": access_token,
             "expires_in": expires_in
         }
@@ -317,14 +448,14 @@ class OAuth2CallbackHandler(BaseHandler):
                 self.hooks.execute_lifecycle_hooks(
                     "oauth_completed",
                     actor_instance,
-                    email=email,
+                    email=identifier,
                     access_token=access_token,
                     redirect_url=response_data["redirect_url"]
                 )
             except Exception as e:
                 logger.error(f"Error executing oauth_completed hook: {e}")
-        
-        logger.debug(f"OAuth2 authentication completed successfully for {email} -> {actor_instance.id}")
+
+        logger.debug(f"OAuth2 authentication completed successfully for {identifier} -> {actor_instance.id}")
         return response_data
     
     

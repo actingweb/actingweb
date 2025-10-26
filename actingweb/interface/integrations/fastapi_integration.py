@@ -449,6 +449,24 @@ class FastAPIIntegration:
             self.logger.debug("Using standard Google OAuth2 callback handler")
             return await self._handle_google_oauth_callback(request)
 
+        # OAuth2 email input - handles email collection when OAuth provider doesn't provide one
+        @self.fastapi_app.get("/oauth/email")
+        async def oauth_email_get(request: Request) -> Response:
+            return await self._handle_oauth2_email(request)
+
+        @self.fastapi_app.post("/oauth/email")
+        async def oauth_email_post(request: Request) -> Response:
+            return await self._handle_oauth2_email(request)
+
+        # Email verification endpoint - verifies email addresses for OAuth2 actors
+        @self.fastapi_app.get("/{actor_id}/www/verify_email")
+        async def email_verification_get(request: Request, actor_id: str) -> Response:
+            return await self._handle_email_verification(request, actor_id)
+
+        @self.fastapi_app.post("/{actor_id}/www/verify_email")
+        async def email_verification_post(request: Request, actor_id: str) -> Response:
+            return await self._handle_email_verification(request, actor_id)
+
         # OAuth2 server endpoints for MCP clients
         @self.fastapi_app.post("/oauth/register")
         @self.fastapi_app.options("/oauth/register")
@@ -473,6 +491,57 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/oauth/logout")
         @self.fastapi_app.options("/oauth/logout")
         async def oauth2_logout(request: Request) -> Response:
+            """
+            Unified logout endpoint that handles both:
+            1. MCP OAuth2 client token revocation (if Authorization header present)
+            2. Web UI session logout (if oauth_token cookie present)
+            """
+            # Handle OPTIONS (CORS preflight) immediately
+            if request.method == "OPTIONS":
+                cors_headers = {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+                    "Access-Control-Max-Age": "86400",
+                }
+                return JSONResponse({"message": "CORS preflight"}, status_code=200, headers=cors_headers)
+
+            # Check if this is an AJAX request (expects JSON response)
+            content_type = request.headers.get("content-type", "")
+            is_ajax = "application/json" in content_type or request.headers.get("x-requested-with") == "XMLHttpRequest"
+
+            # First, handle MCP OAuth2 token revocation if Authorization header present
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.startswith("Bearer "):
+                self.logger.info("Logout: Revoking MCP OAuth2 token")
+                await self._handle_oauth2_endpoint(request, "logout")
+
+            # Check if this is a web UI logout (oauth_token cookie present)
+            oauth_cookie = request.cookies.get("oauth_token")
+            if oauth_cookie:
+                self.logger.info("Logout: Clearing web UI session (oauth_token cookie)")
+
+                if is_ajax:
+                    # Return JSON response for AJAX requests
+                    response = JSONResponse({
+                        "success": True,
+                        "message": "Logged out successfully",
+                        "redirect_url": "/"
+                    })
+                    response.delete_cookie("oauth_token", path="/")
+                    return response
+                else:
+                    # Return redirect for direct navigation
+                    response = RedirectResponse(url="/", status_code=302)
+                    response.delete_cookie("oauth_token", path="/")
+                    return response
+
+            # If neither token nor cookie, just return success
+            if not auth_header and not oauth_cookie:
+                self.logger.info("Logout: No active session found")
+                return JSONResponse({"message": "No active session to logout"}, status_code=200)
+
+            # MCP client logout without web UI redirect
             return await self._handle_oauth2_endpoint(request, "logout")
 
         # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
@@ -922,9 +991,30 @@ class FastAPIIntegration:
         return self._create_fastapi_response(webobj, request)
 
     async def _handle_factory_get_request(self, request: Request) -> Response:
-        """Handle GET requests to factory route - just show the email form."""
-        # Simply show the factory template without any authentication
-        if self.templates:
+        """Handle GET requests to factory route - call factory handler to populate OAuth vars."""
+        # Create webobj using the same pattern as _handle_factory_request
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        # Call the factory handler's get() method to populate OAuth template variables
+        handler = factory.RootFactoryHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        # Run handler in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(self.executor, handler.get)
+
+        # Render template with populated values (including oauth_enabled, oauth_providers, etc.)
+        if self.templates and webobj.response.template_values:
+            return self.templates.TemplateResponse(
+                "aw-root-factory.html", {"request": request, **webobj.response.template_values}
+            )
+        elif self.templates:
             return self.templates.TemplateResponse("aw-root-factory.html", {"request": request})
         else:
             # Fallback for when templates are not available
@@ -1084,6 +1174,153 @@ class FastAPIIntegration:
                 return self.templates.TemplateResponse(
                     "aw-root-failed.html", {"request": request, **webobj.response.template_values}
                 )
+
+        return self._create_fastapi_response(webobj, request)
+
+    async def _handle_oauth2_email(self, request: Request) -> Response:
+        """Handle OAuth2 email input requests."""
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth_email import OAuth2EmailHandler
+
+        handler = OAuth2EmailHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        # Run the synchronous handler in a thread pool
+        loop = asyncio.get_running_loop()
+        if request.method == "POST":
+            result = await loop.run_in_executor(self.executor, handler.post)
+        else:
+            result = await loop.run_in_executor(self.executor, handler.get)
+
+        # Handle template rendering for email form
+        if hasattr(webobj.response, "template_values") and webobj.response.template_values:
+            if self.templates:
+                try:
+                    # App provides aw-oauth-email.html template
+                    return self.templates.TemplateResponse(
+                        "aw-oauth-email.html", {"request": request, **webobj.response.template_values}
+                    )
+                except Exception as e:
+                    # Template not found - provide basic HTML form as fallback
+                    self.logger.warning(f"Template aw-oauth-email.html not found: {e}")
+                    session_id = webobj.response.template_values.get("session_id", "")
+                    error = webobj.response.template_values.get("error", "")
+                    provider = webobj.response.template_values.get("provider_display", "OAuth provider")
+                    message = webobj.response.template_values.get("message", f"Your {provider} account does not have a public email. Please enter your email address to continue.")
+
+                    fallback_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Enter Email - ActingWeb</title>
+                        <style>
+                            body {{ font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }}
+                            .error {{ color: red; margin-bottom: 15px; }}
+                            .message {{ margin-bottom: 20px; color: #666; }}
+                            input[type="email"] {{ width: 100%; padding: 10px; margin: 10px 0; }}
+                            button {{ padding: 10px 20px; background: #4285f4; color: white; border: none; cursor: pointer; }}
+                            button:hover {{ background: #357ae8; }}
+                        </style>
+                    </head>
+                    <body>
+                        <h1>Email Required</h1>
+                        <p class="message">{message}</p>
+                        {f'<p class="error">{error}</p>' if error else ''}
+                        <form action="/oauth/email" method="POST">
+                            <input type="hidden" name="session" value="{session_id}" />
+                            <label>Email Address:
+                                <input type="email" name="email" required placeholder="your@email.com" />
+                            </label>
+                            <button type="submit">Continue</button>
+                        </form>
+                    </body>
+                    </html>
+                    """
+                    return HTMLResponse(content=fallback_html)
+
+        return self._create_fastapi_response(webobj, request)
+
+    async def _handle_email_verification(self, request: Request, actor_id: str) -> Response:
+        """Handle email verification requests."""
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.email_verification import EmailVerificationHandler
+
+        handler = EmailVerificationHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        # Run the synchronous handler in a thread pool
+        loop = asyncio.get_running_loop()
+        if request.method == "POST":
+            result = await loop.run_in_executor(self.executor, handler.post)
+        else:
+            result = await loop.run_in_executor(self.executor, handler.get)
+
+        # Handle template rendering for email verification
+        if hasattr(webobj.response, "template_values") and webobj.response.template_values:
+            if self.templates:
+                try:
+                    # App provides aw-verify-email.html template
+                    return self.templates.TemplateResponse(
+                        "aw-verify-email.html", {"request": request, **webobj.response.template_values}
+                    )
+                except Exception as e:
+                    # Template not found - provide basic HTML as fallback
+                    self.logger.warning(f"Template aw-verify-email.html not found: {e}")
+                    status = webobj.response.template_values.get("status", "")
+                    message = webobj.response.template_values.get("message", "")
+                    email = webobj.response.template_values.get("email", "")
+                    error = webobj.response.template_values.get("error", "")
+
+                    if status == "success":
+                        fallback_html = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head><title>Email Verified</title></head>
+                        <body>
+                            <h1>✓ Email Verified!</h1>
+                            <p>Your email address <strong>{email}</strong> has been verified.</p>
+                            <p><a href="/{actor_id}/www">Continue to Dashboard</a></p>
+                        </body>
+                        </html>
+                        """
+                    elif status == "error":
+                        fallback_html = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head><title>Verification Failed</title></head>
+                        <body>
+                            <h1>Verification Failed</h1>
+                            <p>{error}</p>
+                            <p><a href="/{actor_id}/www">Return to Dashboard</a></p>
+                        </body>
+                        </html>
+                        """
+                    else:
+                        fallback_html = """
+                        <!DOCTYPE html>
+                        <html>
+                        <head><title>Email Verification</title></head>
+                        <body>
+                            <h1>Email Verification</h1>
+                            <p>Please check your email for a verification link.</p>
+                        </body>
+                        </html>
+                        """
+                    return HTMLResponse(content=fallback_html)
 
         return self._create_fastapi_response(webobj, request)
 

@@ -567,6 +567,9 @@ class Actor:
         client_version=None,
         client_platform=None,
         oauth_client_id=None,
+        # Connection tracking
+        last_accessed=None,
+        last_connected_via=None,
     ):
         """Changes a trust relationship and noties the peer if approval is changed."""
         if not relationship or not peerid:
@@ -612,6 +615,8 @@ class Actor:
             client_version=client_version,
             client_platform=client_platform,
             oauth_client_id=oauth_client_id,
+            last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
         )
 
     def create_reciprocal_trust(

@@ -1362,19 +1362,28 @@ class MCPHandler(BaseHandler):
                 if isinstance(impl, dict):
                     client_platform = f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
 
-            # Update the trust relationship with client metadata
+            # Update the trust relationship with client metadata and connection timestamp
             from .. import actor as actor_module
+            from ..trust import canonical_connection_method
+            from datetime import datetime
 
             core_actor = actor_module.Actor(actor.id, config=self.config)
             if core_actor.actor:
                 # Get the relationship type from the trust relationship
                 relationship = getattr(mcp_context.trust_relationship, "relationship", "mcp_client")
+                established_via = getattr(mcp_context.trust_relationship, "established_via", "oauth2_client")
+
+                # Update last connection timestamp
+                now_iso = datetime.utcnow().isoformat()
+
                 success = core_actor.modify_trust_and_notify(
                     relationship=relationship,
                     peerid=peer_id,
                     client_name=client_name,
                     client_version=client_version,
                     client_platform=client_platform,
+                    last_accessed=now_iso,
+                    last_connected_via=canonical_connection_method(established_via),
                 )
                 if success:
                     logger.info(f"Updated trust relationship {peer_id} with client info: {client_name}")

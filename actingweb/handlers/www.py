@@ -398,6 +398,23 @@ class WwwHandler(base_handler.BaseHandler):
             if not relationships:
                 relationships = []
 
+            # Sort by last_connected_at (most recent first), fallback to created_at if no last connection
+            def get_sort_key(trust):
+                if isinstance(trust, dict):
+                    # Try last_connected_at, then last_accessed, then created_at, then empty string
+                    return trust.get("last_connected_at") or trust.get("last_accessed") or trust.get("created_at") or ""
+                else:
+                    # Object-like access
+                    return (
+                        getattr(trust, "last_connected_at", None)
+                        or getattr(trust, "last_accessed", None)
+                        or getattr(trust, "created_at", None)
+                        or ""
+                    )
+
+            # Sort in descending order (most recent first)
+            relationships = sorted(relationships, key=get_sort_key, reverse=True)
+
             # Build approve URIs and check for custom permissions
             connection_metadata: List[Dict[str, str | None]] = []
             for t in relationships:

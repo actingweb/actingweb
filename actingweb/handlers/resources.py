@@ -1,6 +1,5 @@
 # Fixed imports after removing init_actingweb
 import json
-from typing import Union
 
 from actingweb.handlers import base_handler
 
@@ -64,7 +63,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         if not auth_result.authorize("PUT", "resources", name):
             return
         try:
-            body: Union[str, bytes, None] = self.request.body
+            body: str | bytes | None = self.request.body
             if body is None:
                 body_str = "{}"
             elif isinstance(body, bytes):
@@ -76,7 +75,7 @@ class ResourcesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
-            
+
         # Execute callback hook for resource PUT
         pair = None
         if self.hooks:
@@ -106,7 +105,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         if not auth_result.authorize("POST", "resources", name):
             return
         try:
-            body: Union[str, bytes, None] = self.request.body
+            body: str | bytes | None = self.request.body
             if body is None:
                 body_str = "{}"
             elif isinstance(body, bytes):
@@ -118,7 +117,7 @@ class ResourcesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
-            
+
         # Execute callback hook for resource POST
         pair = None
         if self.hooks:

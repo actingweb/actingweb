@@ -4,28 +4,29 @@ Flask integration for ActingWeb applications.
 Automatically generates Flask routes and handles request/response transformation.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
-from flask import Flask, request, redirect, Response, render_template
-from werkzeug.wrappers import Response as WerkzeugResponse
 import logging
+from typing import TYPE_CHECKING, Any
+
+from flask import Flask, Response, redirect, render_template, request
+from werkzeug.wrappers import Response as WerkzeugResponse
 
 from ...aw_web_request import AWWebObj
 from ...handlers import (
-    callbacks,
-    properties,
-    meta,
-    root,
-    trust,
-    devtest,
-    subscription,
-    resources,
-    bot,
-    www,
-    factory,
-    methods,
     actions,
+    bot,
+    callbacks,
+    devtest,
+    factory,
     mcp,
+    meta,
+    methods,
+    properties,
+    resources,
+    root,
     services,
+    subscription,
+    trust,
+    www,
 )
 
 if TYPE_CHECKING:
@@ -49,12 +50,12 @@ class FlaskIntegration:
 
         # Root factory route with OAuth2 authentication
         @self.flask_app.route("/", methods=["GET"])
-        def app_root_get() -> Union[Response, WerkzeugResponse, str]:
+        def app_root_get() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # GET requests don't require authentication - show email form
             return self._handle_factory_get_request()
 
         @self.flask_app.route("/", methods=["POST"])
-        def app_root_post() -> Union[Response, WerkzeugResponse, str]:
+        def app_root_post() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # Check if this is a JSON API request or web form request
             is_json_request = request.content_type and "application/json" in request.content_type
             accepts_json = request.headers.get("Accept", "").find("application/json") >= 0
@@ -68,7 +69,7 @@ class FlaskIntegration:
 
         # OAuth2 callback - handles both ActingWeb and MCP OAuth2 flows
         @self.flask_app.route("/oauth/callback", methods=["GET"])
-        def app_oauth2_callback() -> Union[Response, WerkzeugResponse, str]:
+        def app_oauth2_callback() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # Handle both Google OAuth2 callback (for ActingWeb) and MCP OAuth2 callback
             # Determine which flow based on state parameter
             from flask import request
@@ -94,68 +95,68 @@ class FlaskIntegration:
 
         # OAuth2 email input - handles email collection when OAuth provider doesn't provide one
         @self.flask_app.route("/oauth/email", methods=["GET", "POST"])
-        def app_oauth2_email() -> Union[Response, WerkzeugResponse, str]:
+        def app_oauth2_email() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_email()
 
         # Email verification endpoint - verifies email addresses for OAuth2 actors
         @self.flask_app.route("/<actor_id>/www/verify_email", methods=["GET", "POST"])
-        def email_verification(actor_id: str) -> Union[Response, WerkzeugResponse, str]:
+        def email_verification(actor_id: str) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_email_verification(actor_id)
 
         # OAuth2 server endpoints for MCP clients
         @self.flask_app.route("/oauth/register", methods=["POST", "OPTIONS"])
-        def oauth2_register() -> Union[Response, WerkzeugResponse, str]:
+        def oauth2_register() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_endpoint("register")
 
         @self.flask_app.route("/oauth/authorize", methods=["GET", "POST", "OPTIONS"])
-        def oauth2_authorize() -> Union[Response, WerkzeugResponse, str]:
+        def oauth2_authorize() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_endpoint("authorize")
 
         @self.flask_app.route("/oauth/token", methods=["POST", "OPTIONS"])
-        def oauth2_token() -> Union[Response, WerkzeugResponse, str]:
+        def oauth2_token() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_endpoint("token")
 
         @self.flask_app.route("/oauth/logout", methods=["GET", "POST", "OPTIONS"])
-        def oauth2_logout() -> Union[Response, WerkzeugResponse, str]:
+        def oauth2_logout() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_endpoint("logout")
 
         # Bot endpoint
         @self.flask_app.route("/bot", methods=["POST"])
-        def app_bot() -> Union[Response, WerkzeugResponse, str]:
+        def app_bot() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_bot_request()
 
         # MCP endpoint
         @self.flask_app.route("/mcp", methods=["GET", "POST"])
-        def app_mcp() -> Union[Response, WerkzeugResponse, str]:
+        def app_mcp() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # For MCP, allow initial handshake without authentication
             # Authentication will be handled within the MCP protocol
             return self._handle_mcp_request()
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
         @self.flask_app.route("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"])
-        def oauth_discovery() -> Union[Response, WerkzeugResponse, str]:
+        def oauth_discovery() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
             return self._handle_oauth2_discovery_endpoint(".well-known/oauth-authorization-server")
 
         @self.flask_app.route("/.well-known/oauth-protected-resource", methods=["GET", "OPTIONS"])
-        def oauth_protected_resource_discovery() -> Union[Response, WerkzeugResponse, str]:
+        def oauth_protected_resource_discovery() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             """OAuth2 Protected Resource discovery endpoint."""
             return self._handle_oauth2_discovery_endpoint(".well-known/oauth-protected-resource")
 
         @self.flask_app.route("/.well-known/oauth-protected-resource/mcp", methods=["GET", "OPTIONS"])
-        def oauth_protected_resource_mcp_discovery() -> Union[Response, WerkzeugResponse, str]:
+        def oauth_protected_resource_mcp_discovery() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             """OAuth2 Protected Resource discovery endpoint for MCP."""
             return self._handle_oauth2_discovery_endpoint(".well-known/oauth-protected-resource/mcp")
 
         # MCP information endpoint
         @self.flask_app.route("/mcp/info", methods=["GET"])
-        def mcp_info() -> Dict[str, Any]:
+        def mcp_info() -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
             """MCP information endpoint."""
             return self._create_mcp_info_response()
 
         # Actor root
         @self.flask_app.route("/<actor_id>", methods=["GET", "POST", "DELETE"])
-        def app_actor_root(actor_id: str) -> Union[Response, WerkzeugResponse, str]:
+        def app_actor_root(actor_id: str) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # Align with FastAPI: protect actor root with OAuth when enabled
             auth_redirect = self._check_authentication_and_redirect()
             if auth_redirect:
@@ -165,14 +166,14 @@ class FlaskIntegration:
         # Actor meta
         @self.flask_app.route("/<actor_id>/meta", methods=["GET"])
         @self.flask_app.route("/<actor_id>/meta/<path:path>", methods=["GET"])
-        def app_meta(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_meta(actor_id: str, path: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "meta", path=path)
 
 
         # Actor www with OAuth2 authentication
         @self.flask_app.route("/<actor_id>/www", methods=["GET", "POST", "DELETE"])
         @self.flask_app.route("/<actor_id>/www/<path:path>", methods=["GET", "POST", "DELETE"])
-        def app_www(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_www(actor_id: str, path: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # Check authentication and redirect to OAuth2 if needed
             auth_redirect = self._check_authentication_and_redirect()
             if auth_redirect:
@@ -182,7 +183,7 @@ class FlaskIntegration:
         # Actor properties
         @self.flask_app.route("/<actor_id>/properties", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/properties/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
-        def app_properties(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_properties(actor_id: str, name: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # Align with FastAPI: protect properties with OAuth when enabled
             auth_redirect = self._check_authentication_and_redirect()
             if auth_redirect:
@@ -193,16 +194,16 @@ class FlaskIntegration:
         @self.flask_app.route("/<actor_id>/trust", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/trust/<relationship>", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/trust/<relationship>/<peerid>", methods=["GET", "POST", "DELETE", "PUT"])
-        def app_trust(
-            actor_id: str, relationship: Optional[str] = None, peerid: Optional[str] = None
-        ) -> Union[Response, WerkzeugResponse, str]:
+        def app_trust(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str, relationship: str | None = None, peerid: str | None = None
+        ) -> Response | WerkzeugResponse | str:
             return self._handle_actor_request(actor_id, "trust", relationship=relationship, peerid=peerid)
 
         # Trust permission management endpoints
         @self.flask_app.route("/<actor_id>/trust/<relationship>/<peerid>/permissions", methods=["GET", "PUT", "DELETE"])
-        def app_trust_permissions(
+        def app_trust_permissions(  # pyright: ignore[reportUnusedFunction]
             actor_id: str, relationship: str, peerid: str
-        ) -> Union[Response, WerkzeugResponse, str]:
+        ) -> Response | WerkzeugResponse | str:
             return self._handle_actor_request(
                 actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
             )
@@ -212,54 +213,54 @@ class FlaskIntegration:
         @self.flask_app.route("/<actor_id>/subscriptions/<peerid>", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/subscriptions/<peerid>/<subid>", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/subscriptions/<peerid>/<subid>/<int:seqnr>", methods=["GET"])
-        def app_subscriptions(
-            actor_id: str, peerid: Optional[str] = None, subid: Optional[str] = None, seqnr: Optional[int] = None
-        ) -> Union[Response, WerkzeugResponse, str]:
+        def app_subscriptions(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str, peerid: str | None = None, subid: str | None = None, seqnr: int | None = None
+        ) -> Response | WerkzeugResponse | str:
             return self._handle_actor_request(actor_id, "subscriptions", peerid=peerid, subid=subid, seqnr=seqnr)
 
         # Actor resources
         @self.flask_app.route("/<actor_id>/resources", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/resources/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
-        def app_resources(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_resources(actor_id: str, name: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "resources", name=name)
 
         # Actor callbacks
         @self.flask_app.route("/<actor_id>/callbacks", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/callbacks/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
-        def app_callbacks(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_callbacks(actor_id: str, name: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "callbacks", name=name)
 
         # Actor devtest
         @self.flask_app.route("/<actor_id>/devtest", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/devtest/<path:path>", methods=["GET", "POST", "DELETE", "PUT"])
-        def app_devtest(actor_id: str, path: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_devtest(actor_id: str, path: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "devtest", path=path)
 
         # Actor methods
         @self.flask_app.route("/<actor_id>/methods", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/methods/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
-        def app_methods(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_methods(actor_id: str, name: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "methods", name=name)
 
         # Actor actions
         @self.flask_app.route("/<actor_id>/actions", methods=["GET", "POST", "DELETE", "PUT"])
         @self.flask_app.route("/<actor_id>/actions/<path:name>", methods=["GET", "POST", "DELETE", "PUT"])
-        def app_actions(actor_id: str, name: str = "") -> Union[Response, WerkzeugResponse, str]:
+        def app_actions(actor_id: str, name: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "actions", name=name)
 
         # Third-party service OAuth2 callbacks and management
         @self.flask_app.route("/<actor_id>/services/<service_name>/callback", methods=["GET"])
-        def app_services_callback(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
+        def app_services_callback(actor_id: str, service_name: str) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "services", name=service_name,
                                             code=request.args.get('code'),
                                             state=request.args.get('state'),
                                             error=request.args.get('error'))
 
         @self.flask_app.route("/<actor_id>/services/<service_name>", methods=["DELETE"])
-        def app_services_revoke(actor_id: str, service_name: str) -> Union[Response, WerkzeugResponse, str]:
+        def app_services_revoke(actor_id: str, service_name: str) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "services", name=service_name)
 
-    def _normalize_request(self) -> Dict[str, Any]:
+    def _normalize_request(self) -> dict[str, Any]:
         """Convert Flask request to ActingWeb format."""
         cookies = {}
         raw_cookies = request.headers.get("Cookie")
@@ -299,7 +300,7 @@ class FlaskIntegration:
             "url": request.url,
         }
 
-    def _create_flask_response(self, webobj: AWWebObj) -> Union[Response, WerkzeugResponse, str]:
+    def _create_flask_response(self, webobj: AWWebObj) -> Response | WerkzeugResponse | str:
         """Convert ActingWeb response to Flask response."""
         if webobj.response.redirect:
             response = redirect(webobj.response.redirect, code=302)
@@ -324,7 +325,7 @@ class FlaskIntegration:
 
         return response
 
-    def _handle_factory_request(self) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_factory_request(self) -> Response | WerkzeugResponse | str:
         """Handle factory requests (actor creation)."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -425,7 +426,7 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_factory_get_request(self) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_factory_get_request(self) -> Response | WerkzeugResponse | str:
         """Handle GET requests to factory route - just show the email form."""
         # Simply show the factory template without any authentication
         try:
@@ -448,7 +449,7 @@ class FlaskIntegration:
                 mimetype="text/html",
             )
 
-    def _handle_factory_post_with_oauth_redirect(self) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_factory_post_with_oauth_redirect(self) -> Response | WerkzeugResponse | str:
         """Handle POST to factory route with OAuth2 redirect including email hint."""
         try:
             import json
@@ -508,7 +509,7 @@ class FlaskIntegration:
             logging.error(f"Error in factory POST handler: {e}")
             return Response("Internal server error", status=500)
 
-    def _handle_factory_post_without_oauth(self, email: str) -> Union[Response, WerkzeugResponse, str]:  # pylint: disable=unused-argument
+    def _handle_factory_post_without_oauth(self, email: str) -> Response | WerkzeugResponse | str:  # pylint: disable=unused-argument
         """Handle POST to factory route without OAuth2 - standard actor creation."""
         try:
             # Always use the standard factory handler
@@ -546,7 +547,7 @@ class FlaskIntegration:
             except Exception:
                 return Response("Actor creation failed", status=500)
 
-    def _handle_bot_request(self) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_bot_request(self) -> Response | WerkzeugResponse | str:
         """Handle bot requests."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -562,7 +563,7 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_oauth2_callback(self) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_oauth2_callback(self) -> Response | WerkzeugResponse | str:
         """Handle OAuth2 callback."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -588,7 +589,7 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_oauth2_email(self) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_oauth2_email(self) -> Response | WerkzeugResponse | str:
         """Handle OAuth2 email input requests."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -604,9 +605,9 @@ class FlaskIntegration:
         handler = OAuth2EmailHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
 
         if request.method == "POST":
-            result = handler.post()
+            handler.post()
         else:
-            result = handler.get()
+            handler.get()
 
         # Handle template rendering for email form
         if hasattr(webobj.response, "template_values") and webobj.response.template_values:
@@ -653,7 +654,7 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_email_verification(self, actor_id: str) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_email_verification(self, actor_id: str) -> Response | WerkzeugResponse | str:
         """Handle email verification requests."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -669,9 +670,9 @@ class FlaskIntegration:
         handler = EmailVerificationHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
 
         if request.method == "POST":
-            result = handler.post()
+            handler.post()
         else:
-            result = handler.get()
+            handler.get()
 
         # Handle template rendering for email verification
         if hasattr(webobj.response, "template_values") and webobj.response.template_values:
@@ -682,7 +683,7 @@ class FlaskIntegration:
                 # Template not found - provide basic HTML as fallback
                 logging.warning(f"Template aw-verify-email.html not found: {e}")
                 status = webobj.response.template_values.get("status", "")
-                message = webobj.response.template_values.get("message", "")
+                webobj.response.template_values.get("message", "")
                 email = webobj.response.template_values.get("email", "")
                 error = webobj.response.template_values.get("error", "")
 
@@ -725,7 +726,7 @@ class FlaskIntegration:
 
         return self._create_flask_response(webobj)
 
-    def _handle_oauth2_endpoint(self, endpoint: str) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_oauth2_endpoint(self, endpoint: str) -> Response | WerkzeugResponse | str:
         """Handle OAuth2 endpoints (register, authorize, token)."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -770,12 +771,12 @@ class FlaskIntegration:
             redirect_url = result.get("location")
             if redirect_url:
                 redirect_response = redirect(redirect_url, code=302)
-                
-                # Add CORS headers for OAuth2 redirect responses  
+
+                # Add CORS headers for OAuth2 redirect responses
                 redirect_response.headers["Access-Control-Allow-Origin"] = "*"
                 redirect_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
                 redirect_response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, mcp-protocol-version"
-                
+
                 return redirect_response
 
         # Return the OAuth2 result as JSON with CORS headers
@@ -795,7 +796,7 @@ class FlaskIntegration:
 
         return json_response
 
-    def _handle_oauth2_discovery_endpoint(self, endpoint: str) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_oauth2_discovery_endpoint(self, endpoint: str) -> Response | WerkzeugResponse | str:
         """Handle OAuth2 discovery endpoints that return JSON directly."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -826,7 +827,7 @@ class FlaskIntegration:
 
         return response
 
-    def _handle_mcp_request(self) -> Union[Response, WerkzeugResponse, str]:
+    def _handle_mcp_request(self) -> Response | WerkzeugResponse | str:
         """Handle MCP requests."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -863,7 +864,7 @@ class FlaskIntegration:
 
         return jsonify(result)
 
-    def _check_authentication_and_redirect(self) -> Optional[Union[Response, WerkzeugResponse, str]]:
+    def _check_authentication_and_redirect(self) -> Response | WerkzeugResponse | str | None:
         """Check if request is authenticated, if not return OAuth2 redirect."""
         # Check for Basic auth
         auth_header = request.headers.get("Authorization")
@@ -902,7 +903,7 @@ class FlaskIntegration:
 
     def _create_oauth_redirect_response(
         self, redirect_after_auth: str = "", clear_cookie: bool = False
-    ) -> Union[Response, WerkzeugResponse, str]:
+    ) -> Response | WerkzeugResponse | str:
         """Create OAuth2 redirect response."""
         try:
             from ...oauth2 import create_oauth2_authenticator
@@ -927,7 +928,7 @@ class FlaskIntegration:
 
     def _handle_actor_request(
         self, actor_id: str, endpoint: str, **kwargs: Any
-    ) -> Union[Response, WerkzeugResponse, str]:
+    ) -> Response | WerkzeugResponse | str:
         """Handle actor-specific requests."""
         req_data = self._normalize_request()
         webobj = AWWebObj(
@@ -1045,7 +1046,7 @@ class FlaskIntegration:
 
     def _get_handler(
         self, endpoint: str, webobj: AWWebObj, actor_id: str, **kwargs: Any  # pylint: disable=unused-argument
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """Get the appropriate handler for an endpoint."""
         config = self.aw_app.get_config()
 
@@ -1066,15 +1067,15 @@ class FlaskIntegration:
         if endpoint == "trust":
             relationship = kwargs.get("relationship")
             peerid = kwargs.get("peerid")
-            
+
             # Check for permissions endpoint
             if kwargs.get("permissions"):
                 return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
-            
+
             # For trust endpoint, we need to distinguish between path parameters and query parameters
             # If peerid appears in query params but not as path param, it's a query-based request
             query_peerid = webobj.request.get("peerid")
-            
+
             # Only count actual path parameters (non-None, non-empty)
             path_parts = []
             if relationship is not None and relationship != "":
@@ -1082,7 +1083,7 @@ class FlaskIntegration:
             # Only count peerid as path param if it's not a query param request
             if peerid is not None and peerid != "" and not query_peerid:
                 path_parts.append(peerid)
-            
+
             if len(path_parts) == 0:
                 return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
             elif len(path_parts) == 1:
@@ -1109,7 +1110,7 @@ class FlaskIntegration:
 
         return None
 
-    def _create_oauth_discovery_response(self) -> Dict[str, Any]:
+    def _create_oauth_discovery_response(self) -> dict[str, Any]:
         """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
@@ -1145,7 +1146,7 @@ class FlaskIntegration:
         else:
             return {"error": "Unknown OAuth provider"}
 
-    def _create_mcp_info_response(self) -> Dict[str, Any]:
+    def _create_mcp_info_response(self) -> dict[str, Any]:
         """Create MCP information response."""
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"

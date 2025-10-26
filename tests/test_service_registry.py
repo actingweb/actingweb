@@ -5,15 +5,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from actingweb.interface.app import ActingWebApp
 from actingweb.interface.actor_interface import ActorInterface
+from actingweb.interface.app import ActingWebApp
 
 
 def test_register_and_get_service_client():
     app = ActingWebApp(aw_type="urn:actingweb:test", fqdn="example.com")
     registry = app.get_service_registry()
 
-    service_config = registry.register_service_from_dict(
+    _ = registry.register_service_from_dict(  # noqa: F841
         "demo",
         {
             "client_id": "id",
@@ -37,7 +37,7 @@ def test_register_and_get_service_client():
         property=Mock(),
         store=Mock(),
     )
-    actor_interface = ActorInterface(core_actor, service_registry=registry)
+    actor_interface = ActorInterface(core_actor, service_registry=registry)  # type: ignore[arg-type]
 
     client = actor_interface.services.get("demo")
 
@@ -65,7 +65,7 @@ def test_actor_services_cache():
         property=Mock(),
         store=Mock(),
     )
-    actor_interface = ActorInterface(core_actor, service_registry=registry)
+    actor_interface = ActorInterface(core_actor, service_registry=registry)  # type: ignore[arg-type]
 
     mock_client = Mock(name="cached_client")
     registry.get_service_client = Mock(return_value=mock_client)
@@ -94,9 +94,9 @@ def test_service_registry_templates():
 
 
 def test_actor_interface_services_raises_without_registry():
-    app = ActingWebApp(aw_type="urn:actingweb:test", fqdn="example.com")
+    _ = ActingWebApp(aw_type="urn:actingweb:test", fqdn="example.com")  # noqa: F841
     core_actor = SimpleNamespace(config=None, id="actor", property=None, store=None)
-    actor = ActorInterface(core_actor, service_registry=None)
+    actor = ActorInterface(core_actor, service_registry=None)  # type: ignore[arg-type]
 
     with pytest.raises(RuntimeError):
         _ = actor.services

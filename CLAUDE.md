@@ -108,21 +108,31 @@ poetry export --with docs --without-hashes -o docs/requirements.txt
 
 ### Code Quality and Type Safety
 
-This project uses comprehensive type annotations and mypy for static type checking. When making changes:
+This project maintains **zero errors and zero warnings** for both type checking and linting. The codebase uses comprehensive type annotations with pyright/pylance for static type checking and ruff for fast linting.
+
+**Current Status:**
+- ✅ Pyright: 0 errors, 0 warnings (across 13,000+ lines)
+- ✅ Ruff: All checks passing
+- ✅ Tests: 474/474 passing (100%)
 
 #### Running Type Checks
 ```bash
-# Check all core modules
+# Pyright (primary type checker, used by VSCode Pylance)
+poetry run pyright actingweb
+poetry run pyright tests
+
+# Check both at once
+poetry run pyright actingweb tests
+
+# Mypy (legacy, still supported)
 poetry run mypy actingweb
 
-# Check specific files
-poetry run mypy actingweb/handlers/methods.py actingweb/handlers/actions.py
+# Ruff (linting and formatting)
+poetry run ruff check actingweb tests
+poetry run ruff format actingweb tests
 
-# Check with error codes for better debugging
-poetry run mypy actingweb --show-error-codes
-
-# Check demo application
-poetry run mypy application.py
+# Auto-fix issues where possible
+poetry run ruff check --fix actingweb tests
 ```
 
 #### Type Annotation Guidelines
@@ -188,37 +198,60 @@ def decorator_function(name: str) -> Callable[..., Any]:
 
 #### Pre-commit Quality Checks
 
-Before committing changes, always run:
+Before committing changes, **always** run these checks to maintain zero-error status:
 ```bash
-# Type checking
+# Type checking (primary)
+poetry run pyright actingweb tests
+
+# Linting and auto-formatting
+poetry run ruff check actingweb tests
+poetry run ruff format actingweb tests
+
+# Run tests
+poetry run pytest tests/
+
+# Optional: Legacy type checker
 poetry run mypy actingweb
-
-# Code formatting
-poetry run black .
-
-# Import sorting (if available)
-poetry run isort .
-
-# Syntax check
-poetry run python -m py_compile actingweb/path/to/file.py
 ```
+
+**Expected Result:** All commands should show zero errors and zero warnings.
 
 #### Integration with IDEs
 
-For optimal development experience:
-- **VS Code**: Install Python extension with mypy support
-- **PyCharm**: Enable mypy inspection in settings
-- **Vim/Neovim**: Use ale or coc-pyright for real-time type checking
+The repository includes VSCode configuration for optimal development:
+
+**VS Code (Recommended):**
+- Configuration provided in `.vscode/settings.json`
+- Uses Pylance (pyright) for real-time type checking
+- Uses Ruff for formatting and linting
+- Auto-fixes on save enabled
+- Type checking mode: "basic" (strict enough without being overly pedantic)
+
+**PyCharm:**
+- Enable Pyright external tool
+- Configure Ruff as external formatter
+
+**Vim/Neovim:**
+- Use coc-pyright or ale for real-time type checking
+- Configure ruff-lsp for linting
+
+#### Configuration Files
+
+The repository includes these configuration files:
+- **`pyrightconfig.json`**: Pyright type checker configuration
+- **`pyproject.toml`**: Ruff linting rules and Python package config
+- **`.vscode/settings.json`**: VSCode editor settings
 
 #### Type Checking in CI/CD
 
-Add type checking to your CI pipeline:
+Add comprehensive checks to your CI pipeline:
 ```yaml
 # Example GitHub Actions step
-- name: Type check with mypy
+- name: Type check and lint
   run: |
-    poetry run mypy actingweb
-    poetry run mypy application.py
+    poetry run pyright actingweb tests
+    poetry run ruff check actingweb tests
+    poetry run pytest tests/
 ```
 
 This ensures type safety is maintained across all contributions and prevents type-related runtime errors.

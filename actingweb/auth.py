@@ -1,11 +1,9 @@
 import base64
 import logging
 import math
-import time
 from datetime import datetime
-from typing import Union, Optional
 
-from pynamodb.exceptions import PutError, UpdateError, DoesNotExist
+from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 
 from actingweb import actor, trust
 from actingweb import config as config_class
@@ -130,7 +128,7 @@ class Auth:
             self.response["text"] = "Authentication required"
             return False
         authz = appreq.request.headers["Authorization"]
-        (basic, token) = authz.split(" ")
+        (basic, _) = authz.split(" ")
         if basic.lower() != "basic":
             self.response["code"] = 403
             self.response["text"] = "No basic auth in Authorization header"
@@ -165,7 +163,7 @@ class Auth:
         self.response["text"] = "Ok"
         return True
 
-    def _record_trust_usage(self, trust_record, via_hint: Optional[str] = None) -> None:
+    def _record_trust_usage(self, trust_record, via_hint: str | None = None) -> None:
         """Persist usage metadata for bearer-token trusts."""
         if not self.actor or not trust_record:
             return
@@ -196,7 +194,7 @@ class Auth:
                 modify_kwargs["established_via"] = via_hint
 
             db_trust = trust.Trust(actor_id=self.actor.id, peerid=peer_id, config=self.config)
-            db_trust.modify(**modify_kwargs)
+            db_trust.modify(**modify_kwargs)  # type: ignore[arg-type]
 
             trust_record["last_accessed"] = usage_time
             trust_record["last_connected_at"] = usage_time
@@ -213,7 +211,7 @@ class Auth:
         except Exception as e:
             logging.error(f"Unexpected error recording trust usage metadata: {e}", exc_info=True)
 
-    def check_token_auth(self, appreq, via_hint: Optional[str] = None):
+    def check_token_auth(self, appreq, via_hint: str | None = None):
         """Validate bearer tokens and optionally record how the connection occurred."""
         if "Authorization" not in appreq.request.headers:
             return False
@@ -223,11 +221,11 @@ class Auth:
             return False
         token = auth_parts[1]
         self.authn_done = True
-        
+
         # First, try OAuth2 authentication if configured
         if self._check_oauth2_token(token):
             return True
-        
+
         trustee = self.actor.store.trustee_root if self.actor and self.actor.store else None
         # If trustee_root is set, creator name is 'trustee' and
         # bit strength of passphrase is > 80, use passphrase as
@@ -273,24 +271,24 @@ class Auth:
         try:
             from .oauth2 import create_oauth2_authenticator
             authenticator = create_oauth2_authenticator(self.config)
-            
+
             if not authenticator.is_enabled():
                 return False
-            
+
             # Validate token and get user info
             user_info = authenticator.validate_token_and_get_user_info(token)
             if not user_info:
                 return False
-                
+
             # Extract email from user info
             email = authenticator.get_email_from_user_info(user_info)
             if not email:
                 return False
-            
+
             # For OAuth2, we authenticate users based on their email
             # The actor lookup is handled at the endpoint level, not here in auth
             # Here we just validate that the token is valid and get the email
-            
+
             # Check if this is the correct actor for this email (when actor_id is provided in URL)
             if self.actor and self.actor.creator and self.actor.creator.lower() == email.lower():
                 # This is the correct actor for this email
@@ -309,7 +307,7 @@ class Auth:
                 # 2. New user (actor creation flow handles this)
                 # 3. Factory endpoint (no specific actor yet)
                 logging.debug(f"OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}")
-                
+
                 # For factory endpoint or when no actor is loaded, we still consider auth successful
                 # The endpoint handler will use get_by_creator() to find/create the right actor
                 if not self.actor:
@@ -322,9 +320,9 @@ class Auth:
                     self.token = token
                     logging.debug(f"OAuth2 authentication successful for {email} (no specific actor)")
                     return True
-                
+
                 return False
-                
+
         except Exception as e:
             logging.error(f"Error during OAuth2 token validation: {e}")
             return False
@@ -334,18 +332,18 @@ class Auth:
         try:
             from .oauth2 import create_oauth2_authenticator
             authenticator = create_oauth2_authenticator(self.config)
-            
+
             if not authenticator.is_enabled():
                 return False
-            
+
             # Don't redirect for OAuth callback URLs to avoid infinite loops
             if "/oauth/callback" in path:
                 return False
-            
+
             # Create redirect to OAuth2
             original_url = self._get_original_url(appreq, path)
             auth_url = authenticator.create_authorization_url(redirect_after_auth=original_url)
-            
+
             if auth_url:
                 self.authn_done = True
                 self.response["code"] = 302
@@ -353,10 +351,10 @@ class Auth:
                 self.redirect = auth_url
                 logging.debug(f"Redirecting to OAuth2: {auth_url[:100]}...")
                 return True
-                
+
         except Exception as e:
             logging.error(f"Error creating OAuth2 redirect: {e}")
-        
+
         return False
 
     def _get_original_url(self, appreq, path):
@@ -370,7 +368,7 @@ class Auth:
             else:
                 # Fallback to constructing from config and path
                 return f"{self.config.proto}{self.config.fqdn}{path}"
-        except:
+        except Exception:
             # Last resort fallback
             return f"{self.config.proto}{self.config.fqdn}{path}"
 
@@ -392,13 +390,13 @@ class Auth:
                 logging.debug("Basic auth failed, response code: %s", self.response["code"])
                 self.authn_done = True
                 return
-        
+
         # If all authentication methods fail, try OAuth2 redirect if configured
         logging.debug("All auth methods failed, checking OAuth2 redirect...")
         if self._should_redirect_to_oauth2(appreq, path):
             logging.debug("OAuth2 redirect triggered")
             return
-            
+
         logging.debug("Authentication done, and failed")
         self.authn_done = True
         self.response["code"] = 403
@@ -429,7 +427,7 @@ class Auth:
         access"""
         # For DELETE operations on trust relationships, always allow deletion regardless of approval status
         # This ensures that broken or partially approved relationships can still be cleaned up
-        if (len(self.acl["peerid"]) > 0 and approved and self.acl["approved"] is False and 
+        if (len(self.acl["peerid"]) > 0 and approved and self.acl["approved"] is False and
             not (path.lower() == "trust" and method.upper() == "DELETE")):
             logging.debug(
                 "Rejected authorization because trust relationship is not approved."
@@ -527,13 +525,13 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
             # Authentication successful, use auth_result['actor']
             actor = auth_result['actor']
     """
-    
+
     if not config:
         config = config_class.Config()
-        
+
     # Use basic auth type for custom routes (supports both basic and Bearer token auth)
     auth_obj = Auth(actor_id, auth_type="basic", config=config)
-    
+
     result = {
         'authenticated': False,
         'actor': None,
@@ -541,28 +539,28 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
         'response': {'code': 403, 'text': 'Forbidden', 'headers': {}},
         'redirect': None
     }
-    
+
     if not auth_obj.actor:
         result['response'] = {'code': 404, 'text': 'Actor not found', 'headers': {}}
         return result
-    
+
     # Check authentication without modifying the response object
     auth_obj.check_authentication(appreq=appreq, path="/custom")
-    
+
     # Copy response details
     result['response'] = {
         'code': auth_obj.response['code'],
         'text': auth_obj.response['text'],
         'headers': auth_obj.response['headers'].copy()
     }
-    
+
     # Set redirect if needed
     if hasattr(auth_obj, 'redirect') and auth_obj.redirect:
         result['redirect'] = auth_obj.redirect
-    
+
     # Check if authentication was successful
     if auth_obj.acl['authenticated'] and auth_obj.response['code'] == 200:
         result['authenticated'] = True
         result['actor'] = auth_obj.actor
-        
+
     return result

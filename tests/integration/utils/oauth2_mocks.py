@@ -7,9 +7,8 @@ Provides mock responses for:
 - MCP token issuance endpoint
 """
 
-import json
+
 import responses
-from typing import Dict, Optional
 
 
 class OAuth2MockProvider:
@@ -17,8 +16,8 @@ class OAuth2MockProvider:
 
     def __init__(self, provider_name: str):
         self.provider_name = provider_name
-        self.auth_codes: Dict[str, Dict] = {}
-        self.access_tokens: Dict[str, Dict] = {}
+        self.auth_codes: dict[str, dict] = {}
+        self.access_tokens: dict[str, dict] = {}
 
     def mock_authorization_redirect(
         self, responses_mock, state: str, code: str = "test_auth_code"
@@ -44,7 +43,7 @@ class OAuth2MockProvider:
         responses_mock,
         code: str = "test_auth_code",
         access_token: str = "test_access_token",
-        refresh_token: Optional[str] = "test_refresh_token",
+        refresh_token: str | None = "test_refresh_token",
         email: str = "test@example.com",
     ):
         """Mock the token exchange endpoint."""
@@ -74,7 +73,7 @@ class GoogleOAuth2Mock(OAuth2MockProvider):
         responses_mock,
         code: str = "test_auth_code",
         access_token: str = "test_access_token",
-        refresh_token: Optional[str] = "test_refresh_token",
+        refresh_token: str | None = "test_refresh_token",
         email: str = "test@example.com",
     ):
         """Mock Google token exchange."""
@@ -132,7 +131,7 @@ class GitHubOAuth2Mock(OAuth2MockProvider):
         responses_mock,
         code: str = "test_auth_code",
         access_token: str = "test_access_token",
-        refresh_token: Optional[str] = None,
+        refresh_token: str | None = None,
         email: str = "test@example.com",
     ):
         """Mock GitHub token exchange."""

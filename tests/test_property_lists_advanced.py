@@ -18,8 +18,9 @@ References:
 """
 
 import pytest
-from actingweb.interface.app import ActingWebApp
+
 from actingweb.interface.actor_interface import ActorInterface
+from actingweb.interface.app import ActingWebApp
 
 
 @pytest.fixture
@@ -84,7 +85,7 @@ class TestPropertyListDynamicCreation:
             assert memory_type in all_lists, f"Expected {memory_type} in list_all() output"
 
         # Verify content retrieval
-        personal_list = getattr(test_actor.property_lists, "memory_personal")
+        personal_list = test_actor.property_lists.memory_personal
         items = personal_list.to_list()
         assert len(items) == 1
         assert items[0]["content"] == "Test data for memory_personal"
@@ -125,7 +126,7 @@ class TestPropertyListMetadataStorage:
 
         Spec: actingweb_mcp uses metadata in first item pattern
         """
-        prop_list = getattr(test_actor.property_lists, "memory_travel")
+        prop_list = test_actor.property_lists.memory_travel
 
         # Store metadata as first item (actingweb_mcp pattern)
         metadata = {
@@ -166,7 +167,7 @@ class TestPropertyListMetadataStorage:
 
         Spec: actingweb_mcp reads metadata from first item
         """
-        prop_list = getattr(test_actor.property_lists, "memory_notes")
+        prop_list = test_actor.property_lists.memory_notes
 
         # Store metadata
         metadata = {
@@ -218,7 +219,7 @@ class TestPropertyListDiscovery:
         Spec: actingweb/property.py:36-38 - Filters for list:*-meta pattern
         """
         # Create property list
-        prop_list = getattr(test_actor.property_lists, "memory_test")
+        prop_list = test_actor.property_lists.memory_test
         prop_list.append({"content": "test"})
 
         # list_all() should only return property lists
@@ -237,7 +238,7 @@ class TestPropertyListDiscovery:
         assert not test_actor.property_lists.exists("memory_nonexistent")
 
         # Create list by accessing and appending
-        prop_list = getattr(test_actor.property_lists, "memory_test")
+        prop_list = test_actor.property_lists.memory_test
         prop_list.append({"data": "test"})
 
         # Should now exist
@@ -253,7 +254,7 @@ class TestPropertyListDiscovery:
         Spec: actingweb/property.py:22 - Checks for metadata property
         """
         # Access list but don't append anything
-        prop_list = getattr(test_actor.property_lists, "memory_empty")
+        _ = test_actor.property_lists.memory_empty  # noqa: F841
 
         # Should not exist because no items were appended (no metadata created)
         assert not test_actor.property_lists.exists("memory_empty")
@@ -271,7 +272,7 @@ class TestPropertyListDeletion:
         Spec: actingweb/property_list.py:302-319 - delete() implementation
         """
         # Create and populate property list
-        prop_list = getattr(test_actor.property_lists, "memory_temp")
+        prop_list = test_actor.property_lists.memory_temp
         prop_list.append({"id": 1, "content": "temp data 1"})
         prop_list.append({"id": 2, "content": "temp data 2"})
         prop_list.append({"id": 3, "content": "temp data 3"})
@@ -296,7 +297,7 @@ class TestPropertyListDeletion:
         Spec: actingweb/property_list.py:310-316 - Deletes items and metadata
         """
         # Create list with many items
-        prop_list = getattr(test_actor.property_lists, "memory_test_delete")
+        prop_list = test_actor.property_lists.memory_test_delete
         for i in range(20):
             prop_list.append({"id": i + 1, "content": f"Item {i + 1}"})
 
@@ -308,7 +309,7 @@ class TestPropertyListDeletion:
         prop_list.delete()
 
         # Recreate same list (should be empty, not contain old data)
-        new_prop_list = getattr(test_actor.property_lists, "memory_test_delete")
+        new_prop_list = test_actor.property_lists.memory_test_delete
         items_after = new_prop_list.to_list()
         assert len(items_after) == 0
 
@@ -324,7 +325,7 @@ class TestPropertyListItemDeletion:
 
         Spec: actingweb/property_list.py:212-251 - __delitem__ implementation
         """
-        prop_list = getattr(test_actor.property_lists, "memory_notes")
+        prop_list = test_actor.property_lists.memory_notes
 
         # Add multiple items
         for i in range(5):
@@ -356,7 +357,7 @@ class TestPropertyListItemDeletion:
 
         Spec: actingweb/property_list.py:212-251 - __delitem__ with index 0
         """
-        prop_list = getattr(test_actor.property_lists, "memory_test")
+        prop_list = test_actor.property_lists.memory_test
 
         # Add items
         prop_list.append({"id": 1, "content": "First"})
@@ -378,7 +379,7 @@ class TestPropertyListItemDeletion:
 
         Spec: actingweb/property_list.py:212-251 - __delitem__ with last index
         """
-        prop_list = getattr(test_actor.property_lists, "memory_test")
+        prop_list = test_actor.property_lists.memory_test
 
         # Add items
         prop_list.append({"id": 1, "content": "First"})
@@ -400,7 +401,7 @@ class TestPropertyListItemDeletion:
 
         Spec: actingweb/property_list.py:215-216 - Negative index support
         """
-        prop_list = getattr(test_actor.property_lists, "memory_test")
+        prop_list = test_actor.property_lists.memory_test
 
         # Add items
         for i in range(5):
@@ -429,7 +430,7 @@ class TestPropertyListLargeData:
 
         Spec: actingweb/property_list.py - No size limit on lists
         """
-        prop_list = getattr(test_actor.property_lists, "memory_large")
+        prop_list = test_actor.property_lists.memory_large
 
         # Add 100 items
         for i in range(100):

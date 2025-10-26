@@ -1,7 +1,7 @@
 # mypy: disable-error-code="override"
-import os
 import logging
-from typing import Any, Optional, Dict
+import os
+from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
@@ -41,14 +41,14 @@ class Property(Model):
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
         # Optional PynamoDB configuration attributes
-        connect_timeout_seconds: Optional[int] = None
-        read_timeout_seconds: Optional[int] = None
-        max_retry_attempts: Optional[int] = None
-        max_pool_connections: Optional[int] = None
-        extra_headers: Optional[Dict[str, str]] = None
-        aws_access_key_id: Optional[str] = None
-        aws_secret_access_key: Optional[str] = None
-        aws_session_token: Optional[str] = None
+        connect_timeout_seconds: int | None = None
+        read_timeout_seconds: int | None = None
+        max_retry_attempts: int | None = None
+        max_pool_connections: int | None = None
+        extra_headers: dict[str, str] | None = None
+        aws_access_key_id: str | None = None
+        aws_secret_access_key: str | None = None
+        aws_session_token: str | None = None
 
     id = UnicodeAttribute(hash_key=True)
     name = UnicodeAttribute(range_key=True)
@@ -67,11 +67,11 @@ class DbProperty:
     """
 
     def __init__(self) -> None:
-        self.handle: Optional[Property] = None
+        self.handle: Property | None = None
         if not Property.exists():
             Property.create_table(wait=True)
 
-    def get(self, actor_id: Optional[str] = None, name: Optional[str] = None) -> Optional[str]:
+    def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
         """Retrieves the property from the database"""
         if not actor_id or not name:
             return None
@@ -87,7 +87,7 @@ class DbProperty:
             return None
         return str(self.handle.value) if self.handle.value else None
 
-    def get_actor_id_from_property(self, name: Optional[str] = None, value: Optional[str] = None) -> Optional[str]:
+    def get_actor_id_from_property(self, name: str | None = None, value: str | None = None) -> str | None:
         """Retrives an actor_id based on the value of a property."""
         if not name or not value:
             return None
@@ -100,7 +100,7 @@ class DbProperty:
             return None
         return str(self.handle.id) if self.handle.id else None
 
-    def set(self, actor_id: Optional[str] = None, name: Optional[str] = None, value: Any = None) -> bool:
+    def set(self, actor_id: str | None = None, name: str | None = None, value: Any = None) -> bool:
         """Sets a new value for the property name"""
         if not name:
             return False
@@ -144,13 +144,13 @@ class DbPropertyList:
     """
 
     def __init__(self) -> None:
-        self.handle: Optional[Any] = None
-        self.actor_id: Optional[str] = None
-        self.props: Optional[Dict[str, str]] = None
+        self.handle: Any | None = None
+        self.actor_id: str | None = None
+        self.props: dict[str, str] | None = None
         if not Property.exists():
             Property.create_table(wait=True)
 
-    def fetch(self, actor_id: Optional[str] = None) -> Optional[Dict[str, str]]:
+    def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
         """Retrieves the properties of an actor_id from the database"""
         if not actor_id:
             return None
@@ -166,7 +166,7 @@ class DbPropertyList:
         else:
             return None
 
-    def fetch_all_including_lists(self, actor_id: Optional[str] = None) -> Optional[Dict[str, str]]:
+    def fetch_all_including_lists(self, actor_id: str | None = None) -> dict[str, str] | None:
         """Retrieves ALL properties including list properties - for internal PropertyListStore use"""
         if not actor_id:
             return None

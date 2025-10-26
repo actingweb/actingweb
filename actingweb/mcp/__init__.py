@@ -10,12 +10,12 @@ Business logic for specific MCP tools and prompts should be implemented in indiv
 applications.
 """
 
-from .decorators import mcp_tool, mcp_resource, mcp_prompt
+from .decorators import mcp_prompt, mcp_resource, mcp_tool
 from .sdk_server import MCPServerManager, get_server_manager
 
 __all__ = [
     "mcp_tool",
-    "mcp_resource", 
+    "mcp_resource",
     "mcp_prompt",
     "MCPServerManager",
     "get_server_manager"

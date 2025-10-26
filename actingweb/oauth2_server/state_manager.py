@@ -11,7 +11,7 @@ import json
 import logging
 import secrets
 import time
-from typing import Dict, Any, Optional
+from typing import Any
 
 try:
     from cryptography.fernet import Fernet
@@ -43,7 +43,7 @@ class OAuth2StateManager:
         self.encryption_key = self._get_or_create_encryption_key()
         self.cipher = Fernet(self.encryption_key)
 
-    def create_state(self, mcp_context: Dict[str, Any]) -> str:
+    def create_state(self, mcp_context: dict[str, Any]) -> str:
         """
         Create encrypted state parameter with MCP context.
 
@@ -66,7 +66,7 @@ class OAuth2StateManager:
         logger.debug(f"Created state parameter for MCP client {mcp_context.get('client_id', 'unknown')}")
         return state_param
 
-    def validate_and_extract_state(self, state_param: str) -> Optional[Dict[str, Any]]:
+    def validate_and_extract_state(self, state_param: str) -> dict[str, Any] | None:
         """
         Validate and extract MCP context from state parameter.
 
@@ -96,7 +96,7 @@ class OAuth2StateManager:
                 return None
 
             # Extract MCP context
-            mcp_context: Dict[str, Any] = state_data.get("mcp_context", {})
+            mcp_context: dict[str, Any] = state_data.get("mcp_context", {})
 
             logger.debug(f"Validated state parameter for MCP client {mcp_context.get('client_id', 'unknown')}")
             return mcp_context
@@ -106,8 +106,8 @@ class OAuth2StateManager:
             return None
 
     def create_mcp_state(
-        self, client_id: str, original_state: Optional[str], redirect_uri: str, email_hint: Optional[str] = None,
-        trust_type: Optional[str] = None, code_challenge: Optional[str] = None, code_challenge_method: Optional[str] = None
+        self, client_id: str, original_state: str | None, redirect_uri: str, email_hint: str | None = None,
+        trust_type: str | None = None, code_challenge: str | None = None, code_challenge_method: str | None = None
     ) -> str:
         """
         Create state parameter for MCP OAuth2 flow with trust type selection.
@@ -137,7 +137,7 @@ class OAuth2StateManager:
 
         return self.create_state(mcp_context)
 
-    def extract_mcp_context(self, state_param: str) -> Optional[Dict[str, Any]]:
+    def extract_mcp_context(self, state_param: str) -> dict[str, Any] | None:
         """
         Extract MCP context from OAuth2 callback state.
 
@@ -173,7 +173,7 @@ class OAuth2StateManager:
         """
         # Try to get key from config or environment first (for backwards compatibility)
         if hasattr(self.config, "oauth2_state_encryption_key"):
-            key_str = getattr(self.config, "oauth2_state_encryption_key")
+            key_str = self.config.oauth2_state_encryption_key  # type: ignore[attr-defined]
             if key_str:
                 try:
                     return base64.urlsafe_b64decode(key_str.encode("utf-8"))
@@ -206,10 +206,10 @@ class OAuth2StateManager:
                 raise ImportError("cryptography package is required")
             key: bytes = Fernet.generate_key()
             key_str = base64.urlsafe_b64encode(key).decode("utf-8")
-            
+
             # Store key in system actor properties
             try:
-                setattr(sys_actor.property, "oauth2_state_encryption_key", key_str)
+                sys_actor.property.oauth2_state_encryption_key = key_str  # type: ignore[union-attr]
                 logger.info("Generated and stored new OAuth2 state encryption key in system actor")
                 return key
             except Exception as e:
@@ -222,7 +222,7 @@ class OAuth2StateManager:
             logger.error(f"Error accessing OAuth2 system actor: {e}")
             # Fall back to generating a new key (not persistent)
             if Fernet is None:
-                raise ImportError("cryptography package is required")
+                raise ImportError("cryptography package is required") from e
             key: bytes = Fernet.generate_key()
             logger.warning(
                 "Generated new OAuth2 state encryption key (not persistent). "
@@ -233,7 +233,7 @@ class OAuth2StateManager:
 
 
 # Global state manager
-_state_manager: Optional[OAuth2StateManager] = None
+_state_manager: OAuth2StateManager | None = None
 
 
 def get_oauth2_state_manager(config: config_class.Config) -> OAuth2StateManager:

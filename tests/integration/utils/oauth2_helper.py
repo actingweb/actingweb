@@ -9,8 +9,9 @@ This helper handles the complete OAuth2 flow:
 3. Make authenticated requests with Bearer token
 """
 
+from typing import Any
+
 import requests
-from typing import Dict, Any, Optional
 
 
 class OAuth2TestHelper:
@@ -29,14 +30,14 @@ class OAuth2TestHelper:
             base_url: Base URL of the ActingWeb application (e.g., "http://localhost:5555")
         """
         self.base_url = base_url
-        self.client_id: Optional[str] = None
-        self.client_secret: Optional[str] = None
-        self.access_token: Optional[str] = None
-        self.actor_id: Optional[str] = None
+        self.client_id: str | None = None
+        self.client_secret: str | None = None
+        self.access_token: str | None = None
+        self.actor_id: str | None = None
 
     def register_client(
         self, client_name: str = "Test OAuth2 Client", trust_type: str = "mcp_client"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Register an OAuth2 client for testing.
 
@@ -102,14 +103,14 @@ class OAuth2TestHelper:
         if response.status_code == 200:
             token_data = response.json()
             self.access_token = token_data["access_token"]
-            return self.access_token
+            return self.access_token  # type: ignore[arg-type,union-attr,attr-defined,return-value]
         else:
             # Token endpoint returned error - this means grant_type parsing failed
             # or client credentials were invalid
             try:
                 error_data = response.json()
                 error_msg = f"Token exchange failed: {error_data.get('error', response.text)}"
-            except:
+            except Exception:
                 error_msg = f"Token exchange failed with status {response.status_code}: {response.text}"
             raise AssertionError(error_msg)
 

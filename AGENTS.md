@@ -12,19 +12,24 @@ Use CLAUDE.md to understand details of the repo.
 ## Build, Test, and Development Commands
 
 - Install (with dev extras): `poetry install` (use `-E all` to include optional extras).
-- Run tests + coverage: `poetry run pytest` (fails under 80% coverage; HTML at `htmlcov/`).
-- Lint (Ruff): `poetry run ruff check .`
-- Format (Black): `poetry run black .`
-- Type check (mypy): `poetry run mypy actingweb`
+- Run tests: `poetry run pytest` (474 tests, 100% passing).
+- **Type check (Pyright - PRIMARY)**: `poetry run pyright actingweb tests` ✅ **0 errors, 0 warnings**
+- **Lint (Ruff)**: `poetry run ruff check actingweb tests` ✅ **All checks passing**
+- Format (Ruff): `poetry run ruff format actingweb tests`
+- Type check (mypy - legacy): `poetry run mypy actingweb`
 - Build package: `poetry build`
 - Build docs: `make html` (Sphinx; output in `_build/html`).
+
+**Quality Status:** The codebase maintains **zero errors and zero warnings** for all type checking and linting.
 
 ## Coding Style & Naming Conventions
 
 - Python 3.11+, 4-space indentation, line length 88.
 - Naming: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`.
-- Imports: keep tidy; Ruff enforces style; Black handles formatting.
-- Type hints required in new/modified public functions; keep `py.typed` intact.
+- Imports: keep tidy; Ruff enforces style and formatting.
+- **Type hints REQUIRED**: All new/modified functions must have type annotations.
+- **Zero-tolerance for warnings**: All code must pass `pyright` and `ruff` with zero errors/warnings.
+- Configuration files: `pyrightconfig.json`, `pyproject.toml` (ruff config), `.vscode/settings.json`.
 
 ## Testing Guidelines
 
@@ -40,7 +45,18 @@ Use CLAUDE.md to understand details of the repo.
   - Describe changes, motivation, and impact.
   - Link related issues (e.g., `Closes #123`).
   - Include tests and docs updates when applicable.
-  - Pass CI: pytest, mypy, Ruff, Black, and package build.
+  - **Pass ALL quality checks with zero errors/warnings**:
+    - `poetry run pyright actingweb tests` → 0 errors, 0 warnings
+    - `poetry run ruff check actingweb tests` → All checks passing
+    - `poetry run pytest` → All tests passing
+  - Build package: `poetry build`
+
+**Pre-commit Checklist:**
+```bash
+poetry run pyright actingweb tests  # Must show: 0 errors, 0 warnings
+poetry run ruff check actingweb tests  # Must show: All checks passed!
+poetry run pytest tests/  # Must show: 474 passed
+```
 
 ## Security & Configuration Tips
 

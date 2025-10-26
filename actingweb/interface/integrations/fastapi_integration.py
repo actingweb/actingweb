@@ -5,34 +5,35 @@ Automatically generates FastAPI routes and handles request/response transformati
 with async support.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, Tuple
-from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+import asyncio
+import base64
+import concurrent.futures
+import json
+import logging
+from typing import TYPE_CHECKING, Any
+
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-import asyncio
-import concurrent.futures
-import logging
-import json
-import base64
 
 from ...aw_web_request import AWWebObj
 from ...handlers import (
-    callbacks,
-    properties,
-    meta,
-    root,
-    trust,
-    devtest,
-    subscription,
-    resources,
-    bot,
-    www,
-    factory,
-    methods,
     actions,
+    bot,
+    callbacks,
+    devtest,
+    factory,
     mcp,
+    meta,
+    methods,
+    properties,
+    resources,
+    root,
     services,
+    subscription,
+    trust,
+    www,
 )
 
 if TYPE_CHECKING:
@@ -46,9 +47,9 @@ class ActorCreateRequest(BaseModel):
     """Request model for creating a new actor."""
 
     creator: str = Field(..., description="Email or identifier of the actor creator")
-    passphrase: Optional[str] = Field(None, description="Optional passphrase for actor creation")
-    type: Optional[str] = Field(None, description="Actor type, defaults to configured type")
-    desc: Optional[str] = Field(None, description="Optional description for the actor")
+    passphrase: str | None = Field(None, description="Optional passphrase for actor creation")
+    type: str | None = Field(None, description="Actor type, defaults to configured type")
+    desc: str | None = Field(None, description="Optional description for the actor")
 
 
 class ActorResponse(BaseModel):
@@ -58,14 +59,14 @@ class ActorResponse(BaseModel):
     creator: str = Field(..., description="Email or identifier of the actor creator")
     url: str = Field(..., description="Full URL to the actor")
     type: str = Field(..., description="Actor type")
-    desc: Optional[str] = Field(None, description="Actor description")
+    desc: str | None = Field(None, description="Actor description")
 
 
 class PropertyRequest(BaseModel):
     """Request model for property operations."""
 
     value: Any = Field(..., description="Property value (can be any JSON type)")
-    protected: Optional[bool] = Field(False, description="Whether this property is protected")
+    protected: bool | None = Field(False, description="Whether this property is protected")
 
 
 class PropertyResponse(BaseModel):
@@ -82,7 +83,7 @@ class TrustRequest(BaseModel):
     type: str = Field(..., description="Type of trust relationship")
     peerid: str = Field(..., description="Peer actor identifier")
     baseuri: str = Field(..., description="Base URI of the peer actor")
-    desc: Optional[str] = Field(None, description="Optional description of the relationship")
+    desc: str | None = Field(None, description="Optional description of the relationship")
 
 
 class TrustResponse(BaseModel):
@@ -91,7 +92,7 @@ class TrustResponse(BaseModel):
     type: str = Field(..., description="Type of trust relationship")
     peerid: str = Field(..., description="Peer actor identifier")
     baseuri: str = Field(..., description="Base URI of the peer actor")
-    desc: Optional[str] = Field(None, description="Description of the relationship")
+    desc: str | None = Field(None, description="Description of the relationship")
 
 
 class SubscriptionRequest(BaseModel):
@@ -99,8 +100,8 @@ class SubscriptionRequest(BaseModel):
 
     peerid: str = Field(..., description="Peer actor identifier")
     hook: str = Field(..., description="Hook URL to be called")
-    granularity: Optional[str] = Field("message", description="Subscription granularity")
-    desc: Optional[str] = Field(None, description="Optional description")
+    granularity: str | None = Field("message", description="Subscription granularity")
+    desc: str | None = Field(None, description="Optional description")
 
 
 class SubscriptionResponse(BaseModel):
@@ -110,13 +111,13 @@ class SubscriptionResponse(BaseModel):
     peerid: str = Field(..., description="Peer actor identifier")
     hook: str = Field(..., description="Hook URL")
     granularity: str = Field(..., description="Subscription granularity")
-    desc: Optional[str] = Field(None, description="Subscription description")
+    desc: str | None = Field(None, description="Subscription description")
 
 
 class CallbackRequest(BaseModel):
     """Request model for callback operations."""
 
-    data: Dict[str, Any] = Field(default_factory=dict, description="Callback data")
+    data: dict[str, Any] = Field(default_factory=dict, description="Callback data")
 
 
 class CallbackResponse(BaseModel):
@@ -129,7 +130,7 @@ class CallbackResponse(BaseModel):
 class MethodRequest(BaseModel):
     """Request model for method calls."""
 
-    data: Dict[str, Any] = Field(default_factory=dict, description="Method parameters")
+    data: dict[str, Any] = Field(default_factory=dict, description="Method parameters")
 
 
 class MethodResponse(BaseModel):
@@ -142,7 +143,7 @@ class MethodResponse(BaseModel):
 class ActionRequest(BaseModel):
     """Request model for action triggers."""
 
-    data: Dict[str, Any] = Field(default_factory=dict, description="Action parameters")
+    data: dict[str, Any] = Field(default_factory=dict, description="Action parameters")
 
 
 class ActionResponse(BaseModel):
@@ -157,13 +158,13 @@ class ErrorResponse(BaseModel):
 
     error: str = Field(..., description="Error message")
     status_code: int = Field(..., description="HTTP status code")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: dict[str, Any] | None = Field(None, description="Additional error details")
 
 
 # Dependency Injection Functions
 
 
-async def get_actor_from_path(actor_id: str, request: Request) -> Optional[Dict[str, Any]]:
+async def get_actor_from_path(actor_id: str, request: Request) -> dict[str, Any] | None:
     """
     Dependency to extract and validate actor from path parameter.
     Returns actor data or None if not found.
@@ -173,7 +174,7 @@ async def get_actor_from_path(actor_id: str, request: Request) -> Optional[Dict[
     return {"id": actor_id, "request": request}
 
 
-async def get_basic_auth(request: Request) -> Optional[Dict[str, str]]:
+async def get_basic_auth(request: Request) -> dict[str, str] | None:
     """
     Dependency to extract basic authentication credentials.
     Returns auth data or None if not provided.
@@ -191,7 +192,7 @@ async def get_basic_auth(request: Request) -> Optional[Dict[str, str]]:
         return None
 
 
-async def get_bearer_token(request: Request) -> Optional[str]:
+async def get_bearer_token(request: Request) -> str | None:
     """
     Dependency to extract bearer token from Authorization header.
     Returns token string or None if not provided.
@@ -202,7 +203,7 @@ async def get_bearer_token(request: Request) -> Optional[str]:
     return auth_header[7:]
 
 
-async def authenticate_google_oauth(request: Request, config: Any) -> Optional[Tuple[Any, str]]:
+async def authenticate_google_oauth(request: Request, config: Any) -> tuple[Any, str] | None:
     """
     Authenticate Google OAuth2 Bearer token and return actor.
 
@@ -228,7 +229,7 @@ async def authenticate_google_oauth(request: Request, config: Any) -> Optional[T
 
 def create_oauth_redirect_response(
     config: Any, redirect_after_auth: str = "", clear_cookie: bool = False
-) -> Union[RedirectResponse, Response]:
+) -> RedirectResponse | Response:
     """
     Create OAuth2 redirect response to configured OAuth2 provider.
 
@@ -279,7 +280,7 @@ def add_www_authenticate_header(response: Response, config: Any) -> None:
         response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
 
 
-async def check_authentication_and_redirect(request: Request, config: Any) -> Optional[RedirectResponse]:
+async def check_authentication_and_redirect(request: Request, config: Any) -> RedirectResponse | None:
     """
     Check if request is authenticated, if not return OAuth2 redirect.
 
@@ -340,7 +341,7 @@ async def validate_content_type(request: Request, expected: str = "application/j
     return expected in content_type
 
 
-async def get_json_body(request: Request) -> Dict[str, Any]:
+async def get_json_body(request: Request) -> dict[str, Any]:
     """
     Dependency to parse JSON request body.
     Returns parsed JSON data or empty dict.
@@ -363,7 +364,7 @@ class FastAPIIntegration:
     transformation between FastAPI and ActingWeb with async support.
     """
 
-    def __init__(self, aw_app: "ActingWebApp", fastapi_app: FastAPI, templates_dir: Optional[str] = None):
+    def __init__(self, aw_app: "ActingWebApp", fastapi_app: FastAPI, templates_dir: str | None = None):
         self.aw_app = aw_app
         self.fastapi_app = fastapi_app
         self.templates = Jinja2Templates(directory=templates_dir) if templates_dir else None
@@ -376,7 +377,7 @@ class FastAPIIntegration:
         if hasattr(self, "executor"):
             self.executor.shutdown(wait=True)
 
-    async def _check_auth_or_redirect(self, request: Request) -> Optional[RedirectResponse]:
+    async def _check_auth_or_redirect(self, request: Request) -> RedirectResponse | None:
         """Helper to check authentication and return redirect if needed."""
         return await check_authentication_and_redirect(request, self.aw_app.get_config())
 
@@ -385,12 +386,12 @@ class FastAPIIntegration:
 
         # Root factory route
         @self.fastapi_app.get("/")
-        async def app_root_get(request: Request) -> Response:
+        async def app_root_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             # GET requests don't require authentication - show email form
             return await self._handle_factory_get_request(request)
 
         @self.fastapi_app.post("/")
-        async def app_root_post(request: Request) -> Response:
+        async def app_root_post(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             # Check if this is a JSON API request or web form request
             content_type = request.headers.get("content-type", "")
             accepts_json = request.headers.get("accept", "").find("application/json") >= 0
@@ -405,7 +406,7 @@ class FastAPIIntegration:
 
         # Google OAuth callback
         @self.fastapi_app.get("/oauth/callback")
-        async def oauth_callback_handler(request: Request) -> Response:
+        async def oauth_callback_handler(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             # Handle both Google OAuth2 callback (for ActingWeb) and MCP OAuth2 callback
             # Determine which flow based on state parameter
             state = request.query_params.get("state", "")
@@ -426,7 +427,7 @@ class FastAPIIntegration:
                 from ...oauth2_server.state_manager import get_oauth2_state_manager
 
                 state_manager = get_oauth2_state_manager(self.aw_app.get_config())
-                self.logger.debug(f"State manager created successfully")
+                self.logger.debug("State manager created successfully")
 
                 mcp_context = state_manager.extract_mcp_context(state)
                 self.logger.debug(f"MCP context extraction result: {mcp_context is not None}")
@@ -437,13 +438,9 @@ class FastAPIIntegration:
                     return await self._handle_oauth2_endpoint(request, "callback")
                 else:
                     self.logger.debug("No MCP context found, using standard OAuth2 callback")
-            except Exception as e:
+            except Exception:
                 # Not an MCP callback or state manager not available
-                self.logger.error(f"Error checking MCP context: {e}")
-                import traceback
-
-                self.logger.error(f"Full traceback: {traceback.format_exc()}")
-                pass
+                self.logger.error("Error checking MCP context", exc_info=True)
 
             # Default to Google OAuth2 callback for ActingWeb
             self.logger.debug("Using standard Google OAuth2 callback handler")
@@ -451,46 +448,46 @@ class FastAPIIntegration:
 
         # OAuth2 email input - handles email collection when OAuth provider doesn't provide one
         @self.fastapi_app.get("/oauth/email")
-        async def oauth_email_get(request: Request) -> Response:
+        async def oauth_email_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_email(request)
 
         @self.fastapi_app.post("/oauth/email")
-        async def oauth_email_post(request: Request) -> Response:
+        async def oauth_email_post(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_email(request)
 
         # Email verification endpoint - verifies email addresses for OAuth2 actors
         @self.fastapi_app.get("/{actor_id}/www/verify_email")
-        async def email_verification_get(request: Request, actor_id: str) -> Response:
+        async def email_verification_get(request: Request, actor_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_email_verification(request, actor_id)
 
         @self.fastapi_app.post("/{actor_id}/www/verify_email")
-        async def email_verification_post(request: Request, actor_id: str) -> Response:
+        async def email_verification_post(request: Request, actor_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_email_verification(request, actor_id)
 
         # OAuth2 server endpoints for MCP clients
         @self.fastapi_app.post("/oauth/register")
         @self.fastapi_app.options("/oauth/register")
-        async def oauth2_register(request: Request) -> Response:
+        async def oauth2_register(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_endpoint(request, "register")
 
         @self.fastapi_app.get("/oauth/authorize")
         @self.fastapi_app.options("/oauth/authorize")
-        async def oauth2_authorize_get(request: Request) -> Response:
+        async def oauth2_authorize_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_endpoint(request, "authorize")
 
         @self.fastapi_app.post("/oauth/authorize")
-        async def oauth2_authorize_post(request: Request) -> Response:
+        async def oauth2_authorize_post(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_endpoint(request, "authorize")
 
         @self.fastapi_app.post("/oauth/token")
         @self.fastapi_app.options("/oauth/token")
-        async def oauth2_token(request: Request) -> Response:
+        async def oauth2_token(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_endpoint(request, "token")
 
         @self.fastapi_app.get("/oauth/logout")
         @self.fastapi_app.post("/oauth/logout")
         @self.fastapi_app.options("/oauth/logout")
-        async def oauth2_logout(request: Request) -> Response:
+        async def oauth2_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             """
             Unified logout endpoint that handles both:
             1. MCP OAuth2 client token revocation (if Authorization header present)
@@ -548,13 +545,13 @@ class FastAPIIntegration:
 
         # Bot endpoint
         @self.fastapi_app.post("/bot")
-        async def app_bot(request: Request) -> Response:
+        async def app_bot(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_bot_request(request)
 
         # MCP endpoint
         @self.fastapi_app.get("/mcp")
         @self.fastapi_app.post("/mcp")
-        async def app_mcp(request: Request) -> Response:
+        async def app_mcp(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             # For MCP, allow initial handshake without authentication
             # Authentication will be handled within the MCP protocol
             return await self._handle_mcp_request(request)
@@ -562,25 +559,25 @@ class FastAPIIntegration:
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
         @self.fastapi_app.get("/.well-known/oauth-authorization-server")
         @self.fastapi_app.options("/.well-known/oauth-authorization-server")
-        async def oauth_discovery(request: Request) -> JSONResponse:
+        async def oauth_discovery(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-authorization-server")
 
         @self.fastapi_app.get("/.well-known/oauth-protected-resource")
         @self.fastapi_app.options("/.well-known/oauth-protected-resource")
-        async def oauth_protected_resource_discovery(request: Request) -> JSONResponse:
+        async def oauth_protected_resource_discovery(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
             """OAuth2 Protected Resource discovery endpoint."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-protected-resource")
 
         @self.fastapi_app.get("/.well-known/oauth-protected-resource/mcp")
         @self.fastapi_app.options("/.well-known/oauth-protected-resource/mcp")
-        async def oauth_protected_resource_mcp_discovery(request: Request) -> JSONResponse:
+        async def oauth_protected_resource_mcp_discovery(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
             """OAuth2 Protected Resource discovery endpoint for MCP."""
             return await self._handle_oauth2_discovery_endpoint(request, ".well-known/oauth-protected-resource/mcp")
 
         # MCP information endpoint
         @self.fastapi_app.get("/mcp/info")
-        async def mcp_info() -> Dict[str, Any]:
+        async def mcp_info() -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
             """MCP information endpoint."""
             return self._create_mcp_info_response()
 
@@ -588,7 +585,7 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/{actor_id}")
         @self.fastapi_app.post("/{actor_id}")
         @self.fastapi_app.delete("/{actor_id}")
-        async def app_actor_root(actor_id: str, request: Request) -> Response:
+        async def app_actor_root(actor_id: str, request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             # Check authentication and redirect to Google OAuth2 if needed
             auth_redirect = await check_authentication_and_redirect(request, self.aw_app.get_config())
             if auth_redirect:
@@ -598,7 +595,7 @@ class FastAPIIntegration:
         # Actor meta
         @self.fastapi_app.get("/{actor_id}/meta")
         @self.fastapi_app.get("/{actor_id}/meta/{path:path}")
-        async def app_meta(actor_id: str, request: Request, path: str = "") -> Response:
+        async def app_meta(actor_id: str, request: Request, path: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             # Meta endpoint should be public for peer discovery - no authentication required
             return await self._handle_actor_request(request, actor_id, "meta", path=path)
 
@@ -609,7 +606,7 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/{actor_id}/www/{path:path}")
         @self.fastapi_app.post("/{actor_id}/www/{path:path}")
         @self.fastapi_app.delete("/{actor_id}/www/{path:path}")
-        async def app_www(actor_id: str, request: Request, path: str = "") -> Response:
+        async def app_www(actor_id: str, request: Request, path: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             # Check authentication and redirect to Google OAuth2 if needed
             auth_redirect = await self._check_auth_or_redirect(request)
             if auth_redirect:
@@ -625,7 +622,7 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.put("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.delete("/{actor_id}/properties/{name:path}")
-        async def app_properties(actor_id: str, request: Request, name: str = "") -> Response:
+        async def app_properties(actor_id: str, request: Request, name: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             # Check authentication and redirect to Google OAuth2 if needed
             auth_redirect = await self._check_auth_or_redirect(request)
             if auth_redirect:
@@ -645,8 +642,8 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}")
-        async def app_trust(
-            actor_id: str, request: Request, relationship: Optional[str] = None, peerid: Optional[str] = None
+        async def app_trust(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str, request: Request, relationship: str | None = None, peerid: str | None = None
         ) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "trust", relationship=relationship, peerid=peerid
@@ -656,7 +653,7 @@ class FastAPIIntegration:
         @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}/permissions")
         @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}/permissions")
         @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}/permissions")
-        async def app_trust_permissions(actor_id: str, request: Request, relationship: str, peerid: str) -> Response:
+        async def app_trust_permissions(actor_id: str, request: Request, relationship: str, peerid: str) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_actor_request(
                 request, actor_id, "trust", relationship=relationship, peerid=peerid, permissions=True
             )
@@ -675,12 +672,12 @@ class FastAPIIntegration:
         @self.fastapi_app.put("/{actor_id}/subscriptions/{peerid}/{subid}")
         @self.fastapi_app.delete("/{actor_id}/subscriptions/{peerid}/{subid}")
         @self.fastapi_app.get("/{actor_id}/subscriptions/{peerid}/{subid}/{seqnr:int}")
-        async def app_subscriptions(
+        async def app_subscriptions(  # pyright: ignore[reportUnusedFunction]
             actor_id: str,
             request: Request,
-            peerid: Optional[str] = None,
-            subid: Optional[str] = None,
-            seqnr: Optional[int] = None,
+            peerid: str | None = None,
+            subid: str | None = None,
+            seqnr: int | None = None,
         ) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "subscriptions", peerid=peerid, subid=subid, seqnr=seqnr
@@ -695,7 +692,7 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/resources/{name:path}")
         @self.fastapi_app.put("/{actor_id}/resources/{name:path}")
         @self.fastapi_app.delete("/{actor_id}/resources/{name:path}")
-        async def app_resources(actor_id: str, request: Request, name: str = "") -> Response:
+        async def app_resources(actor_id: str, request: Request, name: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_actor_request(request, actor_id, "resources", name=name)
 
         # Actor callbacks
@@ -707,7 +704,7 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/callbacks/{name:path}")
         @self.fastapi_app.put("/{actor_id}/callbacks/{name:path}")
         @self.fastapi_app.delete("/{actor_id}/callbacks/{name:path}")
-        async def app_callbacks(actor_id: str, request: Request, name: str = "") -> Response:
+        async def app_callbacks(actor_id: str, request: Request, name: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_actor_request(request, actor_id, "callbacks", name=name)
 
         # Actor devtest
@@ -719,7 +716,7 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/devtest/{path:path}")
         @self.fastapi_app.put("/{actor_id}/devtest/{path:path}")
         @self.fastapi_app.delete("/{actor_id}/devtest/{path:path}")
-        async def app_devtest(actor_id: str, request: Request, path: str = "") -> Response:
+        async def app_devtest(actor_id: str, request: Request, path: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_actor_request(request, actor_id, "devtest", path=path)
 
         # Actor methods
@@ -731,7 +728,7 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/methods/{name:path}")
         @self.fastapi_app.put("/{actor_id}/methods/{name:path}")
         @self.fastapi_app.delete("/{actor_id}/methods/{name:path}")
-        async def app_methods(actor_id: str, request: Request, name: str = "") -> Response:
+        async def app_methods(actor_id: str, request: Request, name: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_actor_request(request, actor_id, "methods", name=name)
 
         # Actor actions
@@ -743,28 +740,28 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/actions/{name:path}")
         @self.fastapi_app.put("/{actor_id}/actions/{name:path}")
         @self.fastapi_app.delete("/{actor_id}/actions/{name:path}")
-        async def app_actions(actor_id: str, request: Request, name: str = "") -> Response:
+        async def app_actions(actor_id: str, request: Request, name: str = "") -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_actor_request(request, actor_id, "actions", name=name)
 
         # Third-party service OAuth2 callbacks and management
         @self.fastapi_app.get("/{actor_id}/services/{service_name}/callback")
-        async def app_services_callback(
+        async def app_services_callback(  # pyright: ignore[reportUnusedFunction]
             actor_id: str,
             service_name: str,
             request: Request,
-            code: Optional[str] = None,
-            state: Optional[str] = None,
-            error: Optional[str] = None,
+            code: str | None = None,
+            state: str | None = None,
+            error: str | None = None,
         ) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "services", name=service_name, code=code, state=state, error=error
             )
 
         @self.fastapi_app.delete("/{actor_id}/services/{service_name}")
-        async def app_services_revoke(actor_id: str, service_name: str, request: Request) -> Response:
+        async def app_services_revoke(actor_id: str, service_name: str, request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_actor_request(request, actor_id, "services", name=service_name)
 
-    async def _normalize_request(self, request: Request) -> Dict[str, Any]:
+    async def _normalize_request(self, request: Request) -> dict[str, Any]:
         """Convert FastAPI request to ActingWeb format."""
         # Read body asynchronously
         body = await request.body()
@@ -1094,7 +1091,7 @@ class FastAPIIntegration:
             raise
         except Exception as e:
             self.logger.error(f"Error in factory POST handler: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
     async def _handle_factory_post_without_oauth(self, request: Request, email: str) -> Response:
         """Handle POST to factory route without OAuth2 - standard actor creation."""
@@ -1137,7 +1134,7 @@ class FastAPIIntegration:
                     "aw-root-failed.html", {"request": request, "error": "Actor creation failed"}
                 )
             else:
-                raise HTTPException(status_code=500, detail="Actor creation failed")
+                raise HTTPException(status_code=500, detail="Actor creation failed") from e
 
     async def _handle_google_oauth_callback(self, request: Request) -> Response:
         """Handle Google OAuth2 callback."""
@@ -1195,9 +1192,9 @@ class FastAPIIntegration:
         # Run the synchronous handler in a thread pool
         loop = asyncio.get_running_loop()
         if request.method == "POST":
-            result = await loop.run_in_executor(self.executor, handler.post)
+            await loop.run_in_executor(self.executor, handler.post)
         else:
-            result = await loop.run_in_executor(self.executor, handler.get)
+            await loop.run_in_executor(self.executor, handler.get)
 
         # Handle template rendering for email form
         if hasattr(webobj.response, "template_values") and webobj.response.template_values:
@@ -1265,9 +1262,9 @@ class FastAPIIntegration:
         # Run the synchronous handler in a thread pool
         loop = asyncio.get_running_loop()
         if request.method == "POST":
-            result = await loop.run_in_executor(self.executor, handler.post)
+            await loop.run_in_executor(self.executor, handler.post)
         else:
-            result = await loop.run_in_executor(self.executor, handler.get)
+            await loop.run_in_executor(self.executor, handler.get)
 
         # Handle template rendering for email verification
         if hasattr(webobj.response, "template_values") and webobj.response.template_values:
@@ -1281,7 +1278,7 @@ class FastAPIIntegration:
                     # Template not found - provide basic HTML as fallback
                     self.logger.warning(f"Template aw-verify-email.html not found: {e}")
                     status = webobj.response.template_values.get("status", "")
-                    message = webobj.response.template_values.get("message", "")
+                    webobj.response.template_values.get("message", "")
                     email = webobj.response.template_values.get("email", "")
                     error = webobj.response.template_values.get("error", "")
 
@@ -1629,7 +1626,7 @@ class FastAPIIntegration:
 
         return self._create_fastapi_response(webobj, request)
 
-    def _get_handler(self, endpoint: str, webobj: AWWebObj, actor_id: str, **kwargs: Any) -> Optional[Any]:
+    def _get_handler(self, endpoint: str, webobj: AWWebObj, actor_id: str, **kwargs: Any) -> Any | None:
         """Get the appropriate handler for an endpoint."""
         config = self.aw_app.get_config()
 
@@ -1708,7 +1705,7 @@ class FastAPIIntegration:
 
         return None
 
-    def _create_oauth_discovery_response(self) -> Dict[str, Any]:
+    def _create_oauth_discovery_response(self) -> dict[str, Any]:
         """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
@@ -1744,7 +1741,7 @@ class FastAPIIntegration:
         else:
             return {"error": "Unknown OAuth provider"}
 
-    def _create_mcp_info_response(self) -> Dict[str, Any]:
+    def _create_mcp_info_response(self) -> dict[str, Any]:
         """Create MCP information response."""
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"

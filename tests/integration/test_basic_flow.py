@@ -7,7 +7,6 @@ This test suite runs sequentially - each test depends on the previous ones.
 Converted from Runscope/Blazemeter JSON test suite.
 """
 
-import pytest
 import requests
 
 
@@ -20,12 +19,12 @@ class TestBasicActorFlow:
     """
 
     # Shared state across tests in this class
-    actor_url = None
-    actor_id = None
-    passphrase = None
-    creator = "testuser@actingweb.net"
-    trustee_actor_url = None
-    trustee_passphrase = None
+    actor_url: str | None = None
+    actor_id: str | None = None
+    passphrase: str | None = None
+    creator: str = "testuser@actingweb.net"
+    trustee_actor_url: str | None = None
+    trustee_passphrase: str | None = None
 
     def test_001_factory_root_get(self, http_client):
         """
@@ -74,8 +73,8 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.delete(
-            self.actor_url,
-            auth=("wronguser@actingweb.net", self.passphrase),
+            self.actor_url,  # type: ignore[arg-type,union-attr,attr-defined,return-value]
+            auth=("wronguser@actingweb.net", self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 403
 
@@ -86,7 +85,7 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.delete(
-            self.actor_url,
+            self.actor_url,  # type: ignore[arg-type]
             auth=(self.creator, "wrongpassword"),
         )
         assert response.status_code == 403
@@ -98,7 +97,7 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.get(
-            self.actor_url,
+            self.actor_url,  # type: ignore[arg-type]
             auth=(self.creator, "wrongpassword"),
         )
         assert response.status_code == 403
@@ -110,8 +109,8 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.get(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -157,7 +156,7 @@ class TestBasicActorFlow:
         response = requests.post(
             f"{self.actor_url}/properties",
             data={"test": "testvalue", "test2": "testvalue2"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
         data = response.json()
@@ -172,7 +171,7 @@ class TestBasicActorFlow:
         """
         response = requests.get(
             f"{self.actor_url}/properties/test",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         assert response.text == "testvalue"
@@ -186,14 +185,14 @@ class TestBasicActorFlow:
         response = requests.put(
             f"{self.actor_url}/properties/test",
             data="valuechanged",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify update
         response = requests.get(
             f"{self.actor_url}/properties/test",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         assert response.text == "valuechanged"
@@ -206,7 +205,7 @@ class TestBasicActorFlow:
         """
         response = requests.get(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         props = response.json()
@@ -222,7 +221,7 @@ class TestBasicActorFlow:
         response = requests.post(
             f"{self.actor_url}/properties",
             json={"var1": "value1æøå", "var2": "value2ÆØÅ", "var3": {"test3": "value3", "test4": "value4"}},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
         assert response.json()["var1"] == "value1æøå"
@@ -236,14 +235,14 @@ class TestBasicActorFlow:
         """
         response = requests.delete(
             f"{self.actor_url}/properties/var1",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify deletion
         response = requests.get(
             f"{self.actor_url}/properties/var1",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -255,7 +254,7 @@ class TestBasicActorFlow:
         """
         response = requests.get(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         props = response.json()
@@ -279,7 +278,7 @@ class TestBasicActorFlow:
         response = requests.put(
             f"{self.actor_url}/properties/location",
             json=location_data,
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -291,7 +290,7 @@ class TestBasicActorFlow:
         """
         response = requests.get(
             f"{self.actor_url}/properties/location",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         location = response.json()
@@ -305,7 +304,7 @@ class TestBasicActorFlow:
         """
         response = requests.get(
             f"{self.actor_url}/properties/location/latitude",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         assert response.json()["minutes"] == 1
@@ -318,7 +317,7 @@ class TestBasicActorFlow:
         """
         response = requests.get(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         props = response.json()
@@ -343,14 +342,14 @@ class TestBasicActorFlow:
         response = requests.put(
             f"{self.actor_url}/properties/location/latitude",
             json={"hours": 3, "minutes": 3, "seconds": 3},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify update
         response = requests.get(
             f"{self.actor_url}/properties/location/latitude",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         assert response.json()["hours"] == 3
@@ -364,14 +363,14 @@ class TestBasicActorFlow:
         response = requests.put(
             f"{self.actor_url}/properties/location/latitude/minutes",
             data="4",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify update
         response = requests.get(
             f"{self.actor_url}/properties/location/latitude/minutes",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         # Response might be "4" or 4
@@ -386,14 +385,14 @@ class TestBasicActorFlow:
         response = requests.put(
             f"{self.actor_url}/properties/location/latitude/milliseconds",
             data="50",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify creation
         response = requests.get(
             f"{self.actor_url}/properties/location/latitude/milliseconds",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
 
@@ -406,7 +405,7 @@ class TestBasicActorFlow:
         response = requests.put(
             f"{self.actor_url}/properties/location/fraud/milliseconds",
             json={"test1": "testvalue1", "test2": "testvalue2"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -418,7 +417,7 @@ class TestBasicActorFlow:
         """
         response = requests.get(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         props = response.json()
@@ -433,14 +432,14 @@ class TestBasicActorFlow:
         """
         response = requests.delete(
             f"{self.actor_url}/properties/location/latitude/milliseconds",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify deletion
         response = requests.get(
             f"{self.actor_url}/properties/location/latitude/milliseconds",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -452,7 +451,7 @@ class TestBasicActorFlow:
         """
         response = requests.delete(
             f"{self.actor_url}/properties/location/latitude/milliseconds",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -464,7 +463,7 @@ class TestBasicActorFlow:
         """
         response = requests.delete(
             f"{self.actor_url}/properties/location/fraud",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -476,7 +475,7 @@ class TestBasicActorFlow:
         """
         response = requests.delete(
             f"{self.actor_url}/properties/var3/nonexistent",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -488,7 +487,7 @@ class TestBasicActorFlow:
         """
         response = requests.delete(
             f"{self.actor_url}/properties/var3",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -500,14 +499,14 @@ class TestBasicActorFlow:
         """
         response = requests.delete(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify all deleted
         response = requests.get(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -518,8 +517,8 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.delete(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -530,8 +529,8 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.get(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -563,8 +562,8 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.get(
-            self.trustee_actor_url,
-            auth=("trustee", self.trustee_passphrase),
+            self.trustee_actor_url,  # type: ignore[arg-type]
+            auth=("trustee", self.trustee_passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         assert response.json()["creator"] == "trustee"
@@ -578,7 +577,7 @@ class TestBasicActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.get(
-            self.trustee_actor_url,
+            self.trustee_actor_url,  # type: ignore[arg-type]
             headers={"Authorization": f"Bearer {self.trustee_passphrase}"},
         )
         # Bearer token auth might work differently
@@ -593,6 +592,6 @@ class TestBasicActorFlow:
         if self.trustee_actor_url:
             response = requests.delete(
                 self.trustee_actor_url,
-                auth=("trustee", self.trustee_passphrase),
+                auth=("trustee", self.trustee_passphrase),  # type: ignore[arg-type]
             )
             assert response.status_code == 204

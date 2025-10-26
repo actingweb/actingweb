@@ -5,17 +5,18 @@ This module manages ActingWeb tokens that are separate from Google OAuth2 tokens
 These tokens are issued to MCP clients and validated by MCP endpoints.
 """
 
+import base64
+import hashlib
 import logging
 import secrets
 import time
-from typing import Dict, Any, Optional, Tuple
-import hashlib
-import base64
+from typing import Any
+
 from .. import config as config_class
 from ..constants import (
-    OAUTH2_SYSTEM_ACTOR,
-    AUTH_CODE_INDEX_BUCKET,
     ACCESS_TOKEN_INDEX_BUCKET,
+    AUTH_CODE_INDEX_BUCKET,
+    OAUTH2_SYSTEM_ACTOR,
     REFRESH_TOKEN_INDEX_BUCKET,
 )
 
@@ -46,11 +47,11 @@ class ActingWebTokenManager:
         self,
         actor_id: str,
         client_id: str,
-        google_token_data: Dict[str, Any],
-        user_email: Optional[str] = None,
-        trust_type: Optional[str] = None,
-        code_challenge: Optional[str] = None,
-        code_challenge_method: Optional[str] = None,
+        google_token_data: dict[str, Any],
+        user_email: str | None = None,
+        trust_type: str | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
     ) -> str:
         """
         Create a temporary authorization code for OAuth2 flow.
@@ -93,8 +94,8 @@ class ActingWebTokenManager:
         return auth_code
 
     def exchange_authorization_code(
-        self, code: str, client_id: str, client_secret: Optional[str] = None, code_verifier: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, code: str, client_id: str, client_secret: str | None = None, code_verifier: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Exchange authorization code for ActingWeb access token.
 
@@ -187,7 +188,7 @@ class ActingWebTokenManager:
             "trust_type": trust_type,
         }
 
-    def validate_access_token(self, token: str) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+    def validate_access_token(self, token: str) -> tuple[str, str, dict[str, Any]] | None:
         """
         Validate ActingWeb access token.
 
@@ -213,8 +214,8 @@ class ActingWebTokenManager:
         return token_data["actor_id"], token_data["client_id"], token_data
 
     def refresh_access_token(
-        self, refresh_token: str, client_id: str, client_secret: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, refresh_token: str, client_id: str, client_secret: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Refresh ActingWeb access token using refresh token.
 
@@ -228,18 +229,18 @@ class ActingWebTokenManager:
         """
         refresh_data = self._load_refresh_token(refresh_token)
         if not refresh_data:
-            logger.warning(f"Invalid refresh token")
+            logger.warning("Invalid refresh token")
             return None
 
         # Check if refresh token has expired
         if int(time.time()) > refresh_data["expires_at"]:
-            logger.warning(f"Refresh token expired")
+            logger.warning("Refresh token expired")
             self._remove_refresh_token(refresh_token)
             return None
 
         # Validate client
         if refresh_data["client_id"] != client_id:
-            logger.warning(f"Client ID mismatch for refresh token")
+            logger.warning("Client ID mismatch for refresh token")
             return None
 
         # Revoke old access token
@@ -263,7 +264,7 @@ class ActingWebTokenManager:
             "scope": "mcp",
         }
 
-    def revoke_token(self, token: str, token_type_hint: Optional[str] = None) -> bool:
+    def revoke_token(self, token: str, token_type_hint: str | None = None) -> bool:
         """
         Revoke an access or refresh token.
 
@@ -297,7 +298,7 @@ class ActingWebTokenManager:
 
         return False
 
-    def _create_access_token(self, actor_id: str, client_id: str, google_token_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_access_token(self, actor_id: str, client_id: str, google_token_data: dict[str, Any]) -> dict[str, Any]:
         """Create an ActingWeb access token."""
         token_id = secrets.token_hex(16)
         token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
@@ -321,7 +322,7 @@ class ActingWebTokenManager:
         self._store_access_token(actor_id, token, token_data)
         return token_data
 
-    def _create_access_token_from_refresh(self, actor_id: str, client_id: str) -> Dict[str, Any]:
+    def _create_access_token_from_refresh(self, actor_id: str, client_id: str) -> dict[str, Any]:
         """Create an ActingWeb access token from refresh token (no Google token data needed)."""
         token_id = secrets.token_hex(16)
         token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
@@ -341,7 +342,7 @@ class ActingWebTokenManager:
         self._store_access_token(actor_id, token, token_data)
         return token_data
 
-    def _create_refresh_token(self, actor_id: str, client_id: str, access_token_id: str) -> Dict[str, Any]:
+    def _create_refresh_token(self, actor_id: str, client_id: str, access_token_id: str) -> dict[str, Any]:
         """Create an ActingWeb refresh token."""
         token = f"rt_{secrets.token_urlsafe(32)}"
 
@@ -357,7 +358,7 @@ class ActingWebTokenManager:
         self._store_refresh_token(actor_id, token, refresh_data)
         return refresh_data
 
-    def _store_auth_code(self, actor_id: str, code: str, auth_data: Dict[str, Any]) -> None:
+    def _store_auth_code(self, actor_id: str, code: str, auth_data: dict[str, Any]) -> None:
         """Store authorization code in private attributes."""
         try:
             from .. import attribute
@@ -381,13 +382,13 @@ class ActingWebTokenManager:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
-    def _load_auth_code(self, code: str) -> Optional[Dict[str, Any]]:
+    def _load_auth_code(self, code: str) -> dict[str, Any] | None:
         """Load authorization code data."""
         # Search through actors for the code
         # This is a simplified implementation - in production you'd want indexing
         return self._search_auth_code_in_actors(code)
 
-    def _search_auth_code_in_actors(self, code: str) -> Optional[Dict[str, Any]]:
+    def _search_auth_code_in_actors(self, code: str) -> dict[str, Any] | None:
         """Search for auth code across actors."""
         try:
             # Use the system actor to store a global index of auth codes
@@ -460,7 +461,7 @@ class ActingWebTokenManager:
         except Exception as e:
             logger.error(f"Error removing auth code {code}: {e}")
 
-    def _store_google_token_data(self, actor_id: str, token_key: str, google_token_data: Dict[str, Any]) -> None:
+    def _store_google_token_data(self, actor_id: str, token_key: str, google_token_data: dict[str, Any]) -> None:
         """Store Google OAuth2 token data in private attributes."""
         try:
             from .. import attribute
@@ -476,7 +477,7 @@ class ActingWebTokenManager:
             logger.error(f"Error storing Google token data for actor {actor_id}: {e}")
             raise
 
-    def _load_google_token_data(self, actor_id: str, token_key: str) -> Optional[Dict[str, Any]]:
+    def _load_google_token_data(self, actor_id: str, token_key: str) -> dict[str, Any] | None:
         """Load Google OAuth2 token data from private attributes."""
         try:
             from .. import attribute
@@ -512,7 +513,7 @@ class ActingWebTokenManager:
         except Exception as e:
             logger.error(f"Error removing Google token data for actor {actor_id}, key {token_key}: {e}")
 
-    def _store_access_token(self, actor_id: str, token: str, token_data: Dict[str, Any]) -> None:
+    def _store_access_token(self, actor_id: str, token: str, token_data: dict[str, Any]) -> None:
         """Store access token in private attributes."""
         try:
             from .. import attribute
@@ -533,12 +534,12 @@ class ActingWebTokenManager:
             logger.error(f"Error storing access token for actor {actor_id}: {e}")
             raise
 
-    def _load_access_token(self, token: str) -> Optional[Dict[str, Any]]:
+    def _load_access_token(self, token: str) -> dict[str, Any] | None:
         """Load access token data."""
         # Search through actors for the token
         return self._search_token_in_actors(token)
 
-    def _search_token_in_actors(self, token: str) -> Optional[Dict[str, Any]]:
+    def _search_token_in_actors(self, token: str) -> dict[str, Any] | None:
         """Search for token across actors."""
         try:
             # Use the system actor to store a global index of access tokens
@@ -582,7 +583,7 @@ class ActingWebTokenManager:
             logger.error(f"Error searching for access token {token}: {e}")
             return None
 
-    def _search_refresh_token_in_actors(self, token: str) -> Optional[Dict[str, Any]]:
+    def _search_refresh_token_in_actors(self, token: str) -> dict[str, Any] | None:
         """Search for refresh token across actors."""
         try:
             # Use the system actor to store a global index of refresh tokens
@@ -662,7 +663,7 @@ class ActingWebTokenManager:
         except Exception as e:
             logger.error(f"Error removing access token {token}: {e}")
 
-    def _store_refresh_token(self, actor_id: str, token: str, refresh_data: Dict[str, Any]) -> None:
+    def _store_refresh_token(self, actor_id: str, token: str, refresh_data: dict[str, Any]) -> None:
         """Store refresh token in private attributes."""
         try:
             from .. import attribute
@@ -685,7 +686,7 @@ class ActingWebTokenManager:
             logger.error(f"Error storing refresh token for actor {actor_id}: {e}")
             raise
 
-    def _load_refresh_token(self, token: str) -> Optional[Dict[str, Any]]:
+    def _load_refresh_token(self, token: str) -> dict[str, Any] | None:
         """Load refresh token data."""
         # Search through actors for the token
         return self._search_refresh_token_in_actors(token)
@@ -725,7 +726,7 @@ class ActingWebTokenManager:
 
             # We need to search through all access tokens to find the one with this token_id
             # This is inefficient but necessary given the current storage structure
-            index_bucket = attribute.Attributes(
+            attribute.Attributes(
                 actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
             )
 
@@ -746,7 +747,6 @@ class ActingWebTokenManager:
         """Revoke refresh tokens associated with access token."""
         try:
             # Search through refresh tokens to find ones referencing this access token ID
-            from .. import attribute
 
             logger.debug(f"Attempting to revoke refresh tokens for access token ID: {token_id}")
 
@@ -803,7 +803,7 @@ class ActingWebTokenManager:
         scope: str = "mcp",
         trust_type: str = "mcp_client",
         grant_type: str = "client_credentials",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Create an access token for client credentials flow.
 
@@ -854,7 +854,7 @@ class ActingWebTokenManager:
 
 
 # Global token manager
-_token_manager: Optional[ActingWebTokenManager] = None
+_token_manager: ActingWebTokenManager | None = None
 
 
 def get_actingweb_token_manager(config: config_class.Config) -> ActingWebTokenManager:

@@ -7,7 +7,7 @@ per-relationship permission management as specified in the ActingWeb spec.
 
 import json
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from actingweb.handlers.trust import TrustPeerHandler, TrustPermissionHandler
 from actingweb.trust_permissions import TrustPermissions
@@ -66,7 +66,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
 
     @patch('actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE', True)
     @patch('actingweb.handlers.trust.get_trust_permission_store')
-    @patch('actingweb.handlers.trust.trust.Trust')
+    @patch('actingweb.trust.Trust')
     def test_get_trust_with_permissions_query(self, mock_trust, mock_get_store):
         """Test GET /trust/{relationship}/{peerid}?permissions=true"""
         mock_get_store.return_value = self.permission_store

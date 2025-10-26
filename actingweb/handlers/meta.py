@@ -1,6 +1,6 @@
 import json
+import logging
 
-from actingweb import auth
 from actingweb.handlers import base_handler
 
 
@@ -28,7 +28,7 @@ class MetaHandler(base_handler.BaseHandler):
                 "aw_supported": self.config.aw_supported,
                 "aw_formats": self.config.aw_formats,
             }
-            
+
             # Add supported trust types if available
             try:
                 from ..trust_type_registry import get_registry
@@ -89,7 +89,7 @@ class MetaHandler(base_handler.BaseHandler):
             except Exception as e:
                 logging.error(f"Error retrieving trust types: {e}")
                 out = json.dumps([])
-            
+
             if self.response:
                 self.response.write(out)
                 self.response.headers["Content-Type"] = "application/json"

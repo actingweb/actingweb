@@ -35,9 +35,10 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
     Raises:
         No exceptions - errors are logged as warnings
     """
+    from botocore.exceptions import ClientError
+
     from .. import actor as actor_module
     from ..constants import OAUTH2_SYSTEM_ACTOR
-    from botocore.exceptions import ClientError
 
     try:
         # Check if system actor already exists
@@ -63,7 +64,7 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
             except ClientError as e:
                 if e.response["Error"]["Code"] == "ResourceInUseException":
                     # Actor was created by another process concurrently - this is fine
-                    logger.debug(f"OAuth2 system actor was created by another process")
+                    logger.debug("OAuth2 system actor was created by another process")
                 else:
                     logger.error(f"Error creating OAuth2 system actor: {e}")
                     # Don't raise - allow callers to continue even if actor creation failed

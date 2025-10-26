@@ -8,13 +8,13 @@ and define the base permissions and capabilities for different kinds of relation
 
 import json
 import logging
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from typing import Any
 
 from botocore.exceptions import ClientError
 
-from . import attribute
 from . import actor as actor_module
+from . import attribute
 from . import config as config_class
 from .constants import ACTINGWEB_SYSTEM_ACTOR, TRUST_TYPES_BUCKET
 
@@ -29,28 +29,28 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrustType:
     """Defines a type of trust relationship with associated permissions.
-    
+
     Note: 'name' corresponds to the 'relationship' field in the database for
     backward compatibility with existing ActingWeb protocol.
     """
-    
+
     name: str  # Unique identifier (e.g., "viewer", "mcp_client") - stored as 'relationship'
     display_name: str  # Human-readable name
     description: str  # Description of what this relationship allows
-    base_permissions: Dict[str, Any]  # Base permissions granted
+    base_permissions: dict[str, Any]  # Base permissions granted
     allow_user_override: bool = True  # Whether users can modify permissions
-    oauth_scope: Optional[str] = None  # OAuth2 scope mapping
+    oauth_scope: str | None = None  # OAuth2 scope mapping
     created_by: str = "system"  # Who created this relationship type
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return asdict(self)
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'TrustType':
+    def from_dict(cls, data: dict[str, Any]) -> 'TrustType':
         """Create from dictionary loaded from storage."""
         return cls(**data)
-    
+
     def validate(self) -> bool:
         """Validate the trust type definition."""
         if not self.name or not isinstance(self.name, str):
@@ -66,19 +66,19 @@ class TrustType:
 class TrustTypeRegistry:
     """
     Registry for trust relationship types using ActingWeb attribute buckets.
-    
+
     Trust types are stored in a global attribute bucket for searchability:
     bucket="trust_types", actor_id="_global_system", name={trust_type_name}
     """
-    
+
     def __init__(self, config: config_class.Config):
         self.config = config
-        self._cache: Dict[str, TrustType] = {}
+        self._cache: dict[str, TrustType] = {}
         self._cache_valid = False
         # Cache for the system actor instance
         self._system_actor: Any = None
-        
-    def _get_trust_types_bucket(self) -> Optional[attribute.Attributes]:
+
+    def _get_trust_types_bucket(self) -> attribute.Attributes | None:
         """Get the global trust types attribute bucket."""
         try:
             return attribute.Attributes(
@@ -91,7 +91,7 @@ class TrustTypeRegistry:
             return None
 
     # Backward-compatibility helpers for tests that expect a system actor
-    def _get_system_actor(self) -> Optional[Any]:
+    def _get_system_actor(self) -> Any | None:
         try:
             if self._system_actor is not None and getattr(self._system_actor, 'id', None) == ACTINGWEB_SYSTEM_ACTOR:
                 return self._system_actor
@@ -119,7 +119,7 @@ class TrustTypeRegistry:
         except Exception as e:
             logger.error(f"Error ensuring system actor: {e}")
             return None
-    
+
     def register_type(self, trust_type: TrustType) -> bool:
         """Register a new trust type (property-store based for compatibility)."""
         if not trust_type.validate():
@@ -141,8 +141,8 @@ class TrustTypeRegistry:
         except Exception as e:
             logger.error(f"Error registering trust type {trust_type.name}: {e}")
             return False
-    
-    def get_type(self, name: str) -> Optional[TrustType]:
+
+    def get_type(self, name: str) -> TrustType | None:
         """Get a trust type by name (from system actor properties)."""
         if self._cache_valid and name in self._cache:
             return self._cache[name]
@@ -163,14 +163,14 @@ class TrustTypeRegistry:
         except Exception as e:
             logger.error(f"Error loading trust type {name}: {e}")
             return None
-    
-    def list_types(self) -> List[TrustType]:
+
+    def list_types(self) -> list[TrustType]:
         """List all registered trust types from system actor properties."""
         sys_actor = self._get_system_actor()
         if not sys_actor:
             return []
 
-        trust_types: List[TrustType] = []
+        trust_types: list[TrustType] = []
         try:
             props = sys_actor.get_properties() or {}
             for key, raw in props.items():
@@ -189,17 +189,17 @@ class TrustTypeRegistry:
         except Exception as e:
             logger.error(f"Error listing trust types: {e}")
             return []
-    
+
     def delete_type(self, name: str) -> bool:
         """Delete a trust type."""
         bucket = self._get_trust_types_bucket()
         if not bucket:
             return False
-        
+
         try:
             # Delete from attribute bucket
             success = bucket.delete_attr(name=name)
-            
+
             if success:
                 # Remove from cache
                 self._cache.pop(name, None)
@@ -208,11 +208,11 @@ class TrustTypeRegistry:
             else:
                 logger.error(f"Failed to delete trust type {name}")
                 return False
-            
+
         except Exception as e:
             logger.error(f"Error deleting trust type {name}: {e}")
             return False
-    
+
     def clear_cache(self) -> None:
         """Clear the internal cache."""
         self._cache.clear()
@@ -220,7 +220,7 @@ class TrustTypeRegistry:
 
 
 # Singleton instance
-_registry: Optional[TrustTypeRegistry] = None
+_registry: TrustTypeRegistry | None = None
 
 
 def initialize_registry(config: config_class.Config) -> None:
@@ -244,7 +244,7 @@ def get_registry(config: config_class.Config) -> TrustTypeRegistry:
 
 def _register_default_types(registry: TrustTypeRegistry) -> None:
     """Register the default trust types."""
-    
+
     # Viewer - Read-only access
     viewer = TrustType(
         name="viewer",
@@ -274,7 +274,7 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         },
         oauth_scope="actingweb.viewer"
     )
-    
+
     # Friend - Standard trusted relationship
     friend = TrustType(
         name="friend",
@@ -306,7 +306,7 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         },
         oauth_scope="actingweb.friend"
     )
-    
+
     # Partner - Enhanced access for business partners
     partner = TrustType(
         name="partner",
@@ -338,7 +338,7 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         },
         oauth_scope="actingweb.partner"
     )
-    
+
     # Admin - Full access
     admin = TrustType(
         name="admin",
@@ -365,7 +365,7 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         },
         oauth_scope="actingweb.admin"
     )
-    
+
     # MCP Client - AI assistant access with secure defaults
     mcp_client = TrustType(
         name="mcp_client",
@@ -403,8 +403,8 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         allow_user_override=True,  # Users should customize MCP permissions
         oauth_scope="actingweb.mcp"
     )
-    
-    # Associate - Traditional default ActingWeb relationship 
+
+    # Associate - Traditional default ActingWeb relationship
     associate = TrustType(
         name="associate",
         display_name="Associate",
@@ -433,10 +433,10 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         },
         oauth_scope="actingweb.associate"
     )
-    
+
     # Register all default types (maintaining ActingWeb compatibility)
     default_types = [associate, viewer, friend, partner, admin, mcp_client]
-    
+
     for trust_type in default_types:
         try:
             registry.register_type(trust_type)

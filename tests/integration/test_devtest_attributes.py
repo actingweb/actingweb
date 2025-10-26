@@ -10,7 +10,6 @@ Converted from Runscope/Blazemeter JSON test suite.
 NOTE: The /devtest endpoints should be disabled in production environments.
 """
 
-import pytest
 import requests
 
 
@@ -21,9 +20,9 @@ class TestDevtestAttributesFlow:
     Tests must run in order as they share state (actor and attribute buckets).
     """
 
-    actor_url = None
-    passphrase = None
-    creator = "testuser@actingweb.net"
+    actor_url: str | None = None
+    passphrase: str | None = None
+    creator: str = "testuser@actingweb.net"
 
     def test_001_factory_root_get(self, http_client):
         """
@@ -72,7 +71,7 @@ class TestDevtestAttributesFlow:
             f"{self.actor_url}/devtest/attribute/bucket1",
             json={"var1": "value1", "var2": "value2"},
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type,union-attr,attr-defined,return-value]
         )
         assert response.status_code == 200
         data = response.json()
@@ -89,7 +88,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute/bucket1",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -114,7 +113,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -137,7 +136,7 @@ class TestDevtestAttributesFlow:
             f"{self.actor_url}/devtest/attribute/bucket1/var1",
             json="value2",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -150,7 +149,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -171,7 +170,7 @@ class TestDevtestAttributesFlow:
             f"{self.actor_url}/devtest/attribute/bucket2",
             json={"varb1": "valueb1", "varb2": "valueb2"},
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -186,7 +185,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -211,7 +210,7 @@ class TestDevtestAttributesFlow:
             f"{self.actor_url}/devtest/attribute/bucket3",
             json={"varc1": "valuec1", "varc2": "valuec2"},
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -226,7 +225,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -252,7 +251,7 @@ class TestDevtestAttributesFlow:
                 }
             },
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -267,7 +266,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -289,7 +288,7 @@ class TestDevtestAttributesFlow:
         response = requests.delete(
             f"{self.actor_url}/devtest/attribute/bucket2/varb2",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -302,7 +301,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -333,7 +332,7 @@ class TestDevtestAttributesFlow:
         response = requests.delete(
             f"{self.actor_url}/devtest/attribute/bucket2/varb1",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -346,7 +345,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -365,7 +364,7 @@ class TestDevtestAttributesFlow:
         response = requests.delete(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -378,7 +377,7 @@ class TestDevtestAttributesFlow:
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
             headers={"Content-Type": "application/json"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -389,7 +388,7 @@ class TestDevtestAttributesFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.delete(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204

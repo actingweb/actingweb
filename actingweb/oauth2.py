@@ -6,33 +6,34 @@ supporting both Google OAuth2 and generic OAuth2 providers. It consolidates all 
 functionality into a single, maintainable module.
 """
 
+import hashlib
 import json
 import logging
-import time
-import hashlib
 import re
-from typing import Optional, Dict, Any, Tuple
+import time
+from typing import Any
 from urllib.parse import urlparse
+
 import requests  # type: ignore[import-untyped]
-from oauthlib.oauth2 import WebApplicationClient  # type: ignore[import-untyped]
 from oauthlib.common import generate_token  # type: ignore[import-untyped]
+from oauthlib.oauth2 import WebApplicationClient  # type: ignore[import-untyped]
 
 from . import actor as actor_module
 from . import config as config_class
-from .interface.actor_interface import ActorInterface
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
+from .interface.actor_interface import ActorInterface
 
 logger = logging.getLogger(__name__)
 
 # Simple cache for invalid tokens to avoid repeat network requests
-_invalid_token_cache: Dict[str, float] = {}
+_invalid_token_cache: dict[str, float] = {}
 _INVALID_TOKEN_CACHE_TTL = 300  # 5 minutes
 
 
 class OAuth2Provider:
     """Base OAuth2 provider configuration."""
 
-    def __init__(self, name: str, config: Dict[str, Any]):
+    def __init__(self, name: str, config: dict[str, Any]):
         self.name = name
         self.client_id = config.get("client_id", "")
         self.client_secret = config.get("client_secret", "")
@@ -95,13 +96,13 @@ class OAuth2Authenticator:
     5. Actor lookup/creation based on OAuth2 identity
     """
 
-    def __init__(self, config: config_class.Config, provider: Optional[OAuth2Provider] = None):
+    def __init__(self, config: config_class.Config, provider: OAuth2Provider | None = None):
         self.config = config
         self.provider = provider or GoogleOAuth2Provider(config)
         self.client = WebApplicationClient(self.provider.client_id) if self.provider.is_enabled() else None
 
         # Session and token management
-        self._sessions: Dict[str, Dict[str, Any]] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}
 
         if not self.provider.is_enabled():
             logger.warning(
@@ -197,7 +198,6 @@ class OAuth2Authenticator:
 
         # If it contains only base64-safe characters and is reasonably long,
         # it's likely an encrypted MCP state
-        import re
 
         if len(state) > 50 and re.match(r"^[A-Za-z0-9+/_=-]+$", state):
             return True
@@ -206,7 +206,7 @@ class OAuth2Authenticator:
 
     def exchange_code_for_token(
         self, code: str, state: str = ""
-    ) -> Optional[Dict[str, Any]]:  # pylint: disable=unused-argument
+    ) -> dict[str, Any] | None:  # pylint: disable=unused-argument
         """
         Exchange authorization code for access token using oauthlib.
 
@@ -259,7 +259,7 @@ class OAuth2Authenticator:
             logger.error(f"Exception during token exchange: {e}")
             return None
 
-    def refresh_access_token(self, refresh_token: str) -> Optional[Dict[str, Any]]:
+    def refresh_access_token(self, refresh_token: str) -> dict[str, Any] | None:
         """
         Refresh access token using oauthlib.
 
@@ -308,7 +308,7 @@ class OAuth2Authenticator:
             logger.error(f"Exception during token refresh: {e}")
             return None
 
-    def validate_token_and_get_user_info(self, access_token: str) -> Optional[Dict[str, Any]]:
+    def validate_token_and_get_user_info(self, access_token: str) -> dict[str, Any] | None:
         """
         Validate access token and extract user information.
 
@@ -359,10 +359,10 @@ class OAuth2Authenticator:
 
     def get_email_from_user_info(
         self,
-        user_info: Dict[str, Any],
-        access_token: Optional[str] = None,
+        user_info: dict[str, Any],
+        access_token: str | None = None,
         require_email: bool = False
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Extract email or unique provider identifier from user info.
 
@@ -428,7 +428,7 @@ class OAuth2Authenticator:
         logger.error(f"Failed to extract any identifier from {self.provider.name} user info")
         return None
 
-    def _get_github_primary_email(self, access_token: str) -> Optional[str]:
+    def _get_github_primary_email(self, access_token: str) -> str | None:
         """Get primary email from GitHub's emails API."""
         if not access_token:
             return None
@@ -471,7 +471,7 @@ class OAuth2Authenticator:
             logger.warning(f"Failed to get GitHub primary email: {e}")
             return None
 
-    def _get_github_verified_emails(self, access_token: str) -> Optional[list[str]]:
+    def _get_github_verified_emails(self, access_token: str) -> list[str] | None:
         """
         Fetch ALL verified emails from GitHub's emails API.
 
@@ -521,7 +521,7 @@ class OAuth2Authenticator:
             logger.warning(f"Failed to get GitHub verified emails: {e}")
             return None
 
-    def lookup_or_create_actor_by_email(self, email: str) -> Optional[actor_module.Actor]:
+    def lookup_or_create_actor_by_email(self, email: str) -> actor_module.Actor | None:
         """
         Look up actor by email or create new one if not found.
 
@@ -538,8 +538,8 @@ class OAuth2Authenticator:
     def lookup_or_create_actor_by_identifier(
         self,
         identifier: str,
-        user_info: Optional[Dict[str, Any]] = None
-    ) -> Optional[actor_module.Actor]:
+        user_info: dict[str, Any] | None = None
+    ) -> actor_module.Actor | None:
         """
         Look up actor by identifier (email or provider ID) or create new one if not found.
 
@@ -609,7 +609,7 @@ class OAuth2Authenticator:
 
         return validate_expected_email(state, authenticated_email)
 
-    def authenticate_bearer_token(self, bearer_token: str) -> Tuple[Optional[actor_module.Actor], Optional[str]]:
+    def authenticate_bearer_token(self, bearer_token: str) -> tuple[actor_module.Actor | None, str | None]:
         """
         Authenticate Bearer token and return associated actor.
 
@@ -653,11 +653,11 @@ class OAuth2Authenticator:
         auth_url = self.create_authorization_url()
         return f'Bearer realm="ActingWeb", authorization_uri="{auth_url}"'
 
-    def store_session_data(self, session_id: str, data: Dict[str, Any]) -> None:
+    def store_session_data(self, session_id: str, data: dict[str, Any]) -> None:
         """Store session data for OAuth2 flow."""
         self._sessions[session_id] = data
 
-    def get_session_data(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def get_session_data(self, session_id: str) -> dict[str, Any] | None:
         """Retrieve session data for OAuth2 flow."""
         return self._sessions.get(session_id)
 
@@ -774,7 +774,7 @@ def create_github_authenticator(config: config_class.Config) -> OAuth2Authentica
     return OAuth2Authenticator(config, GitHubOAuth2Provider(config))
 
 
-def create_generic_authenticator(config: config_class.Config, provider_config: Dict[str, Any]) -> OAuth2Authenticator:
+def create_generic_authenticator(config: config_class.Config, provider_config: dict[str, Any]) -> OAuth2Authenticator:
     """
     Factory function to create generic OAuth2 authenticator.
 
@@ -792,7 +792,7 @@ def create_generic_authenticator(config: config_class.Config, provider_config: D
 # Utility functions
 
 
-def extract_bearer_token(auth_header: str) -> Optional[str]:
+def extract_bearer_token(auth_header: str) -> str | None:
     """
     Extract Bearer token from Authorization header.
 
@@ -845,12 +845,12 @@ def create_oauth2_trust_relationship(
     actor: ActorInterface,
     email: str,
     trust_type: str,
-    oauth_tokens: Dict[str, Any],
-    established_via: Optional[str] = None,
-    client_id: Optional[str] = None,
-    client_name: Optional[str] = None,
-    client_version: Optional[str] = None,
-    client_platform: Optional[str] = None,
+    oauth_tokens: dict[str, Any],
+    established_via: str | None = None,
+    client_id: str | None = None,
+    client_name: str | None = None,
+    client_version: str | None = None,
+    client_platform: str | None = None,
 ) -> bool:
     """
     Create trust relationship after successful OAuth2 authentication.

@@ -6,16 +6,16 @@ could not be verified by the OAuth provider.
 """
 
 import logging
-import time
 import secrets
-from typing import Dict, Any, Optional, TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any, Optional
 
 from .base_handler import BaseHandler
 
 if TYPE_CHECKING:
-    from ..interface.hooks import HookRegistry
     from .. import aw_web_request
     from .. import config as config_class
+    from ..interface.hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class EmailVerificationHandler(BaseHandler):
             raise RuntimeError("Config is required for EmailVerificationHandler")
         super().__init__(webobj, config, hooks)
 
-    def get(self) -> Dict[str, Any]:
+    def get(self) -> dict[str, Any]:
         """
         Handle GET request to verify email with token.
 
@@ -53,7 +53,7 @@ class EmailVerificationHandler(BaseHandler):
 
         # Get actor_id from URL path
         # URL format: /<actor_id>/www/verify_email
-        actor_id: Optional[str] = None
+        actor_id: str | None = None
         if self.request.url:
             parts = self.request.url.split("/")
             if len(parts) >= 2:
@@ -144,7 +144,7 @@ class EmailVerificationHandler(BaseHandler):
 
         return {}
 
-    def post(self) -> Dict[str, Any]:
+    def post(self) -> dict[str, Any]:
         """
         Handle POST request to resend verification email.
 
@@ -157,7 +157,7 @@ class EmailVerificationHandler(BaseHandler):
 
         # Get actor_id from URL path
         # URL format: /<actor_id>/www/verify_email
-        actor_id: Optional[str] = None
+        actor_id: str | None = None
         if self.request.url:
             parts = self.request.url.split("/")
             if len(parts) >= 2:
@@ -211,7 +211,7 @@ class EmailVerificationHandler(BaseHandler):
             "message": "Verification email sent. Please check your inbox."
         }
 
-    def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
+    def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create error response with template rendering."""
         self.response.set_status(status_code)
 

@@ -25,7 +25,7 @@ class AWRequest:
         ret: list[str] = []
         if not self.params:
             return ret
-        for k, v in self.params.items():
+        for k, _v in self.params.items():
             ret.append(k)
         return ret
 

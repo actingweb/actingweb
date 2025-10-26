@@ -7,7 +7,6 @@ This test suite runs sequentially - each test depends on the previous ones.
 Converted from Runscope/Blazemeter JSON test suite.
 """
 
-import pytest
 import requests
 
 
@@ -18,9 +17,9 @@ class TestAttributesFlow:
     Tests must run in order as they share state.
     """
 
-    actor_url = None
-    passphrase = None
-    creator = "attr@actingweb.net"
+    actor_url: str | None = None
+    passphrase: str | None = None
+    creator: str = "attr@actingweb.net"
 
     def test_001_create_actor(self, http_client):
         """
@@ -63,7 +62,7 @@ class TestAttributesFlow:
         response = requests.post(
             f"{self.actor_url}/properties",
             json=complex_data,
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
 
@@ -76,14 +75,14 @@ class TestAttributesFlow:
         response = requests.put(
             f"{self.actor_url}/properties/config/settings/notifications/frequency",
             data="hourly",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify update
         response = requests.get(
             f"{self.actor_url}/properties/config/settings/notifications/frequency",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         # Nested values may be JSON-encoded
@@ -103,14 +102,14 @@ class TestAttributesFlow:
         response = requests.post(
             f"{self.actor_url}/properties",
             json=array_data,
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
 
         # Verify arrays are preserved
         response = requests.get(
             f"{self.actor_url}/properties/tags",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -133,7 +132,7 @@ class TestAttributesFlow:
         response = requests.post(
             f"{self.actor_url}/properties",
             json=special_data,
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
 
@@ -151,14 +150,14 @@ class TestAttributesFlow:
         response = requests.put(
             f"{self.actor_url}/properties/moderate_data",
             data=moderate_value,
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify retrieval
         response = requests.get(
             f"{self.actor_url}/properties/moderate_data",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         assert len(response.text) == 1000
@@ -172,14 +171,14 @@ class TestAttributesFlow:
         # Delete all
         response = requests.delete(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Verify all deleted
         response = requests.get(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 404
 
@@ -187,7 +186,7 @@ class TestAttributesFlow:
         response = requests.post(
             f"{self.actor_url}/properties",
             json={"fresh": "start"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
 
@@ -198,7 +197,7 @@ class TestAttributesFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.delete(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204

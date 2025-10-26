@@ -18,8 +18,9 @@ References:
 """
 
 import pytest
-from actingweb.interface.app import ActingWebApp
+
 from actingweb.interface.actor_interface import ActorInterface
+from actingweb.interface.app import ActingWebApp
 from actingweb.interface.oauth_client_manager import OAuth2ClientManager
 
 
@@ -60,7 +61,7 @@ class TestOAuth2ClientCreation:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type,union-attr,attr-defined,return-value]
 
             # Create client with trust type (actingweb_mcp pattern)
             client_data = client_manager.create_client(
@@ -94,7 +95,7 @@ class TestOAuth2ClientCreation:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create 5 different MCP clients (realistic actingweb_mcp scenario)
             client_names = ["ChatGPT", "Claude", "Cursor", "Windsurf", "Custom Assistant"]
@@ -134,7 +135,7 @@ class TestOAuth2ClientCreation:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create clients with different trust types
             trust_types = ["mcp_client", "viewer", "friend"]
@@ -167,7 +168,7 @@ class TestOAuth2ClientListing:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # List should be empty
             clients = client_manager.list_clients()
@@ -187,10 +188,10 @@ class TestOAuth2ClientListing:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create 3 clients
-            for i, name in enumerate(["ChatGPT", "Claude", "Cursor"]):
+            for _, name in enumerate(["ChatGPT", "Claude", "Cursor"]):  # type: ignore[arg-type]
                 client_manager.create_client(
                     client_name=name,
                     trust_type="mcp_client"
@@ -219,7 +220,7 @@ class TestOAuth2ClientListing:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
             client_manager.create_client(client_name="Test Client", trust_type="mcp_client")
@@ -252,7 +253,7 @@ class TestOAuth2ClientRetrieval:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
             created = client_manager.create_client(
@@ -285,7 +286,7 @@ class TestOAuth2ClientRetrieval:
 
         try:
             # Create client for actor1
-            client_manager1 = OAuth2ClientManager(actor1.id, config)
+            client_manager1 = OAuth2ClientManager(actor1.id, config)  # type: ignore[arg-type]
             created = client_manager1.create_client(
                 client_name="Actor1 Client",
                 trust_type="mcp_client"
@@ -293,7 +294,7 @@ class TestOAuth2ClientRetrieval:
             client_id = created["client_id"]
 
             # Try to retrieve from actor2's manager
-            client_manager2 = OAuth2ClientManager(actor2.id, config)
+            client_manager2 = OAuth2ClientManager(actor2.id, config)  # type: ignore[arg-type]
             retrieved = client_manager2.get_client(client_id)
 
             # Should return None (not actor2's client)
@@ -312,7 +313,7 @@ class TestOAuth2ClientRetrieval:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Try to get non-existent client
             retrieved = client_manager.get_client("mcp_nonexistent12345")
@@ -337,7 +338,7 @@ class TestOAuth2ClientDeletion:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
             created = client_manager.create_client(
@@ -370,7 +371,7 @@ class TestOAuth2ClientDeletion:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create 3 clients
             client_ids = []
@@ -407,7 +408,7 @@ class TestOAuth2ClientDeletion:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Try to delete non-existent client
             success = client_manager.delete_client("mcp_nonexistent12345")
@@ -430,12 +431,12 @@ class TestOAuth2ClientDeletion:
 
         try:
             # Create client for actor1
-            client_manager1 = OAuth2ClientManager(actor1.id, config)
+            client_manager1 = OAuth2ClientManager(actor1.id, config)  # type: ignore[arg-type]
             created = client_manager1.create_client(client_name="Actor1 Client", trust_type="mcp_client")
             client_id = created["client_id"]
 
             # Try to delete from actor2's manager
-            client_manager2 = OAuth2ClientManager(actor2.id, config)
+            client_manager2 = OAuth2ClientManager(actor2.id, config)  # type: ignore[arg-type]
             success = client_manager2.delete_client(client_id)
 
             # Should fail (not actor2's client)
@@ -464,7 +465,7 @@ class TestOAuth2AccessTokenGeneration:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client (must start with mcp_ for token generation)
             created = client_manager.create_client(
@@ -496,7 +497,7 @@ class TestOAuth2AccessTokenGeneration:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Try to generate token for non-existent client
             token_response = client_manager.generate_access_token("mcp_nonexistent12345")
@@ -521,7 +522,7 @@ class TestOAuth2ClientManagerRealisticScenarios:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # User connects ChatGPT
             chatgpt = client_manager.create_client(
@@ -530,13 +531,13 @@ class TestOAuth2ClientManagerRealisticScenarios:
             )
 
             # User connects Claude
-            claude = client_manager.create_client(
+            _ = client_manager.create_client(  # noqa: F841  # type: ignore[arg-type]
                 client_name="Claude",
                 trust_type="mcp_client"
             )
 
             # User connects Cursor
-            cursor = client_manager.create_client(
+            _ = client_manager.create_client(  # noqa: F841  # type: ignore[arg-type]
                 client_name="Cursor",
                 trust_type="mcp_client"
             )

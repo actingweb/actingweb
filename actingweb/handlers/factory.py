@@ -1,6 +1,5 @@
 import json
 import logging
-from builtins import str
 
 from actingweb import actor
 from actingweb.handlers import base_handler
@@ -20,7 +19,10 @@ class RootFactoryHandler(base_handler.BaseHandler):
             # Check if OAuth is configured
             if self.config.oauth and self.config.oauth.get("client_id"):
                 try:
-                    from actingweb.oauth2 import create_google_authenticator, create_github_authenticator
+                    from actingweb.oauth2 import (
+                        create_github_authenticator,
+                        create_google_authenticator,
+                    )
 
                     # Determine which provider(s) to support based on configuration
                     oauth2_provider = getattr(self.config, 'oauth2_provider', 'google')
@@ -87,7 +89,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
             creator = self.request.get("creator")
             trustee_root = self.request.get("trustee_root")
             passphrase = self.request.get("passphrase")
-            
+
         # Normalise creator when using email login flow
         if isinstance(creator, str):
             creator = creator.strip()

@@ -7,12 +7,13 @@ built on top of the new OAuth2 system with proper token management.
 
 import json
 import logging
-from typing import Dict, Any, Optional, Union
-import requests
+from typing import Any
 from urllib.parse import urljoin
 
-from .service_config import ServiceConfig
+import requests
+
 from ...oauth2 import OAuth2Authenticator, OAuth2Provider
+from .service_config import ServiceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +59,8 @@ class ServiceClient:
         self.authenticator = OAuth2Authenticator(aw_config, self.provider)
 
         # Current access token
-        self._access_token: Optional[str] = None
-        self._refresh_token: Optional[str] = None
+        self._access_token: str | None = None
+        self._refresh_token: str | None = None
 
         # Load tokens from actor properties if available
         self._load_tokens()
@@ -76,7 +77,7 @@ class ServiceClient:
         self._access_token = self.actor.property.get(access_token_key)
         self._refresh_token = self.actor.property.get(refresh_token_key)
 
-    def _save_tokens(self, access_token: str, refresh_token: Optional[str] = None) -> None:
+    def _save_tokens(self, access_token: str, refresh_token: str | None = None) -> None:
         """Save OAuth tokens to actor storage."""
         if not self.actor.property:
             logger.warning(f"Cannot save tokens for service {self.service_config.name} - no property store")
@@ -170,9 +171,9 @@ class ServiceClient:
 
         return False
 
-    def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None,
-                     data: Optional[Union[Dict[str, Any], str, bytes]] = None,
-                     headers: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+    def _make_request(self, method: str, endpoint: str, params: dict[str, Any] | None = None,
+                     data: dict[str, Any] | str | bytes | None = None,
+                     headers: dict[str, str] | None = None) -> dict[str, Any] | None:
         """
         Make authenticated API request to the service.
 
@@ -254,21 +255,21 @@ class ServiceClient:
             logger.error(f"Error making request to {self.service_config.name}: {e}")
             return None
 
-    def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Make GET request to the service API."""
         return self._make_request("GET", endpoint, params=params)
 
-    def post(self, endpoint: str, data: Optional[Union[Dict[str, Any], str, bytes]] = None,
-             params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def post(self, endpoint: str, data: dict[str, Any] | str | bytes | None = None,
+             params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Make POST request to the service API."""
         return self._make_request("POST", endpoint, params=params, data=data)
 
-    def put(self, endpoint: str, data: Optional[Union[Dict[str, Any], str, bytes]] = None,
-            params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def put(self, endpoint: str, data: dict[str, Any] | str | bytes | None = None,
+            params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Make PUT request to the service API."""
         return self._make_request("PUT", endpoint, params=params, data=data)
 
-    def delete(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def delete(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Make DELETE request to the service API."""
         return self._make_request("DELETE", endpoint, params=params)
 

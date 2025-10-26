@@ -1,4 +1,3 @@
-from builtins import str
 
 from actingweb.handlers import base_handler
 

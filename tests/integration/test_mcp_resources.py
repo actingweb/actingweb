@@ -7,8 +7,6 @@ Resources in MCP map to ActingWeb actor properties, meta information,
 and other actor data accessible to the MCP client.
 """
 
-import pytest
-import json
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 

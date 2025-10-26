@@ -4,7 +4,6 @@ Root conftest for all tests (unit and integration).
 This sets up the test environment BEFORE any modules are imported.
 """
 import os
-import pytest
 
 
 def pytest_configure(config):

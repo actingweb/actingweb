@@ -8,7 +8,7 @@ properties in DynamoDB, bypassing the 400KB limit while maintaining API compatib
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class ListProperty:
         self.actor_id = actor_id
         self.name = name
         self.config = config
-        self._meta_cache: Optional[Dict[str, Any]] = None
+        self._meta_cache: dict[str, Any] | None = None
         self._db = self.config.DbProperty.DbProperty() if self.config else None
 
     def _get_meta_property_name(self) -> str:
@@ -59,7 +59,7 @@ class ListProperty:
         """Get the property name for a list item at given index."""
         return f"list:{self.name}-{index}"
 
-    def _load_metadata(self) -> Dict[str, Any]:
+    def _load_metadata(self) -> dict[str, Any]:
         """Load metadata from database, with caching."""
         if self._meta_cache is not None:
             return self._meta_cache
@@ -94,7 +94,7 @@ class ListProperty:
             self._save_metadata(meta)
             return meta
 
-    def _create_default_metadata(self) -> Dict[str, Any]:
+    def _create_default_metadata(self) -> dict[str, Any]:
         """Create default metadata structure."""
         now = datetime.now().isoformat()
         return {
@@ -108,7 +108,7 @@ class ListProperty:
             "explanation": "",
         }
 
-    def _save_metadata(self, meta: Dict[str, Any]) -> None:
+    def _save_metadata(self, meta: dict[str, Any]) -> None:
         """Save metadata to database and update cache."""
         meta["updated_at"] = datetime.now().isoformat()
 
@@ -270,7 +270,7 @@ class ListProperty:
         # Store the new item - use fresh DB instance to avoid handle conflicts
         item_property_name = self._get_item_property_name(length)
         item_db = self.config.DbProperty.DbProperty()
-        result = item_db.set(actor_id=self.actor_id, name=item_property_name, value=item_str)
+        item_db.set(actor_id=self.actor_id, name=item_property_name, value=item_str)
         logger.debug(f"append(): Stored item at '{item_property_name}' with value: {item_str}")
 
         # Update metadata
@@ -278,7 +278,7 @@ class ListProperty:
         meta["length"] = length + 1
         self._save_metadata(meta)
 
-    def extend(self, items: List[Any]) -> None:
+    def extend(self, items: list[Any]) -> None:
         """Add multiple items to end of list."""
         for item in items:
             self.append(item)
@@ -318,7 +318,7 @@ class ListProperty:
         # Clear cache
         self._meta_cache = None
 
-    def to_list(self) -> List[Any]:
+    def to_list(self) -> list[Any]:
         """Load entire list into memory."""
         length = len(self)
         result = []
@@ -332,7 +332,7 @@ class ListProperty:
 
         return result
 
-    def slice(self, start: int, end: int) -> List[Any]:
+    def slice(self, start: int, end: int) -> list[Any]:
         """Load a range of items efficiently."""
         length = len(self)
 
@@ -408,7 +408,7 @@ class ListProperty:
                 return
         raise ValueError(f"{value} not in list")
 
-    def index(self, value: Any, start: int = 0, stop: Optional[int] = None) -> int:
+    def index(self, value: Any, start: int = 0, stop: int | None = None) -> int:
         """Return index of first occurrence of value."""
         length = len(self)
         if stop is None:

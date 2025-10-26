@@ -5,10 +5,8 @@ Tests the OAuth2SessionManager used for postponed actor creation when
 OAuth providers don't provide email addresses.
 """
 
-import pytest
 import time
-from typing import Dict, Any
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 
 
 class TestOAuth2SessionManager:
@@ -17,8 +15,8 @@ class TestOAuth2SessionManager:
     def setup_method(self):
         """Set up test fixtures."""
         # Import here to avoid module-level imports that might fail
-        from actingweb.oauth_session import OAuth2SessionManager
         from actingweb.config import Config
+        from actingweb.oauth_session import OAuth2SessionManager
 
         # Create mock config with database support
         self.config = Mock(spec=Config)
@@ -28,33 +26,33 @@ class TestOAuth2SessionManager:
 
         # Mock the DbAttribute class to use in-memory storage
         class MockDbAttribute:
-            def __init__(test_self):
+            def __init__(test_self):  # type: ignore
                 test_self.storage = self._test_storage
 
-            def get_bucket(test_self, actor_id, bucket):
+            def get_bucket(test_self, actor_id, bucket):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 return test_self.storage.get(key, {})
 
-            def get_attr(test_self, actor_id, bucket, name):
+            def get_attr(test_self, actor_id, bucket, name):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 bucket_data = test_self.storage.get(key, {})
                 return bucket_data.get(name)
 
-            def set_attr(test_self, actor_id, bucket, name, data, timestamp=None):
+            def set_attr(test_self, actor_id, bucket, name, data, timestamp=None):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 if key not in test_self.storage:
                     test_self.storage[key] = {}
                 test_self.storage[key][name] = {"data": data, "timestamp": timestamp}
                 return True
 
-            def delete_attr(test_self, actor_id, bucket, name):
+            def delete_attr(test_self, actor_id, bucket, name):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 if key in test_self.storage and name in test_self.storage[key]:
                     del test_self.storage[key][name]
                     return True
                 return False
 
-            def delete_bucket(test_self, actor_id, bucket):
+            def delete_bucket(test_self, actor_id, bucket):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 if key in test_self.storage:
                     del test_self.storage[key]
@@ -298,10 +296,10 @@ class TestOAuth2SessionManager:
         session1 = self.manager.get_session(session_id1)
         session2 = self.manager.get_session(session_id2)
 
-        assert session1["token_data"]["access_token"] == "token1"
-        assert session2["token_data"]["access_token"] == "token2"
-        assert session1["provider"] == "google"
-        assert session2["provider"] == "github"
+        assert session1["token_data"]["access_token"] == "token1"  # type: ignore
+        assert session2["token_data"]["access_token"] == "token2"  # type: ignore
+        assert session1["provider"] == "google"  # type: ignore
+        assert session2["provider"] == "github"  # type: ignore
 
 
 class TestOAuth2SessionManagerFactory:
@@ -309,8 +307,8 @@ class TestOAuth2SessionManagerFactory:
 
     def test_get_oauth2_session_manager_returns_instance(self):
         """Test that get_oauth2_session_manager returns a manager instance."""
-        from actingweb.oauth_session import get_oauth2_session_manager
         from actingweb.config import Config
+        from actingweb.oauth_session import get_oauth2_session_manager
 
         config = Mock(spec=Config)
         manager = get_oauth2_session_manager(config)

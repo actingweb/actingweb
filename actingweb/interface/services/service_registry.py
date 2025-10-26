@@ -6,10 +6,10 @@ service clients from ActingWeb actors.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Any
 
-from .service_config import ServiceConfig, ServiceTemplates
 from .service_client import ServiceClient
+from .service_config import ServiceConfig, ServiceTemplates
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class ServiceRegistry:
     def __init__(self, aw_config):
         """Initialize service registry with ActingWeb configuration."""
         self.aw_config = aw_config
-        self._services: Dict[str, ServiceConfig] = {}
+        self._services: dict[str, ServiceConfig] = {}
 
     def register_service(self, service_config: ServiceConfig) -> "ServiceRegistry":
         """
@@ -45,7 +45,7 @@ class ServiceRegistry:
         logger.info(f"Registered service: {service_config.name}")
         return self
 
-    def register_service_from_dict(self, name: str, config: Dict[str, Any]) -> "ServiceRegistry":
+    def register_service_from_dict(self, name: str, config: dict[str, Any]) -> "ServiceRegistry":
         """
         Register a service from a configuration dictionary.
 
@@ -86,11 +86,11 @@ class ServiceRegistry:
         """Register Box service using template."""
         return self.register_service(ServiceTemplates.box(client_id, client_secret))
 
-    def get_service_config(self, name: str) -> Optional[ServiceConfig]:
+    def get_service_config(self, name: str) -> ServiceConfig | None:
         """Get service configuration by name."""
         return self._services.get(name)
 
-    def list_services(self) -> Dict[str, ServiceConfig]:
+    def list_services(self) -> dict[str, ServiceConfig]:
         """Get all registered service configurations."""
         return self._services.copy()
 
@@ -98,7 +98,7 @@ class ServiceRegistry:
         """Check if a service is registered."""
         return name in self._services
 
-    def get_service_client(self, name: str, actor_interface) -> Optional[ServiceClient]:
+    def get_service_client(self, name: str, actor_interface) -> ServiceClient | None:
         """
         Get an authenticated service client for an actor.
 
@@ -135,9 +135,9 @@ class ActorServices:
         """Initialize actor services with service registry."""
         self.actor = actor_interface
         self.registry = service_registry
-        self._clients: Dict[str, ServiceClient] = {}
+        self._clients: dict[str, ServiceClient] = {}
 
-    def get(self, service_name: str) -> Optional[ServiceClient]:
+    def get(self, service_name: str) -> ServiceClient | None:
         """
         Get authenticated service client for this actor.
 
@@ -158,7 +158,7 @@ class ActorServices:
 
         return client
 
-    def list_available_services(self) -> Dict[str, bool]:
+    def list_available_services(self) -> dict[str, bool]:
         """
         List all available services and their authentication status.
 
@@ -193,7 +193,7 @@ class ActorServices:
 
         return success
 
-    def revoke_all_services(self) -> Dict[str, bool]:
+    def revoke_all_services(self) -> dict[str, bool]:
         """
         Revoke authentication for all services.
 

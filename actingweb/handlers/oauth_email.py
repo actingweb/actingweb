@@ -6,17 +6,17 @@ an email address. It allows users to manually enter their email to complete
 actor creation.
 """
 
-import logging
 import json
+import logging
 import time
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from .base_handler import BaseHandler
 
 if TYPE_CHECKING:
-    from ..interface.hooks import HookRegistry
     from .. import aw_web_request
     from .. import config as config_class
+    from ..interface.hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class OAuth2EmailHandler(BaseHandler):
             webobj = aw_web_request.AWWebObj()
         super().__init__(webobj, config, hooks)
 
-    def get(self) -> Dict[str, Any]:
+    def get(self) -> dict[str, Any]:
         """
         Handle GET request to /oauth/email - show email input form.
 
@@ -86,7 +86,7 @@ class OAuth2EmailHandler(BaseHandler):
 
         return {}  # Template will be rendered by app
 
-    def post(self) -> Dict[str, Any]:
+    def post(self) -> dict[str, Any]:
         """
         Handle POST request to /oauth/email - process email input.
 
@@ -208,6 +208,7 @@ class OAuth2EmailHandler(BaseHandler):
         # If email requires verification, set up verification flow
         if email_requires_verification and actor_instance.store:
             import secrets
+
             from ..constants import EMAIL_VERIFICATION_TOKEN_LENGTH
 
             # Generate verification token
@@ -271,7 +272,7 @@ class OAuth2EmailHandler(BaseHandler):
             "redirect_performed": True
         }
 
-    def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
+    def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create error response with template rendering for user-friendly errors."""
         self.response.set_status(status_code)
 

@@ -11,13 +11,11 @@ These fixtures provide:
 """
 
 import os
+import subprocess
 import time
+
 import pytest
 import requests
-import subprocess
-from typing import Dict, List, Optional
-from contextlib import contextmanager
-from unittest.mock import patch, MagicMock
 
 # Test configuration
 # Use AWS_DB_HOST from environment if set (for CI), otherwise use local default
@@ -58,7 +56,7 @@ def docker_services():
 
         # Wait for DynamoDB to be ready
         max_retries = 30
-        for i in range(max_retries):
+        for _ in range(max_retries):
             try:
                 response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
                 if response.status_code in [200, 400]:  # DynamoDB responds with 400 to /
@@ -82,15 +80,17 @@ def docker_services():
 
 
 @pytest.fixture(scope="session")
-def test_app(docker_services):
+def test_app(docker_services):  # pylint: disable=unused-argument
     """
     Start the test harness FastAPI application for the test session.
 
     Returns the base URL for making requests.
     """
-    from .test_harness import create_test_app
     from threading import Thread
+
     import uvicorn
+
+    from .test_harness import create_test_app
 
     # Set environment for DynamoDB
     os.environ["AWS_ACCESS_KEY_ID"] = "test"
@@ -99,7 +99,7 @@ def test_app(docker_services):
     os.environ["AWS_DB_PREFIX"] = "test"
 
     # Create app
-    fastapi_app, aw_app = create_test_app(
+    fastapi_app, _ = create_test_app(
         fqdn=f"{TEST_APP_HOST}:{TEST_APP_PORT}",
         proto="http://",
         enable_oauth=True,
@@ -121,7 +121,7 @@ def test_app(docker_services):
 
     # Wait for app to be ready
     max_retries = 30
-    for i in range(max_retries):
+    for _ in range(max_retries):
         try:
             response = requests.get(f"{TEST_APP_URL}/", timeout=2)
             if response.status_code in [200, 404]:
@@ -136,16 +136,18 @@ def test_app(docker_services):
 
 
 @pytest.fixture(scope="session")
-def www_test_app(docker_services):
+def www_test_app(docker_services):  # pylint: disable=unused-argument
     """
     Start a test harness FastAPI application WITHOUT OAuth for www template testing.
 
     This allows testing www templates with basic auth instead of OAuth redirects.
     Returns the base URL for making requests.
     """
-    from .test_harness import create_test_app
     from threading import Thread
+
     import uvicorn
+
+    from .test_harness import create_test_app
 
     # Use a different port for www testing
     WWW_TEST_PORT = 5557
@@ -158,7 +160,7 @@ def www_test_app(docker_services):
     os.environ["AWS_DB_PREFIX"] = "test"
 
     # Create app WITHOUT OAuth
-    fastapi_app, aw_app = create_test_app(
+    fastapi_app, _ = create_test_app(
         fqdn=f"{TEST_APP_HOST}:{WWW_TEST_PORT}",
         proto="http://",
         enable_oauth=False,  # Disable OAuth for www testing
@@ -180,7 +182,7 @@ def www_test_app(docker_services):
 
     # Wait for app to be ready
     max_retries = 30
-    for i in range(max_retries):
+    for _ in range(max_retries):
         try:
             response = requests.get(f"{WWW_TEST_URL}/", timeout=2)
             if response.status_code in [200, 404]:
@@ -195,23 +197,25 @@ def www_test_app(docker_services):
 
 
 @pytest.fixture(scope="session")
-def peer_app(docker_services):
+def peer_app(docker_services):  # pylint: disable=unused-argument
     """
     Start a second test harness FastAPI application on a different port.
 
     This acts as a peer actor for testing trust relationships.
     Returns the base URL for making requests.
     """
-    from .test_harness import create_test_app
     from threading import Thread
+
     import uvicorn
+
+    from .test_harness import create_test_app
 
     PEER_APP_HOST = "localhost"
     PEER_APP_PORT = 5556
     PEER_APP_URL = f"http://{PEER_APP_HOST}:{PEER_APP_PORT}"
 
     # Create peer app (shares same DynamoDB as main app)
-    fastapi_app, aw_app = create_test_app(
+    fastapi_app, _ = create_test_app(
         fqdn=f"{PEER_APP_HOST}:{PEER_APP_PORT}",
         proto="http://",
         enable_oauth=True,
@@ -233,7 +237,7 @@ def peer_app(docker_services):
 
     # Wait for app to be ready
     max_retries = 30
-    for i in range(max_retries):
+    for _ in range(max_retries):
         try:
             response = requests.get(f"{PEER_APP_URL}/", timeout=2)
             if response.status_code in [200, 404]:
@@ -265,9 +269,9 @@ class ActorManager:
 
     def __init__(self, base_url: str):
         self.base_url = base_url
-        self.actors: List[Dict] = []
+        self.actors: list[dict] = []
 
-    def create(self, creator: str, passphrase: Optional[str] = None) -> Dict:
+    def create(self, creator: str, passphrase: str | None = None) -> dict:
         """
         Create a test actor.
 
@@ -357,11 +361,11 @@ def trust_helper():
     class TrustHelper:
         def establish(
             self,
-            from_actor: Dict,
-            to_actor: Dict,
+            from_actor: dict,
+            to_actor: dict,
             relationship: str = "friend",
             approve: bool = True,
-        ) -> Dict:
+        ) -> dict:
             """
             Establish trust from from_actor to to_actor.
 

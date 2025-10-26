@@ -8,8 +8,9 @@ as other ActingWeb interfaces like TrustManager and PropertyStore.
 
 import logging
 import time
-from typing import Dict, Any, List, Optional
 from datetime import datetime
+from typing import Any
+
 from ..oauth2_server.client_registry import MCPClientRegistry
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ class OAuth2ClientManager:
         self.config = config
         self._registry = MCPClientRegistry(config)
 
-    def create_client(self, client_name: str, trust_type: str = "mcp_client", **kwargs) -> Dict[str, Any]:
+    def create_client(self, client_name: str, trust_type: str = "mcp_client", **kwargs) -> dict[str, Any]:
         """
         Create a new OAuth2 client for this actor.
 
@@ -84,7 +85,7 @@ class OAuth2ClientManager:
             logger.error(f"Error creating OAuth2 client: {e}")
             raise
 
-    def get_client(self, client_id: str) -> Optional[Dict[str, Any]]:
+    def get_client(self, client_id: str) -> dict[str, Any] | None:
         """
         Get details for a specific OAuth2 client.
 
@@ -106,7 +107,7 @@ class OAuth2ClientManager:
             logger.error(f"Error retrieving OAuth2 client {client_id}: {e}")
             return None
 
-    def list_clients(self) -> List[Dict[str, Any]]:
+    def list_clients(self) -> list[dict[str, Any]]:
         """
         List all OAuth2 clients for this actor.
 
@@ -166,7 +167,7 @@ class OAuth2ClientManager:
             logger.error(f"Error deleting OAuth2 client {client_id}: {e}")
             return False
 
-    def validate_client(self, client_id: str, client_secret: Optional[str] = None) -> bool:
+    def validate_client(self, client_id: str, client_secret: str | None = None) -> bool:
         """
         Validate OAuth2 client credentials.
 
@@ -185,7 +186,7 @@ class OAuth2ClientManager:
             logger.error(f"Error validating OAuth2 client {client_id}: {e}")
             return False
 
-    def regenerate_client_secret(self, client_id: str) -> Optional[Dict[str, Any]]:
+    def regenerate_client_secret(self, client_id: str) -> dict[str, Any] | None:
         """
         Regenerate the client secret for an existing OAuth2 client.
 
@@ -246,7 +247,7 @@ class OAuth2ClientManager:
             logger.error(f"Error regenerating OAuth2 client secret for {client_id}: {e}")
             return None
 
-    def get_client_stats(self) -> Dict[str, int | Dict[str, int]]:
+    def get_client_stats(self) -> dict[str, int | dict[str, int]]:
         """
         Get statistics about OAuth2 clients for this actor.
 
@@ -258,7 +259,7 @@ class OAuth2ClientManager:
 
             # Calculate statistics
             total_clients = len(clients)
-            trust_types: Dict[str, int] = {}
+            trust_types: dict[str, int] = {}
 
             for client in clients:
                 trust_type = client.get("trust_type", "unknown")
@@ -291,7 +292,7 @@ class OAuth2ClientManager:
         """Support iteration over clients."""
         return iter(self.list_clients())
 
-    def generate_access_token(self, client_id: str, scope: str = "mcp") -> Optional[Dict[str, Any]]:
+    def generate_access_token(self, client_id: str, scope: str = "mcp") -> dict[str, Any] | None:
         """
         Generate an access token for the specified OAuth2 client using client credentials flow.
 

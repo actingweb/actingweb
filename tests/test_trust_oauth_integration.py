@@ -17,10 +17,11 @@ References:
 """
 
 import pytest
-from actingweb.interface.app import ActingWebApp
+
 from actingweb.interface.actor_interface import ActorInterface
+from actingweb.interface.app import ActingWebApp
 from actingweb.interface.oauth_client_manager import OAuth2ClientManager
-from actingweb.trust_permissions import TrustPermissionStore, TrustPermissions
+from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
 
 
 @pytest.fixture
@@ -60,7 +61,7 @@ class TestTrustCreationOnClientRegistration:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type,union-attr,attr-defined,return-value]
 
             # Create OAuth2 client
             client_data = client_manager.create_client(
@@ -98,7 +99,7 @@ class TestTrustCreationOnClientRegistration:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client with specific trust type
             client_data = client_manager.create_client(
@@ -132,7 +133,7 @@ class TestTrustCreationOnClientRegistration:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create 3 OAuth2 clients
             client_names = ["ChatGPT", "Claude", "Cursor"]
@@ -176,7 +177,7 @@ class TestTrustAttributesForOAuth:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client with specific name
             client_data = client_manager.create_client(
@@ -211,7 +212,7 @@ class TestTrustAttributesForOAuth:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
             client_data = client_manager.create_client(
@@ -246,7 +247,7 @@ class TestTrustAttributesForOAuth:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
             client_data = client_manager.create_client(
@@ -285,7 +286,7 @@ class TestTrustDeletionOnClientDeletion:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
             client_data = client_manager.create_client(
@@ -307,15 +308,15 @@ class TestTrustDeletionOnClientDeletion:
             client_manager.delete_client(client_id)
 
             # Reload actor to get fresh trust data
-            actor_reload = ActorInterface.get_by_id(actor.id, config)
+            actor_reload = ActorInterface.get_by_id(actor.id, config)  # type: ignore[arg-type]
 
             # Verify trust is deleted
-            trust_count_after = len(actor_reload.trust.relationships)
+            trust_count_after = len(actor_reload.trust.relationships)  # type: ignore[arg-type]
             assert trust_count_after == trust_count_before - 1
 
             # Verify specific trust for this client is gone
             matching_trust_after = None
-            for trust in actor_reload.trust.relationships:
+            for trust in actor_reload.trust.relationships:  # type: ignore[arg-type]
                 if client_id in trust.peerid:
                     matching_trust_after = trust
                     break
@@ -339,7 +340,7 @@ class TestPermissionChecksWithOAuth:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type,union-attr,attr-defined,return-value]
 
             # Create client
             client_data = client_manager.create_client(
@@ -373,7 +374,7 @@ class TestPermissionChecksWithOAuth:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
             client_data = client_manager.create_client(
@@ -389,12 +390,12 @@ class TestPermissionChecksWithOAuth:
                     matching_trust = trust
                     break
 
-            peer_id = matching_trust.peerid
+            peer_id = matching_trust.peerid  # type: ignore[arg-type]
 
             # Set individual permissions for this OAuth client trust
             permission_store = TrustPermissionStore(config)
             permissions = TrustPermissions(
-                actor_id=actor.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
                 peer_id=peer_id,
                 trust_type="mcp_client",
                 properties={
@@ -408,9 +409,9 @@ class TestPermissionChecksWithOAuth:
             assert success
 
             # Verify permissions are stored
-            stored = permission_store.get_permissions(actor.id, peer_id)
+            stored = permission_store.get_permissions(actor.id, peer_id)  # type: ignore[arg-type]
             assert stored is not None
-            assert "memory_personal" in stored.properties["excluded_patterns"]
+            assert "memory_personal" in stored.properties["excluded_patterns"]  # type: ignore[arg-type]
         finally:
             actor.delete()
 
@@ -430,7 +431,7 @@ class TestRealisticOAuthTrustScenarios:
         actor = ActorInterface.create(creator="user@example.com", config=config)
 
         try:
-            client_manager = OAuth2ClientManager(actor.id, config)
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Connect ChatGPT - restricted access
             chatgpt = client_manager.create_client(
@@ -478,7 +479,7 @@ class TestRealisticOAuthTrustScenarios:
 
             # ChatGPT: Only memory_personal
             chatgpt_perms = TrustPermissions(
-                actor_id=actor.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
                 peer_id=chatgpt_trust.peerid,
                 trust_type="mcp_client",
                 properties={
@@ -492,7 +493,7 @@ class TestRealisticOAuthTrustScenarios:
 
             # Claude: All memory types (no exclusions)
             claude_perms = TrustPermissions(
-                actor_id=actor.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
                 peer_id=claude_trust.peerid,
                 trust_type="mcp_client",
                 properties={
@@ -506,7 +507,7 @@ class TestRealisticOAuthTrustScenarios:
 
             # Cursor: Only memory_work
             cursor_perms = TrustPermissions(
-                actor_id=actor.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
                 peer_id=cursor_trust.peerid,
                 trust_type="mcp_client",
                 properties={
@@ -519,12 +520,12 @@ class TestRealisticOAuthTrustScenarios:
             permission_store.store_permissions(cursor_perms)
 
             # Verify each has different permissions
-            chatgpt_stored = permission_store.get_permissions(actor.id, chatgpt_trust.peerid)
-            claude_stored = permission_store.get_permissions(actor.id, claude_trust.peerid)
-            cursor_stored = permission_store.get_permissions(actor.id, cursor_trust.peerid)
+            chatgpt_stored = permission_store.get_permissions(actor.id, chatgpt_trust.peerid)  # type: ignore[arg-type]
+            claude_stored = permission_store.get_permissions(actor.id, claude_trust.peerid)  # type: ignore[arg-type]
+            cursor_stored = permission_store.get_permissions(actor.id, cursor_trust.peerid)  # type: ignore[arg-type]
 
-            assert len(chatgpt_stored.properties["excluded_patterns"]) == 3
-            assert len(claude_stored.properties["excluded_patterns"]) == 0
-            assert len(cursor_stored.properties["excluded_patterns"]) == 3
+            assert len(chatgpt_stored.properties["excluded_patterns"]) == 3  # type: ignore[arg-type]
+            assert len(claude_stored.properties["excluded_patterns"]) == 0  # type: ignore[arg-type]
+            assert len(cursor_stored.properties["excluded_patterns"]) == 3  # type: ignore
         finally:
             actor.delete()

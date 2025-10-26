@@ -1,7 +1,8 @@
+import base64
 import json
 import logging
+
 import requests
-import base64
 
 from actingweb import trust
 

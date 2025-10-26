@@ -7,41 +7,45 @@ GET returns action status, PUT/POST executes the action.
 
 import json
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 from actingweb import auth
 from actingweb.handlers import base_handler
-from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
+
+from ..permission_evaluator import (
+    PermissionResult,
+    get_permission_evaluator,
+)
 
 
 class ActionsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/actions endpoint."""
-    
-    
+
+
     def _check_action_permission(self, actor_id: str, auth_obj, action_name: str) -> bool:
         """
         Check action permission using the unified access control system.
-        
+
         Args:
             actor_id: The actor ID
             auth_obj: Auth object from authentication
             action_name: Action name to check access for
-            
+
         Returns:
             True if access is allowed, False otherwise
         """
         # Get peer ID from auth object (if authenticated via trust relationship)
         peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
-        
+
         if not peer_id:
             # No peer relationship - fall back to legacy authorization for basic/oauth auth
             return auth_obj.check_authorisation(path="actions", subpath=action_name, method="GET")
-        
+
         # Use permission evaluator for peer-based access
         try:
             evaluator = get_permission_evaluator(self.config)
             result = evaluator.evaluate_action_access(actor_id, peer_id, action_name)
-            
+
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
@@ -50,13 +54,13 @@ class ActionsHandler(base_handler.BaseHandler):
             else:  # NOT_FOUND
                 # No specific permission rule - fall back to legacy for backward compatibility
                 return auth_obj.check_authorisation(path="actions", subpath=action_name, method="GET")
-                
+
         except Exception as e:
             logging.error(f"Error in action permission evaluation for {actor_id}:{peer_id}:{action_name}: {e}")
             # Fall back to legacy authorization on errors
             return auth_obj.check_authorisation(path="actions", subpath=action_name, method="GET")
-    
-    def _create_auth_context(self, auth_obj) -> Dict[str, Any]:
+
+    def _create_auth_context(self, auth_obj) -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
         peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
         return {
@@ -91,7 +95,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-            
+
         # Execute action hook to get action info/status
         result = None
         if self.hooks:
@@ -131,10 +135,10 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-            
+
         # Parse request body
         try:
-            body: Union[str, bytes, None] = self.request.body
+            body: str | bytes | None = self.request.body
             if body is None:
                 body_str = "{}"
             elif isinstance(body, bytes):
@@ -146,7 +150,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
-            
+
         # Execute action hook
         result = None
         if self.hooks:
@@ -154,7 +158,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if actor_interface:
                 auth_context = self._create_auth_context(check)
                 result = self.hooks.execute_action_hooks(name, actor_interface, params, auth_context)
-        
+
         if result is not None:
             if self.response:
                 self.response.set_status(200, "OK")
@@ -183,10 +187,10 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-            
+
         # Parse request body
         try:
-            body: Union[str, bytes, None] = self.request.body
+            body: str | bytes | None = self.request.body
             if body is None:
                 body_str = "{}"
             elif isinstance(body, bytes):
@@ -198,7 +202,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
-            
+
         # Execute action hook (PUT treated same as POST)
         result = None
         if self.hooks:
@@ -206,7 +210,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if actor_interface:
                 auth_context = self._create_auth_context(check)
                 result = self.hooks.execute_action_hooks(name, actor_interface, params, auth_context)
-        
+
         if result is not None:
             if self.response:
                 self.response.set_status(200, "OK")
@@ -232,7 +236,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-            
+
         # Execute action deletion hook
         result = False
         if self.hooks:
@@ -241,7 +245,7 @@ class ActionsHandler(base_handler.BaseHandler):
                 auth_context = self._create_auth_context(check)
                 hook_result = self.hooks.execute_action_hooks(name, actor_interface, {"method": "DELETE"}, auth_context)
                 result = bool(hook_result)
-        
+
         if result:
             if self.response:
                 self.response.set_status(204, "Deleted")

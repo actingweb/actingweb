@@ -1,7 +1,5 @@
 import json
 import logging
-from builtins import str
-from typing import Union
 
 from actingweb import auth
 from actingweb.handlers import base_handler
@@ -107,7 +105,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                         self.response.set_status(403, "Forbidden")
                     return
                 try:
-                    body: Union[str, bytes, None] = self.request.body
+                    body: str | bytes | None = self.request.body
                     if body is None:
                         body_str = "{}"
                     elif isinstance(body, bytes):
@@ -148,7 +146,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if actor_interface:
                 # Parse request body for hook data
                 try:
-                    body: Union[str, bytes, None] = self.request.body
+                    body: str | bytes | None = self.request.body
                     if body is None:
                         body_str = "{}"
                     elif isinstance(body, bytes):

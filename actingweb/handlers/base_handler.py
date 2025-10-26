@@ -1,12 +1,12 @@
 
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
-from actingweb import aw_web_request, auth
+from actingweb import aw_web_request
 from actingweb import config as config_class
 
 if TYPE_CHECKING:
-    from actingweb.interface.hooks import HookRegistry
     from actingweb.interface.actor_interface import ActorInterface
+    from actingweb.interface.hooks import HookRegistry
 
 
 class BaseHandler:
@@ -21,7 +21,7 @@ class BaseHandler:
         self.response = webobj.response
         self.config = config
         self.hooks = hooks
-        
+
     def _get_actor_interface(self, actor) -> Optional['ActorInterface']:
         """Get ActorInterface wrapper for given actor."""
         if actor:
@@ -30,7 +30,7 @@ class BaseHandler:
             registry = getattr(self.config, "service_registry", None)
             return ActorInterface(actor, service_registry=registry)
         return None
-    
+
     def _authenticate_dual_context(self, actor_id: str, api_path: str, web_subpath: str, name: str = "", add_response: bool = True) -> 'AuthResult':
         """
         Authenticate supporting both web UI (OAuth) and API (basic) access.
@@ -116,7 +116,7 @@ class BaseHandler:
         return AuthResult(auth_obj.actor, auth_obj, self.response)
 
     def require_authenticated_actor(self, actor_id: str, path: str, method: str = "GET",
-                                  subpath: str = "") -> Optional[Any]:
+                                  subpath: str = "") -> Any | None:
         """
         Simplified actor authentication and authorization in one call.
 
@@ -164,7 +164,7 @@ class BaseHandler:
         """
         return self._authenticate_internal(actor_id, path, subpath, add_response)
 
-    def get_actor_allow_unauthenticated(self, actor_id: str, path: str = "", subpath: str = "") -> Optional[Any]:
+    def get_actor_allow_unauthenticated(self, actor_id: str, path: str = "", subpath: str = "") -> Any | None:
         """
         Get actor allowing unauthenticated access (for public endpoints like meta).
 

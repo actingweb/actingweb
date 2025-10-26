@@ -9,13 +9,13 @@ persistence across multiple containers in distributed deployments.
 """
 
 import logging
-import time
 import secrets
-from typing import Dict, Any, Optional, TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from . import config as config_class
     from . import actor as actor_module
+    from . import config as config_class
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,11 @@ class OAuth2SessionManager:
 
     def store_session(
         self,
-        token_data: Dict[str, Any],
-        user_info: Dict[str, Any],
+        token_data: dict[str, Any],
+        user_info: dict[str, Any],
         state: str = "",
         provider: str = "google",
-        verified_emails: Optional[list[str]] = None
+        verified_emails: list[str] | None = None
     ) -> str:
         """
         Store OAuth2 session data temporarily in database.
@@ -86,7 +86,7 @@ class OAuth2SessionManager:
         logger.debug(f"Stored OAuth session {session_id[:8]}... for provider {provider}")
         return session_id
 
-    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
         """
         Retrieve OAuth2 session data from database.
 
@@ -124,7 +124,7 @@ class OAuth2SessionManager:
             return None
 
         from typing import cast
-        return cast(Dict[str, Any], session)
+        return cast(dict[str, Any], session)
 
     def complete_session(self, session_id: str, email: str) -> Optional['actor_module.Actor']:
         """
@@ -145,7 +145,7 @@ class OAuth2SessionManager:
         try:
             # Extract session data
             token_data = session["token_data"]
-            user_info = session["user_info"]
+            session["user_info"]
             provider = session.get("provider", "google")
 
             # Validate email format
@@ -157,7 +157,6 @@ class OAuth2SessionManager:
             email = email.strip().lower()
 
             # Look up or create actor by email
-            from . import actor as actor_module
             from .oauth2 import create_oauth2_authenticator
 
             authenticator = create_oauth2_authenticator(self.config, provider)

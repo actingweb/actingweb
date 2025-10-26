@@ -1,7 +1,5 @@
 import json
-from typing import Any, Optional
 
-from actingweb import auth
 from actingweb.handlers import base_handler
 
 
@@ -45,7 +43,7 @@ class RootHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 self.hooks.execute_lifecycle_hooks("actor_deleted", actor_interface)
-                
+
         myself.delete()
         self.response.set_status(204)
         return

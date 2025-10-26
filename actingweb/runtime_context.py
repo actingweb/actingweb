@@ -36,9 +36,9 @@ Usage Example::
             # Customize behavior based on client type
 """
 
-from typing import Optional, Dict, Any, NamedTuple
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class MCPContext:
     client_id: str  # OAuth2 client ID (e.g., "mcp_abc123")
     trust_relationship: Any  # Trust database record with client metadata
     peer_id: str  # Normalized peer identifier for permission checking
-    token_data: Optional[Dict[str, Any]] = None  # OAuth2 token metadata
+    token_data: dict[str, Any] | None = None  # OAuth2 token metadata
 
 
 @dataclass
@@ -70,7 +70,7 @@ class OAuth2Context:
     client_id: str  # OAuth2 client ID
     user_email: str  # Authenticated user email
     scopes: list[str]  # Granted OAuth2 scopes
-    token_data: Optional[Dict[str, Any]] = None  # Token metadata
+    token_data: dict[str, Any] | None = None  # Token metadata
 
 
 @dataclass
@@ -80,10 +80,10 @@ class WebContext:
 
     Contains session and authentication information for web UI access.
     """
-    session_id: Optional[str] = None  # Session identifier
-    user_agent: Optional[str] = None  # Browser user agent
-    ip_address: Optional[str] = None  # Client IP address
-    authenticated_user: Optional[str] = None  # Authenticated user identifier
+    session_id: str | None = None  # Session identifier
+    user_agent: str | None = None  # Browser user agent
+    ip_address: str | None = None  # Client IP address
+    authenticated_user: str | None = None  # Authenticated user identifier
 
 
 class RuntimeContext:
@@ -106,7 +106,7 @@ class RuntimeContext:
         """
         self.actor = actor
 
-    def _get_context_data(self) -> Dict[str, Any]:
+    def _get_context_data(self) -> dict[str, Any]:
         """Get the runtime context data dict, creating if needed."""
         if not hasattr(self.actor, _RUNTIME_CONTEXT_ATTR):
             setattr(self.actor, _RUNTIME_CONTEXT_ATTR, {})
@@ -117,7 +117,7 @@ class RuntimeContext:
         client_id: str,
         trust_relationship: Any,
         peer_id: str,
-        token_data: Optional[Dict[str, Any]] = None
+        token_data: dict[str, Any] | None = None
     ) -> None:
         """
         Set MCP context for the current request.
@@ -137,7 +137,7 @@ class RuntimeContext:
         )
         logger.debug(f"Set MCP context for client {client_id} on actor {self.actor.id}")
 
-    def get_mcp_context(self) -> Optional[MCPContext]:
+    def get_mcp_context(self) -> MCPContext | None:
         """
         Get MCP context for the current request.
 
@@ -152,7 +152,7 @@ class RuntimeContext:
         client_id: str,
         user_email: str,
         scopes: list[str],
-        token_data: Optional[Dict[str, Any]] = None
+        token_data: dict[str, Any] | None = None
     ) -> None:
         """
         Set OAuth2 context for the current request.
@@ -172,7 +172,7 @@ class RuntimeContext:
         )
         logger.debug(f"Set OAuth2 context for client {client_id} on actor {self.actor.id}")
 
-    def get_oauth2_context(self) -> Optional[OAuth2Context]:
+    def get_oauth2_context(self) -> OAuth2Context | None:
         """
         Get OAuth2 context for the current request.
 
@@ -184,10 +184,10 @@ class RuntimeContext:
 
     def set_web_context(
         self,
-        session_id: Optional[str] = None,
-        user_agent: Optional[str] = None,
-        ip_address: Optional[str] = None,
-        authenticated_user: Optional[str] = None
+        session_id: str | None = None,
+        user_agent: str | None = None,
+        ip_address: str | None = None,
+        authenticated_user: str | None = None
     ) -> None:
         """
         Set web browser context for the current request.
@@ -207,7 +207,7 @@ class RuntimeContext:
         )
         logger.debug(f"Set web context for session {session_id} on actor {self.actor.id}")
 
-    def get_web_context(self) -> Optional[WebContext]:
+    def get_web_context(self) -> WebContext | None:
         """
         Get web browser context for the current request.
 
@@ -217,7 +217,7 @@ class RuntimeContext:
         context_data = self._get_context_data()
         return context_data.get("web")
 
-    def get_request_type(self) -> Optional[str]:
+    def get_request_type(self) -> str | None:
         """
         Determine the type of the current request.
 
@@ -282,7 +282,7 @@ class RuntimeContext:
         return context_data.get(key)
 
 
-def get_client_info_from_context(actor: Any) -> Optional[Dict[str, str]]:
+def get_client_info_from_context(actor: Any) -> dict[str, str] | None:
     """
     Helper function to extract client information from runtime context.
 

@@ -1,8 +1,7 @@
 # mypy: disable-error-code="unreachable,unused-ignore"
 import json
 import logging
-from typing import Dict, List
-from actingweb import auth
+
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
@@ -10,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class WwwHandler(base_handler.BaseHandler):
 
-    def _get_consistent_urls(self, actor_id: str) -> Dict[str, str]:
+    def _get_consistent_urls(self, actor_id: str) -> dict[str, str]:
         """
         Get consistent URL variables for templates using config.root.
         Returns a dictionary with standardized URL paths that work across all pages.
@@ -85,10 +84,10 @@ class WwwHandler(base_handler.BaseHandler):
         if not path or path == "":
             # Use consistent URL calculation
             urls = self._get_consistent_urls(actor_id)
-            
+
             self.response.template_values = {
                 "url": urls["url"],
-                "actor_root": urls["actor_root"], 
+                "actor_root": urls["actor_root"],
                 "actor_www": urls["actor_www"],
                 "id": actor_id,
                 "creator": myself.creator,
@@ -99,11 +98,11 @@ class WwwHandler(base_handler.BaseHandler):
         if path == "init":
             # Use consistent URL calculation
             urls = self._get_consistent_urls(actor_id)
-            
+
             self.response.template_values = {
                 "id": myself.id,
                 "url": urls["url"],
-                "actor_root": urls["actor_root"], 
+                "actor_root": urls["actor_root"],
                 "actor_www": urls["actor_www"],
             }
             return
@@ -181,14 +180,14 @@ class WwwHandler(base_handler.BaseHandler):
 
             # Use consistent URL calculation
             urls = self._get_consistent_urls(actor_id)
-            
+
             self.response.template_values = {
                 "id": myself.id,
                 "properties": display_properties or properties,
                 "read_only_properties": read_only_properties,
                 "list_properties": list_properties,
                 "url": urls["url"],
-                "actor_root": urls["actor_root"], 
+                "actor_root": urls["actor_root"],
                 "actor_www": urls["actor_www"],
             }
             return
@@ -416,7 +415,7 @@ class WwwHandler(base_handler.BaseHandler):
             relationships = sorted(relationships, key=get_sort_key, reverse=True)
 
             # Build approve URIs and check for custom permissions
-            connection_metadata: List[Dict[str, str | None]] = []
+            connection_metadata: list[dict[str, str | None]] = []
             for t in relationships:
                 if isinstance(t, dict):
                     rel = t.get("relationship", "")
@@ -504,7 +503,7 @@ class WwwHandler(base_handler.BaseHandler):
                 "actor_www": urls["actor_www"],
             }
             return
-        
+
         if path == "trust/new":
             # Use consistent URL calculation
             urls = self._get_consistent_urls(actor_id)
@@ -563,7 +562,7 @@ class WwwHandler(base_handler.BaseHandler):
             # If permission system is not available or there's an error, assume no custom permissions
             return False
 
-    def _get_available_trust_types(self) -> List[Dict[str, str]]:
+    def _get_available_trust_types(self) -> list[dict[str, str]]:
         """Get available trust types for trust relationship creation."""
         try:
             from ..trust_type_registry import get_registry
@@ -589,15 +588,15 @@ class WwwHandler(base_handler.BaseHandler):
             # No fallback - this is a configuration error that should be fixed
             return []
 
-    def _get_oauth_clients_for_actor(self, actor_id: str) -> List[Dict[str, str]]:
+    def _get_oauth_clients_for_actor(self, actor_id: str) -> list[dict[str, str]]:
         """Get registered OAuth2 clients for an actor."""
         try:
             from ..interface.oauth_client_manager import OAuth2ClientManager
-            
+
             # Use the high-level OAuth2ClientManager interface
             client_manager = OAuth2ClientManager(actor_id, self.config)
             clients = client_manager.list_clients()
-            
+
             # OAuth2ClientManager provides pre-formatted data ready for templates
             # Just need to map the field names to match template expectations
             processed_clients = []
@@ -610,9 +609,9 @@ class WwwHandler(base_handler.BaseHandler):
                     "status": client.get("status", "active"),
                 }
                 processed_clients.append(processed_client)
-            
+
             return processed_clients
-            
+
         except Exception as e:
             logging.error(f"Error getting OAuth2 clients for actor {actor_id}: {e}")
             return []
@@ -628,8 +627,8 @@ class WwwHandler(base_handler.BaseHandler):
             self.response.set_status(400, "Peer URL is required")
             self.response.write("Error: Peer URL is required")
             return
-        
-        # Validate relationship name length 
+
+        # Validate relationship name length
         if relationship and len(relationship) > 100:  # Reasonable length limit for human-readable names
             self.response.set_status(400, "Relationship name too long")
             self.response.write("Error: Relationship name must be 100 characters or less")
@@ -659,7 +658,7 @@ class WwwHandler(base_handler.BaseHandler):
                 relationship=trust_type,  # Trust type requested from peer (goes in URL)
                 trust_type="",  # Empty allows any mini-application type - trust registry type is separate
             )
-            
+
             # TODO: Store human-readable relationship name separately if different from trust_type
             # For now, the relationship field will contain the trust type used in the protocol
 

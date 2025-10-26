@@ -2,10 +2,9 @@
 Simplified trust relationship management for ActingWeb actors.
 """
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-
 import logging
+from datetime import datetime
+from typing import Any
 
 from ..actor import Actor as CoreActor
 from ..trust import canonical_connection_method
@@ -14,7 +13,7 @@ from ..trust import canonical_connection_method
 class TrustRelationship:
     """Represents a trust relationship with another actor."""
 
-    def __init__(self, data: Dict[str, Any]):
+    def __init__(self, data: dict[str, Any]):
         self._data = data
 
     @property
@@ -68,61 +67,61 @@ class TrustRelationship:
         return str(self._data.get("type", ""))
 
     @property
-    def established_via(self) -> Optional[str]:
+    def established_via(self) -> str | None:
         """How this trust relationship was established (actingweb, oauth2, mcp)."""
         return self._data.get("established_via")
 
     @property
-    def peer_identifier(self) -> Optional[str]:
+    def peer_identifier(self) -> str | None:
         """Generic peer identifier (email, username, UUID, etc.)."""
         return self._data.get("peer_identifier")
 
     @property
-    def created_at(self) -> Optional[str]:
+    def created_at(self) -> str | None:
         """When this trust relationship was created."""
         return self._data.get("created_at")
 
     @property
-    def last_accessed(self) -> Optional[str]:
+    def last_accessed(self) -> str | None:
         """When this trust relationship was last accessed."""
         return self._data.get("last_connected_at") or self._data.get("last_accessed")
 
     @property
-    def last_connected_at(self) -> Optional[str]:
+    def last_connected_at(self) -> str | None:
         """Most recent time the relationship authenticated successfully."""
         return self._data.get("last_connected_at") or self._data.get("last_accessed")
 
     @property
-    def last_connected_via(self) -> Optional[str]:
+    def last_connected_via(self) -> str | None:
         """How the trust last connected (trust, subscription, oauth, mcp)."""
         return self._data.get("last_connected_via")
 
     @property
-    def client_name(self) -> Optional[str]:
+    def client_name(self) -> str | None:
         """Friendly name of the OAuth2 client (e.g., ChatGPT, Claude, MCP Inspector)."""
         return self._data.get("client_name")
 
     @property
-    def client_version(self) -> Optional[str]:
+    def client_version(self) -> str | None:
         """Version of the OAuth2 client software."""
         return self._data.get("client_version")
 
     @property
-    def client_platform(self) -> Optional[str]:
+    def client_platform(self) -> str | None:
         """Platform info from User-Agent for OAuth2 clients."""
         return self._data.get("client_platform")
 
     @property
-    def oauth_client_id(self) -> Optional[str]:
+    def oauth_client_id(self) -> str | None:
         """OAuth2 client ID reference for credentials-based clients."""
         return self._data.get("oauth_client_id")
 
     @property
-    def user_agent(self) -> Optional[str]:
+    def user_agent(self) -> str | None:
         """Alias for client_platform for backward compatibility."""
         return self.client_platform
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return self._data.copy()
 
@@ -153,14 +152,14 @@ class TrustManager:
         self._core_actor = core_actor
 
     @property
-    def relationships(self) -> List[TrustRelationship]:
+    def relationships(self) -> list[TrustRelationship]:
         """Get all trust relationships."""
         relationships = self._core_actor.get_trust_relationships()
         return [TrustRelationship(rel) for rel in relationships if isinstance(rel, dict)]
 
     def find_relationship(
         self, peer_id: str = "", relationship: str = "", trust_type: str = ""
-    ) -> Optional[TrustRelationship]:
+    ) -> TrustRelationship | None:
         """Find a specific trust relationship."""
         relationships = self._core_actor.get_trust_relationships(
             peerid=peer_id, relationship=relationship, trust_type=trust_type
@@ -169,7 +168,7 @@ class TrustManager:
             return TrustRelationship(relationships[0])
         return None
 
-    def get_relationship(self, peer_id: str) -> Optional[TrustRelationship]:
+    def get_relationship(self, peer_id: str) -> TrustRelationship | None:
         """Get relationship with specific peer."""
         rel_data = self._core_actor.get_trust_relationship(peerid=peer_id)
         if rel_data and isinstance(rel_data, dict):
@@ -178,7 +177,7 @@ class TrustManager:
 
     def create_relationship(
         self, peer_url: str, relationship: str = "friend", secret: str = "", description: str = ""
-    ) -> Optional[TrustRelationship]:
+    ) -> TrustRelationship | None:
         """Create a new trust relationship with another actor."""
         if not secret:
             secret = self._core_actor.config.new_token() if self._core_actor.config else ""
@@ -213,16 +212,16 @@ class TrustManager:
         return bool(result)
 
     @property
-    def active_relationships(self) -> List[TrustRelationship]:
+    def active_relationships(self) -> list[TrustRelationship]:
         """Get all active (approved and verified) relationships."""
         return [rel for rel in self.relationships if rel.is_active]
 
     @property
-    def pending_relationships(self) -> List[TrustRelationship]:
+    def pending_relationships(self) -> list[TrustRelationship]:
         """Get all pending (not yet approved by both sides) relationships."""
         return [rel for rel in self.relationships if not rel.is_active]
 
-    def get_peers_by_relationship(self, relationship: str) -> List[TrustRelationship]:
+    def get_peers_by_relationship(self, relationship: str) -> list[TrustRelationship]:
         """Get all peers with a specific relationship type."""
         return [rel for rel in self.relationships if rel.relationship == relationship]
 
@@ -245,12 +244,12 @@ class TrustManager:
         self,
         email: str,
         trust_type: str,
-        oauth_tokens: Optional[Dict[str, Any]] = None,
-        established_via: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_name: Optional[str] = None,
-        client_version: Optional[str] = None,
-        client_platform: Optional[str] = None,
+        oauth_tokens: dict[str, Any] | None = None,
+        established_via: str | None = None,
+        client_id: str | None = None,
+        client_name: str | None = None,
+        client_version: str | None = None,
+        client_platform: str | None = None,
     ) -> bool:
         """
         Create or update a trust established via OAuth2 or MCP using an email identity.
@@ -328,13 +327,12 @@ class TrustManager:
         )
         existing = self.get_relationship(peer_id)
 
-        now_epoch = None
         try:
             import time
 
-            now_epoch = int(time.time())
+            int(time.time())
         except Exception:
-            now_epoch = None
+            pass
 
         if existing:
             # Update last accessed and established_via via DB layer without notifying peers

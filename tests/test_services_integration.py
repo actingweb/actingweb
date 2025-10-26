@@ -3,9 +3,9 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from actingweb.handlers.services import ServicesHandler
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
-from actingweb.handlers.services import ServicesHandler
 
 
 def _create_app_with_service() -> ActingWebApp:
@@ -38,12 +38,12 @@ def test_action_hook_receives_service_client():
         property=Mock(),
         store=Mock(),
     )
-    actor_interface = ActorInterface(core_actor)
+    actor_interface = ActorInterface(core_actor)  # type: ignore[arg-type]
 
     captured = {}
 
     @app.action_hook("sync_contacts")
-    def sync_contacts(actor, action_name, data):
+    def sync_contacts(actor, action_name, data):  # pyright: ignore[reportUnusedFunction]
         captured["client"] = actor.services.get("crm_service")
         return {"status": "ok"}
 
@@ -67,7 +67,7 @@ def test_services_handler_callback_uses_registry():
     response = Mock()
     webobj = SimpleNamespace(request=request, response=response)
 
-    handler = ServicesHandler(webobj, config, hooks=app.hooks)
+    handler = ServicesHandler(webobj, config, hooks=app.hooks)  # type: ignore[arg-type]
 
     actor_core = SimpleNamespace(
         id="actor-123",

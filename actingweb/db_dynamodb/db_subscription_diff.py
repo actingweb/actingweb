@@ -1,7 +1,6 @@
 import datetime
 import logging
 import os
-from builtins import str
 
 from pynamodb.attributes import NumberAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.models import Model

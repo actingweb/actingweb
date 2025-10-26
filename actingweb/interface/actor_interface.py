@@ -4,12 +4,12 @@ Improved Actor interface that wraps the core Actor class.
 Provides a clean, intuitive interface for working with ActingWeb actors.
 """
 
-from typing import Any, Optional, Dict, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from ..actor import Actor as CoreActor
 from .property_store import PropertyStore
-from .trust_manager import TrustManager
 from .subscription_manager import SubscriptionManager
+from .trust_manager import TrustManager
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -54,13 +54,13 @@ class ActorInterface:
             data={"status": "active"},
         )
     """
-    
+
     def __init__(self, core_actor: CoreActor, service_registry=None):
         self._core_actor = core_actor
-        self._property_store: Optional[PropertyStore] = None
+        self._property_store: PropertyStore | None = None
         self._property_list_store = None  # Will be initialized on first access
-        self._trust_manager: Optional[TrustManager] = None
-        self._subscription_manager: Optional[SubscriptionManager] = None
+        self._trust_manager: TrustManager | None = None
+        self._subscription_manager: SubscriptionManager | None = None
         if service_registry is not None:
             self._service_registry = service_registry
         else:
@@ -68,11 +68,11 @@ class ActorInterface:
             registry_from_config = getattr(config, "service_registry", None) if config is not None else None
             self._service_registry = registry_from_config
         self._services = None  # Will be initialized on first access
-        
+
     @classmethod
-    def create(cls, creator: str, config: 'Config', actor_id: Optional[str] = None,
-               passphrase: Optional[str] = None, delete_existing: bool = False,
-               trustee_root: Optional[str] = None, hooks: Any = None, service_registry=None) -> 'ActorInterface':
+    def create(cls, creator: str, config: 'Config', actor_id: str | None = None,
+               passphrase: str | None = None, delete_existing: bool = False,
+               trustee_root: str | None = None, hooks: Any = None, service_registry=None) -> 'ActorInterface':
         """
         Create a new actor.
 
@@ -111,7 +111,7 @@ class ActorInterface:
             raise RuntimeError(f"Failed to create actor for creator: {creator}")
 
         return cls(core_actor, service_registry)
-        
+
     @classmethod
     def get_by_id(cls, actor_id: str, config: 'Config', service_registry=None) -> Optional['ActorInterface']:
         """
@@ -131,7 +131,7 @@ class ActorInterface:
         if core_actor.id:
             return cls(core_actor, service_registry)
         return None
-        
+
     @classmethod
     def get_by_creator(cls, creator: str, config: 'Config', service_registry=None) -> Optional['ActorInterface']:
         """
@@ -151,7 +151,7 @@ class ActorInterface:
         if core_actor.get_from_creator(creator=creator):
             return cls(core_actor, service_registry)
         return None
-        
+
     @classmethod
     def get_by_property(cls, property_name: str, property_value: str, config: 'Config', service_registry=None) -> Optional['ActorInterface']:
         """
@@ -173,29 +173,29 @@ class ActorInterface:
         if core_actor.id:
             return cls(core_actor, service_registry)
         return None
-        
+
     @property
-    def id(self) -> Optional[str]:
+    def id(self) -> str | None:
         """Actor ID."""
         return self._core_actor.id
-        
+
     @property
-    def creator(self) -> Optional[str]:
+    def creator(self) -> str | None:
         """Actor creator."""
         return self._core_actor.creator
-        
+
     @property
-    def passphrase(self) -> Optional[str]:
+    def passphrase(self) -> str | None:
         """Actor passphrase."""
         return self._core_actor.passphrase
-        
+
     @property
     def url(self) -> str:
         """Actor URL."""
         if self._core_actor.config and self.id:
             return f"{self._core_actor.config.root}{self.id}"
         return ""
-        
+
     @property
     def properties(self) -> PropertyStore:
         """Actor properties."""
@@ -204,7 +204,7 @@ class ActorInterface:
                 raise RuntimeError("Actor properties not available - actor may not be properly initialized")
             self._property_store = PropertyStore(self._core_actor.property)
         return self._property_store
-        
+
     @property
     def property_lists(self):
         """Actor property lists for distributed storage."""
@@ -213,14 +213,14 @@ class ActorInterface:
             from ..property import PropertyListStore
             self._property_list_store = PropertyListStore(actor_id=self.id, config=self._core_actor.config)
         return self._property_list_store
-        
+
     @property
     def trust(self) -> TrustManager:
         """Trust relationship manager."""
         if self._trust_manager is None:
             self._trust_manager = TrustManager(self._core_actor)
         return self._trust_manager
-        
+
     @property
     def subscriptions(self) -> SubscriptionManager:
         """Subscription manager."""
@@ -238,64 +238,64 @@ class ActorInterface:
             try:
                 from .services.service_registry import ActorServices
                 self._services = ActorServices(self, self._service_registry)
-            except ImportError:
-                raise RuntimeError("ActorServices not available. Service registry functionality requires proper installation.")
+            except ImportError as e:
+                raise RuntimeError("ActorServices not available. Service registry functionality requires proper installation.") from e
         return self._services
-        
-    @property 
+
+    @property
     def core_actor(self) -> CoreActor:
         """Access to underlying core actor (for advanced use)."""
         return self._core_actor
-        
+
     def delete(self) -> None:
         """Delete this actor and all associated data."""
         self._core_actor.delete()
-        
+
     def modify_creator(self, new_creator: str) -> bool:
         """
         Modify the creator of this actor.
-        
+
         Args:
             new_creator: New creator identifier
-            
+
         Returns:
             True if successful, False otherwise
         """
         return self._core_actor.modify(creator=new_creator)
-        
+
     def is_valid(self) -> bool:
         """Check if this actor is valid (has ID and exists)."""
         return self.id is not None and len(self.id) > 0
-        
+
     def is_owner(self) -> bool:
         """Check if current user is the owner of this actor."""
         # This is a placeholder implementation
         # In a real implementation, this would check authentication context
         return True
-        
+
     def refresh(self) -> bool:
         """Refresh actor data from storage."""
         if self.id is None:
             return False
         actor_data = self._core_actor.get(actor_id=self.id)
         return actor_data is not None and len(actor_data) > 0
-        
-    def get_peer_info(self, peer_url: str) -> Dict[str, Any]:
+
+    def get_peer_info(self, peer_url: str) -> dict[str, Any]:
         """
         Get information about a peer actor.
-        
+
         Args:
             peer_url: URL of the peer actor
-            
+
         Returns:
             Dictionary with peer information
         """
         return self._core_actor.get_peer_info(peer_url)
-        
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert actor to dictionary representation.
-        
+
         Returns:
             Dictionary with actor data
         """
@@ -307,11 +307,11 @@ class ActorInterface:
             "trust_relationships": len(self.trust.relationships),
             "subscriptions": len(self.subscriptions.all_subscriptions)
         }
-        
+
     def __str__(self) -> str:
         """String representation of actor."""
         return f"Actor(id={self.id}, creator={self.creator})"
-        
+
     def __repr__(self) -> str:
         """Detailed representation of actor."""
         return f"ActorInterface(id={self.id}, creator={self.creator}, url={self.url})"

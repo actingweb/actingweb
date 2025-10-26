@@ -41,7 +41,8 @@ class OAuth2SessionManager:
         token_data: Dict[str, Any],
         user_info: Dict[str, Any],
         state: str = "",
-        provider: str = "google"
+        provider: str = "google",
+        verified_emails: Optional[list[str]] = None
     ) -> str:
         """
         Store OAuth2 session data temporarily in database.
@@ -51,6 +52,7 @@ class OAuth2SessionManager:
             user_info: User information from OAuth provider
             state: OAuth state parameter
             provider: OAuth provider name (google, github, etc)
+            verified_emails: List of verified emails from provider (if available)
 
         Returns:
             Session ID for retrieving the data later
@@ -67,6 +69,11 @@ class OAuth2SessionManager:
             "provider": provider,
             "created_at": int(time.time()),
         }
+
+        # Store verified emails if provided
+        if verified_emails:
+            session_data["verified_emails"] = verified_emails
+            logger.debug(f"Stored {len(verified_emails)} verified emails in session")
 
         # Store in attribute bucket for persistence across containers
         bucket = attribute.Attributes(
@@ -116,7 +123,8 @@ class OAuth2SessionManager:
             bucket.delete_attr(name=session_id)
             return None
 
-        return session
+        from typing import cast
+        return cast(Dict[str, Any], session)
 
     def complete_session(self, session_id: str, email: str) -> Optional['actor_module.Actor']:
         """

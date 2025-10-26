@@ -136,11 +136,12 @@ GitHub OAuth2 Provider
     - **Private Email Handling**: Special logic for users with private email addresses
 
 **Email Handling:**
-    GitHub users may have private email addresses. The system handles this by:
-    
-    1. Using public email if available
-    2. Attempting to fetch primary email via GitHub's emails API
-    3. Falling back to ``{username}@github.local`` as unique identifier
+    GitHub users may have private email addresses. The system provides multiple strategies:
+
+    1. Using public email if available (immediate login)
+    2. Fetching verified emails via GitHub's emails API (dropdown selection)
+    3. Manual email input with verification link (see Email Verification below)
+    4. Provider ID mode: using stable GitHub user ID as identifier (no email required)
 
 GitHub App Setup
 ----------------
@@ -772,6 +773,421 @@ New configuration (backward compatible):
     
     # Or explicitly specify provider
     config.oauth2_provider = "google"  # or "github"
+
+Email Verification System
+==========================
+
+ActingWeb includes a comprehensive email verification system to prevent account hijacking when OAuth providers cannot verify email ownership.
+
+Security Problem
+----------------
+
+When OAuth2 providers don't return a verified email address (e.g., GitHub users with private emails), the system needs to ensure the email entered by the user actually belongs to them. Without verification, an attacker could:
+
+1. Authenticate with GitHub (private email)
+2. Enter a victim's email address in the form
+3. Gain access to the victim's actor
+
+The email verification system prevents this by requiring proof of email ownership.
+
+How It Works
+------------
+
+**Scenario 1: Provider Has Verified Emails**
+    OAuth provider returns verified emails → User selects from dropdown → Actor created (email_verified=true)
+
+**Scenario 2: No Verified Emails Available**
+    No verified emails → User enters email → Verification email sent → User clicks link → Email marked verified
+
+**Scenario 3: MCP Flows** (Cannot use web forms)
+    No email from provider → Return error 502 → User must configure OAuth provider to make email public
+
+Configuration
+-------------
+
+Email verification behavior is controlled by the ``force_email_prop_as_creator`` configuration:
+
+.. code-block:: python
+
+    app = (
+        ActingWebApp(...)
+        .with_email_as_creator(enable=True)  # Requires email addresses (default)
+        .with_unique_creator(enable=True)
+    )
+
+When enabled (default):
+    - Actor ``creator`` field must be a valid email address
+    - System validates email ownership via OAuth provider OR verification link
+    - Suitable for applications requiring email for notifications, billing, etc.
+
+When disabled:
+    - Actor ``creator`` field can be provider-specific ID
+    - No email verification needed (see Provider ID Support below)
+    - Suitable for privacy-focused applications
+
+Verification Flow
+-----------------
+
+1. **Token Generation**: 32-byte URL-safe random token, 24-hour expiry
+2. **Storage**: Token stored in ``actor.store.email_verification_token``
+3. **Email Sent**: Lifecycle hook ``email_verification_required`` triggered
+4. **User Clicks Link**: ``GET /<actor_id>/www/verify_email?token=abc123``
+5. **Validation**: Token checked against stored value and expiry
+6. **Mark Verified**: ``actor.store.email_verified`` set to ``"true"``
+7. **Hook Triggered**: Lifecycle hook ``email_verified`` executed
+
+Implementing Email Verification
+--------------------------------
+
+**Required: Implement the verification email hook:**
+
+.. code-block:: python
+
+    @app.lifecycle_hook("email_verification_required")
+    def send_verification_email(
+        actor: ActorInterface,
+        email: str,
+        verification_url: str,
+        token: str
+    ) -> None:
+        """Send verification email when OAuth provider cannot verify."""
+        import boto3  # or your email service
+
+        ses = boto3.client('ses', region_name='us-east-1')
+
+        ses.send_email(
+            Source="noreply@yourdomain.com",
+            Destination={"ToAddresses": [email]},
+            Message={
+                "Subject": {"Data": "Verify your email address"},
+                "Body": {
+                    "Html": {
+                        "Data": f'''
+                        <h2>Verify Your Email</h2>
+                        <p>Click the link below to verify your email:</p>
+                        <p><a href="{verification_url}">Verify Email</a></p>
+                        <p>This link expires in 24 hours.</p>
+                        '''
+                    }
+                }
+            }
+        )
+
+**Optional: Handle successful verification:**
+
+.. code-block:: python
+
+    @app.lifecycle_hook("email_verified")
+    def handle_email_verified(actor: ActorInterface, email: str) -> None:
+        """Called after successful email verification."""
+        logger.info(f"Email verified for actor {actor.id}: {email}")
+        # Optional: Send welcome email, grant permissions, etc.
+
+Verification Endpoints
+----------------------
+
+``GET /<actor_id>/www/verify_email?token=<token>``
+    Validates the verification token and marks email as verified.
+
+    **Responses:**
+        - Success: Shows "Email Verified!" page
+        - Invalid token: Shows error with explanation
+        - Expired token: Shows error with "Resend" button
+
+``POST /<actor_id>/www/verify_email``
+    Resends the verification email with a new token.
+
+    **Use case:** User didn't receive the original email or token expired
+
+Verification State
+------------------
+
+The verification state is stored in actor properties:
+
+.. code-block:: python
+
+    # Check if email is verified
+    if actor.store.email_verified == "true":
+        # Email has been verified
+        pass
+
+    # Access verification metadata
+    token = actor.store.email_verification_token  # Current token (if pending)
+    created_at = actor.store.email_verification_created_at  # Token creation time
+    verified_at = actor.store.email_verified_at  # When verification completed
+
+Templates
+---------
+
+ActingWeb provides default templates for email verification:
+
+**aw-verify-email.html**
+    Verification result page (success, error, expired)
+
+**aw-oauth-email.html**
+    Email input form with dropdown support for verified emails
+
+Applications can override these templates by placing them in their ``templates/`` directory.
+
+Security Considerations
+-----------------------
+
+**Token Security:**
+    - 32 bytes (256 bits) of cryptographically secure random data
+    - URL-safe encoding (no special characters)
+    - Single-use tokens (cleared after verification)
+    - 24-hour expiration
+
+**Email Validation:**
+    - Verified emails from OAuth providers are validated via API
+    - User input restricted to verified emails when available (dropdown)
+    - Manual email input requires clicking verification link
+    - No way to bypass verification requirement
+
+**Attack Prevention:**
+    - Token brute-forcing: 256-bit entropy makes this impractical
+    - Token replay: Tokens are single-use and cleared after verification
+    - Token expiry: Forces re-verification after 24 hours
+    - Email spoofing: Verification link sent to claimed email address
+
+MCP Authorization Security
+===========================
+
+ActingWeb includes critical security protections for MCP (Model Context Protocol) authorization flows to prevent unauthorized access.
+
+Cross-Actor Authorization Prevention
+-------------------------------------
+
+**Security Threat:**
+    An attacker could attempt to authorize MCP access to someone else's actor by manipulating the OAuth flow with a different user's ``actor_id``.
+
+**Attack Scenario Without Protection:**
+
+1. Alice has an actor with ``creator="alice@example.com"`` and ``actor_id="abc123"``
+2. Bob starts MCP authorization with OAuth, providing ``actor_id="abc123"`` in the state parameter
+3. Bob authenticates with his Google account (bob@example.com)
+4. Without validation, the system would:
+
+   - Load Alice's actor (abc123)
+   - Store Bob's OAuth tokens in Alice's actor
+   - Create trust relationship from Bob to Alice's actor
+   - Bob gains unauthorized access to Alice's data!
+
+**Protection Mechanism:**
+
+The OAuth2 callback handler validates actor ownership before completing authorization:
+
+.. code-block:: python
+
+    # In oauth2_callback.py
+    if actor_id and actor_instance:
+        # Validate OAuth identifier matches actor creator
+        if actor_instance.creator != identifier:
+            # Reject authorization attempt
+            return error_response(403, "You cannot authorize access to an actor that doesn't belong to you")
+
+**How It Works:**
+
+1. When ``actor_id`` is provided in OAuth state, the system loads the actor
+2. Compares the OAuth-authenticated identifier with the actor's ``creator`` field
+3. If they don't match, rejects the authorization with HTTP 403
+4. Only allows authorization when the OAuth user owns the actor
+
+**Error Messages:**
+
+For MCP authorization attempts:
+    *"You cannot authorize MCP access to an actor that doesn't belong to you. You authenticated as 'bob@example.com' but this actor belongs to 'alice@example.com'."*
+
+For web login attempts:
+    *"Authentication failed: You authenticated as 'bob@example.com' but attempted to access an actor belonging to 'alice@example.com'. Please log in with the correct account."*
+
+Session Fixation Prevention
+----------------------------
+
+This security check also prevents session fixation attacks in web login flows:
+
+**Attack Scenario:**
+1. Attacker tricks victim into visiting OAuth URL with attacker's ``actor_id``
+2. Victim authenticates with their own Google account
+3. Without validation, victim's session would be bound to attacker's actor
+
+**Protection:**
+The same validation prevents this by rejecting authentication when the OAuth identifier doesn't match the actor creator.
+
+Security Logging
+-----------------
+
+All authorization violations are logged with full context:
+
+.. code-block:: text
+
+    ERROR Security violation: OAuth identifier 'bob@example.com' does not match
+    actor creator 'alice@example.com'. Flow type: MCP authorization
+
+This enables security monitoring and incident response.
+
+Legitimate Use Cases
+---------------------
+
+**Self-Authorization (Allowed):**
+    - Alice authenticates with alice@example.com
+    - Provides her own ``actor_id``
+    - OAuth identifier matches actor creator → Authorized ✓
+
+**New Actor Creation (Allowed):**
+    - Bob authenticates with bob@example.com
+    - No ``actor_id`` provided OR invalid ``actor_id``
+    - System creates new actor with creator=bob@example.com → Authorized ✓
+
+**Cross-Actor Authorization (Blocked):**
+    - Bob authenticates with bob@example.com
+    - Provides Alice's ``actor_id``
+    - OAuth identifier doesn't match actor creator → Rejected ✗
+
+Provider ID Support
+===================
+
+ActingWeb supports using stable provider-specific identifiers instead of email addresses as the actor creator. This provides enhanced privacy and works with users who don't want to share their email.
+
+What Are Provider IDs?
+-----------------------
+
+Instead of using email addresses (which can change or be private), ActingWeb can use stable identifiers from OAuth providers:
+
+**Google Provider IDs:**
+    Format: ``google:<sub>``
+
+    Example: ``google:105123456789012345678``
+
+    The ``sub`` claim is a unique, stable identifier that never changes for a user.
+
+**GitHub Provider IDs:**
+    Format: ``github:<user_id>``
+
+    Example: ``github:12345678``
+
+    The GitHub user ID is stable even if the username changes. Falls back to ``github:<username>`` if user ID unavailable.
+
+**Other Providers:**
+    Format: ``{provider_name}:{unique_id}``
+
+    Example: ``microsoft:550e8400-e29b-41d4-a716-446655440000``
+
+Configuration
+-------------
+
+Enable provider ID mode by disabling email-as-creator:
+
+.. code-block:: python
+
+    app = (
+        ActingWebApp(...)
+        .with_email_as_creator(enable=False)  # Use provider IDs
+        .with_unique_creator(enable=True)
+    )
+
+**Effect:**
+    - Actor ``creator`` field contains provider ID (e.g., ``google:105...``)
+    - Email address stored separately in ``actor.store.email`` (if provided by OAuth)
+    - No email verification required
+    - Works with private emails and email-less OAuth flows
+
+Accessing Actor Information
+----------------------------
+
+.. code-block:: python
+
+    # Get provider and ID from creator
+    if actor.creator.startswith("google:"):
+        google_sub = actor.creator.split(":", 1)[1]
+        print(f"Google user: {google_sub}")
+    elif actor.creator.startswith("github:"):
+        github_id = actor.creator.split(":", 1)[1]
+        print(f"GitHub user: {github_id}")
+
+    # Get display email (may be None in provider ID mode)
+    email = actor.store.email or "No email provided"
+
+    # Get OAuth provider
+    provider = actor.store.oauth_provider  # "google", "github", etc.
+
+Benefits of Provider IDs
+-------------------------
+
+**Privacy:**
+    Users can authenticate without sharing their email address
+
+**Stability:**
+    Provider IDs never change, even if the user changes their email or username
+
+**Compatibility:**
+    Works with OAuth providers that don't expose email addresses
+
+**Security:**
+    No user input - identifiers come directly from OAuth provider
+
+**Simplicity:**
+    No email verification flow needed
+
+When to Use Provider IDs
+-------------------------
+
+**Use Provider IDs when:**
+    - Privacy is a priority
+    - Email addresses are not required for your application
+    - You want stable, unchanging identifiers
+    - Supporting users with private GitHub emails
+    - Building MCP-only applications (no email notifications)
+
+**Use Email Mode when:**
+    - You need to send email notifications
+    - Billing requires email addresses
+    - Users expect email-based identification
+    - Compatibility with existing email-based systems
+
+Migration Between Modes
+------------------------
+
+**Switching from Email to Provider ID:**
+    Existing email-based actors continue to work. New actors use provider IDs.
+
+**Switching from Provider ID to Email:**
+    Not recommended. Existing actors use provider IDs. Consider implementing email linking separately.
+
+**Hybrid Approach:**
+    Store provider ID as creator, link email separately:
+
+    .. code-block:: python
+
+        # In provider ID mode, email is stored separately
+        actor.creator  # "google:105123456789012345678"
+        actor.store.email  # "user@gmail.com" (if provided by OAuth)
+        actor.store.email_verified  # "true" if verified by OAuth provider
+
+Comparison: Email vs Provider ID Modes
+---------------------------------------
+
++---------------------------+-------------------------+---------------------------+
+| Feature                   | Email Mode              | Provider ID Mode          |
++===========================+=========================+===========================+
+| Creator field             | Email address           | Provider-specific ID      |
++---------------------------+-------------------------+---------------------------+
+| Email verification        | Required (if not from   | Not required              |
+|                           | verified OAuth source)  |                           |
++---------------------------+-------------------------+---------------------------+
+| Private GitHub emails     | Requires verification   | Works seamlessly          |
++---------------------------+-------------------------+---------------------------+
+| Stable identifier         | No (email can change)   | Yes (ID never changes)    |
++---------------------------+-------------------------+---------------------------+
+| Email notifications       | Yes                     | Optional (separate field) |
++---------------------------+-------------------------+---------------------------+
+| User privacy              | Email exposed           | Email optional            |
++---------------------------+-------------------------+---------------------------+
+| MCP flows                 | Email required          | Works without email       |
++---------------------------+-------------------------+---------------------------+
+| Configuration             | ``with_email_as_creator | ``with_email_as_creator   |
+|                           | (enable=True)``         | (enable=False)``          |
++---------------------------+-------------------------+---------------------------+
 
 Future Enhancements
 ===================

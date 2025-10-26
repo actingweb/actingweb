@@ -8,6 +8,7 @@ actor creation.
 
 import logging
 import json
+import time
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from .base_handler import BaseHandler
@@ -97,13 +98,8 @@ class OAuth2EmailHandler(BaseHandler):
         """
         # Parse request data
         try:
-            body = self.request.body
-            if isinstance(body, bytes):
-                body_str = body.decode("utf-8", "ignore")
-            elif body is None:
-                body_str = ""
-            else:
-                body_str = body
+            # request.body is str | None, so we can directly use it
+            body_str = self.request.body or ""
 
             # Try JSON first
             try:
@@ -139,10 +135,48 @@ class OAuth2EmailHandler(BaseHandler):
                 return {}
             return self.error_response(400, "Invalid email address")
 
-        # Complete OAuth session with provided email
+        # Get session with verified emails list
         from ..oauth_session import get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
+        session = session_manager.get_session(session_id)
+
+        if not session:
+            return self.error_response(400, "Invalid or expired session")
+
+        # Check if we have verified emails to validate against
+        verified_emails = session.get("verified_emails", [])
+        email_requires_verification = False
+
+        if verified_emails:
+            # We have verified emails - user MUST choose from this list
+            if email not in verified_emails:
+                logger.error(f"Email {email} not in verified emails: {verified_emails}")
+
+                # For web forms, show dropdown with verified emails
+                if self.config.ui:
+                    self.response.set_status(400)
+                    self.response.template_values = {
+                        "session_id": session_id,
+                        "action": "/oauth/email",
+                        "method": "POST",
+                        "provider": session.get("provider", "OAuth provider"),
+                        "verified_emails": verified_emails,
+                        "error": "Please select one of your verified email addresses",
+                        "show_dropdown": True
+                    }
+                    return {}
+
+                return self.error_response(
+                    403,
+                    "Email not verified with OAuth provider. Please select from your verified emails."
+                )
+        else:
+            # No verified emails from provider - user can enter any email but needs verification
+            logger.info(f"No verified emails from OAuth provider - {email} will require verification")
+            email_requires_verification = True
+
+        # Complete OAuth session with provided email
         actor_instance = session_manager.complete_session(session_id, email)
 
         if not actor_instance:
@@ -170,6 +204,41 @@ class OAuth2EmailHandler(BaseHandler):
                 self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for actor_created: {e}")
+
+        # If email requires verification, set up verification flow
+        if email_requires_verification and actor_instance.store:
+            import secrets
+            from ..constants import EMAIL_VERIFICATION_TOKEN_LENGTH
+
+            # Generate verification token
+            verification_token = secrets.token_urlsafe(EMAIL_VERIFICATION_TOKEN_LENGTH)
+
+            # Store verification state
+            actor_instance.store.email_verified = "false"
+            actor_instance.store.email_verification_token = verification_token
+            actor_instance.store.email_verification_created_at = str(int(time.time()))
+
+            logger.info(f"Email verification required for {email}, token generated")
+
+            # Execute hook to send verification email
+            if self.hooks:
+                try:
+                    from ..interface.actor_interface import ActorInterface
+                    registry = getattr(self.config, "service_registry", None)
+                    actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
+
+                    verification_url = f"{self.config.proto}{self.config.fqdn}/{actor_instance.id}/www/verify_email?token={verification_token}"
+
+                    self.hooks.execute_lifecycle_hooks(
+                        "email_verification_required",
+                        actor_interface,
+                        email=email,
+                        verification_url=verification_url,
+                        token=verification_token
+                    )
+                except Exception as e:
+                    logger.error(f"Error in email_verification_required hook: {e}")
+                    # Don't fail the OAuth flow - just log the error
 
         # Set up session cookie with OAuth token
         if actor_instance.store and actor_instance.store.oauth_token:

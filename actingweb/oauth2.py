@@ -13,7 +13,7 @@ import hashlib
 import re
 from typing import Optional, Dict, Any, Tuple
 from urllib.parse import urlparse
-import requests
+import requests  # type: ignore[import-untyped]
 from oauthlib.oauth2 import WebApplicationClient  # type: ignore[import-untyped]
 from oauthlib.common import generate_token  # type: ignore[import-untyped]
 
@@ -25,7 +25,7 @@ from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 logger = logging.getLogger(__name__)
 
 # Simple cache for invalid tokens to avoid repeat network requests
-_invalid_token_cache = {}
+_invalid_token_cache: Dict[str, float] = {}
 _INVALID_TOKEN_CACHE_TTL = 300  # 5 minutes
 
 
@@ -357,34 +357,76 @@ class OAuth2Authenticator:
             _invalid_token_cache[token_hash] = current_time
             return None
 
-    def get_email_from_user_info(self, user_info: Dict[str, Any], access_token: Optional[str] = None) -> Optional[str]:
-        """Extract email from user info based on provider."""
+    def get_email_from_user_info(
+        self,
+        user_info: Dict[str, Any],
+        access_token: Optional[str] = None,
+        require_email: bool = False
+    ) -> Optional[str]:
+        """
+        Extract email or unique provider identifier from user info.
+
+        Behavior depends on require_email flag:
+        - If True: Only return valid email addresses (respects force_email_prop_as_creator)
+        - If False: Return provider-specific unique identifier if email unavailable
+
+        Args:
+            user_info: User information from OAuth2 provider
+            access_token: OAuth2 access token (for additional API calls)
+            require_email: If True, only return valid emails (not provider IDs)
+
+        Returns:
+            Email address or provider-specific identifier, or None if unavailable
+        """
         if not user_info:
             return None
 
-        # For Google and most providers
+        # Always try to get email first (preferred for both modes)
         email = user_info.get("email")
         if email:
             return str(email).lower()
 
-        # For GitHub, if email is not public, we may need to make additional API call
-        if self.provider.name == "github":
-            # Try to get the primary email from GitHub's emails API if we have access token
-            if access_token and not email:
+        # If email is required (force_email_prop_as_creator=True), try harder
+        if require_email:
+            if self.provider.name == "github" and access_token:
+                # Try to fetch verified emails from GitHub API
                 email = self._get_github_primary_email(access_token)
                 if email:
                     return email.lower()
 
-            # GitHub might not have email if it's private
-            # Use login (username) as fallback identifier
+            # If still no email and email is required, return None
+            # This will trigger email input form
+            return None
+
+        # Email not required - use provider-specific unique identifier
+        logger.info(f"Email not available, using provider-specific identifier for {self.provider.name}")
+
+        if self.provider.name == "google":
+            # Google 'sub' claim is stable unique identifier (never changes)
+            sub = user_info.get("sub")
+            if sub:
+                return f"google:{sub}"
+
+        if self.provider.name == "github":
+            # GitHub user ID is most stable (doesn't change even if username changes)
+            user_id = user_info.get("id")
+            if user_id:
+                return f"github:{user_id}"
+
+            # Fallback to username (can change but better than nothing)
             login = user_info.get("login")
             if login:
-                # For GitHub, we'll use login@github.local as the email identifier
-                # This ensures each GitHub user gets a unique identifier
-                return f"{login}@github.local"
+                logger.warning(f"Using GitHub username '{login}' as identifier - this may change")
+                return f"github:{login}".lower()
 
         # Fallback for other providers
-        return str(user_info.get("preferred_username", "")).lower()
+        username = user_info.get("preferred_username", "")
+        if username:
+            return f"{self.provider.name}:{username}".lower()
+
+        # No identifier available
+        logger.error(f"Failed to extract any identifier from {self.provider.name} user info")
+        return None
 
     def _get_github_primary_email(self, access_token: str) -> Optional[str]:
         """Get primary email from GitHub's emails API."""
@@ -429,9 +471,61 @@ class OAuth2Authenticator:
             logger.warning(f"Failed to get GitHub primary email: {e}")
             return None
 
+    def _get_github_verified_emails(self, access_token: str) -> Optional[list[str]]:
+        """
+        Fetch ALL verified emails from GitHub's emails API.
+
+        Args:
+            access_token: GitHub OAuth access token
+
+        Returns:
+            List of verified email addresses, or None if API call fails
+        """
+        if not access_token:
+            return None
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+            "User-Agent": "ActingWeb-OAuth2-Client",
+        }
+
+        try:
+            response = requests.get(
+                url="https://api.github.com/user/emails",
+                headers=headers,
+                timeout=(5, 10)
+            )
+
+            if response.status_code != 200:
+                logger.warning(f"GitHub emails API request failed: {response.status_code}")
+                return None
+
+            emails = response.json()
+
+            # Extract all verified emails
+            verified = []
+            for email_info in emails:
+                if email_info.get("verified", False):
+                    email = email_info.get("email")
+                    if email:
+                        verified.append(str(email).lower())
+
+            if verified:
+                logger.debug(f"Found {len(verified)} verified emails from GitHub")
+                return verified
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"Failed to get GitHub verified emails: {e}")
+            return None
+
     def lookup_or_create_actor_by_email(self, email: str) -> Optional[actor_module.Actor]:
         """
         Look up actor by email or create new one if not found.
+
+        DEPRECATED: Use lookup_or_create_actor_by_identifier() instead.
 
         Args:
             email: User email from OAuth2 provider
@@ -439,38 +533,75 @@ class OAuth2Authenticator:
         Returns:
             Actor instance or None if failed
         """
-        if not email:
+        return self.lookup_or_create_actor_by_identifier(email, user_info=None)
+
+    def lookup_or_create_actor_by_identifier(
+        self,
+        identifier: str,
+        user_info: Optional[Dict[str, Any]] = None
+    ) -> Optional[actor_module.Actor]:
+        """
+        Look up actor by identifier (email or provider ID) or create new one if not found.
+
+        Args:
+            identifier: User identifier - can be email or provider-specific ID
+            user_info: Optional user info for additional metadata storage
+
+        Returns:
+            Actor instance or None if failed
+        """
+        if not identifier:
             return None
 
         try:
-            # Use get_from_creator() method to find existing actor by email
+            # Use get_from_creator() method to find existing actor by identifier
             existing_actor = actor_module.Actor(config=self.config)
-            if existing_actor.get_from_creator(email):
+            if existing_actor.get_from_creator(identifier):
+                logger.info(f"Found existing actor for identifier: {identifier}")
                 return existing_actor
 
-            # Create new actor with email as creator using ActorInterface
+            # Create new actor with identifier as creator
+            logger.info(f"Creating new actor for identifier: {identifier}")
+
             try:
                 actor_interface = ActorInterface.create(
-                    creator=email,
+                    creator=identifier,
                     config=self.config,
                     passphrase="",  # ActingWeb will auto-generate
-                    hooks=getattr(self.config, "_hooks", None),  # Pass hooks if available for lifecycle events
+                    hooks=getattr(self.config, "_hooks", None),
                 )
 
                 # Set up initial properties for OAuth actor
                 if actor_interface.core_actor.store:
-                    actor_interface.core_actor.store.email = email
+                    # Store OAuth provider info
                     actor_interface.core_actor.store.auth_method = f"{self.provider.name}_oauth2"
                     actor_interface.core_actor.store.created_at = str(int(time.time()))
                     actor_interface.core_actor.store.oauth_provider = self.provider.name
 
-                return actor_interface.core_actor  # Return the core actor for backward compatibility
+                    # If identifier is provider-specific ID, store actual email separately
+                    if ":" in identifier and user_info:
+                        email = user_info.get("email")
+                        if email:
+                            actor_interface.core_actor.store.email = email.lower()
+                            logger.debug(f"Stored display email for provider ID actor: {email}")
+
+                        # Store provider-specific ID for reference
+                        if identifier.startswith("google:"):
+                            actor_interface.core_actor.store.oauth_sub = identifier.split(":", 1)[1]
+                        elif identifier.startswith("github:"):
+                            actor_interface.core_actor.store.oauth_github_id = identifier.split(":", 1)[1]
+                    elif "@" in identifier:
+                        # Identifier is an email - store it in email property too
+                        actor_interface.core_actor.store.email = identifier
+
+                return actor_interface.core_actor
+
             except Exception as create_error:
-                logger.error(f"Failed to create actor for email {email}: {create_error}")
+                logger.error(f"Failed to create actor for identifier {identifier}: {create_error}")
                 return None
 
         except Exception as e:
-            logger.error(f"Exception during actor lookup/creation for {email}: {e}")
+            logger.error(f"Exception during actor lookup/creation for {identifier}: {e}")
             return None
 
     def validate_email_from_state(self, state: str, authenticated_email: str) -> bool:
@@ -744,7 +875,7 @@ def create_oauth2_trust_relationship(
             established_via = ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 
         # Delegate to TrustManager for unified behavior
-        from .interface.trust_manager import TrustManager  # type: ignore
+        from .interface.trust_manager import TrustManager
 
         tm = TrustManager(actor.core_actor)
         return tm.create_or_update_oauth_trust(

@@ -449,6 +449,15 @@ class FastAPIIntegration:
             self.logger.debug("Using standard Google OAuth2 callback handler")
             return await self._handle_google_oauth_callback(request)
 
+        # OAuth2 email input - handles email collection when OAuth provider doesn't provide one
+        @self.fastapi_app.get("/oauth/email")
+        async def oauth_email_get(request: Request) -> Response:
+            return await self._handle_oauth2_email(request)
+
+        @self.fastapi_app.post("/oauth/email")
+        async def oauth_email_post(request: Request) -> Response:
+            return await self._handle_oauth2_email(request)
+
         # OAuth2 server endpoints for MCP clients
         @self.fastapi_app.post("/oauth/register")
         @self.fastapi_app.options("/oauth/register")
@@ -1084,6 +1093,76 @@ class FastAPIIntegration:
                 return self.templates.TemplateResponse(
                     "aw-root-failed.html", {"request": request, **webobj.response.template_values}
                 )
+
+        return self._create_fastapi_response(webobj, request)
+
+    async def _handle_oauth2_email(self, request: Request) -> Response:
+        """Handle OAuth2 email input requests."""
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth_email import OAuth2EmailHandler
+
+        handler = OAuth2EmailHandler(webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks)
+
+        # Run the synchronous handler in a thread pool
+        loop = asyncio.get_running_loop()
+        if request.method == "POST":
+            result = await loop.run_in_executor(self.executor, handler.post)
+        else:
+            result = await loop.run_in_executor(self.executor, handler.get)
+
+        # Handle template rendering for email form
+        if hasattr(webobj.response, "template_values") and webobj.response.template_values:
+            if self.templates:
+                try:
+                    # App provides aw-oauth-email.html template
+                    return self.templates.TemplateResponse(
+                        "aw-oauth-email.html", {"request": request, **webobj.response.template_values}
+                    )
+                except Exception as e:
+                    # Template not found - provide basic HTML form as fallback
+                    self.logger.warning(f"Template aw-oauth-email.html not found: {e}")
+                    session_id = webobj.response.template_values.get("session_id", "")
+                    error = webobj.response.template_values.get("error", "")
+                    provider = webobj.response.template_values.get("provider_display", "OAuth provider")
+                    message = webobj.response.template_values.get("message", f"Your {provider} account does not have a public email. Please enter your email address to continue.")
+
+                    fallback_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Enter Email - ActingWeb</title>
+                        <style>
+                            body {{ font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }}
+                            .error {{ color: red; margin-bottom: 15px; }}
+                            .message {{ margin-bottom: 20px; color: #666; }}
+                            input[type="email"] {{ width: 100%; padding: 10px; margin: 10px 0; }}
+                            button {{ padding: 10px 20px; background: #4285f4; color: white; border: none; cursor: pointer; }}
+                            button:hover {{ background: #357ae8; }}
+                        </style>
+                    </head>
+                    <body>
+                        <h1>Email Required</h1>
+                        <p class="message">{message}</p>
+                        {f'<p class="error">{error}</p>' if error else ''}
+                        <form action="/oauth/email" method="POST">
+                            <input type="hidden" name="session" value="{session_id}" />
+                            <label>Email Address:
+                                <input type="email" name="email" required placeholder="your@email.com" />
+                            </label>
+                            <button type="submit">Continue</button>
+                        </form>
+                    </body>
+                    </html>
+                    """
+                    return HTMLResponse(content=fallback_html)
 
         return self._create_fastapi_response(webobj, request)
 

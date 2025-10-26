@@ -106,8 +106,38 @@ class OAuth2CallbackHandler(BaseHandler):
         # Extract email from user info
         email = self.authenticator.get_email_from_user_info(user_info, access_token)
         if not email:
-            logger.error("Failed to extract email from user info")
-            return self.error_response(502, "Email extraction failed")
+            logger.warning("Failed to extract email from user info - will redirect to email input form")
+
+            # Store OAuth data in temporary session for later completion
+            try:
+                from ..oauth_session import get_oauth2_session_manager
+
+                session_manager = get_oauth2_session_manager(self.config)
+                provider_name = getattr(self.config, 'oauth2_provider', 'google')
+                session_id = session_manager.store_session(
+                    token_data=token_data,
+                    user_info=user_info,
+                    state=state,
+                    provider=provider_name
+                )
+
+                # Redirect to email input form (app will provide template)
+                email_form_url = f"/oauth/email?session={session_id}"
+                self.response.set_status(302, "Found")
+                self.response.set_redirect(email_form_url)
+
+                return {
+                    "status": "email_required",
+                    "message": "Email could not be extracted from OAuth provider",
+                    "session_id": session_id,
+                    "redirect_url": email_form_url,
+                    "redirect_performed": True
+                }
+
+            except Exception as session_error:
+                logger.error(f"Failed to create OAuth session: {session_error}")
+                # Fall back to error response if session storage fails
+                return self.error_response(502, "Email extraction failed and could not store session")
         
         # Validate that the authenticated email matches the expected email from the form
         if not validate_expected_email(state, email):

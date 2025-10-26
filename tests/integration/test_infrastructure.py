@@ -4,12 +4,12 @@ Infrastructure Health Check Tests.
 Basic tests to verify the test infrastructure is working.
 """
 
-import pytest
 
 
 def test_docker_services(docker_services):
     """Test that DynamoDB is running via Docker."""
     import requests
+
     from .conftest import TEST_DYNAMODB_HOST
 
     # DynamoDB should respond to health check

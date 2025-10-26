@@ -13,9 +13,9 @@ This is critical for MCP functionality - MCP clients authenticate using OAuth2.
 Spec: OAuth2 authorization server for MCP clients
 """
 
+from typing import Any
+
 import pytest
-import json
-from typing import Dict, Any
 
 
 class TestMCPOAuth2ClientRegistration:
@@ -49,7 +49,7 @@ class TestMCPOAuth2ClientRegistration:
             print(f"Response body: {response.text[:500]}")
             try:
                 print(f"Response JSON: {response.json()}")
-            except:
+            except Exception:
                 pass
 
         assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text[:200]}"
@@ -86,7 +86,7 @@ class TestMCPOAuth2Authorization:
     """Test OAuth2 authorization flow for MCP clients."""
 
     @pytest.fixture
-    def registered_client(self, http_client, base_url) -> Dict[str, Any]:
+    def registered_client(self, http_client, base_url) -> dict[str, Any]:
         """Fixture to register an OAuth2 client."""
         response = http_client.post(
             f"{base_url}/oauth/register",
@@ -149,7 +149,7 @@ class TestMCPOAuth2TokenExchange:
     """Test OAuth2 token endpoint for MCP clients."""
 
     @pytest.fixture
-    def registered_client(self, http_client, base_url) -> Dict[str, Any]:
+    def registered_client(self, http_client, base_url) -> dict[str, Any]:
         """Fixture to register an OAuth2 client."""
         response = http_client.post(
             f"{base_url}/oauth/register",

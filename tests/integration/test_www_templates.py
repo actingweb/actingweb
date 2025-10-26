@@ -17,7 +17,6 @@ enabled, allowing www endpoints to be accessed with basic auth credentials.
 This test suite runs sequentially - each test depends on the previous ones.
 """
 
-import pytest
 
 
 class TestWWWTemplates:
@@ -32,10 +31,10 @@ class TestWWWTemplates:
     """
 
     # Shared state across tests in this class
-    actor_url = None
-    actor_id = None
-    passphrase = None
-    creator = "wwwtest@actingweb.net"
+    actor_url: str | None = None
+    actor_id: str | None = None
+    passphrase: str | None = None
+    creator: str = "wwwtest@actingweb.net"
 
     def test_001_create_actor(self, www_test_app):
         """
@@ -73,7 +72,7 @@ class TestWWWTemplates:
         # Use the creator and passphrase from actor creation for basic auth
         response = requests.get(
             f"{self.actor_url}/www",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type,union-attr,attr-defined,return-value]
         )
 
         assert response.status_code == 200
@@ -81,7 +80,7 @@ class TestWWWTemplates:
 
         html = response.text
         # Verify template variables are populated
-        assert self.actor_id in html, "Template should contain actor_id"
+        assert self.actor_id in html, "Template should contain actor_id"  # type: ignore[arg-type]
         assert self.creator in html, "Template should contain creator"
         assert f"/{self.actor_id}/www" in html, "Template should contain actor_www URL"
 
@@ -96,13 +95,13 @@ class TestWWWTemplates:
 
         response = requests.get(
             f"{self.actor_url}/www/init",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 200
 
         html = response.text
-        assert self.actor_id in html, "actor_id should be in init template"
+        assert self.actor_id in html, "actor_id should be in init template"  # type: ignore[arg-type]
         assert f"/{self.actor_id}/www" in html, "actor_www URL should be in template"
 
     def test_004_create_simple_property(self, www_test_app):
@@ -112,7 +111,7 @@ class TestWWWTemplates:
         response = requests.post(
             f"{self.actor_url}/properties/test_prop",
             json={"test_prop": "test_value"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 201]
@@ -129,13 +128,13 @@ class TestWWWTemplates:
 
         response = requests.get(
             f"{self.actor_url}/www/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 200
 
         html = response.text
-        assert self.actor_id in html, "actor_id should be in properties template"
+        assert self.actor_id in html, "actor_id should be in properties template"  # type: ignore[arg-type]
         assert "test_prop" in html, "property name should be in template"
         assert "test_value" in html, "property value should be in template"
         assert f"/{self.actor_id}/www" in html, "actor_www URL should be in template"
@@ -152,13 +151,13 @@ class TestWWWTemplates:
 
         response = requests.get(
             f"{self.actor_url}/www/properties/test_prop",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 200
 
         html = response.text
-        assert self.actor_id in html, "actor_id should be in property template"
+        assert self.actor_id in html, "actor_id should be in property template"  # type: ignore[arg-type]
         assert "test_prop" in html, "property name should be in template"
         assert "test_value" in html, "property value should be in template"
         assert f"/{self.actor_id}/www" in html, "actor_www URL should be in template"
@@ -171,7 +170,7 @@ class TestWWWTemplates:
         response = requests.post(
             f"{self.actor_url}/properties",
             json={"test_list": {"_type": "list"}},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 201], f"Failed to create list property: {response.text}"
@@ -180,7 +179,7 @@ class TestWWWTemplates:
         response = requests.put(
             f"{self.actor_url}/properties/test_list?index=0",
             json="list_item_1",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 204, f"Failed to add list item: {response.text}"
@@ -198,13 +197,13 @@ class TestWWWTemplates:
 
         response = requests.get(
             f"{self.actor_url}/www/properties/test_list",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 200
 
         html = response.text
-        assert self.actor_id in html, "actor_id should be in list property template"
+        assert self.actor_id in html, "actor_id should be in list property template"  # type: ignore[arg-type]
         assert "test_list" in html, "property name should be in template"
         # Should show list indicator (either "List with X items" or the items themselves)
         assert (
@@ -234,12 +233,12 @@ class TestWWWTemplates:
                 "url": peer_url,
                 "relationship": "friend",
             },
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert trust_response.status_code == 201
 
         # Approve trust from peer side
-        trust_data = trust_response.json()
+        _ = trust_response.json()  # noqa: F841  # type: ignore[arg-type]
         approve_response = requests.put(
             f"{peer_url}/trust/friend/{self.actor_id}",
             json={"approved": True},
@@ -258,8 +257,8 @@ class TestWWWTemplates:
         Template: aw-actor-www-trust.html
         Expected template_values: id, trusts, oauth_clients, url, actor_root, actor_www
         """
-        import requests
         import pytest
+        import requests
 
         # Skip if actor wasn't created in previous tests
         if not self.actor_url or not self.actor_id:
@@ -267,7 +266,7 @@ class TestWWWTemplates:
 
         response = requests.get(
             f"{self.actor_url}/www/trust",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 200
@@ -289,13 +288,13 @@ class TestWWWTemplates:
 
         response = requests.get(
             f"{self.actor_url}/www/trust/new",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 200
 
         html = response.text
-        assert self.actor_id in html, "actor_id should be in trust new template"
+        assert self.actor_id in html, "actor_id should be in trust new template"  # type: ignore[arg-type]
         assert "POST" in html or "post" in html, "form method should be in template"
         # Should have form for creating trust relationships
         assert (
@@ -307,8 +306,8 @@ class TestWWWTemplates:
         import requests
 
         response = requests.delete(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 204]  # 204 No Content is valid for DELETE
@@ -322,10 +321,10 @@ class TestWWWTemplateURLConsistency:
     to derive actor_root and actor_www URLs.
     """
 
-    actor_id = None
-    actor_url = None
-    passphrase = None
-    creator = "urltest@actingweb.net"
+    actor_id: str | None = None
+    actor_url: str | None = None
+    passphrase: str | None = None
+    creator: str = "urltest@actingweb.net"
 
     def test_001_create_actor(self, www_test_app):
         """Create an actor for URL consistency testing."""
@@ -359,7 +358,7 @@ class TestWWWTemplateURLConsistency:
 
         for page in pages:
             url = f"{self.actor_url}/www/{page}" if page else f"{self.actor_url}/www"
-            response = requests.get(url, auth=(self.creator, self.passphrase))
+            response = requests.get(url, auth=(self.creator, self.passphrase))  # type: ignore[arg-type]
 
             assert response.status_code == 200, f"Page {page} should be accessible"
 
@@ -377,8 +376,8 @@ class TestWWWTemplateURLConsistency:
         import requests
 
         response = requests.delete(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 204]  # 204 No Content is valid for DELETE

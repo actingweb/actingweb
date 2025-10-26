@@ -16,8 +16,6 @@ client-specific descriptions when available.
 Spec: Client-specific tool descriptions in MCP SDK server
 """
 
-import pytest
-import json
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 
@@ -169,7 +167,7 @@ class TestClientDescriptionSelection:
         tools = data["result"]["tools"]
         if len(tools) > 0:
             for tool in tools:
-                description = tool.get("description", "")
+                _ = tool.get("description", "")  # noqa: F841
                 # ChatGPT descriptions should be simpler:
                 # - No newline characters (bullet points)
                 # - Shorter and more natural language
@@ -269,7 +267,7 @@ class TestDescriptionRegressionScenarios:
 
             # Critical: Description should not have the problematic patterns
             # that caused ChatGPT to reject the server
-            description = tool["description"]
+            _ = tool["description"]  # noqa: F841
             # If this tool has a ChatGPT-specific description, it should be simplified
             # (This is a soft check - we can't enforce it for all tools,
             #  only those with client_descriptions defined)

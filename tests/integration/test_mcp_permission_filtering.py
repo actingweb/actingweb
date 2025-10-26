@@ -12,7 +12,6 @@ This ensures:
 5. resources/list filters resources based on permissions
 """
 
-import pytest
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 

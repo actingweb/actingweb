@@ -7,8 +7,6 @@ using the JSON-RPC 2.0 protocol at /mcp endpoint.
 This extends test_mcp_basic.py with comprehensive tool testing.
 """
 
-import pytest
-import json
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 
@@ -546,7 +544,7 @@ class TestMCPToolResponseFormatRegression:
             assert result.isError is False, \
                 f"isError should be False for success, got: {result.isError}"
             assert len(result.content) > 0, "Content should not be empty"
-            assert result.content[0].text == "✅ Successfully stored: test data"
+            assert result.content[0].text == "✅ Successfully stored: test data"  # type: ignore[arg-type,union-attr,attr-defined,return-value]
 
     def test_sdk_server_preserves_is_error_field_failure(self):
         """
@@ -592,7 +590,7 @@ class TestMCPToolResponseFormatRegression:
             assert result.isError is True, \
                 f"isError should be True for errors, got: {result.isError}"
             assert len(result.content) > 0, "Content should not be empty"
-            assert "❌" in result.content[0].text, "Error indicator missing"
+            assert "❌" in result.content[0].text, "Error indicator missing"  # type: ignore[arg-type,union-attr,attr-defined,return-value]
 
     def test_tool_response_without_is_error_field(self):
         """

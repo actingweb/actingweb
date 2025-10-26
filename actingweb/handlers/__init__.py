@@ -1,18 +1,19 @@
+# Modules are lazy-loaded on-demand
 __all__ = [
-    "root",
-    "bot",
-    "callbacks",
-    "callback_oauth",
-    "devtest",
-    "meta",
-    "oauth",
-    "properties",
-    "resources",
-    "factory",
-    "subscription",
-    "trust",
-    "www",
-    "methods",
-    "actions",
-    "base_handler",
+    "root",  # pyright: ignore[reportUnsupportedDunderAll]
+    "bot",  # pyright: ignore[reportUnsupportedDunderAll]
+    "callbacks",  # pyright: ignore[reportUnsupportedDunderAll]
+    "callback_oauth",  # pyright: ignore[reportUnsupportedDunderAll]
+    "devtest",  # pyright: ignore[reportUnsupportedDunderAll]
+    "meta",  # pyright: ignore[reportUnsupportedDunderAll]
+    "oauth",  # pyright: ignore[reportUnsupportedDunderAll]
+    "properties",  # pyright: ignore[reportUnsupportedDunderAll]
+    "resources",  # pyright: ignore[reportUnsupportedDunderAll]
+    "factory",  # pyright: ignore[reportUnsupportedDunderAll]
+    "subscription",  # pyright: ignore[reportUnsupportedDunderAll]
+    "trust",  # pyright: ignore[reportUnsupportedDunderAll]
+    "www",  # pyright: ignore[reportUnsupportedDunderAll]
+    "methods",  # pyright: ignore[reportUnsupportedDunderAll]
+    "actions",  # pyright: ignore[reportUnsupportedDunderAll]
+    "base_handler",  # pyright: ignore[reportUnsupportedDunderAll]
 ]

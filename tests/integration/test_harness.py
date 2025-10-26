@@ -9,9 +9,11 @@ Note: Switched from Flask to FastAPI to support MCP endpoints which
 require async/await functionality.
 """
 
-import os
 import logging
+import os
+
 from fastapi import FastAPI
+
 from actingweb.interface import ActingWebApp
 
 # Suppress uvicorn access logs for cleaner test output

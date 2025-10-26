@@ -2,8 +2,8 @@
 Service configuration for third-party OAuth2 service integration.
 """
 
-from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -18,13 +18,13 @@ class ServiceConfig:
     name: str
     client_id: str
     client_secret: str
-    scopes: List[str]
+    scopes: list[str]
     auth_uri: str
     token_uri: str
-    userinfo_uri: Optional[str] = None
-    revocation_uri: Optional[str] = None
-    base_api_url: Optional[str] = None
-    extra_params: Optional[Dict[str, Any]] = None
+    userinfo_uri: str | None = None
+    revocation_uri: str | None = None
+    base_api_url: str | None = None
+    extra_params: dict[str, Any] | None = None
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -52,7 +52,7 @@ class ServiceConfig:
             self.token_uri
         )
 
-    def to_oauth2_config(self) -> Dict[str, Any]:
+    def to_oauth2_config(self) -> dict[str, Any]:
         """Convert to OAuth2 configuration format."""
         config = {
             "client_id": self.client_id,

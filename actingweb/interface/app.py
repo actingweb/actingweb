@@ -3,16 +3,16 @@ Main ActingWebApp class providing fluent API for application configuration.
 """
 
 import os
-from typing import Optional, Dict, Any, Callable, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
+from .. import __version__
 from ..config import Config
 from .hooks import HookRegistry
-from .. import __version__
 
 if TYPE_CHECKING:
-    from .actor_interface import ActorInterface
-    from .integrations.flask_integration import FlaskIntegration
     from .integrations.fastapi_integration import FastAPIIntegration
+    from .integrations.flask_integration import FlaskIntegration
 
 
 class ActingWebApp:
@@ -47,12 +47,12 @@ class ActingWebApp:
         self.proto = proto or os.getenv("APP_HOST_PROTOCOL", "https://")
 
         # Configuration options
-        self._oauth_config: Optional[Dict[str, Any]] = None
-        self._actors_config: Dict[str, Dict[str, Any]] = {}
+        self._oauth_config: dict[str, Any] | None = None
+        self._actors_config: dict[str, dict[str, Any]] = {}
         self._enable_ui = False
         self._enable_devtest = False
         self._enable_bot = False
-        self._bot_config: Optional[Dict[str, Any]] = None
+        self._bot_config: dict[str, Any] | None = None
         self._www_auth = "basic"
         self._unique_creator = False
         self._force_email_prop_as_creator = False
@@ -62,10 +62,10 @@ class ActingWebApp:
         self.hooks = HookRegistry()
 
         # Service registry for third-party OAuth2 services
-        self._service_registry: Optional[Any] = None  # Lazy initialized
+        self._service_registry: Any | None = None  # Lazy initialized
 
         # Internal config object (lazy initialized)
-        self._config: Optional[Config] = None
+        self._config: Config | None = None
         # Automatically initialize permission system for better performance
         self._initialize_permission_system()
 
@@ -75,7 +75,7 @@ class ActingWebApp:
             return
 
         # Always set attribute so downstream code can rely on it existing
-        setattr(self._config, "service_registry", self._service_registry)
+        self._config.service_registry = self._service_registry  # type: ignore[attr-defined]
 
     def _apply_runtime_changes_to_config(self) -> None:
         """Propagate builder changes to an existing Config instance.
@@ -342,7 +342,7 @@ class ActingWebApp:
         return integration
 
     def integrate_fastapi(
-        self, fastapi_app: Any, templates_dir: Optional[str] = None, **options: Any
+        self, fastapi_app: Any, templates_dir: str | None = None, **options: Any
     ) -> "FastAPIIntegration":
         """
         Integrate ActingWeb with FastAPI application.

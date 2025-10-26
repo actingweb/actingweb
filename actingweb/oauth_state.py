@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Tuple
+from typing import Any
 
 
 def encode_state(
@@ -18,9 +18,9 @@ def encode_state(
     trust_type: str = "",
     expected_email: str = "",
     user_agent: str = "",
-    extra: Dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> str:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "csrf": csrf,
         "redirect": redirect,
         "actor_id": actor_id,
@@ -33,7 +33,7 @@ def encode_state(
     return json.dumps(data)
 
 
-def decode_state(state: str) -> Tuple[str, str, str, str, str, str]:
+def decode_state(state: str) -> tuple[str, str, str, str, str, str]:
     """
     Decode state into (csrf, redirect, actor_id, trust_type, expected_email, user_agent).
     Supports legacy forms (raw actor_id or raw CSRF token).

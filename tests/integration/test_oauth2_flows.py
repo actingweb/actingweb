@@ -15,10 +15,8 @@ These flows work together:
 This comprehensive test suite ensures all OAuth2 components work together.
 """
 
-import pytest
-import responses
 import requests
-from typing import Dict, Any
+import responses
 
 
 class TestExternalOAuth2Provider:
@@ -339,6 +337,7 @@ class TestWWWWithOAuth2:
         3. Use Google token as oauth_token cookie to access /www
         """
         import requests
+
         from .utils.oauth2_mocks import GoogleOAuth2Mock
 
         # Allow requests to test app to pass through
@@ -485,8 +484,8 @@ class TestOAuth2Discovery:
         assert "capabilities" in data, "Missing capabilities field"
 
         # Verify version is from SDK (should be 2025-06-18 or newer, not hardcoded 2024-11-05)
-        from mcp.types import LATEST_PROTOCOL_VERSION
         from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+        from mcp.types import LATEST_PROTOCOL_VERSION
 
         assert data["mcp_version"] == LATEST_PROTOCOL_VERSION, \
             f"Expected mcp_version={LATEST_PROTOCOL_VERSION}, got {data['mcp_version']}"
@@ -500,7 +499,7 @@ class TestOAuth2Discovery:
         assert "prompts" in data["capabilities"]
 
         # Log for debugging
-        print(f"\nMCP Discovery endpoint reports:")
+        print("\nMCP Discovery endpoint reports:")
         print(f"  mcp_version: {data['mcp_version']}")
         print(f"  supported_protocol_versions: {data['supported_protocol_versions']}")
 

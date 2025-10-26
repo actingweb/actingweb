@@ -1,10 +1,11 @@
 import copy
 import json
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from actingweb.handlers import base_handler
-from ..permission_evaluator import get_permission_evaluator, PermissionResult
+
+from ..permission_evaluator import PermissionResult, get_permission_evaluator
 
 
 def merge_dict(d1, d2):
@@ -46,41 +47,41 @@ def delete_dict(d1, path):
 
 
 class PropertiesHandler(base_handler.BaseHandler):
-    
+
     def _check_property_permission(self, actor_id: str, auth_obj, property_path: str, operation: str) -> bool:
         """
         Check property permission using the unified access control system.
-        
+
         This replaces the legacy auth.check_authorisation() with the new permission evaluator
         that supports granular trust type-based permissions.
-        
+
         Args:
             actor_id: The actor ID
             auth_obj: Auth object from authentication
             property_path: Property path (e.g., "email", "notes/work")
             operation: Operation type ("read", "write", "delete")
-            
+
         Returns:
             True if access is allowed, False otherwise
         """
         # Get peer ID from auth object (if authenticated via trust relationship)
         peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
-        
+
         if not peer_id:
             # No peer relationship - fall back to legacy authorization for basic/oauth auth
             legacy_subpath = property_path.split('/')[0] if property_path else ""
             method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
             return auth_obj.check_authorisation(
-                path="properties", 
-                subpath=legacy_subpath, 
+                path="properties",
+                subpath=legacy_subpath,
                 method=method_map.get(operation, "GET")
             )
-        
+
         # Use permission evaluator for peer-based access
         try:
             evaluator = get_permission_evaluator(self.config)
             result = evaluator.evaluate_property_access(actor_id, peer_id, property_path, operation)
-            
+
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
@@ -91,23 +92,23 @@ class PropertiesHandler(base_handler.BaseHandler):
                 legacy_subpath = property_path.split('/')[0] if property_path else ""
                 method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
                 return auth_obj.check_authorisation(
-                    path="properties", 
-                    subpath=legacy_subpath, 
+                    path="properties",
+                    subpath=legacy_subpath,
                     method=method_map.get(operation, "GET")
                 )
-                
+
         except Exception as e:
             logging.error(f"Error in permission evaluation for {actor_id}:{peer_id}:{property_path}: {e}")
             # Fall back to legacy authorization on errors
             legacy_subpath = property_path.split('/')[0] if property_path else ""
             method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
             return auth_obj.check_authorisation(
-                path="properties", 
-                subpath=legacy_subpath, 
+                path="properties",
+                subpath=legacy_subpath,
                 method=method_map.get(operation, "GET")
             )
-    
-    def _create_auth_context(self, auth_obj, operation: str = "read") -> Dict[str, Any]:
+
+    def _create_auth_context(self, auth_obj, operation: str = "read") -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
         peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
         return {
@@ -115,7 +116,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             'config': self.config,
             'operation': operation
         }
-    
+
     def get(self, actor_id, name):
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
@@ -143,21 +144,21 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not name:
             self.listall(myself, check)
             return
-            
+
         # Check if this is a list property first
-        if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None 
+        if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None
             and myself.property_lists.exists(name)):
             # This is a list property - handle index parameter
             index_param = self.request.get("index")
             try:
                 list_prop = getattr(myself.property_lists, name)
-                
+
                 if index_param is not None:
                     # Get specific item by index
                     try:
                         index = int(index_param)
                         item = list_prop[index]
-                        
+
                         # Execute property hook if available
                         if self.hooks:
                             actor_interface = self._get_actor_interface(myself)
@@ -173,7 +174,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     if self.response:
                                         self.response.set_status(404)
                                     return
-                        
+
                         out = json.dumps(item)
                     except (IndexError, ValueError):
                         if self.response:
@@ -182,7 +183,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 else:
                     # Get all items
                     all_items = list_prop.to_list()
-                    
+
                     # Execute property hook if available
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
@@ -198,21 +199,21 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 if self.response:
                                     self.response.set_status(404)
                                 return
-                    
+
                     out = json.dumps(all_items)
-                    
+
                 if self.response:
                     self.response.set_status(200, "Ok")
                     self.response.headers["Content-Type"] = "application/json"
                     self.response.write(out)
                 return
-                
+
             except Exception as e:
                 logging.error(f"Error accessing list property '{name}': {e}")
                 if self.response:
                     self.response.set_status(500, "Error accessing list property")
                 return
-        
+
         # Regular property handling
         lookup = myself.property[name] if myself and myself.property else None
         if not lookup:
@@ -261,7 +262,7 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not properties or len(properties) == 0:
             self.response.set_status(404, "No properties")
             return
-        pair = dict()
+        pair = {}
         for name, value in list(properties.items()):
             try:
                 js = json.loads(value)
@@ -405,7 +406,7 @@ class PropertiesHandler(base_handler.BaseHandler):
         if len(name) > 0:
             if self.response:
                 self.response.set_status(400)
-        pair = dict()
+        pair = {}
         # Handle the form with property type support
         if self.request.get("property"):
             prop_name = self.request.get("property")
@@ -422,7 +423,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     # Set description and explanation if provided
                     description = self.request.get("description") or ""
                     explanation = self.request.get("explanation") or ""
-                    
+
                     if description:
                         list_prop.set_description(description)
                     if explanation:
@@ -441,7 +442,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     self.response.set_status(403)
                                 return
 
-                    pair[prop_name] = f"[Empty list property created]"
+                    pair[prop_name] = "[Empty list property created]"
                 else:
                     if self.response:
                         self.response.set_status(500, "List properties not supported")
@@ -527,15 +528,15 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 auth_context = self._create_auth_context(check, "write")
                                 transformed = self.hooks.execute_property_hooks(key, "post", actor_interface, [], [key], auth_context)
                                 if transformed is not None:
-                                    pair[key] = f"[Empty list property created]"
+                                    pair[key] = "[Empty list property created]"
                                 else:
                                     continue
                         else:
-                            pair[key] = f"[Empty list property created]"
+                            pair[key] = "[Empty list property created]"
                     else:
                         # List properties not supported
                         continue
-                        
+
                 # Handle items array for bulk list updates
                 elif isinstance(val, dict) and "items" in val:
                     # Validate items array structure
@@ -544,20 +545,20 @@ class PropertiesHandler(base_handler.BaseHandler):
                         if self.response:
                             self.response.set_status(400, f"Invalid 'items' field for property '{key}': expected list, got {type(val['items']).__name__}")
                         return
-                    
+
                     if len(val["items"]) == 0:
                         logging.warning(f"Empty 'items' array for property '{key}': no updates to perform")
                         pair[key] = "[No items to update]"
                         continue
-                    
+
                     # This is a bulk update for a list property
-                    if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None 
+                    if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None
                         and myself.property_lists.exists(key)):
                         try:
                             list_prop = getattr(myself.property_lists, key)
                             items_updated = 0
                             items_deleted = 0
-                            
+
                             for i, item_spec in enumerate(val["items"]):
                                 # Validate item structure
                                 if not isinstance(item_spec, dict):
@@ -565,29 +566,29 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     if self.response:
                                         self.response.set_status(400, f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}")
                                     return
-                                
+
                                 # Check for required "index" field
                                 if "index" not in item_spec:
                                     logging.error(f"Missing 'index' field in item at position {i}: {item_spec}")
                                     if self.response:
                                         self.response.set_status(400, f"Missing 'index' field in item at position {i}")
                                     return
-                                
+
                                 index = item_spec["index"]
-                                
+
                                 # Validate index type and value
                                 if not isinstance(index, int):
                                     logging.error(f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}")
                                     if self.response:
                                         self.response.set_status(400, f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}")
                                     return
-                                
+
                                 if index < 0:
                                     logging.error(f"Invalid index value in item at position {i}: {index} (must be >= 0)")
                                     if self.response:
                                         self.response.set_status(400, f"Invalid index value in item at position {i}: {index} (must be >= 0)")
                                     return
-                                
+
                                 # Check if this is a deletion (empty item data)
                                 if len(item_spec) == 1:  # Only has "index" key, means delete
                                     try:
@@ -615,7 +616,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                         if self.response:
                                             self.response.set_status(500, f"Error updating item at index {index}: {str(e)}")
                                         return
-                            
+
                             # Execute property post hook if available
                             if self.hooks:
                                 actor_interface = self._get_actor_interface(myself)
@@ -629,9 +630,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                                         if self.response:
                                             self.response.set_status(403, "Bulk update rejected by hooks")
                                         return
-                            
+
                             pair[key] = f"[Bulk update: {items_updated} items updated, {items_deleted} items deleted]"
-                            
+
                         except Exception as e:
                             logging.error(f"Error in bulk update for list property '{key}': {e}")
                             if self.response:
@@ -708,12 +709,12 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
         if len(path) == 1:
             # Check if this is a list property first
-            if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None 
+            if (myself and hasattr(myself, "property_lists") and myself.property_lists is not None
                 and myself.property_lists.exists(name)):
                 # This is a list property - delete the entire list
                 try:
                     list_prop = getattr(myself.property_lists, name)
-                    
+
                     # Execute property delete hook if available
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
@@ -727,18 +728,18 @@ class PropertiesHandler(base_handler.BaseHandler):
                             if result is None:
                                 self.response.set_status(403)
                                 return
-                    
+
                     # Delete the entire list including metadata
                     list_prop.delete()
                     myself.register_diffs(target="properties", subtarget=name, blob="")
                     self.response.set_status(204)
                     return
-                    
+
                 except Exception as e:
                     logging.error(f"Error deleting list property '{name}': {e}")
                     self.response.set_status(500, f"Error deleting list property: {str(e)}")
                     return
-            
+
             # Regular property handling
             old_prop = myself.property[name] if myself and myself.property else None
             # Execute property delete hook if available

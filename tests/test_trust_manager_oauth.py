@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 
 from actingweb.interface.trust_manager import TrustManager
 
@@ -19,8 +19,8 @@ class FakeCoreActor:
     def __init__(self) -> None:
         self.id = "actor_1"
         self.config = FakeConfig()
-        self.store: Dict[str, Any] = FakeStore()
-        self._trusts: Dict[str, Dict[str, Any]] = {}
+        self.store: dict[str, Any] = FakeStore()
+        self._trusts: dict[str, dict[str, Any]] = {}
 
     # Minimal API used by TrustManager
     def get_trust_relationships(self, peerid: str = "", relationship: str = "", trust_type: str = ""):
@@ -47,12 +47,12 @@ def canonical_via(via: str | None) -> str | None:
 
 def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
     actor = FakeCoreActor()
-    tm = TrustManager(actor)
+    tm = TrustManager(actor)  # type: ignore[arg-type]
 
     # Stub DbTrust.create/get/modify used inside TrustManager
     class FakeDbTrust:
         def __init__(self) -> None:
-            self._db: Dict[tuple[str, str], Dict[str, Any]] = {}
+            self._db: dict[tuple[str, str], dict[str, Any]] = {}
             self.handle = None
 
         def get(self, actor_id: str, peerid: str):
@@ -80,7 +80,7 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
         def modify(self, **kwargs):
             if not self.handle:
                 return True
-            db_key = (getattr(self.handle, "id"), getattr(self.handle, "peerid"))
+            db_key = (self.handle.id, self.handle.peerid)  # type: ignore[arg-type,union-attr,attr-defined,return-value]
             for key, value in kwargs.items():
                 if key == "last_connected_via":
                     value = canonical_via(value)

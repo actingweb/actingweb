@@ -10,12 +10,14 @@ These tests ensure that OAuth2 flows properly validate actor ownership
 and prevent unauthorized access to other users' actors.
 """
 
-import pytest
-from typing import Any, Generator
-from unittest.mock import patch, MagicMock
+from collections.abc import Generator
+from typing import Any
+from unittest.mock import MagicMock, patch
 
-from actingweb.oauth_state import encode_state
+import pytest
+
 from actingweb.aw_web_request import AWWebObj
+from actingweb.oauth_state import encode_state
 
 
 @pytest.fixture(autouse=True)

@@ -2,7 +2,9 @@
 Simplified property store interface for ActingWeb actors.
 """
 
-from typing import Any, Dict, Iterator, Tuple
+from collections.abc import Iterator
+from typing import Any
+
 from ..property import PropertyStore as CorePropertyStore
 
 
@@ -62,8 +64,8 @@ class PropertyStore:
         """Get property value as attribute."""
         try:
             return self._core_store[key]
-        except (KeyError, AttributeError):
-            raise AttributeError(f"Property '{key}' not found")
+        except (KeyError, AttributeError) as err:
+            raise AttributeError(f"Property '{key}' not found") from err
 
     def __setattr__(self, key: str, value: Any) -> None:
         """Set property value as attribute."""
@@ -104,12 +106,12 @@ class PropertyStore:
         for key in self:
             yield self[key]
 
-    def items(self) -> Iterator[Tuple[str, Any]]:
+    def items(self) -> Iterator[tuple[str, Any]]:
         """Get all property key-value pairs."""
         for key in self:
             yield (key, self[key])
 
-    def update(self, other: Dict[str, Any]) -> None:
+    def update(self, other: dict[str, Any]) -> None:
         """Update properties from dictionary."""
         for key, value in other.items():
             self[key] = value
@@ -119,9 +121,9 @@ class PropertyStore:
         for key in list(self.keys()):
             del self[key]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
-        return {key: value for key, value in self.items()}
+        return dict(self.items())
 
     @property
     def core_store(self) -> CorePropertyStore:

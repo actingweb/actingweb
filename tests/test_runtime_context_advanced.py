@@ -16,10 +16,11 @@ References:
 """
 
 import pytest
-from actingweb.interface.app import ActingWebApp
-from actingweb.interface.actor_interface import ActorInterface
-from actingweb.runtime_context import RuntimeContext, get_client_info_from_context
+
 from actingweb.actor import Actor as CoreActor
+from actingweb.interface.actor_interface import ActorInterface
+from actingweb.interface.app import ActingWebApp
+from actingweb.runtime_context import RuntimeContext, get_client_info_from_context
 
 
 @pytest.fixture
@@ -281,8 +282,8 @@ class TestRuntimeContextCleanup:
             mcp_ctx = runtime_context1.get_mcp_context()
             oauth_ctx = runtime_context2.get_oauth2_context()
 
-            assert mcp_ctx.client_id == "mcp_actor1"
-            assert oauth_ctx.client_id == "oauth_actor2"
+            assert mcp_ctx.client_id == "mcp_actor1"  # type: ignore
+            assert oauth_ctx.client_id == "oauth_actor2"  # type: ignore
         finally:
             actor1.delete()
             actor2.delete()

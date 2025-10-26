@@ -189,23 +189,23 @@ class Config:
         #########
         # This app follows the actingweb specification specified
         self.aw_version = "1.0"
-        
+
         # Base supported options
         base_supported = [
-            "www", "oauth", "callbacks", "trust", "onewaytrust", 
-            "subscriptions", "actions", "resources", "methods", 
+            "www", "oauth", "callbacks", "trust", "onewaytrust",
+            "subscriptions", "actions", "resources", "methods",
             "sessions", "nestedproperties"
         ]
-        
+
         # Add optional features if available
         if self._check_trust_permissions_available():
             base_supported.append("trustpermissions")
-        
+
         if kwargs.get('mcp', False):
             base_supported.append("mcp")
-            
+
         self.aw_supported = ",".join(base_supported)
-        
+
         # These are the supported formats
         self.aw_formats = "json"
         #########
@@ -229,9 +229,11 @@ class Config:
         """Check if trust permission management system is available."""
         try:
             # Try to import the trust permissions modules
-            from . import trust_permissions
-            from . import permission_evaluator
-            from . import trust_type_registry
+            from . import (  # noqa: F401  # pyright: ignore[reportUnusedImport]
+                permission_evaluator,  # pyright: ignore[reportUnusedImport]
+                trust_permissions,  # pyright: ignore[reportUnusedImport]
+                trust_type_registry,  # pyright: ignore[reportUnusedImport]
+            )
             # If all imports succeed, the system is available
             return True
         except ImportError:

@@ -1,19 +1,20 @@
 from typing import Any
+
 from .property_list import ListProperty
 
 
 class PropertyListStore:
     """
     Explicit interface for managing list properties.
-    
+
     Used when the application knows it's working with list data.
     """
-    
+
     def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         self._actor_id = actor_id
         self._config = config
         self.__initialised = True
-    
+
     def exists(self, name: str) -> bool:
         """Check if a list property exists without creating it."""
         try:
@@ -24,7 +25,7 @@ class PropertyListStore:
         except Exception:
             pass
         return False
-    
+
     def list_all(self) -> list[str]:
         """List all existing list property names."""
         list_names = []
@@ -42,7 +43,7 @@ class PropertyListStore:
             logger = logging.getLogger(__name__)
             logger.error(f"Error in list_all(): {e}")
         return list_names
-    
+
     def __getattr__(self, k: str) -> ListProperty:
         """Return a ListProperty for the requested list name."""
         if k.startswith('_'):

@@ -1,4 +1,3 @@
-from typing import Any, Dict, Optional, Union
 
 from actingweb.handlers import base_handler
 
@@ -24,7 +23,7 @@ class BotHandler(base_handler.BaseHandler):
             }
             # Parse request body if available
             try:
-                body: Union[str, bytes, None] = self.request.body
+                body: str | bytes | None = self.request.body
                 if body is not None:
                     if isinstance(body, bytes):
                         body_str = body.decode("utf-8", "ignore")

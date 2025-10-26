@@ -13,8 +13,8 @@ Key Features:
 - Per-actor service authentication with trust relationship storage
 """
 
-from .service_registry import ServiceRegistry
 from .service_client import ServiceClient
 from .service_config import ServiceConfig
+from .service_registry import ServiceRegistry
 
 __all__ = ['ServiceRegistry', 'ServiceClient', 'ServiceConfig']

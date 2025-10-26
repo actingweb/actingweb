@@ -1,4 +1,4 @@
-from actingweb.oauth_state import encode_state, decode_state, validate_expected_email
+from actingweb.oauth_state import decode_state, encode_state, validate_expected_email
 
 
 def test_encode_decode_roundtrip_minimal():

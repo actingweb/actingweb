@@ -5,20 +5,21 @@ Provides a clean decorator-based system for registering hooks that respond
 to various ActingWeb events.
 """
 
-from typing import Dict, List, Callable, Any, Optional, Union
-from enum import Enum
 import logging
+from collections.abc import Callable
+from enum import Enum
+from typing import Any
 
 # Import permission system for transparent permission checking
 try:
-    from ..permission_evaluator import get_permission_evaluator, PermissionResult
+    from ..permission_evaluator import PermissionResult, get_permission_evaluator
 
     PERMISSION_SYSTEM_AVAILABLE = True
 except ImportError:
     # Fallback definitions for when permission system is not available
     get_permission_evaluator = None
     PermissionResult = None
-    PERMISSION_SYSTEM_AVAILABLE = False
+    PERMISSION_SYSTEM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
 
 
 class HookType(Enum):
@@ -60,16 +61,16 @@ class HookRegistry:
     """
 
     def __init__(self) -> None:
-        self._property_hooks: Dict[str, Dict[str, List[Callable[..., Any]]]] = {}
-        self._callback_hooks: Dict[str, List[Callable[..., Any]]] = {}
-        self._app_callback_hooks: Dict[str, List[Callable[..., Any]]] = {}  # New: for application-level callbacks
-        self._subscription_hooks: List[Callable[..., Any]] = []
-        self._lifecycle_hooks: Dict[str, List[Callable[..., Any]]] = {}
-        self._method_hooks: Dict[str, List[Callable[..., Any]]] = {}  # New: for method hooks
-        self._action_hooks: Dict[str, List[Callable[..., Any]]] = {}  # New: for action hooks
+        self._property_hooks: dict[str, dict[str, list[Callable[..., Any]]]] = {}
+        self._callback_hooks: dict[str, list[Callable[..., Any]]] = {}
+        self._app_callback_hooks: dict[str, list[Callable[..., Any]]] = {}  # New: for application-level callbacks
+        self._subscription_hooks: list[Callable[..., Any]] = []
+        self._lifecycle_hooks: dict[str, list[Callable[..., Any]]] = {}
+        self._method_hooks: dict[str, list[Callable[..., Any]]] = {}  # New: for method hooks
+        self._action_hooks: dict[str, list[Callable[..., Any]]] = {}  # New: for action hooks
 
     def _check_hook_permission(
-        self, hook_type: str, resource_name: str, actor: Any, auth_context: Optional[Dict[str, Any]] = None
+        self, hook_type: str, resource_name: str, actor: Any, auth_context: dict[str, Any] | None = None
     ) -> bool:
         """
         Check if hook execution is permitted based on unified access control.
@@ -111,7 +112,7 @@ class HookRegistry:
             if PERMISSION_SYSTEM_AVAILABLE:
                 evaluator = get_permission_evaluator(config)  # type: ignore
             else:
-                logging.warning(f"Permission system is not available due to failed import.")
+                logging.warning("Permission system is not available due to failed import.")
                 return True
 
             if hook_type == "property":
@@ -233,8 +234,8 @@ class HookRegistry:
         operation: str,
         actor: Any,
         value: Any,
-        path: Optional[List[str]] = None,
-        auth_context: Optional[Dict[str, Any]] = None,
+        path: list[str] | None = None,
+        auth_context: dict[str, Any] | None = None,
     ) -> Any:
         """Execute property hooks with transparent permission checking."""
         path = path or []
@@ -277,10 +278,10 @@ class HookRegistry:
 
         return value
 
-    def execute_callback_hooks(self, callback_name: str, actor: Any, data: Any) -> Union[bool, Dict[str, Any]]:
+    def execute_callback_hooks(self, callback_name: str, actor: Any, data: Any) -> bool | dict[str, Any]:
         """Execute callback hooks and return whether callback was processed or result data."""
         processed = False
-        result_data: Optional[Dict[str, Any]] = None
+        result_data: dict[str, Any] | None = None
 
         # Execute hooks for specific callback
         if callback_name in self._callback_hooks:
@@ -311,10 +312,10 @@ class HookRegistry:
             return result_data
         return processed
 
-    def execute_app_callback_hooks(self, callback_name: str, data: Any) -> Union[bool, Dict[str, Any]]:
+    def execute_app_callback_hooks(self, callback_name: str, data: Any) -> bool | dict[str, Any]:
         """Execute application-level callback hooks (no actor context)."""
         processed = False
-        result_data: Optional[Dict[str, Any]] = None
+        result_data: dict[str, Any] | None = None
 
         # Execute hooks for specific callback
         if callback_name in self._app_callback_hooks:
@@ -333,7 +334,7 @@ class HookRegistry:
             return result_data
         return processed
 
-    def execute_subscription_hooks(self, actor: Any, subscription: Dict[str, Any], peer_id: str, data: Any) -> bool:
+    def execute_subscription_hooks(self, actor: Any, subscription: dict[str, Any], peer_id: str, data: Any) -> bool:
         """Execute subscription hooks and return whether subscription was processed."""
         processed = False
 
@@ -362,7 +363,7 @@ class HookRegistry:
         return result
 
     def execute_method_hooks(
-        self, method_name: str, actor: Any, data: Any, auth_context: Optional[Dict[str, Any]] = None
+        self, method_name: str, actor: Any, data: Any, auth_context: dict[str, Any] | None = None
     ) -> Any:
         """Execute method hooks with transparent permission checking."""
         # Check permission before executing hooks
@@ -397,7 +398,7 @@ class HookRegistry:
         return result
 
     def execute_action_hooks(
-        self, action_name: str, actor: Any, data: Any, auth_context: Optional[Dict[str, Any]] = None
+        self, action_name: str, actor: Any, data: Any, auth_context: dict[str, Any] | None = None
     ) -> Any:
         """Execute action hooks with transparent permission checking."""
         # Check permission before executing hooks
@@ -436,7 +437,7 @@ class HookRegistry:
 _hook_registry = HookRegistry()
 
 
-def property_hook(property_name: str = "*", operations: Optional[List[str]] = None) -> Callable[..., Any]:
+def property_hook(property_name: str = "*", operations: list[str] | None = None) -> Callable[..., Any]:
     """
     Decorator for registering property hooks.
 
@@ -457,7 +458,7 @@ def property_hook(property_name: str = "*", operations: Optional[List[str]] = No
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
-        setattr(func, "_operations", operations or ["get", "put", "post", "delete"])
+        func._operations = operations or ["get", "put", "post", "delete"]
         _hook_registry.register_property_hook(property_name, func)
         return func
 

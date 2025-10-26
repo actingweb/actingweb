@@ -18,9 +18,10 @@ References:
 """
 
 import pytest
-from actingweb.interface.app import ActingWebApp
+
 from actingweb.interface.actor_interface import ActorInterface
-from actingweb.trust_permissions import TrustPermissionStore, TrustPermissions
+from actingweb.interface.app import ActingWebApp
+from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
 
 
 @pytest.fixture
@@ -59,8 +60,8 @@ class TestTrustPermissionsExcludedPatterns:
         try:
             # Create permissions with excluded patterns (actingweb_mcp pattern)
             permissions = TrustPermissions(
-                actor_id=actor1.id,
-                peer_id=actor2.id,
+                actor_id=actor1.id,  # type: ignore[arg-type,union-attr,attr-defined,return-value]
+                peer_id=actor2.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -100,8 +101,8 @@ class TestTrustPermissionsExcludedPatterns:
         try:
             # Store permissions
             permissions = TrustPermissions(
-                actor_id=actor1.id,
-                peer_id=actor2.id,
+                actor_id=actor1.id,  # type: ignore[arg-type]
+                peer_id=actor2.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -139,8 +140,8 @@ class TestTrustPermissionsExcludedPatterns:
         try:
             # Create initial permissions
             permissions = TrustPermissions(
-                actor_id=actor1.id,
-                peer_id=actor2.id,
+                actor_id=actor1.id,  # type: ignore[arg-type]
+                peer_id=actor2.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -182,8 +183,8 @@ class TestTrustPermissionsExcludedPatterns:
         try:
             # Create permissions with empty excluded_patterns
             permissions = TrustPermissions(
-                actor_id=actor1.id,
-                peer_id=actor2.id,
+                actor_id=actor1.id,  # type: ignore[arg-type]
+                peer_id=actor2.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -327,8 +328,8 @@ class TestTrustPermissionsInheritance:
         try:
             # Create override with just properties, other categories use trust type defaults
             permissions = TrustPermissions(
-                actor_id=actor1.id,
-                peer_id=actor2.id,
+                actor_id=actor1.id,  # type: ignore[arg-type]
+                peer_id=actor2.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={  # Override properties only
                     "patterns": ["memory_*"],
@@ -392,13 +393,13 @@ class TestTrustPermissionsRetrieval:
             # Create permissions for multiple clients
             for client in [client1, client2, client3]:
                 permissions = TrustPermissions(
-                    actor_id=actor1.id,
-                    peer_id=client.id,
+                    actor_id=actor1.id,  # type: ignore[arg-type]
+                    peer_id=client.id,  # type: ignore[arg-type]
                     trust_type="mcp_client",
                     properties={
                         "patterns": ["memory_*"],
                         "operations": ["read"],
-                        "excluded_patterns": [f"memory_private_{client.id[:8]}"]
+                        "excluded_patterns": [f"memory_private_{client.id[:8]}"]  # type: ignore[arg-type]
                     },
                     created_by="test"
                 )
@@ -437,8 +438,8 @@ class TestTrustPermissionsComplexScenarios:
         try:
             # ChatGPT gets memory_* but excludes all except memory_personal
             permissions = TrustPermissions(
-                actor_id=actor.id,
-                peer_id=chatgpt.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
+                peer_id=chatgpt.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -485,8 +486,8 @@ class TestTrustPermissionsComplexScenarios:
         try:
             # Claude gets all memory types (no exclusions)
             permissions = TrustPermissions(
-                actor_id=actor.id,
-                peer_id=claude.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
+                peer_id=claude.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -521,8 +522,8 @@ class TestTrustPermissionsComplexScenarios:
         try:
             # ChatGPT: Only memory_personal and memory_work
             chatgpt_perms = TrustPermissions(
-                actor_id=actor.id,
-                peer_id=chatgpt.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
+                peer_id=chatgpt.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -534,8 +535,8 @@ class TestTrustPermissionsComplexScenarios:
 
             # Claude: All memory types
             claude_perms = TrustPermissions(
-                actor_id=actor.id,
-                peer_id=claude.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
+                peer_id=claude.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],
@@ -547,8 +548,8 @@ class TestTrustPermissionsComplexScenarios:
 
             # Cursor: Only work-related
             cursor_perms = TrustPermissions(
-                actor_id=actor.id,
-                peer_id=cursor.id,
+                actor_id=actor.id,  # type: ignore[arg-type]
+                peer_id=cursor.id,  # type: ignore[arg-type]
                 trust_type="mcp_client",
                 properties={
                     "patterns": ["memory_*"],

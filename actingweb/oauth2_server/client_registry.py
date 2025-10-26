@@ -9,10 +9,11 @@ per-actor but clients are not treated as actors themselves.
 import logging
 import secrets
 import time
-from typing import Dict, Any, Optional, List
+from typing import Any
+
 from .. import attribute
 from .. import config as config_class
-from ..constants import OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET
+from ..constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class MCPClientRegistry:
         # Use Attributes system for private storage instead of underscore properties
         self.clients_bucket = "mcp_clients"  # Private attribute bucket for client data
 
-    def register_client(self, actor_id: str, registration_data: Dict[str, Any]) -> Dict[str, Any]:
+    def register_client(self, actor_id: str, registration_data: dict[str, Any]) -> dict[str, Any]:
         """
         Register an MCP client for a specific actor and create corresponding trust relationship.
 
@@ -99,7 +100,7 @@ class MCPClientRegistry:
         logger.debug(f"Registered MCP client {client_id} for actor {actor_id}")
         return response
 
-    def validate_client(self, client_id: str, client_secret: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def validate_client(self, client_id: str, client_secret: str | None = None) -> dict[str, Any] | None:
         """
         Validate client credentials.
 
@@ -147,7 +148,7 @@ class MCPClientRegistry:
         registered_uris = client_data.get("redirect_uris", [])
         return redirect_uri in registered_uris
 
-    def get_client_actor_id(self, client_id: str) -> Optional[str]:
+    def get_client_actor_id(self, client_id: str) -> str | None:
         """
         Get the actor ID associated with a client.
 
@@ -160,7 +161,7 @@ class MCPClientRegistry:
         client_data = self._load_client(client_id)
         return client_data.get("actor_id") if client_data else None
 
-    def list_clients_for_actor(self, actor_id: str) -> List[Dict[str, Any]]:
+    def list_clients_for_actor(self, actor_id: str) -> list[dict[str, Any]]:
         """
         List all clients registered for an actor.
 
@@ -173,19 +174,19 @@ class MCPClientRegistry:
         try:
             # Use the proper ActingWeb pattern with attribute buckets
             bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
-            
+
             # Get all client attributes from the bucket
             bucket_data = bucket.get_bucket()
             if not bucket_data:
                 return []
-            
+
             # Extract the actual client data from each attribute
             clients = []
             for attr_data in bucket_data.values():
                 if attr_data and "data" in attr_data:
                     clients.append(attr_data["data"])
             return clients
-            
+
         except Exception as e:
             logger.error(f"Error listing clients for actor {actor_id}: {e}")
             return []
@@ -233,7 +234,7 @@ class MCPClientRegistry:
             logger.error(f"Error deleting client {client_id}: {e}")
             return False
 
-    def _store_client(self, actor_id: str, client_id: str, client_data: Dict[str, Any]) -> None:
+    def _store_client(self, actor_id: str, client_id: str, client_data: dict[str, Any]) -> None:
         """Store client data using ActingWeb attributes bucket."""
         try:
             # Use the proper ActingWeb pattern with attribute buckets
@@ -242,13 +243,13 @@ class MCPClientRegistry:
             # Store client data in the bucket
             logger.debug(f"Storing client {client_id} in mcp_clients bucket for actor {actor_id}")
             bucket.set_attr(name=client_id, data=client_data)
-            logger.debug(f"Successfully stored client data")
+            logger.debug("Successfully stored client data")
 
         except Exception as e:
             logger.error(f"Error storing client {client_id} for actor {actor_id}: {e}")
             raise
 
-    def _load_client(self, client_id: str) -> Optional[Dict[str, Any]]:
+    def _load_client(self, client_id: str) -> dict[str, Any] | None:
         """Load client data by searching all actors."""
         try:
             # Extract actor ID from client data if we can find it
@@ -265,14 +266,14 @@ class MCPClientRegistry:
             # The client_id contains the actor context in our implementation
             # We can optimize this later with proper indexing
 
-            client_data: Optional[Dict[str, Any]] = self._search_client_in_actors(client_id)
+            client_data: dict[str, Any] | None = self._search_client_in_actors(client_id)
             return client_data
 
         except Exception as e:
             logger.error(f"Error loading client {client_id}: {e}")
             return None
 
-    def _search_client_in_actors(self, client_id: str) -> Optional[Dict[str, Any]]:
+    def _search_client_in_actors(self, client_id: str) -> dict[str, Any] | None:
         """
         Search for client across actors.
 
@@ -290,37 +291,37 @@ class MCPClientRegistry:
 
         return self._load_from_global_index(client_id)
 
-    def _load_from_global_index(self, client_id: str) -> Optional[Dict[str, Any]]:
+    def _load_from_global_index(self, client_id: str) -> dict[str, Any] | None:
         """Load client from a global index using attribute buckets."""
         try:
             # Use global attribute bucket for client index
             # This stores client_id -> actor_id mapping
             global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
-            
+
             # Get the actor ID for this client
             actor_id_attr = global_bucket.get_attr(name=client_id)
             if not actor_id_attr or "data" not in actor_id_attr:
                 return None
-            
+
             actor_id = actor_id_attr["data"]
             if not actor_id:
                 return None
-                
+
             # Load the actual client data from the actor's bucket
             client_bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
             client_attr = client_bucket.get_attr(name=client_id)
             if not client_attr or "data" not in client_attr:
                 return None
-            
-            client_data: Dict[str, Any] = client_attr["data"]
-            
+
+            client_data: dict[str, Any] = client_attr["data"]
+
             return client_data
-            
+
         except Exception as e:
             logger.error(f"Error loading client from global index: {e}")
             return None
 
-    def _create_client_trust_relationship(self, actor_id: str, client_id: str, client_data: Dict[str, Any]) -> None:
+    def _create_client_trust_relationship(self, actor_id: str, client_id: str, client_data: dict[str, Any]) -> None:
         """
         Create a trust relationship for the OAuth2 client.
 
@@ -451,18 +452,18 @@ class MCPClientRegistry:
             # Use global attribute bucket for client index
             # This stores client_id -> actor_id mapping
             global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
-            
+
             # Store the client_id -> actor_id mapping
             global_bucket.set_attr(name=client_id, data=actor_id)
             logger.debug(f"Updated global index: {client_id} -> {actor_id}")
-            
+
         except Exception as e:
             logger.error(f"Error updating global client index: {e}")
             raise
 
 
 # Global registry instance
-_client_registry: Optional[MCPClientRegistry] = None
+_client_registry: MCPClientRegistry | None = None
 
 
 def get_mcp_client_registry(config: config_class.Config) -> MCPClientRegistry:

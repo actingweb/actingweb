@@ -1,8 +1,6 @@
 import json
 import logging
-from builtins import str
 
-from actingweb import auth
 from actingweb.handlers import base_handler
 
 

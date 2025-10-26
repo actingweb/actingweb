@@ -6,7 +6,6 @@ at application startup, avoiding lazy loading during request processing.
 """
 
 import logging
-from typing import List
 
 from . import config as config_class
 
@@ -30,7 +29,7 @@ def initialize_permission_system(config: config_class.Config) -> None:
     Raises:
         RuntimeError: If any critical permission system component fails to initialize
     """
-    initialization_errors: List[str] = []
+    initialization_errors: list[str] = []
 
     logger.debug("Initializing ActingWeb permission system...")
 

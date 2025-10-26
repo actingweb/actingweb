@@ -6,16 +6,14 @@ can issue its own tokens to MCP clients while proxying user authentication
 to Google OAuth2.
 """
 
-import json
 import logging
-import time
-from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
-from urllib.parse import urlencode, urlparse, parse_qs
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
-from .client_registry import get_mcp_client_registry
-from .token_manager import get_actingweb_token_manager
-from .state_manager import get_oauth2_state_manager
 from ..oauth2 import create_oauth2_authenticator
+from .client_registry import get_mcp_client_registry
+from .state_manager import get_oauth2_state_manager
+from .token_manager import get_actingweb_token_manager
 
 if TYPE_CHECKING:
     from .. import config as config_class
@@ -48,8 +46,8 @@ class ActingWebOAuth2Server:
             logger.warning("Google OAuth2 not configured - MCP OAuth2 server will not work properly")
 
     def handle_client_registration(
-        self, registration_data: Dict[str, Any], actor_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self, registration_data: dict[str, Any], actor_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Handle dynamic client registration (RFC 7591).
 
@@ -77,12 +75,12 @@ class ActingWebOAuth2Server:
             return response
 
         except ValueError as e:
-            raise ValueError(f"Client registration failed: {str(e)}")
+            raise ValueError(f"Client registration failed: {str(e)}") from e
         except Exception as e:
             logger.error(f"Client registration error: {e}")
-            raise ValueError("Internal server error during client registration")
+            raise ValueError("Internal server error during client registration") from e
 
-    def handle_authorization_request(self, params: Dict[str, Any], method: str = "GET") -> Dict[str, Any]:
+    def handle_authorization_request(self, params: dict[str, Any], method: str = "GET") -> dict[str, Any]:
         """
         Handle OAuth2 authorization request.
 
@@ -100,7 +98,7 @@ class ActingWebOAuth2Server:
             client_id = params.get("client_id")
             redirect_uri = params.get("redirect_uri")
             response_type = params.get("response_type", "code")
-            scope = params.get("scope", "")
+            params.get("scope", "")
             state = params.get("state", "")
             code_challenge = params.get("code_challenge")
             code_challenge_method = params.get("code_challenge_method", "plain")
@@ -186,7 +184,7 @@ class ActingWebOAuth2Server:
             logger.error(f"Authorization request error: {e}")
             return self._error_response("server_error", "Internal server error")
 
-    def handle_oauth_callback(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def handle_oauth_callback(self, params: dict[str, Any]) -> dict[str, Any]:
         """
         Handle OAuth2 callback from Google.
 
@@ -313,7 +311,7 @@ class ActingWebOAuth2Server:
             logger.error(f"OAuth2 callback error: {e}")
             return self._error_response("server_error", "Internal server error")
 
-    def handle_token_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def handle_token_request(self, params: dict[str, Any]) -> dict[str, Any]:
         """
         Handle OAuth2 token request.
 
@@ -339,7 +337,7 @@ class ActingWebOAuth2Server:
             logger.error(f"Token request error: {e}")
             return self._error_response("server_error", "Internal server error")
 
-    def _handle_authorization_code_grant(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_authorization_code_grant(self, params: dict[str, Any]) -> dict[str, Any]:
         """Handle authorization_code grant type."""
 
         code = params.get("code")
@@ -381,7 +379,7 @@ class ActingWebOAuth2Server:
         logger.info(f"Issued ActingWeb access token for client {client_id}")
         return token_response
 
-    def _handle_refresh_token_grant(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_refresh_token_grant(self, params: dict[str, Any]) -> dict[str, Any]:
         """Handle refresh_token grant type."""
         refresh_token = params.get("refresh_token")
         client_id = params.get("client_id")
@@ -408,7 +406,7 @@ class ActingWebOAuth2Server:
         logger.info(f"Refreshed ActingWeb access token for client {client_id}")
         return token_response
 
-    def _handle_client_credentials_grant(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_client_credentials_grant(self, params: dict[str, Any]) -> dict[str, Any]:
         """Handle client_credentials grant type."""
         client_id = params.get("client_id")
         client_secret = params.get("client_secret")
@@ -447,7 +445,7 @@ class ActingWebOAuth2Server:
         logger.info(f"Created client credentials access token for client {client_id} -> actor {actor_id}")
         return token_response
 
-    def handle_discovery_request(self) -> Dict[str, Any]:
+    def handle_discovery_request(self) -> dict[str, Any]:
         """
         Handle OAuth2 authorization server discovery (RFC 8414).
 
@@ -470,7 +468,7 @@ class ActingWebOAuth2Server:
             "mcp_resource": f"{base_url}/mcp",
         }
 
-    def validate_mcp_token(self, token: str) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+    def validate_mcp_token(self, token: str) -> tuple[str, str, dict[str, Any]] | None:
         """
         Validate ActingWeb token for MCP endpoints.
 
@@ -482,7 +480,7 @@ class ActingWebOAuth2Server:
         """
         return self.token_manager.validate_access_token(token)
 
-    def handle_logout_request(self, token: Optional[str] = None) -> Dict[str, Any]:
+    def handle_logout_request(self, token: str | None = None) -> dict[str, Any]:
         """
         Handle OAuth2 logout request.
 
@@ -502,7 +500,7 @@ class ActingWebOAuth2Server:
                 try:
                     token_validation = self.token_manager.validate_access_token(token)
                     if token_validation:
-                        actor_id, client_id, token_data = token_validation
+                        actor_id, client_id, _ = token_validation
                         logger.info(f"Token validated for actor {actor_id}, client {client_id}")
 
                         # Revoke access token using the generic revoke method
@@ -543,7 +541,7 @@ class ActingWebOAuth2Server:
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
 
-    def _get_or_create_actor_for_email(self, email: str) -> Optional[Any]:
+    def _get_or_create_actor_for_email(self, email: str) -> Any | None:
         """Get or create actor for email address."""
         try:
             from .. import actor as actor_module
@@ -569,7 +567,7 @@ class ActingWebOAuth2Server:
 
                 # The actor should now have its ID set from the create() method
                 if not actor_obj.id:
-                    logger.error(f"Actor creation succeeded but ID is not set")
+                    logger.error("Actor creation succeeded but ID is not set")
                     return None
 
             except Exception as create_error:
@@ -648,6 +646,7 @@ class ActingWebOAuth2Server:
         """Store MCP client info in the trust relationship for the OAuth2 client."""
         try:
             import time
+
             from ..handlers.mcp import _mcp_client_info_cache
 
             # Search through all cached client info to find match for this client
@@ -656,7 +655,7 @@ class ActingWebOAuth2Server:
 
             # Try to find client info in the cache (there should only be one recent entry)
             current_time = time.time()
-            for session_key, data in _mcp_client_info_cache.items():
+            for _session_key, data in _mcp_client_info_cache.items():
                 if current_time - data["timestamp"] < 600:  # Within 10 minutes
                     client_info = data["client_info"]
                     break
@@ -681,7 +680,7 @@ class ActingWebOAuth2Server:
             # This is not critical, so we don't raise the exception
 
     def _update_trust_with_client_info_oauth(
-        self, actor_interface, client_id: str, client_info: Dict[str, Any]
+        self, actor_interface, client_id: str, client_info: dict[str, Any]
     ) -> None:
         """
         Update trust relationship with MCP client metadata for OAuth2 server context.
@@ -741,13 +740,13 @@ class ActingWebOAuth2Server:
         except Exception as e:
             logger.debug(f"Could not update trust with OAuth2 client info: {e}")
 
-    def _error_response(self, error: str, description: str) -> Dict[str, Any]:
+    def _error_response(self, error: str, description: str) -> dict[str, Any]:
         """Create OAuth2 error response."""
         return {"error": error, "error_description": description}
 
 
 # Global OAuth2 server instance
-_oauth2_server: Optional[ActingWebOAuth2Server] = None
+_oauth2_server: ActingWebOAuth2Server | None = None
 
 
 def get_actingweb_oauth2_server(config: "config_class.Config") -> ActingWebOAuth2Server:

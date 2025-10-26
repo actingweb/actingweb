@@ -5,7 +5,8 @@ This handles OAuth2 callback flows for third-party services like Dropbox, Gmail,
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any
+
 from ..handlers.base_handler import BaseHandler
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ class ServicesHandler(BaseHandler):
 
     _service_registry: Any  # Dynamic attribute injected by integration layer
 
-    def get(self, actor_id: str, service_name: str, **kwargs) -> Dict[str, Any]:
+    def get(self, actor_id: str, service_name: str, **kwargs) -> dict[str, Any]:
         """
         Handle OAuth2 callback for a third-party service.
 
@@ -90,7 +91,7 @@ class ServicesHandler(BaseHandler):
         # Try to get service registry from config
         return getattr(self.config, "service_registry", None)
 
-    def delete(self, actor_id: str, service_name: str, **kwargs) -> Dict[str, Any]:  # pylint: disable=unused-argument
+    def delete(self, actor_id: str, service_name: str, **kwargs) -> dict[str, Any]:  # pylint: disable=unused-argument
         """
         Revoke authentication for a third-party service.
 

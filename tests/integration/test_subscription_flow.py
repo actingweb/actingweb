@@ -20,12 +20,12 @@ class TestSubscriptionActorFlow:
     """
 
     # Shared state for actors
-    actor1_url = None
+    actor1_url: str | None = None
     actor1_id = None
     passphrase1 = None
     creator1 = "trust1@actingweb.net"
 
-    actor2_url = None
+    actor2_url: str | None = None
     actor2_id = None
     passphrase2 = None
     creator2 = "trust2@actingweb.net"
@@ -121,7 +121,7 @@ class TestSubscriptionActorFlow:
                 "relationship": "friend",
                 "desc": "Test relationship between actor1 and actor2",
             },
-            auth=(self.creator1, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type,union-attr,attr-defined,return-value]
         )
 
         assert response.status_code in [201, 202]
@@ -131,7 +131,7 @@ class TestSubscriptionActorFlow:
         response = requests.put(
             f"{self.actor2_url}/trust/friend/{self.actor1_id}",
             json={"approved": True},
-            auth=(self.creator2, self.passphrase2),
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 204]
 
@@ -139,7 +139,7 @@ class TestSubscriptionActorFlow:
         response = requests.put(
             f"{self.actor1_url}/trust/friend/{self.actor2_id}",
             json={"approved": True},
-            auth=(self.creator1, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 204]
 
@@ -157,7 +157,7 @@ class TestSubscriptionActorFlow:
                 "secret": "mysecret2",
                 "desc": "Test relationship between actor1 and actor3",
             },
-            auth=(self.creator1, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [201, 202]
@@ -167,7 +167,7 @@ class TestSubscriptionActorFlow:
         response = requests.put(
             f"{self.actor3_url}/trust/friend/{self.actor1_id}",
             json={"approved": True},
-            auth=(self.creator3, self.passphrase3),
+            auth=(self.creator3, self.passphrase3),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 204]
 
@@ -202,7 +202,7 @@ class TestSubscriptionActorFlow:
                 "subtarget": "test",
                 "granularity": "none",
             },
-            auth=(self.creator2, self.passphrase2),
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 202, 204]
 
@@ -236,7 +236,7 @@ class TestSubscriptionActorFlow:
                 "subtarget": "",
                 "granularity": "high",
             },
-            auth=(self.creator2, self.passphrase2),
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 202, 204]
 
@@ -254,7 +254,7 @@ class TestSubscriptionActorFlow:
                 "subtarget": "",
                 "granularity": "high",
             },
-            auth=(self.creator2, self.passphrase2),
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 202, 204]
 
@@ -272,7 +272,7 @@ class TestSubscriptionActorFlow:
                 "subtarget": "",
                 "granularity": "low",
             },
-            auth=(self.creator3, self.passphrase3),
+            auth=(self.creator3, self.passphrase3),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 202, 204]
 
@@ -290,7 +290,7 @@ class TestSubscriptionActorFlow:
                 "subtarget": "data2",
                 "granularity": "high",
             },
-            auth=(self.creator3, self.passphrase3),
+            auth=(self.creator3, self.passphrase3),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 202, 204]
 
@@ -324,7 +324,7 @@ class TestSubscriptionActorFlow:
                 "subtarget": "",
                 "granularity": "none",
             },
-            auth=(self.creator3, self.passphrase3),
+            auth=(self.creator3, self.passphrase3),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 202, 204]
 
@@ -343,7 +343,7 @@ class TestSubscriptionActorFlow:
                 "resource": "resource",
                 "granularity": "none",
             },
-            auth=(self.creator2, self.passphrase2),
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 202, 204]
 
@@ -492,7 +492,7 @@ class TestSubscriptionActorFlow:
         """
         response = requests.get(
             f"{self.actor1_url}/subscriptions",
-            auth=(self.creator1, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
 
@@ -504,7 +504,7 @@ class TestSubscriptionActorFlow:
         """
         response = requests.get(
             f"{self.actor1_url}/subscriptions?target=properties",
-            auth=(self.creator1, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -756,8 +756,8 @@ class TestSubscriptionActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.delete(
-            self.actor3_url,
-            auth=(self.creator3, self.passphrase3),
+            self.actor3_url,  # type: ignore[arg-type]
+            auth=(self.creator3, self.passphrase3),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
@@ -788,14 +788,14 @@ class TestSubscriptionActorFlow:
         """
         # Delete actor1
         response = requests.delete(
-            self.actor1_url,
-            auth=(self.creator1, self.passphrase1),
+            self.actor1_url,  # type: ignore[arg-type]
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
 
         # Delete actor2
         response = requests.delete(
-            self.actor2_url,
-            auth=(self.creator2, self.passphrase2),
+            self.actor2_url,  # type: ignore[arg-type]
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
         assert response.status_code == 204

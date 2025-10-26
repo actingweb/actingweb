@@ -1,8 +1,6 @@
 import logging
 import os
-
 from datetime import datetime
-from typing import Union
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
@@ -16,16 +14,16 @@ from actingweb.trust import canonical_connection_method
 """
 
 
-def _parse_timestamp(value: Union[str, datetime, None]) -> datetime:
+def _parse_timestamp(value: str | datetime | None) -> datetime:
     """
     Parse timestamp value consistently, handling both string and datetime inputs.
-    
+
     Args:
         value: String timestamp (ISO format) or datetime object
-        
+
     Returns:
         datetime object
-        
+
     Raises:
         ValueError: If string cannot be parsed as valid ISO timestamp
     """

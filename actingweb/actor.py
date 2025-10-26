@@ -2,8 +2,9 @@ import base64
 import datetime
 import json
 import logging
-import requests
 from typing import Any
+
+import requests
 
 from actingweb import attribute, peertrustee, property, subscription, trust
 from actingweb.constants import (
@@ -214,7 +215,7 @@ class Actor:
         will be chosen (if any)
         """
         seed = url
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         seed += now.strftime("%Y%m%dT%H%M%S%f")
         if len(creator) > 0:
             self.creator = creator
@@ -261,11 +262,11 @@ class Actor:
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(actor_id=self.id, config=self.config)
-        
+
         # Set trustee_root if provided
         if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0 and self.store:
             self.store.trustee_root = trustee_root
-        
+
         # Execute actor_created lifecycle hook if hooks are provided
         if hooks:
             try:
@@ -620,15 +621,15 @@ class Actor:
         )
 
     def create_reciprocal_trust(
-        self, 
-        url, 
-        secret=None, 
-        desc="", 
+        self,
+        url,
+        secret=None,
+        desc="",
         relationship="",  # trust type/permission level (e.g., "friend", "admin") - goes in URL
         trust_type=""     # peer's expected ActingWeb mini-app type for validation (optional)
     ):
         """Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
-        
+
         Args:
             relationship: The trust type/permission level to request (friend, admin, etc.)
             trust_type: Expected peer mini-app type for validation (optional)
@@ -727,7 +728,7 @@ class Actor:
         desc="",
     ):
         """Creates a new trust when requested and call backs to initiating actor to verify relationship.
-        
+
         Args:
             trust_type: The peer's ActingWeb mini-application type URI
             relationship: The trust type/permission level (friend, admin, etc.)
@@ -809,7 +810,7 @@ class Actor:
                 rel.get("baseuri", "").endswith(f"/{self.id}") or
                 rel.get("baseuri", "") == f"{self.config.root}{self.id}" if self.config else False
             )
-            
+
             if delete_peer and not is_oauth2_trust and not is_self_deletion:
                 url = rel["baseuri"] + "/trust/" + rel["relationship"] + "/" + self.id
                 headers = {}

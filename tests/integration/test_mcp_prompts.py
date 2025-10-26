@@ -7,8 +7,6 @@ Prompts in MCP map to ActingWeb methods - predefined workflows or
 interactions that can be exposed to MCP clients.
 """
 
-import pytest
-import json
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 

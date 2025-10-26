@@ -1,8 +1,7 @@
 import datetime
 import json
-from builtins import str
 
-from actingweb import attribute, auth, aw_proxy
+from actingweb import attribute, aw_proxy
 from actingweb.handlers import base_handler
 
 
@@ -162,7 +161,7 @@ class DevtestHandler(base_handler.BaseHandler):
                         self.response.set_status(404)
                     return
                 if isinstance(params, dict):
-                    for b, d in params.items():
+                    for _b, d in params.items():
                         for k, v in d.items():
                             d[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
                     out = json.dumps(params)

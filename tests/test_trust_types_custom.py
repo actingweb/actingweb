@@ -16,6 +16,7 @@ References:
 """
 
 import pytest
+
 from actingweb.interface.app import ActingWebApp
 from actingweb.trust_type_registry import get_registry
 

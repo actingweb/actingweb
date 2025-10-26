@@ -1,18 +1,21 @@
 import json
 import logging
 
-from actingweb import auth, trust
+from actingweb import auth
 from actingweb.handlers import base_handler
 
 # Import permission system with fallback
 try:
-    from ..trust_permissions import get_trust_permission_store, create_permission_override
+    from ..trust_permissions import (
+        create_permission_override,
+        get_trust_permission_store,
+    )
     PERMISSION_SYSTEM_AVAILABLE = True
 except ImportError:
     # Set fallback values for when permission system is not available
     get_trust_permission_store = None
     create_permission_override = None
-    PERMISSION_SYSTEM_AVAILABLE = False
+    PERMISSION_SYSTEM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
 
 # /trust aw_handlers
 #
@@ -324,7 +327,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
         my_trust = relationships[0]
 
         # Check access based on authentication type (needed for verification logic)
-        is_creator = auth_result.auth_obj.acl.get("authenticated") and auth_result.auth_obj.acl.get("role") == "creator"
+        _ = auth_result.auth_obj.acl.get("authenticated") and auth_result.auth_obj.acl.get("role") == "creator"  # pyright: ignore[reportUnusedExpression]
         is_peer_token = auth_result.auth_obj.trust is not None
 
         # The GET handler should return trust data for verification purposes but NOT modify verified status
@@ -436,7 +439,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if "approved" in params:
                 if params["approved"] is True or params["approved"].lower() == "true":
                     approved = True
-            
+
             # Handle permission updates
             if "permissions" in params and PERMISSION_SYSTEM_AVAILABLE:
                 permission_updates = params["permissions"]
@@ -464,16 +467,16 @@ class TrustPeerHandler(base_handler.BaseHandler):
             approved=approved,
             desc=desc,
         )
-        
+
         # Update permissions if provided
         permissions_updated = True
         if permission_updates is not None and PERMISSION_SYSTEM_AVAILABLE and get_trust_permission_store:
             try:
                 permission_store = get_trust_permission_store(self.config)
-                
+
                 # Check if permissions already exist
                 existing_permissions = permission_store.get_permissions(actor_id, peerid)
-                
+
                 if existing_permissions:
                     # Update existing permissions
                     permissions_updated = permission_store.update_permissions(
@@ -488,14 +491,14 @@ class TrustPeerHandler(base_handler.BaseHandler):
                         permission_updates=permission_updates
                     )
                     permissions_updated = permission_store.store_permissions(permissions_obj)
-                    
+
                 if not permissions_updated:
                     logging.error(f"Failed to update permissions for trust relationship {actor_id}:{peerid}")
-                    
+
             except Exception as e:
                 logging.error(f"Error updating permissions for trust relationship {actor_id}:{peerid}: {e}")
                 permissions_updated = False
-        
+
         if trust_updated and permissions_updated:
             self.response.set_status(204, "Ok")
         else:
@@ -519,7 +522,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403)
             return
-        
+
         # Prevent actors from deleting trust relationships with themselves
         if peerid == actor_id:
             if self.response:
@@ -557,21 +560,20 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(501, "Permission system not available")
             return
-            
+
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
         if not auth_result.success:
             logging.error(f"TrustPermissionHandler auth failed: actor={auth_result.actor is not None}, auth_obj={auth_result.auth_obj is not None}, code={auth_result.auth_obj.response['code'] if auth_result.auth_obj else 'None'}")
             return
-        myself = auth_result.actor
 
         # Same authorization as trust endpoint
         if not auth_result.authorize("GET", "trust", "<type>/<id>"):
             return
-            
+
         try:
             permission_store = get_trust_permission_store(self.config)
             custom_permissions = permission_store.get_permissions(actor_id, peerid)
-            
+
             if custom_permissions:
                 # Return custom permission overrides
                 permission_data = {
@@ -598,7 +600,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                     registry = get_registry(self.config)
                     logging.debug(f"Looking up trust type '{relationship}' in registry")
                     trust_type = registry.get_type(relationship)
-                    
+
                     if not trust_type:
                         logging.error(f"Trust type '{relationship}' not found in registry")
                         available_types = [t.name for t in registry.list_types()] if registry else []
@@ -606,9 +608,9 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                         if self.response:
                             self.response.set_status(404, f"Trust type '{relationship}' not found")
                         return
-                    
+
                     logging.debug(f"Found trust type '{relationship}': {trust_type.display_name}")
-                    
+
                     # Return default permissions from trust type
                     permission_data = {
                         "actor_id": actor_id,
@@ -631,24 +633,24 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                     if self.response:
                         self.response.set_status(500, f"Error accessing trust type defaults: {registry_error}")
                     return
-            
+
             out = json.dumps(permission_data)
             self.response.write(out)
             self.response.headers["Content-Type"] = "application/json"
             self.response.set_status(200, "Ok")
-            
+
         except Exception as e:
             logging.error(f"Error retrieving permissions for {actor_id}:{peerid}: {e}")
             if self.response:
                 self.response.set_status(500, "Internal server error")
-    
+
     def put(self, actor_id: str, relationship: str, peerid: str):
         """Create or update permission overrides for a trust relationship."""
         if not PERMISSION_SYSTEM_AVAILABLE or not get_trust_permission_store:
             if self.response:
                 self.response.set_status(501, "Permission system not available")
             return
-            
+
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
         if not auth_result.success:
             return
@@ -657,7 +659,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
         # Same authorization as trust endpoint
         if not auth_result.authorize("PUT", "trust", "<type>/<id>"):
             return
-            
+
         try:
             body = self.request.body
             if isinstance(body, bytes):
@@ -665,17 +667,17 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
-            
+
             # Validate trust relationship exists
             relationships = myself.get_trust_relationships(relationship=relationship, peerid=peerid)
             if not relationships or len(relationships) == 0:
                 if self.response:
                     self.response.set_status(404, "Trust relationship not found")
                 return
-                
+
             permission_store = get_trust_permission_store(self.config)
             existing_permissions = permission_store.get_permissions(actor_id, peerid)
-            
+
             if existing_permissions:
                 # Update existing permissions
                 success = permission_store.update_permissions(actor_id, peerid, params)
@@ -691,13 +693,13 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                     trust_type=relationship,
                     permission_updates=params
                 )
-                
+
                 success = permission_store.store_permissions(permissions_obj)
                 if success:
                     self.response.set_status(201, "Created")
                 else:
                     self.response.set_status(500, "Failed to create permissions")
-                    
+
         except ValueError as e:
             logging.error(f"Invalid JSON in permission request: {e}")
             if self.response:
@@ -706,32 +708,31 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             logging.error(f"Error updating permissions for {actor_id}:{peerid}: {e}")
             if self.response:
                 self.response.set_status(500, "Internal server error")
-    
+
     def delete(self, actor_id: str, relationship: str, peerid: str):
         """Delete permission overrides for a trust relationship."""
         if not PERMISSION_SYSTEM_AVAILABLE or not get_trust_permission_store:
             if self.response:
                 self.response.set_status(501, "Permission system not available")
             return
-            
+
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
         if not auth_result.success:
             return
-        myself = auth_result.actor
 
         # Same authorization as trust endpoint
         if not auth_result.authorize("DELETE", "trust", "<type>/<id>"):
             return
-            
+
         try:
             permission_store = get_trust_permission_store(self.config)
             success = permission_store.delete_permissions(actor_id, peerid)
-            
+
             if success:
                 self.response.set_status(204, "Deleted")
             else:
                 self.response.set_status(404, "No permissions found")
-                
+
         except Exception as e:
             logging.error(f"Error deleting permissions for {actor_id}:{peerid}: {e}")
             if self.response:

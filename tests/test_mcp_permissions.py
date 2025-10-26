@@ -1,9 +1,9 @@
 import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
 
-from actingweb.interface.hooks import HookRegistry
 from actingweb.handlers.mcp import MCPHandler
-from actingweb.mcp.decorators import mcp_tool, mcp_prompt
+from actingweb.interface.hooks import HookRegistry
+from actingweb.mcp.decorators import mcp_prompt, mcp_tool
 
 
 def make_hooks():
@@ -19,7 +19,7 @@ def make_hooks():
 
     hooks.register_action_hook("search", search_tool)
     hooks.register_action_hook("create_note", create_note_tool)
-    
+
     @mcp_prompt(description="Summarize content")
     def summarize_prompt(actor, method_name, data):
         return {"prompt": f"Summarize: {data.get('text', '')}"}

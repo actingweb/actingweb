@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from actingweb.interface.services.service_config import ServiceConfig
 from actingweb.interface.services.service_client import ServiceClient
+from actingweb.interface.services.service_config import ServiceConfig
 
 
 class _PropertyStore(dict):
@@ -96,7 +96,7 @@ def test_make_request_refreshes_token(service_config, actor_interface, aw_config
 
     assert result == {"ok": True}
     assert client._access_token == "new-token"
-    args, kwargs = request_mock.call_args_list[-1]
+    _, kwargs = request_mock.call_args_list[-1]
     assert kwargs["headers"]["Authorization"] == "Bearer new-token"
 
 

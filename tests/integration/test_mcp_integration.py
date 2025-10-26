@@ -8,7 +8,6 @@ These tests verify the entire MCP stack works together correctly.
 """
 
 import pytest
-import json
 from mcp.types import LATEST_PROTOCOL_VERSION
 
 
@@ -346,7 +345,7 @@ class TestMCPCapabilities:
         assert "result" in data
         assert "capabilities" in data["result"]
 
-        capabilities = data["result"]["capabilities"]
+        _ = data["result"]["capabilities"]  # noqa: F841
         # Server should report what it supports
         # At minimum, should indicate if tools/resources/prompts are supported
 

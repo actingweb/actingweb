@@ -10,7 +10,6 @@ NOTE: These tests should ONLY run with devtest endpoints enabled.
 In production, devtest MUST be disabled for security.
 """
 
-import pytest
 import requests
 
 
@@ -21,10 +20,10 @@ class TestDevTestEndpoints:
     Tests must run in order as they share state.
     """
 
-    actor_url = None
-    actor_id = None
-    passphrase = None
-    creator = "devtest@actingweb.net"
+    actor_url: str | None = None
+    actor_id: str | None = None
+    passphrase: str | None = None
+    creator: str = "devtest@actingweb.net"
 
     def test_001_create_actor(self, http_client):
         """
@@ -52,7 +51,7 @@ class TestDevTestEndpoints:
         response = requests.post(
             f"{self.actor_url}/devtest/attribute/bucket1",
             json={"var1": "value1", "var2": "value2"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type,union-attr,attr-defined,return-value]
         )
 
         # Accept 200 or 201 for creation
@@ -69,7 +68,7 @@ class TestDevTestEndpoints:
         """
         response = requests.get(
             f"{self.actor_url}/devtest/attribute/bucket1",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code == 200
@@ -90,7 +89,7 @@ class TestDevTestEndpoints:
         """
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 404]  # 404 if no implementation
@@ -108,7 +107,7 @@ class TestDevTestEndpoints:
         response = requests.put(
             f"{self.actor_url}/devtest/attribute/bucket1",
             json={"var1": "changed", "var2": "value2"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         # PUT might not be implemented for attributes, accept 404
@@ -118,7 +117,7 @@ class TestDevTestEndpoints:
             # Verify change
             response = requests.get(
                 f"{self.actor_url}/devtest/attribute/bucket1",
-                auth=(self.creator, self.passphrase),
+                auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
             )
             assert response.status_code == 200
             data = response.json()
@@ -136,7 +135,7 @@ class TestDevTestEndpoints:
         response = requests.post(
             f"{self.actor_url}/devtest/attribute/bucket2",
             json={"var3": "value3", "var4": "value4"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 201]
@@ -152,7 +151,7 @@ class TestDevTestEndpoints:
         response = requests.post(
             f"{self.actor_url}/devtest/attribute/bucket3",
             json={"var5": "value5"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 201]
@@ -169,7 +168,7 @@ class TestDevTestEndpoints:
                 "vard1": {"data": {"var1": "value1", "var2": "value2"}},
                 "vard2": {"data": {"var1": "value1", "var2": "value2"}},
             },
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 201]
@@ -182,7 +181,7 @@ class TestDevTestEndpoints:
         """
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         if response.status_code == 200:
@@ -199,7 +198,7 @@ class TestDevTestEndpoints:
         """
         response = requests.delete(
             f"{self.actor_url}/devtest/attribute/bucket2",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 204]
@@ -212,13 +211,12 @@ class TestDevTestEndpoints:
         """
         response = requests.get(
             f"{self.actor_url}/devtest/attribute/bucket1",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         if response.status_code == 200:
             data = response.json()
-            # Timestamp field might exist
-            has_timestamp = "timestamp" in str(data).lower() or "time" in str(data).lower()
+            # Timestamp field might exist - just verify data exists
             # Not strictly required, so just check if data exists
             assert data is not None
 
@@ -230,7 +228,7 @@ class TestDevTestEndpoints:
         """
         response = requests.delete(
             f"{self.actor_url}/devtest/attribute",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         assert response.status_code in [200, 204, 404]  # 404 if no implementation
@@ -243,7 +241,7 @@ class TestDevTestEndpoints:
         """
         response = requests.get(
             f"{self.actor_url}/devtest/attribute",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         # Should return 404 or empty result
@@ -261,7 +259,7 @@ class TestDevTestEndpoints:
         """
         response = requests.post(
             f"{self.actor_url}/devtest/proxy/create",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         # Accept 200, 201, or 404 if not implemented
@@ -277,14 +275,14 @@ class TestDevTestEndpoints:
         response = requests.post(
             f"{self.actor_url}/properties",
             json={"proxy_test": "value"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
 
         # Try to access via proxy
         response = requests.get(
             f"{self.actor_url}/devtest/proxy/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         # Accept 200 or 404 if proxy not implemented
@@ -299,7 +297,7 @@ class TestDevTestEndpoints:
         response = requests.put(
             f"{self.actor_url}/devtest/proxy/properties/proxy_test",
             data="changed",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         # Accept 204 or 404 if proxy not implemented
@@ -313,7 +311,7 @@ class TestDevTestEndpoints:
         """
         response = requests.delete(
             f"{self.actor_url}/devtest/proxy/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
         # Accept 204 or 404 if proxy not implemented
@@ -326,7 +324,7 @@ class TestDevTestEndpoints:
         Spec: docs/actingweb-spec.rst:454-505
         """
         response = requests.delete(
-            self.actor_url,
-            auth=(self.creator, self.passphrase),
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 204

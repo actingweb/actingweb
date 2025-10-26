@@ -11,30 +11,30 @@ ActingWeb server supports MCP (and thus all actors can be accessed via MCP), or
 MCP is not available at all.
 """
 
-from typing import Optional, Dict, Any
-import logging
 import json
+import logging
 import re
 import time
+from typing import Any
 
 # Global cache for MCP client info during session establishment
-_mcp_client_info_cache: Dict[str, Dict[str, Any]] = {}
+_mcp_client_info_cache: dict[str, dict[str, Any]] = {}
 
-from .base_handler import BaseHandler
-from ..mcp.sdk_server import get_server_manager
-from .. import aw_web_request
-from .. import config as config_class
-from ..interface.hooks import HookRegistry
-from ..interface.actor_interface import ActorInterface
-from ..runtime_context import RuntimeContext
-
+# Imports after MCP availability check
+from .. import aw_web_request  # noqa: E402
+from .. import config as config_class  # noqa: E402
+from ..interface.actor_interface import ActorInterface  # noqa: E402
+from ..interface.hooks import HookRegistry  # noqa: E402
+from ..mcp.sdk_server import get_server_manager  # noqa: E402
+from ..runtime_context import RuntimeContext  # noqa: E402
+from .base_handler import BaseHandler  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 # Global caches for MCP performance optimization
-_token_cache: Dict[str, Dict[str, Any]] = {}  # token -> validation data
-_actor_cache: Dict[str, Dict[str, Any]] = {}  # actor_id -> {actor, trust_context, last_accessed}
-_trust_cache: Dict[str, Any] = {}  # actor_id -> trust_relationship
+_token_cache: dict[str, dict[str, Any]] = {}  # token -> validation data
+_actor_cache: dict[str, dict[str, Any]] = {}  # actor_id -> {actor, trust_context, last_accessed}
+_trust_cache: dict[str, Any] = {}  # actor_id -> trust_relationship
 _cache_ttl = 300  # 5 minutes cache TTL
 
 # Cache statistics for performance monitoring
@@ -63,7 +63,7 @@ class MCPHandler(BaseHandler):
         self,
         webobj: aw_web_request.AWWebObj = aw_web_request.AWWebObj(),
         config: config_class.Config = config_class.Config(),
-        hooks: Optional[HookRegistry] = None,
+        hooks: HookRegistry | None = None,
     ) -> None:
         super().__init__(webobj, config, hooks)
         self.server_manager = get_server_manager()
@@ -95,7 +95,7 @@ class MCPHandler(BaseHandler):
                 f"Cleaned up {len(expired_tokens)} expired tokens and {len(expired_actors)} expired actors from MCP cache"
             )
 
-    def get(self) -> Dict[str, Any]:
+    def get(self) -> dict[str, Any]:
         """
         Handle GET requests to /mcp endpoint.
 
@@ -125,7 +125,7 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error handling MCP GET request: {e}")
             return self.error_response(500, f"Internal server error: {str(e)}")
 
-    def post(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def post(self, data: dict[str, Any]) -> dict[str, Any]:
         """
         Handle POST requests to /mcp endpoint.
 
@@ -190,9 +190,9 @@ class MCPHandler(BaseHandler):
             return False
 
         # Check if any action hooks are MCP-exposed
-        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
 
-        for action_name, hooks in self.hooks._action_hooks.items():
+        for _action_name, hooks in self.hooks._action_hooks.items():
             for hook in hooks:
                 if is_mcp_exposed(hook):
                     metadata = get_mcp_metadata(hook)
@@ -206,9 +206,9 @@ class MCPHandler(BaseHandler):
             return False
 
         # Check if any method hooks are MCP-exposed as resources
-        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
 
-        for method_name, hooks in self.hooks._method_hooks.items():
+        for _method_name, hooks in self.hooks._method_hooks.items():
             for hook in hooks:
                 if is_mcp_exposed(hook):
                     metadata = get_mcp_metadata(hook)
@@ -222,9 +222,9 @@ class MCPHandler(BaseHandler):
             return False
 
         # Check if any method hooks are MCP-exposed
-        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
 
-        for method_name, hooks in self.hooks._method_hooks.items():
+        for _method_name, hooks in self.hooks._method_hooks.items():
             for hook in hooks:
                 if is_mcp_exposed(hook):
                     metadata = get_mcp_metadata(hook)
@@ -232,7 +232,7 @@ class MCPHandler(BaseHandler):
                         return True
         return False
 
-    def _handle_initialize(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_initialize(self, request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         """Handle MCP initialize request."""
         # Store client info for later use during OAuth2 authentication
         client_info = params.get("clientInfo", {})
@@ -248,14 +248,14 @@ class MCPHandler(BaseHandler):
                 actor = self.authenticate_and_get_actor_cached()
                 if actor:
                     logger.debug(
-                        f"Found authenticated actor during initialize, storing client info in trust relationship"
+                        "Found authenticated actor during initialize, storing client info in trust relationship"
                     )
                     self._update_trust_with_client_info(actor, client_info)
-            except Exception as e:
+            except Exception:
                 pass
 
         # Build capabilities based on what's actually available
-        capabilities: Dict[str, Any] = {}
+        capabilities: dict[str, Any] = {}
 
         # Tools capability
         if self._has_mcp_tools():
@@ -282,17 +282,17 @@ class MCPHandler(BaseHandler):
             },
         }
 
-    def _handle_tools_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
+    def _handle_tools_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
         """Handle MCP tools/list request with permission filtering and client filtering."""
         global _mcp_client_info_cache
         tools = []
 
         if self.hooks:
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+            from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
             from ..permission_evaluator import (
-                get_permission_evaluator,
-                PermissionType,
                 PermissionResult,
+                PermissionType,
+                get_permission_evaluator,
             )
 
             # Resolve peer_id from runtime context (set during auth)
@@ -450,16 +450,16 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": tools_result}
 
-    def _handle_resources_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
+    def _handle_resources_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
         """Handle MCP resources/list request with permission filtering."""
         resources = []
 
         if self.hooks:
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+            from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
             from ..permission_evaluator import (
-                get_permission_evaluator,
-                PermissionType,
                 PermissionResult,
+                PermissionType,
+                get_permission_evaluator,
             )
 
             runtime_context = RuntimeContext(actor)
@@ -514,16 +514,16 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {"resources": resources}}
 
-    def _handle_prompts_list(self, request_id: Any, actor: Any) -> Dict[str, Any]:
+    def _handle_prompts_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
         """Handle MCP prompts/list request with permission filtering."""
         prompts = []
 
         if self.hooks:
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+            from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
             from ..permission_evaluator import (
-                get_permission_evaluator,
-                PermissionType,
                 PermissionResult,
+                PermissionType,
+                get_permission_evaluator,
             )
 
             runtime_context = RuntimeContext(actor)
@@ -580,7 +580,7 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": prompts}}
 
-    def _handle_tool_call(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
+    def _handle_tool_call(self, request_id: Any, params: dict[str, Any], actor: Any) -> dict[str, Any]:
         """Handle MCP tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -593,7 +593,11 @@ class MCPHandler(BaseHandler):
 
         # Check permission before finding/dispatching the hook
         try:
-            from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
+            from ..permission_evaluator import (
+                PermissionResult,
+                PermissionType,
+                get_permission_evaluator,
+            )
 
             runtime_context = RuntimeContext(actor)
             mcp_context = runtime_context.get_mcp_context()
@@ -614,7 +618,7 @@ class MCPHandler(BaseHandler):
             logger.debug(f"Skipping tool permission check due to error: {e}")
 
         # Find the corresponding action hook
-        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
 
         for action_name, hooks in self.hooks._action_hooks.items():
             for hook in hooks:
@@ -656,7 +660,7 @@ class MCPHandler(BaseHandler):
 
         return self._create_jsonrpc_error(request_id, -32601, f"Tool not found: {tool_name}")
 
-    def _handle_prompt_get(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
+    def _handle_prompt_get(self, request_id: Any, params: dict[str, Any], actor: Any) -> dict[str, Any]:
         """Handle MCP prompts/get request."""
         prompt_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -669,7 +673,11 @@ class MCPHandler(BaseHandler):
 
         # Check permission before finding/dispatching the hook
         try:
-            from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
+            from ..permission_evaluator import (
+                PermissionResult,
+                PermissionType,
+                get_permission_evaluator,
+            )
 
             runtime_context = RuntimeContext(actor)
             mcp_context = runtime_context.get_mcp_context()
@@ -689,7 +697,7 @@ class MCPHandler(BaseHandler):
             logger.debug(f"Skipping prompt permission check due to error: {e}")
 
         # Find the corresponding method hook
-        from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
 
         for method_name, hooks in self.hooks._method_hooks.items():
             for hook in hooks:
@@ -734,7 +742,7 @@ class MCPHandler(BaseHandler):
 
         return self._create_jsonrpc_error(request_id, -32601, f"Prompt not found: {prompt_name}")
 
-    def _handle_resource_read(self, request_id: Any, params: Dict[str, Any], actor: Any) -> Dict[str, Any]:
+    def _handle_resource_read(self, request_id: Any, params: dict[str, Any], actor: Any) -> dict[str, Any]:
         """Handle MCP resources/read request."""
         uri = params.get("uri")
 
@@ -747,7 +755,11 @@ class MCPHandler(BaseHandler):
         try:
             # Check permission before accessing resource
             try:
-                from ..permission_evaluator import get_permission_evaluator, PermissionType, PermissionResult
+                from ..permission_evaluator import (
+                    PermissionResult,
+                    PermissionType,
+                    get_permission_evaluator,
+                )
 
                 trust_context = getattr(actor, "_mcp_trust_context", None)
                 peer_id = trust_context.get("peer_id") if trust_context else None
@@ -766,7 +778,7 @@ class MCPHandler(BaseHandler):
                 logger.debug(f"Skipping resource permission check due to error: {e}")
 
             # Find the corresponding resource hook
-            from ..mcp.decorators import is_mcp_exposed, get_mcp_metadata
+            from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
 
             # Reuse URI template matching from SDK server implementation
             from ..mcp.sdk_server import _match_uri_template
@@ -784,7 +796,7 @@ class MCPHandler(BaseHandler):
 
                             # Check for template/pattern match
                             uri_matches = False
-                            variables: Dict[str, str] | None = None
+                            variables: dict[str, str] | None = None
                             try:
                                 variables = _match_uri_template(str(resource_uri), str(uri))
                             except Exception:
@@ -848,7 +860,7 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error reading resource {uri}: {e}")
             return self._create_jsonrpc_error(request_id, -32603, f"Resource read failed: {str(e)}")
 
-    def _handle_notifications_initialized(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_notifications_initialized(self, request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         """Handle MCP notifications/initialized request."""
         # This is a notification that the client has finished initialization
         # According to MCP spec, this is a notification (no response expected)
@@ -857,7 +869,7 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 
-    def _handle_ping(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_ping(self, request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
         """Handle MCP ping request."""
         # Ping is used for keepalive/connectivity testing
         # Return empty result to confirm server is alive
@@ -865,7 +877,7 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 
-    def _create_jsonrpc_error(self, request_id: Any, code: int, message: str) -> Dict[str, Any]:
+    def _create_jsonrpc_error(self, request_id: Any, code: int, message: str) -> dict[str, Any]:
         """Create a JSON-RPC error response."""
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
@@ -1001,8 +1013,8 @@ class MCPHandler(BaseHandler):
             return None
 
     def _get_or_create_actor_cached(
-        self, actor_id: str, token_data: Dict[str, Any], current_time: float
-    ) -> Optional[ActorInterface]:
+        self, actor_id: str, token_data: dict[str, Any], current_time: float
+    ) -> ActorInterface | None:
         """Get or create actor with caching."""
         # Check actor cache first
         if actor_id in _actor_cache:
@@ -1058,7 +1070,7 @@ class MCPHandler(BaseHandler):
 
         return actor_interface
 
-    def _lookup_mcp_trust_relationship(self, actor: ActorInterface, client_id: str, token_data: Dict[str, Any]) -> Any:
+    def _lookup_mcp_trust_relationship(self, actor: ActorInterface, client_id: str, token_data: dict[str, Any]) -> Any:
         """
         Lookup trust relationship for MCP client.
 
@@ -1172,14 +1184,14 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error looking up MCP trust relationship: {e}")
             return None
 
-    def get_auth_header(self) -> Optional[str]:
+    def get_auth_header(self) -> str | None:
         """Get Authorization header from request."""
         if hasattr(self, "request") and self.request and hasattr(self.request, "headers") and self.request.headers:
             auth_header = self.request.headers.get("Authorization") or self.request.headers.get("authorization")
             return str(auth_header) if auth_header is not None else None
         return None
 
-    def initiate_oauth2_redirect(self) -> Dict[str, Any]:
+    def initiate_oauth2_redirect(self) -> dict[str, Any]:
         """
         Initiate OAuth2 redirect to Google (placeholder for Phase 3).
 
@@ -1301,7 +1313,7 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error validating Google token against actor email: {e}")
             return False
 
-    def _update_actor_client_info(self, actor, request_data: Dict[str, Any]) -> None:
+    def _update_actor_client_info(self, actor, request_data: dict[str, Any]) -> None:
         """
         Extract and update client info from MCP request data.
 
@@ -1328,7 +1340,7 @@ class MCPHandler(BaseHandler):
             logger.debug(f"Could not update client info from request: {e}")
             # Non-critical, don't raise exception
 
-    def _update_trust_with_client_info(self, actor, client_info: Dict[str, Any]) -> None:
+    def _update_trust_with_client_info(self, actor, client_info: dict[str, Any]) -> None:
         """
         Update trust relationship with MCP client metadata instead of storing in actor properties.
 
@@ -1363,9 +1375,10 @@ class MCPHandler(BaseHandler):
                     client_platform = f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
 
             # Update the trust relationship with client metadata and connection timestamp
+            from datetime import datetime
+
             from .. import actor as actor_module
             from ..trust import canonical_connection_method
-            from datetime import datetime
 
             core_actor = actor_module.Actor(actor.id, config=self.config)
             if core_actor.actor:
@@ -1396,7 +1409,7 @@ class MCPHandler(BaseHandler):
             logger.error(f"Could not update trust with client info: {e}")
             # Non-critical, don't raise exception
 
-    def _store_mcp_client_info_temporarily(self, client_info: Dict[str, Any]) -> None:
+    def _store_mcp_client_info_temporarily(self, client_info: dict[str, Any]) -> None:
         """Store MCP client info temporarily until OAuth2 authentication completes."""
         global _mcp_client_info_cache
 
@@ -1419,7 +1432,7 @@ class MCPHandler(BaseHandler):
         return f"{client_ip}:{hash(user_agent)}"
 
     @classmethod
-    def get_stored_client_info(cls, session_key: str) -> Optional[Dict[str, Any]]:
+    def get_stored_client_info(cls, session_key: str) -> dict[str, Any] | None:
         """Retrieve stored client info for a session key."""
         global _mcp_client_info_cache
         if session_key in _mcp_client_info_cache:
@@ -1529,7 +1542,7 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error marking client {client_id} as peer_approved: {e}")
             # Non-critical - client can still access with existing permissions
 
-    def error_response(self, status_code: int, message: str) -> Dict[str, Any]:
+    def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create an error response."""
         if status_code == 401:
             # Add WWW-Authenticate header for ActingWeb OAuth2 server

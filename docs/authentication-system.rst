@@ -263,6 +263,77 @@ Actor Lookup/Creation
 
 ActingWeb looks up or creates an actor based on the user's email address or unique identifier.
 
+OAuth Login Flow with Postponed Actor Creation
+-----------------------------------------------
+
+ActingWeb supports an OAuth login flow where actor creation is postponed until after email is obtained from the OAuth provider. This enables applications to implement "Login with Google" or "Login with GitHub" buttons on the factory page.
+
+**Key Features:**
+
+- **Deferred Actor Creation**: Actors are created only after successful OAuth authentication and email retrieval
+- **Email Fallback**: If the OAuth provider doesn't provide an email (e.g., GitHub private email), users are redirected to an email input form
+- **Trust Type Detection**: Distinguishes between web UI login flows and MCP authorization flows
+
+**Implementation:**
+
+The library exposes OAuth authorization URLs through the factory handler's ``template_values``:
+
+.. code-block:: python
+
+    # Factory handler GET / provides:
+    {
+        'oauth_urls': {
+            'google': 'https://accounts.google.com/o/oauth2/v2/auth?...',
+            'github': 'https://github.com/login/oauth/authorize?...'
+        },
+        'oauth_providers': [
+            {
+                'name': 'google',
+                'display_name': 'Google',
+                'url': 'https://...'
+            }
+        ],
+        'oauth_enabled': True
+    }
+
+Applications render "Login with Google/GitHub" buttons using these URLs:
+
+.. code-block:: html
+
+    {% if oauth_enabled %}
+        {% for provider in oauth_providers %}
+            <a href="{{ provider.url }}">
+                Login with {{ provider.display_name }}
+            </a>
+        {% endfor %}
+    {% endif %}
+
+**Flow Diagram:**
+
+1. User clicks "Login with Google" → OAuth2 redirect
+2. Google returns to ``/oauth/callback`` with authorization code
+3. Library exchanges code for access token and retrieves user info
+4. If email is available: Create actor and redirect to ``/{actor_id}/www``
+5. If email is missing: Redirect to ``/oauth/email`` for manual input
+6. After email input: Create actor and complete login
+
+**Email Fallback:**
+
+When OAuth providers don't provide email addresses (e.g., GitHub with private email), the library:
+
+1. Stores OAuth tokens temporarily in a session (10-minute TTL)
+2. Redirects to ``/oauth/email`` with a session token
+3. Presents email input form to the user
+4. Completes actor creation after email is provided
+
+Applications should provide an ``aw-oauth-email.html`` template for email input. If not provided, a basic fallback form is used.
+
+**MCP Authorization Protection:**
+
+The email fallback flow is disabled for MCP authorization requests (when ``trust_type`` parameter is present in OAuth state). MCP clients are programmatic and cannot interact with web forms, so these flows return an error if email cannot be extracted.
+
+For detailed implementation guide, see :doc:`oauth-login-flow`.
+
 MCP Integration
 ===============
 

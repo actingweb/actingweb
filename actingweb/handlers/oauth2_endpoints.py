@@ -233,6 +233,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "state": form_data.get("state", [""])[0],
                     "email": form_data.get("email", [""])[0],
                     "trust_type": form_data.get("trust_type", ["mcp_client"])[0],  # Default to mcp_client
+                    "provider": form_data.get("provider", [""])[0],  # OAuth provider (google/github)
                 }
 
             # Debug logging for MCP OAuth2 flow
@@ -630,6 +631,10 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "client_id": form_data.get("client_id", ""),
                 "redirect_uri": form_data.get("redirect_uri", ""),
                 "state": form_data.get("state", ""),
+                "response_type": form_data.get("response_type", "code"),  # OAuth2 PKCE
+                "scope": form_data.get("scope", ""),  # OAuth2 scope
+                "code_challenge": form_data.get("code_challenge", ""),  # OAuth2 PKCE
+                "code_challenge_method": form_data.get("code_challenge_method", ""),  # OAuth2 PKCE
                 "client_name": form_data.get("client_name", "MCP Client"),
                 "form_action": "/oauth/authorize",
                 "form_method": "POST",

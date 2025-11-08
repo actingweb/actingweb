@@ -17,6 +17,8 @@ from .token_manager import get_actingweb_token_manager
 
 if TYPE_CHECKING:
     from .. import config as config_class
+    from ..actor import Actor
+    from ..interface.actor_interface import ActorInterface
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +41,12 @@ class ActingWebOAuth2Server:
         self.token_manager = get_actingweb_token_manager(config)
         self.state_manager = get_oauth2_state_manager(config)
 
-        # Google OAuth2 authenticator for user authentication
-        self.google_authenticator = create_oauth2_authenticator(config)
+        # OAuth2 authenticators for user authentication
+        self.google_authenticator = create_oauth2_authenticator(config, "google")
+        self.github_authenticator = create_oauth2_authenticator(config, "github")
 
-        if not self.google_authenticator.is_enabled():
-            logger.warning("Google OAuth2 not configured - MCP OAuth2 server will not work properly")
+        if not self.google_authenticator.is_enabled() and not self.github_authenticator.is_enabled():
+            logger.warning("OAuth2 not configured - MCP OAuth2 server will not work properly")
 
     def handle_client_registration(
         self, registration_data: dict[str, Any], actor_id: str | None = None
@@ -142,10 +145,14 @@ class ActingWebOAuth2Server:
                 }
 
             elif method == "POST":
-                # Process email and redirect to Google
+                # Get email and provider from form submission
                 email = params.get("email", "").strip()
-                if not email:
-                    return self._error_response("invalid_request", "Email is required")
+                provider = params.get("provider", "").strip()
+
+                # Email is required if no provider specified (old email form flow)
+                # Provider is required if no email specified (new OAuth button flow)
+                if not email and not provider:
+                    return self._error_response("invalid_request", "Email or provider is required")
 
                 # Get trust type from form submission
                 trust_type = params.get("trust_type", "mcp_client").strip()
@@ -155,27 +162,35 @@ class ActingWebOAuth2Server:
                     client_id=client_id,
                     original_state=state,
                     redirect_uri=redirect_uri,
-                    email_hint=email,
+                    email_hint=email if email else None,
                     trust_type=trust_type,  # Add trust type to state
                     code_challenge=code_challenge,
                     code_challenge_method=code_challenge_method,
                 )
 
-                # Create Google OAuth2 authorization URL
-                # For MCP flows, we need to use a special method that preserves the encrypted state
-                google_auth_url = self._create_google_oauth_url_for_mcp(mcp_state, email)
-
-                if not google_auth_url:
-                    logger.error("Failed to create MCP Google OAuth2 URL, falling back to standard method")
-                    # Fallback to standard method
-                    google_auth_url = self.google_authenticator.create_authorization_url(
-                        state=mcp_state, redirect_after_auth="", email_hint=email
+                # Create OAuth2 authorization URL based on provider
+                oauth_url = None
+                if provider == "github":
+                    # GitHub OAuth flow
+                    oauth_url = self.github_authenticator.create_authorization_url(
+                        state=mcp_state, redirect_after_auth="", email_hint=email if email else ""
                     )
+                else:
+                    # Default to Google OAuth (or when email is provided)
+                    # For MCP flows, we need to use a special method that preserves the encrypted state
+                    oauth_url = self._create_google_oauth_url_for_mcp(mcp_state, email if email else "")
 
-                if not google_auth_url:
+                    if not oauth_url:
+                        logger.error("Failed to create MCP Google OAuth2 URL, falling back to standard method")
+                        # Fallback to standard method
+                        oauth_url = self.google_authenticator.create_authorization_url(
+                            state=mcp_state, redirect_after_auth="", email_hint=email if email else ""
+                        )
+
+                if not oauth_url:
                     return self._error_response("server_error", "Failed to create authorization URL")
 
-                return {"action": "redirect", "url": google_auth_url}
+                return {"action": "redirect", "url": oauth_url}
 
             else:
                 return self._error_response("invalid_request", "Method not allowed")
@@ -642,7 +657,7 @@ class ActingWebOAuth2Server:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return ""
 
-    def _store_mcp_client_info_in_trust(self, actor_obj, client_id: str) -> None:
+    def _store_mcp_client_info_in_trust(self, actor_obj: "Actor", client_id: str) -> None:
         """Store MCP client info in the trust relationship for the OAuth2 client."""
         try:
             import time
@@ -680,7 +695,7 @@ class ActingWebOAuth2Server:
             # This is not critical, so we don't raise the exception
 
     def _update_trust_with_client_info_oauth(
-        self, actor_interface, client_id: str, client_info: dict[str, Any]
+        self, actor_interface: "ActorInterface", client_id: str, client_info: dict[str, Any]
     ) -> None:
         """
         Update trust relationship with MCP client metadata for OAuth2 server context.

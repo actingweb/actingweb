@@ -2,6 +2,19 @@
 CHANGELOG
 =========
 
+v3.4.1: Nov 8, 2025
+-------------------
+
+FIXED
+~~~~~
+
+**MCP Tool Annotations**
+
+- Fixed tool annotations not being serialized in ``tools/list`` responses in MCP handler
+- Tool annotations (``readOnlyHint``, ``destructiveHint``, ``idempotentHint``, ``openWorldHint``) are now properly included when decorators define them
+- This fix enables ChatGPT and other MCP clients to properly evaluate tool safety before execution
+- Aligns FastAPI/HTTP integration path with SDK server behavior
+
 v3.4: Oct 26, 2025
 -------------------
 

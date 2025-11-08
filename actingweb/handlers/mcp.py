@@ -405,6 +405,11 @@ class MCPHandler(BaseHandler):
                     if input_schema:
                         tool_def["inputSchema"] = input_schema
 
+                    # Add annotations if present (for ChatGPT safety evaluation)
+                    annotations = metadata.get("annotations")
+                    if annotations:
+                        tool_def["annotations"] = annotations
+
                     tools.append(tool_def)
 
         # Apply client-specific formatting for tools/list response

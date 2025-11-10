@@ -2,6 +2,26 @@
 CHANGELOG
 =========
 
+v3.4.1: Nov 8, 2025
+-------------------
+
+FIXED
+~~~~~
+
+**MCP Tool Annotations**
+
+- Fixed tool annotations not being serialized in ``tools/list`` responses in MCP handler
+- Tool annotations (``readOnlyHint``, ``destructiveHint``, ``idempotentHint``, ``openWorldHint``) are now properly included when decorators define them
+- This fix enables ChatGPT and other MCP clients to properly evaluate tool safety before execution
+- Aligns FastAPI/HTTP integration path with SDK server behavior
+
+**OAuth2 Trust Type Selection**
+
+- Fixed OAuth2 authorization form ignoring user-selected trust type during Google/GitHub authentication
+- OAuth provider buttons now submit form to ``/oauth/authorize`` POST with selected trust_type before redirecting to provider
+- Trust type is properly embedded in encrypted OAuth state and applied during callback
+- Fixes regression introduced when OAuth provider integration was added (previously worked with email form submission)
+
 v3.4: Oct 26, 2025
 -------------------
 

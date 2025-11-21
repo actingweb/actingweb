@@ -677,7 +677,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         base_url = f"{self.config.proto}{self.config.fqdn}"
 
         return {
-            "resource": base_url,
+            "resource": f"{base_url}/mcp",
             "authorization_servers": [base_url],
             "scopes_supported": ["mcp"],
             "bearer_methods_supported": ["header"],

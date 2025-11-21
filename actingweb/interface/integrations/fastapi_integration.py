@@ -782,8 +782,7 @@ class FastAPIIntegration:
             # for compatibility with ActingWeb's auth system
             if k.lower() == "authorization":
                 headers["Authorization"] = v
-                # Debug logging for auth headers
-                self.logger.debug(f"FastAPI: Found Authorization header: {v}")
+                # Authorization header found (no logging needed for routine operation)
             elif k.lower() == "content-type":
                 headers["Content-Type"] = v
             else:

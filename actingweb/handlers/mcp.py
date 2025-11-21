@@ -326,7 +326,7 @@ class MCPHandler(BaseHandler):
                         client_type = "mcp_inspector"
                     else:
                         client_type = "universal"
-                    logger.debug(f"Detected client type for tools filtering: {client_type}")
+                    # Client type detected (no logging needed for routine operation)
                 else:
                     # Fallback: Check global client info cache like the other handler does
                     session_key = self._get_session_key()
@@ -346,7 +346,7 @@ class MCPHandler(BaseHandler):
                                     client_type = "mcp_inspector"
                                 else:
                                     client_type = "universal"
-                                logger.debug(f"Detected client type for tools filtering: {client_type}")
+                                # Client type detected (no logging needed for routine operation)
 
                     if not client_type:
                         client_type = "universal"
@@ -956,7 +956,7 @@ class MCPHandler(BaseHandler):
                                 f"MCP cache stats - Token hits: {_cache_stats['token_hits']}, Actor hits: {_cache_stats['actor_hits']}, Trust hits: {_cache_stats['trust_hits']}"
                             )
 
-                        logger.debug(f"Serving cached MCP authentication for client {client_id} -> actor {actor_id}")
+                        # Serving cached MCP authentication (no logging needed for routine operation)
                         return actor_interface
                     else:
                         _cache_stats["actor_misses"] += 1

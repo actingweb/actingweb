@@ -98,7 +98,9 @@ class PermissionEvaluator:
             # Evaluate the permission rules
             result = self._evaluate_rules(permission_rules, target, operation)
 
-            logger.debug(f"Permission evaluation: {actor_id}:{peer_id} -> {permission_type.value}:{target}:{operation} = {result.value}")
+            # Only log denials for security monitoring
+            if result == PermissionResult.DENIED:
+                logger.warning(f"Permission denied: {actor_id}:{peer_id} -> {permission_type.value}:{target}:{operation}")
             return result
 
         except Exception as e:

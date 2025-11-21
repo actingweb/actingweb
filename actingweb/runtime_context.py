@@ -135,7 +135,7 @@ class RuntimeContext:
             peer_id=peer_id,
             token_data=token_data
         )
-        logger.debug(f"Set MCP context for client {client_id} on actor {self.actor.id}")
+        # MCP context set successfully (no logging needed for routine operation)
 
     def get_mcp_context(self) -> MCPContext | None:
         """

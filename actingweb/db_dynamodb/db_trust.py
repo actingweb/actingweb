@@ -113,10 +113,8 @@ class DbTrust:
             return None
         try:
             if not self.handle and peerid:
-                logging.debug("    Retrieving trust from db based on peerid(" + peerid + ")")
                 self.handle = Trust.get(actor_id, peerid, consistent_read=True)
             elif not self.handle and token:
-                logging.debug("    Retrieving trust from db based on token(" + token + ")")
                 res = Trust.secret_index.query(token)
                 for h in res:
                     if actor_id == h.id:

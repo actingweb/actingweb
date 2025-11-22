@@ -2,6 +2,19 @@
 CHANGELOG
 =========
 
+v3.4.2: TBD, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- Fixed wrong URL in OAUTH2 discovery URL that prevented detection of dynamic client registration
+
+CHANGED
+~~~~~~~
+
+- Reduced unnecessary error logging for access and authentication
+
 v3.4.1: Nov 8, 2025
 -------------------
 

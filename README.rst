@@ -244,10 +244,10 @@ Building and installing
     poetry build
 
     # Upload to test server:
-    poetry publish --repository pypitest
+    poetry publish --repository pypitest --username=__token__ --password=<your-pypi-token>
 
     # Upload to production server:
-    poetry publish
+    poetry publish --username=__token__ --password=<your-pypi-token>
 
 Development
 -----------

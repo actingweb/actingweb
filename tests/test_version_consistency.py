@@ -1,6 +1,7 @@
 """Tests for version consistency across package files."""
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 
@@ -65,4 +66,51 @@ class TestVersionConsistency:
         assert re.search(r"^v\d+\.\d+", first_500, re.MULTILINE), (
             "No version entry found at the top of CHANGELOG.rst. "
             "Ensure the changelog is updated with new versions at the top."
+        )
+
+    def test_changelog_date_not_tbd(self):
+        """Verify that the topmost CHANGELOG entry has today's date, not TBD."""
+        root_dir = Path(__file__).parent.parent
+        changelog_path = root_dir / "CHANGELOG.rst"
+
+        with open(changelog_path, "r") as f:
+            changelog_content = f.read()
+
+        # Match version pattern like "v3.4.2: TBD, 2025" or "v3.4.1: Nov 8, 2025"
+        version_match = re.search(
+            r"^v(\d+\.\d+(?:\.\d+)?): (.+), (\d{4})$",
+            changelog_content,
+            re.MULTILINE
+        )
+        assert version_match, "Could not find version entry in CHANGELOG.rst"
+
+        version = version_match.group(1)
+        date_part = version_match.group(2).strip()
+        year_part = version_match.group(3)
+
+        # Check that date is not "TBD"
+        assert date_part != "TBD", (
+            f"CHANGELOG.rst version {version} has 'TBD' as the date. "
+            f"Please update the date to today's date (e.g., '{datetime.now().strftime('%b %d, %Y')}')."
+        )
+
+        # Verify the date format and that it's today's date
+        try:
+            # Parse the date (e.g., "Nov 8")
+            parsed_date = datetime.strptime(f"{date_part}, {year_part}", "%b %d, %Y")
+        except ValueError as e:
+            raise AssertionError(
+                f"CHANGELOG.rst version {version} has invalid date format '{date_part}, {year_part}'. "
+                f"Expected format: 'Mon DD, YYYY' (e.g., 'Nov 8, 2025'). Error: {e}"
+            )
+
+        # Get today's date (ignoring time)
+        today = datetime.now().date()
+        changelog_date = parsed_date.date()
+
+        # Verify it's today's date
+        assert changelog_date == today, (
+            f"CHANGELOG.rst version {version} has date {changelog_date.strftime('%b %d, %Y')} "
+            f"but today is {today.strftime('%b %d, %Y')}. "
+            f"Please update the CHANGELOG date to today's date."
         )

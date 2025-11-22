@@ -46,7 +46,9 @@ class OAuth2Provider:
 
     def is_enabled(self) -> bool:
         """Check if provider is properly configured."""
-        return bool(self.client_id and self.client_secret and self.auth_uri and self.token_uri)
+        return bool(
+            self.client_id and self.client_secret and self.auth_uri and self.token_uri
+        )
 
 
 class GoogleOAuth2Provider(OAuth2Provider):
@@ -96,10 +98,16 @@ class OAuth2Authenticator:
     5. Actor lookup/creation based on OAuth2 identity
     """
 
-    def __init__(self, config: config_class.Config, provider: OAuth2Provider | None = None):
+    def __init__(
+        self, config: config_class.Config, provider: OAuth2Provider | None = None
+    ):
         self.config = config
         self.provider = provider or GoogleOAuth2Provider(config)
-        self.client = WebApplicationClient(self.provider.client_id) if self.provider.is_enabled() else None
+        self.client = (
+            WebApplicationClient(self.provider.client_id)
+            if self.provider.is_enabled()
+            else None
+        )
 
         # Session and token management
         self._sessions: dict[str, dict[str, Any]] = {}
@@ -143,15 +151,17 @@ class OAuth2Authenticator:
 
         # Encode redirect URL, email hint, trust type, and user agent in state if provided
         # IMPORTANT: Don't overwrite encrypted MCP state (which is base64 encoded)
-        if (redirect_after_auth or email_hint or trust_type or user_agent) and not self._looks_like_encrypted_state(
-            state
-        ):
+        if (
+            redirect_after_auth or email_hint or trust_type or user_agent
+        ) and not self._looks_like_encrypted_state(state):
             state_data = {
                 "csrf": state,
                 "redirect": redirect_after_auth,
                 "expected_email": email_hint,  # Store original email for validation
                 "trust_type": trust_type,  # Store trust type for automatic relationship creation
-                "user_agent": user_agent[:100] if user_agent else "",  # Truncate user agent to prevent large state
+                "user_agent": user_agent[:100]
+                if user_agent
+                else "",  # Truncate user agent to prevent large state
             }
             state = json.dumps(state_data)
 
@@ -228,7 +238,10 @@ class OAuth2Authenticator:
             client_secret=self.provider.client_secret,
         )
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        }
 
         # GitHub requires specific Accept header for JSON response
         if self.provider.name == "github":
@@ -245,7 +258,9 @@ class OAuth2Authenticator:
             )
 
             if response.status_code != 200:
-                logger.error(f"OAuth2 token exchange failed: {response.status_code} {response.text}")
+                logger.error(
+                    f"OAuth2 token exchange failed: {response.status_code} {response.text}"
+                )
                 return None
 
             token_data = response.json()
@@ -274,14 +289,21 @@ class OAuth2Authenticator:
 
         # Prepare refresh request using oauthlib
         refresh_request_body = self.client.prepare_refresh_body(
-            refresh_token=refresh_token, client_id=self.provider.client_id, client_secret=self.provider.client_secret
+            refresh_token=refresh_token,
+            client_id=self.provider.client_id,
+            client_secret=self.provider.client_secret,
         )
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        }
 
         # GitHub doesn't typically support refresh tokens
         if self.provider.name == "github":
-            logger.warning("GitHub doesn't support refresh tokens - user will need to re-authenticate")
+            logger.warning(
+                "GitHub doesn't support refresh tokens - user will need to re-authenticate"
+            )
             return None
 
         try:
@@ -294,7 +316,9 @@ class OAuth2Authenticator:
             )
 
             if response.status_code != 200:
-                logger.error(f"OAuth2 token refresh failed: {response.status_code} {response.text}")
+                logger.error(
+                    f"OAuth2 token refresh failed: {response.status_code} {response.text}"
+                )
                 return None
 
             token_data = response.json()
@@ -308,7 +332,9 @@ class OAuth2Authenticator:
             logger.error(f"Exception during token refresh: {e}")
             return None
 
-    def validate_token_and_get_user_info(self, access_token: str) -> dict[str, Any] | None:
+    def validate_token_and_get_user_info(
+        self, access_token: str
+    ) -> dict[str, Any] | None:
         """
         Validate access token and extract user information.
 
@@ -327,10 +353,15 @@ class OAuth2Authenticator:
         if token_hash in _invalid_token_cache:
             cache_time = _invalid_token_cache[token_hash]
             if current_time - cache_time < _INVALID_TOKEN_CACHE_TTL:
-                logger.debug("Token found in invalid token cache - skipping network request")
+                logger.debug(
+                    "Token found in invalid token cache - skipping network request"
+                )
                 return None
 
-        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        }
 
         # GitHub API requires User-Agent header
         if self.provider.name == "github":
@@ -339,11 +370,15 @@ class OAuth2Authenticator:
         try:
             # Use requests library with better timeout handling
             response = requests.get(
-                url=self.provider.userinfo_uri, headers=headers, timeout=(5, 10)  # (connect timeout, read timeout)
+                url=self.provider.userinfo_uri,
+                headers=headers,
+                timeout=(5, 10),  # (connect timeout, read timeout)
             )
 
             if response.status_code != 200:
-                logger.debug(f"OAuth2 userinfo request failed: {response.status_code} {response.text}")
+                logger.debug(
+                    f"OAuth2 userinfo request failed: {response.status_code} {response.text}"
+                )
                 # Cache this invalid token to avoid future network requests
                 _invalid_token_cache[token_hash] = current_time
                 return None
@@ -361,7 +396,7 @@ class OAuth2Authenticator:
         self,
         user_info: dict[str, Any],
         access_token: str | None = None,
-        require_email: bool = False
+        require_email: bool = False,
     ) -> str | None:
         """
         Extract email or unique provider identifier from user info.
@@ -399,7 +434,9 @@ class OAuth2Authenticator:
             return None
 
         # Email not required - use provider-specific unique identifier
-        logger.info(f"Email not available, using provider-specific identifier for {self.provider.name}")
+        logger.info(
+            f"Email not available, using provider-specific identifier for {self.provider.name}"
+        )
 
         if self.provider.name == "google":
             # Google 'sub' claim is stable unique identifier (never changes)
@@ -416,7 +453,9 @@ class OAuth2Authenticator:
             # Fallback to username (can change but better than nothing)
             login = user_info.get("login")
             if login:
-                logger.warning(f"Using GitHub username '{login}' as identifier - this may change")
+                logger.warning(
+                    f"Using GitHub username '{login}' as identifier - this may change"
+                )
                 return f"github:{login}".lower()
 
         # Fallback for other providers
@@ -425,7 +464,9 @@ class OAuth2Authenticator:
             return f"{self.provider.name}:{username}".lower()
 
         # No identifier available
-        logger.error(f"Failed to extract any identifier from {self.provider.name} user info")
+        logger.error(
+            f"Failed to extract any identifier from {self.provider.name} user info"
+        )
         return None
 
     def _get_github_primary_email(self, access_token: str) -> str | None:
@@ -448,7 +489,9 @@ class OAuth2Authenticator:
             )
 
             if response.status_code != 200:
-                logger.warning(f"GitHub emails API request failed: {response.status_code}")
+                logger.warning(
+                    f"GitHub emails API request failed: {response.status_code}"
+                )
                 return None
 
             emails = response.json()
@@ -494,11 +537,13 @@ class OAuth2Authenticator:
             response = requests.get(
                 url="https://api.github.com/user/emails",
                 headers=headers,
-                timeout=(5, 10)
+                timeout=(5, 10),
             )
 
             if response.status_code != 200:
-                logger.warning(f"GitHub emails API request failed: {response.status_code}")
+                logger.warning(
+                    f"GitHub emails API request failed: {response.status_code}"
+                )
                 return None
 
             emails = response.json()
@@ -536,9 +581,7 @@ class OAuth2Authenticator:
         return self.lookup_or_create_actor_by_identifier(email, user_info=None)
 
     def lookup_or_create_actor_by_identifier(
-        self,
-        identifier: str,
-        user_info: dict[str, Any] | None = None
+        self, identifier: str, user_info: dict[str, Any] | None = None
     ) -> actor_module.Actor | None:
         """
         Look up actor by identifier (email or provider ID) or create new one if not found.
@@ -574,7 +617,9 @@ class OAuth2Authenticator:
                 # Set up initial properties for OAuth actor
                 if actor_interface.core_actor.store:
                     # Store OAuth provider info
-                    actor_interface.core_actor.store.auth_method = f"{self.provider.name}_oauth2"
+                    actor_interface.core_actor.store.auth_method = (
+                        f"{self.provider.name}_oauth2"
+                    )
                     actor_interface.core_actor.store.created_at = str(int(time.time()))
                     actor_interface.core_actor.store.oauth_provider = self.provider.name
 
@@ -583,13 +628,19 @@ class OAuth2Authenticator:
                         email = user_info.get("email")
                         if email:
                             actor_interface.core_actor.store.email = email.lower()
-                            logger.debug(f"Stored display email for provider ID actor: {email}")
+                            logger.debug(
+                                f"Stored display email for provider ID actor: {email}"
+                            )
 
                         # Store provider-specific ID for reference
                         if identifier.startswith("google:"):
-                            actor_interface.core_actor.store.oauth_sub = identifier.split(":", 1)[1]
+                            actor_interface.core_actor.store.oauth_sub = (
+                                identifier.split(":", 1)[1]
+                            )
                         elif identifier.startswith("github:"):
-                            actor_interface.core_actor.store.oauth_github_id = identifier.split(":", 1)[1]
+                            actor_interface.core_actor.store.oauth_github_id = (
+                                identifier.split(":", 1)[1]
+                            )
                     elif "@" in identifier:
                         # Identifier is an email - store it in email property too
                         actor_interface.core_actor.store.email = identifier
@@ -597,11 +648,15 @@ class OAuth2Authenticator:
                 return actor_interface.core_actor
 
             except Exception as create_error:
-                logger.error(f"Failed to create actor for identifier {identifier}: {create_error}")
+                logger.error(
+                    f"Failed to create actor for identifier {identifier}: {create_error}"
+                )
                 return None
 
         except Exception as e:
-            logger.error(f"Exception during actor lookup/creation for {identifier}: {e}")
+            logger.error(
+                f"Exception during actor lookup/creation for {identifier}: {e}"
+            )
             return None
 
     def validate_email_from_state(self, state: str, authenticated_email: str) -> bool:
@@ -609,7 +664,9 @@ class OAuth2Authenticator:
 
         return validate_expected_email(state, authenticated_email)
 
-    def authenticate_bearer_token(self, bearer_token: str) -> tuple[actor_module.Actor | None, str | None]:
+    def authenticate_bearer_token(
+        self, bearer_token: str
+    ) -> tuple[actor_module.Actor | None, str | None]:
         """
         Authenticate Bearer token and return associated actor.
 
@@ -690,13 +747,18 @@ class OAuth2Authenticator:
             # Get the revocation endpoint from the provider
             revocation_url = self.provider.revocation_uri
             if not revocation_url:
-                logger.warning(f"Provider {self.provider.__class__.__name__} does not support token revocation")
+                logger.warning(
+                    f"Provider {self.provider.__class__.__name__} does not support token revocation"
+                )
                 return False
 
             # Prepare revocation request
             import requests
 
-            headers = {"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "ActingWeb/1.0"}
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "ActingWeb/1.0",
+            }
 
             data = {"token": token, "client_id": self.provider.client_id}
 
@@ -705,14 +767,18 @@ class OAuth2Authenticator:
                 data["client_secret"] = self.provider.client_secret
 
             # Make revocation request
-            response = requests.post(revocation_url, data=data, headers=headers, timeout=10)
+            response = requests.post(
+                revocation_url, data=data, headers=headers, timeout=10
+            )
 
             # Google returns 200 for both successful revocations and already-invalid tokens
             # This is per RFC 7009 - revocation should be idempotent
             if response.status_code == 200:
                 return True
             else:
-                logger.warning(f"Token revocation failed with status {response.status_code}: {response.text}")
+                logger.warning(
+                    f"Token revocation failed with status {response.status_code}: {response.text}"
+                )
                 return False
 
         except Exception as e:
@@ -723,7 +789,9 @@ class OAuth2Authenticator:
 # Factory functions for backward compatibility and convenience
 
 
-def create_oauth2_authenticator(config: config_class.Config, provider_name: str = "") -> OAuth2Authenticator:
+def create_oauth2_authenticator(
+    config: config_class.Config, provider_name: str = ""
+) -> OAuth2Authenticator:
     """
     Factory function to create OAuth2 authenticator for the configured provider.
 
@@ -774,7 +842,9 @@ def create_github_authenticator(config: config_class.Config) -> OAuth2Authentica
     return OAuth2Authenticator(config, GitHubOAuth2Provider(config))
 
 
-def create_generic_authenticator(config: config_class.Config, provider_config: dict[str, Any]) -> OAuth2Authenticator:
+def create_generic_authenticator(
+    config: config_class.Config, provider_config: dict[str, Any]
+) -> OAuth2Authenticator:
     """
     Factory function to create generic OAuth2 authenticator.
 

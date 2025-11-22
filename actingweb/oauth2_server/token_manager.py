@@ -36,9 +36,15 @@ class ActingWebTokenManager:
         self.config = config
         # Use Attributes system for private storage instead of underscore properties
         self.tokens_bucket = "mcp_tokens"  # Private attribute bucket for tokens
-        self.refresh_tokens_bucket = "mcp_refresh_tokens"  # Private attribute bucket for refresh tokens
-        self.auth_codes_bucket = "mcp_auth_codes"  # Private attribute bucket for auth codes
-        self.google_tokens_bucket = "mcp_google_tokens"  # Private attribute bucket for Google tokens
+        self.refresh_tokens_bucket = (
+            "mcp_refresh_tokens"  # Private attribute bucket for refresh tokens
+        )
+        self.auth_codes_bucket = (
+            "mcp_auth_codes"  # Private attribute bucket for auth codes
+        )
+        self.google_tokens_bucket = (
+            "mcp_google_tokens"  # Private attribute bucket for Google tokens
+        )
         self.token_prefix = "aw_"  # Prefix to distinguish from Google tokens
         self.default_expires_in = 3600  # 1 hour
         self.refresh_token_expires_in = 2592000  # 30 days
@@ -90,11 +96,17 @@ class ActingWebTokenManager:
 
         self._store_auth_code(actor_id, auth_code, auth_data)
 
-        logger.debug(f"Created authorization code for client {client_id}, actor {actor_id}")
+        logger.debug(
+            f"Created authorization code for client {client_id}, actor {actor_id}"
+        )
         return auth_code
 
     def exchange_authorization_code(
-        self, code: str, client_id: str, client_secret: str | None = None, code_verifier: str | None = None
+        self,
+        code: str,
+        client_id: str,
+        client_secret: str | None = None,
+        code_verifier: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Exchange authorization code for ActingWeb access token.
@@ -119,7 +131,9 @@ class ActingWebTokenManager:
             logger.warning(f"Expired authorization code: {code}")
             # Clean up both auth code and Google token data
             if "google_token_key" in auth_data:
-                self._remove_google_token_data(auth_data["actor_id"], auth_data["google_token_key"])
+                self._remove_google_token_data(
+                    auth_data["actor_id"], auth_data["google_token_key"]
+                )
             self._remove_auth_code(code)
             return None
 
@@ -128,7 +142,9 @@ class ActingWebTokenManager:
             logger.warning(f"Authorization code already used: {code}")
             # Clean up both auth code and Google token data
             if "google_token_key" in auth_data:
-                self._remove_google_token_data(auth_data["actor_id"], auth_data["google_token_key"])
+                self._remove_google_token_data(
+                    auth_data["actor_id"], auth_data["google_token_key"]
+                )
             self._remove_auth_code(code)
             return None
 
@@ -143,7 +159,9 @@ class ActingWebTokenManager:
 
         if stored_challenge:  # PKCE was used in authorization
             if not code_verifier:
-                logger.warning(f"PKCE code_verifier required but not provided for code {code}")
+                logger.warning(
+                    f"PKCE code_verifier required but not provided for code {code}"
+                )
                 return None
 
             # Validate code_verifier against stored challenge
@@ -156,20 +174,28 @@ class ActingWebTokenManager:
         self._store_auth_code(auth_data["actor_id"], code, auth_data)
 
         # Load Google token data
-        google_token_data = self._load_google_token_data(auth_data["actor_id"], auth_data["google_token_key"])
+        google_token_data = self._load_google_token_data(
+            auth_data["actor_id"], auth_data["google_token_key"]
+        )
         if not google_token_data:
             logger.error(f"Failed to load Google token data for auth code {code}")
             self._remove_auth_code(code)
             return None
 
         # Create ActingWeb access token
-        access_token = self._create_access_token(auth_data["actor_id"], client_id, google_token_data)
+        access_token = self._create_access_token(
+            auth_data["actor_id"], client_id, google_token_data
+        )
 
         # Create refresh token
-        refresh_token = self._create_refresh_token(auth_data["actor_id"], client_id, access_token["token_id"])
+        refresh_token = self._create_refresh_token(
+            auth_data["actor_id"], client_id, access_token["token_id"]
+        )
 
         # Clean up authorization code and Google token data
-        self._remove_google_token_data(auth_data["actor_id"], auth_data["google_token_key"])
+        self._remove_google_token_data(
+            auth_data["actor_id"], auth_data["google_token_key"]
+        )
         self._remove_auth_code(code)
 
         # Return token response
@@ -188,7 +214,9 @@ class ActingWebTokenManager:
             "trust_type": trust_type,
         }
 
-    def validate_access_token(self, token: str) -> tuple[str, str, dict[str, Any]] | None:
+    def validate_access_token(
+        self, token: str
+    ) -> tuple[str, str, dict[str, Any]] | None:
         """
         Validate ActingWeb access token.
 
@@ -249,7 +277,9 @@ class ActingWebTokenManager:
             self._revoke_access_token_by_id(old_token_id)
 
         # Create new access token without Google token data (refresh flow)
-        access_token = self._create_access_token_from_refresh(refresh_data["actor_id"], client_id)
+        access_token = self._create_access_token_from_refresh(
+            refresh_data["actor_id"], client_id
+        )
 
         # Update refresh token with new access token reference
         refresh_data["access_token_id"] = access_token["token_id"]
@@ -298,7 +328,9 @@ class ActingWebTokenManager:
 
         return False
 
-    def _create_access_token(self, actor_id: str, client_id: str, google_token_data: dict[str, Any]) -> dict[str, Any]:
+    def _create_access_token(
+        self, actor_id: str, client_id: str, google_token_data: dict[str, Any]
+    ) -> dict[str, Any]:
         """Create an ActingWeb access token."""
         token_id = secrets.token_hex(16)
         token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
@@ -322,7 +354,9 @@ class ActingWebTokenManager:
         self._store_access_token(actor_id, token, token_data)
         return token_data
 
-    def _create_access_token_from_refresh(self, actor_id: str, client_id: str) -> dict[str, Any]:
+    def _create_access_token_from_refresh(
+        self, actor_id: str, client_id: str
+    ) -> dict[str, Any]:
         """Create an ActingWeb access token from refresh token (no Google token data needed)."""
         token_id = secrets.token_hex(16)
         token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
@@ -342,7 +376,9 @@ class ActingWebTokenManager:
         self._store_access_token(actor_id, token, token_data)
         return token_data
 
-    def _create_refresh_token(self, actor_id: str, client_id: str, access_token_id: str) -> dict[str, Any]:
+    def _create_refresh_token(
+        self, actor_id: str, client_id: str, access_token_id: str
+    ) -> dict[str, Any]:
         """Create an ActingWeb refresh token."""
         token = f"rt_{secrets.token_urlsafe(32)}"
 
@@ -358,18 +394,24 @@ class ActingWebTokenManager:
         self._store_refresh_token(actor_id, token, refresh_data)
         return refresh_data
 
-    def _store_auth_code(self, actor_id: str, code: str, auth_data: dict[str, Any]) -> None:
+    def _store_auth_code(
+        self, actor_id: str, code: str, auth_data: dict[str, Any]
+    ) -> None:
         """Store authorization code in private attributes."""
         try:
             from .. import attribute
 
             # Store auth code in private attributes bucket
-            auth_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.auth_codes_bucket, config=self.config)
+            auth_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.auth_codes_bucket, config=self.config
+            )
             auth_bucket.set_attr(name=code, data=auth_data)
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=AUTH_CODE_INDEX_BUCKET,
+                config=self.config,
             )
             index_bucket.set_attr(name=code, data=actor_id)
 
@@ -396,7 +438,9 @@ class ActingWebTokenManager:
 
             # Create a global index bucket for auth codes
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=AUTH_CODE_INDEX_BUCKET,
+                config=self.config,
             )
 
             # Look up which actor has this code
@@ -412,12 +456,16 @@ class ActingWebTokenManager:
 
             # Load the actual auth code data from private attributes
             auth_bucket = attribute.Attributes(
-                actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config
+                actor_id=found_actor_id,
+                bucket=self.auth_codes_bucket,
+                config=self.config,
             )
             auth_attr = auth_bucket.get_attr(name=code)
 
             if not auth_attr or "data" not in auth_attr:
-                logger.warning(f"Auth code {code} found in index but not in actor {found_actor_id}")
+                logger.warning(
+                    f"Auth code {code} found in index but not in actor {found_actor_id}"
+                )
                 # Clean up the stale index entry
                 index_bucket.delete_attr(name=code)
                 return None
@@ -441,7 +489,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=AUTH_CODE_INDEX_BUCKET,
+                config=self.config,
             )
 
             found_actor_data = index_bucket.get_attr(name=code)
@@ -449,7 +499,9 @@ class ActingWebTokenManager:
                 found_actor_id = found_actor_data["data"]
                 # Remove from private attributes
                 auth_bucket = attribute.Attributes(
-                    actor_id=found_actor_id, bucket=self.auth_codes_bucket, config=self.config
+                    actor_id=found_actor_id,
+                    bucket=self.auth_codes_bucket,
+                    config=self.config,
                 )
                 auth_bucket.delete_attr(name=code)
                 logger.debug(f"Removed auth code {code} from actor {found_actor_id}")
@@ -461,7 +513,9 @@ class ActingWebTokenManager:
         except Exception as e:
             logger.error(f"Error removing auth code {code}: {e}")
 
-    def _store_google_token_data(self, actor_id: str, token_key: str, google_token_data: dict[str, Any]) -> None:
+    def _store_google_token_data(
+        self, actor_id: str, token_key: str, google_token_data: dict[str, Any]
+    ) -> None:
         """Store Google OAuth2 token data in private attributes."""
         try:
             from .. import attribute
@@ -471,13 +525,17 @@ class ActingWebTokenManager:
                 actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
             )
             google_bucket.set_attr(name=token_key, data=google_token_data)
-            logger.debug(f"Stored Google token data for actor {actor_id} with key {token_key}")
+            logger.debug(
+                f"Stored Google token data for actor {actor_id} with key {token_key}"
+            )
 
         except Exception as e:
             logger.error(f"Error storing Google token data for actor {actor_id}: {e}")
             raise
 
-    def _load_google_token_data(self, actor_id: str, token_key: str) -> dict[str, Any] | None:
+    def _load_google_token_data(
+        self, actor_id: str, token_key: str
+    ) -> dict[str, Any] | None:
         """Load Google OAuth2 token data from private attributes."""
         try:
             from .. import attribute
@@ -496,7 +554,9 @@ class ActingWebTokenManager:
             return token_data if isinstance(token_data, dict) else None
 
         except Exception as e:
-            logger.error(f"Error loading Google token data for actor {actor_id}, key {token_key}: {e}")
+            logger.error(
+                f"Error loading Google token data for actor {actor_id}, key {token_key}: {e}"
+            )
             return None
 
     def _remove_google_token_data(self, actor_id: str, token_key: str) -> None:
@@ -509,22 +569,32 @@ class ActingWebTokenManager:
                 actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
             )
             google_bucket.delete_attr(name=token_key)
-            logger.debug(f"Removed Google token data for actor {actor_id} with key {token_key}")
+            logger.debug(
+                f"Removed Google token data for actor {actor_id} with key {token_key}"
+            )
         except Exception as e:
-            logger.error(f"Error removing Google token data for actor {actor_id}, key {token_key}: {e}")
+            logger.error(
+                f"Error removing Google token data for actor {actor_id}, key {token_key}: {e}"
+            )
 
-    def _store_access_token(self, actor_id: str, token: str, token_data: dict[str, Any]) -> None:
+    def _store_access_token(
+        self, actor_id: str, token: str, token_data: dict[str, Any]
+    ) -> None:
         """Store access token in private attributes."""
         try:
             from .. import attribute
 
             # Store access token in private attributes bucket
-            tokens_bucket = attribute.Attributes(actor_id=actor_id, bucket=self.tokens_bucket, config=self.config)
+            tokens_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.tokens_bucket, config=self.config
+            )
             tokens_bucket.set_attr(name=token, data=token_data)
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=ACCESS_TOKEN_INDEX_BUCKET,
+                config=self.config,
             )
             index_bucket.set_attr(name=token, data=actor_id)
 
@@ -547,7 +617,9 @@ class ActingWebTokenManager:
 
             # Create a global index bucket for access tokens
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=ACCESS_TOKEN_INDEX_BUCKET,
+                config=self.config,
             )
 
             # Look up which actor has this token
@@ -562,11 +634,15 @@ class ActingWebTokenManager:
                 return None
 
             # Load the actual token data from private attributes
-            tokens_bucket = attribute.Attributes(actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config)
+            tokens_bucket = attribute.Attributes(
+                actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config
+            )
             token_attr = tokens_bucket.get_attr(name=token)
 
             if not token_attr or "data" not in token_attr:
-                logger.warning(f"Access token {token} found in index but not in actor {found_actor_id}")
+                logger.warning(
+                    f"Access token {token} found in index but not in actor {found_actor_id}"
+                )
                 # Clean up the stale index entry
                 index_bucket.delete_attr(name=token)
                 return None
@@ -591,7 +667,9 @@ class ActingWebTokenManager:
 
             # Create a global index bucket for refresh tokens
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=REFRESH_TOKEN_INDEX_BUCKET,
+                config=self.config,
             )
 
             # Look up which actor has this token
@@ -607,12 +685,16 @@ class ActingWebTokenManager:
 
             # Load the actual token data from private attributes
             refresh_bucket = attribute.Attributes(
-                actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+                actor_id=found_actor_id,
+                bucket=self.refresh_tokens_bucket,
+                config=self.config,
             )
             token_attr = refresh_bucket.get_attr(name=token)
 
             if not token_attr or "data" not in token_attr:
-                logger.warning(f"Refresh token {token} found in index but not in actor {found_actor_id}")
+                logger.warning(
+                    f"Refresh token {token} found in index but not in actor {found_actor_id}"
+                )
                 # Clean up the stale index entry
                 index_bucket.delete_attr(name=token)
                 return None
@@ -639,7 +721,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=ACCESS_TOKEN_INDEX_BUCKET,
+                config=self.config,
             )
 
             found_actor_data = index_bucket.get_attr(name=token)
@@ -647,14 +731,20 @@ class ActingWebTokenManager:
                 found_actor_id = found_actor_data["data"]
                 # Remove from private attributes
                 tokens_bucket = attribute.Attributes(
-                    actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config
+                    actor_id=found_actor_id,
+                    bucket=self.tokens_bucket,
+                    config=self.config,
                 )
                 tokens_bucket.delete_attr(name=token)
-                logger.debug(f"Removed access token {token} from actor {found_actor_id}")
+                logger.debug(
+                    f"Removed access token {token} from actor {found_actor_id}"
+                )
 
                 # Also remove associated Google token data
                 if token_data and "google_token_key" in token_data:
-                    self._remove_google_token_data(found_actor_id, token_data["google_token_key"])
+                    self._remove_google_token_data(
+                        found_actor_id, token_data["google_token_key"]
+                    )
 
             # Remove from global index
             index_bucket.delete_attr(name=token)
@@ -663,7 +753,9 @@ class ActingWebTokenManager:
         except Exception as e:
             logger.error(f"Error removing access token {token}: {e}")
 
-    def _store_refresh_token(self, actor_id: str, token: str, refresh_data: dict[str, Any]) -> None:
+    def _store_refresh_token(
+        self, actor_id: str, token: str, refresh_data: dict[str, Any]
+    ) -> None:
         """Store refresh token in private attributes."""
         try:
             from .. import attribute
@@ -676,7 +768,9 @@ class ActingWebTokenManager:
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=REFRESH_TOKEN_INDEX_BUCKET,
+                config=self.config,
             )
             index_bucket.set_attr(name=token, data=actor_id)
 
@@ -698,7 +792,9 @@ class ActingWebTokenManager:
             from .. import attribute
 
             index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=REFRESH_TOKEN_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=REFRESH_TOKEN_INDEX_BUCKET,
+                config=self.config,
             )
 
             found_actor_data = index_bucket.get_attr(name=token)
@@ -706,10 +802,14 @@ class ActingWebTokenManager:
                 found_actor_id = found_actor_data["data"]
                 # Remove from private attributes
                 refresh_bucket = attribute.Attributes(
-                    actor_id=found_actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+                    actor_id=found_actor_id,
+                    bucket=self.refresh_tokens_bucket,
+                    config=self.config,
                 )
                 refresh_bucket.delete_attr(name=token)
-                logger.debug(f"Removed refresh token {token} from actor {found_actor_id}")
+                logger.debug(
+                    f"Removed refresh token {token} from actor {found_actor_id}"
+                )
 
             # Remove from global index
             index_bucket.delete_attr(name=token)
@@ -727,7 +827,9 @@ class ActingWebTokenManager:
             # We need to search through all access tokens to find the one with this token_id
             # This is inefficient but necessary given the current storage structure
             attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=ACCESS_TOKEN_INDEX_BUCKET, config=self.config
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=ACCESS_TOKEN_INDEX_BUCKET,
+                config=self.config,
             )
 
             # Get all tokens from the index (this could be optimized with a reverse index)
@@ -748,7 +850,9 @@ class ActingWebTokenManager:
         try:
             # Search through refresh tokens to find ones referencing this access token ID
 
-            logger.debug(f"Attempting to revoke refresh tokens for access token ID: {token_id}")
+            logger.debug(
+                f"Attempting to revoke refresh tokens for access token ID: {token_id}"
+            )
 
             # Similar to _revoke_access_token_by_id, this requires searching through all refresh tokens
             # This is a limitation of the current design - in production you'd want proper indexing
@@ -757,9 +861,13 @@ class ActingWebTokenManager:
             )
 
         except Exception as e:
-            logger.error(f"Error revoking refresh tokens for access token ID {token_id}: {e}")
+            logger.error(
+                f"Error revoking refresh tokens for access token ID {token_id}: {e}"
+            )
 
-    def _validate_pkce(self, code_verifier: str, code_challenge: str, code_challenge_method: str) -> bool:
+    def _validate_pkce(
+        self, code_verifier: str, code_challenge: str, code_challenge_method: str
+    ) -> bool:
         """
         Validate PKCE code_verifier against stored code_challenge.
 
@@ -774,11 +882,15 @@ class ActingWebTokenManager:
         try:
             # Basic format validation
             if not code_verifier or len(code_verifier) < 43 or len(code_verifier) > 128:
-                logger.warning(f"Invalid PKCE code_verifier length: {len(code_verifier) if code_verifier else 0}")
+                logger.warning(
+                    f"Invalid PKCE code_verifier length: {len(code_verifier) if code_verifier else 0}"
+                )
                 return False
 
             if not code_challenge or len(code_challenge) < 43:
-                logger.warning(f"Invalid PKCE code_challenge length: {len(code_challenge) if code_challenge else 0}")
+                logger.warning(
+                    f"Invalid PKCE code_challenge length: {len(code_challenge) if code_challenge else 0}"
+                )
                 return False
 
             # Validate based on method
@@ -787,10 +899,14 @@ class ActingWebTokenManager:
             elif code_challenge_method == "S256":
                 # Create SHA256 hash of code_verifier and base64url encode it
                 digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-                expected_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+                expected_challenge = (
+                    base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+                )
                 return expected_challenge == code_challenge
             else:
-                logger.warning(f"Unsupported PKCE challenge method: {code_challenge_method}")
+                logger.warning(
+                    f"Unsupported PKCE challenge method: {code_challenge_method}"
+                )
                 return False
         except Exception as e:
             logger.error(f"Error validating PKCE: {e}")
@@ -845,7 +961,9 @@ class ActingWebTokenManager:
                 "scope": scope,
             }
 
-            logger.info(f"Created access token for client credentials flow: {client_id} -> {actor_id}")
+            logger.info(
+                f"Created access token for client credentials flow: {client_id} -> {actor_id}"
+            )
             return response
 
         except Exception as e:

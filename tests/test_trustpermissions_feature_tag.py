@@ -10,7 +10,6 @@ from actingweb.config import Config
 
 
 class TestTrustPermissionsFeatureTag(unittest.TestCase):
-
     def test_trustpermissions_tag_included_when_available(self):
         """Test that trustpermissions tag is included when permission system is available."""
         # The permission system should be available in this test environment
@@ -27,7 +26,9 @@ class TestTrustPermissionsFeatureTag(unittest.TestCase):
         """Test that trustpermissions tag is not included when permission system is unavailable."""
 
         # Mock the import to fail, simulating unavailable permission system
-        with patch.object(Config, '_check_trust_permissions_available', return_value=False):
+        with patch.object(
+            Config, "_check_trust_permissions_available", return_value=False
+        ):
             config = Config()
 
             # Check that the trustpermissions tag is NOT in the supported list
@@ -101,5 +102,5 @@ class TestTrustPermissionsFeatureTag(unittest.TestCase):
         self.assertIn("trustpermissions", written_content)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

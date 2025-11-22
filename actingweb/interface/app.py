@@ -40,7 +40,13 @@ class ActingWebApp:
             pass
     """
 
-    def __init__(self, aw_type: str, database: str = "dynamodb", fqdn: str = "", proto: str = "https://"):
+    def __init__(
+        self,
+        aw_type: str,
+        database: str = "dynamodb",
+        fqdn: str = "",
+        proto: str = "https://",
+    ):
         self.aw_type = aw_type
         self.database = database
         self.fqdn = fqdn or os.getenv("APP_HOST_FQDN", "localhost")
@@ -143,7 +149,9 @@ class ActingWebApp:
         self._apply_runtime_changes_to_config()
         return self
 
-    def with_bot(self, token: str = "", email: str = "", secret: str = "", admin_room: str = "") -> "ActingWebApp":
+    def with_bot(
+        self, token: str = "", email: str = "", secret: str = "", admin_room: str = ""
+    ) -> "ActingWebApp":
         """Configure bot integration."""
         self._enable_bot = True
         self._bot_config = {
@@ -174,22 +182,34 @@ class ActingWebApp:
         # to avoid touching unrelated features; OAuth fix does not require recompute.
         return self
 
-    def add_service(self, name: str, client_id: str, client_secret: str,
-                   scopes: list, auth_uri: str, token_uri: str,
-                   userinfo_uri: str = "", revocation_uri: str = "",
-                   base_api_url: str = "", **extra_params) -> "ActingWebApp":
+    def add_service(
+        self,
+        name: str,
+        client_id: str,
+        client_secret: str,
+        scopes: list,
+        auth_uri: str,
+        token_uri: str,
+        userinfo_uri: str = "",
+        revocation_uri: str = "",
+        base_api_url: str = "",
+        **extra_params,
+    ) -> "ActingWebApp":
         """Add a custom third-party OAuth2 service configuration."""
-        self._get_service_registry().register_service_from_dict(name, {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "scopes": scopes,
-            "auth_uri": auth_uri,
-            "token_uri": token_uri,
-            "userinfo_uri": userinfo_uri,
-            "revocation_uri": revocation_uri,
-            "base_api_url": base_api_url,
-            "extra_params": extra_params
-        })
+        self._get_service_registry().register_service_from_dict(
+            name,
+            {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scopes": scopes,
+                "auth_uri": auth_uri,
+                "token_uri": token_uri,
+                "userinfo_uri": userinfo_uri,
+                "revocation_uri": revocation_uri,
+                "base_api_url": base_api_url,
+                "extra_params": extra_params,
+            },
+        )
         return self
 
     def add_dropbox(self, client_id: str, client_secret: str) -> "ActingWebApp":
@@ -197,7 +217,9 @@ class ActingWebApp:
         self._get_service_registry().register_dropbox(client_id, client_secret)
         return self
 
-    def add_gmail(self, client_id: str, client_secret: str, readonly: bool = True) -> "ActingWebApp":
+    def add_gmail(
+        self, client_id: str, client_secret: str, readonly: bool = True
+    ) -> "ActingWebApp":
         """Add Gmail service using pre-configured template."""
         self._get_service_registry().register_gmail(client_id, client_secret, readonly)
         return self
@@ -216,6 +238,7 @@ class ActingWebApp:
         """Get or create the service registry."""
         if self._service_registry is None:
             from .services import ServiceRegistry
+
             self._service_registry = ServiceRegistry(self.get_config())
         # Ensure config exposes the registry even if it existed earlier
         self._attach_service_registry_to_config()
@@ -225,7 +248,9 @@ class ActingWebApp:
         """Get the service registry for advanced configuration."""
         return self._get_service_registry()
 
-    def add_actor_type(self, name: str, factory: str = "", relationship: str = "friend") -> "ActingWebApp":
+    def add_actor_type(
+        self, name: str, factory: str = "", relationship: str = "friend"
+    ) -> "ActingWebApp":
         """Add an actor type configuration."""
         self._actors_config[name] = {
             "type": self.aw_type,
@@ -335,7 +360,8 @@ class ActingWebApp:
             from .integrations.flask_integration import FlaskIntegration
         except ImportError as e:
             raise ImportError(
-                "Flask integration requires Flask to be installed. " "Install with: pip install 'actingweb[flask]'"
+                "Flask integration requires Flask to be installed. "
+                "Install with: pip install 'actingweb[flask]'"
             ) from e
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
@@ -376,7 +402,8 @@ class ActingWebApp:
             from flask import Flask
         except ImportError as e:
             raise ImportError(
-                "Flask is required for standalone mode. " "Install with: pip install 'actingweb[flask]'"
+                "Flask is required for standalone mode. "
+                "Install with: pip install 'actingweb[flask]'"
             ) from e
         flask_app = Flask(__name__)
         self.integrate_flask(flask_app)
@@ -398,5 +425,7 @@ class ActingWebApp:
 
             logger = logging.getLogger(__name__)
             logger.info(f"Permission system initialization failed: {e}")
-            logger.info("System will fall back to basic functionality with lazy loading")
+            logger.info(
+                "System will fall back to basic functionality with lazy loading"
+            )
             # Graceful fallback - don't raise exceptions that would break app startup

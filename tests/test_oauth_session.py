@@ -71,18 +71,15 @@ class TestOAuth2SessionManager:
         token_data = {
             "access_token": "test_token",
             "refresh_token": "test_refresh",
-            "expires_in": 3600
+            "expires_in": 3600,
         }
-        user_info = {
-            "sub": "user123",
-            "name": "Test User"
-        }
+        user_info = {"sub": "user123", "name": "Test User"}
 
         session_id = self.manager.store_session(
             token_data=token_data,
             user_info=user_info,
             state="test_state",
-            provider="google"
+            provider="google",
         )
 
         assert session_id is not None
@@ -90,17 +87,14 @@ class TestOAuth2SessionManager:
 
     def test_get_session_retrieves_stored_data(self):
         """Test that get_session retrieves previously stored data."""
-        token_data = {
-            "access_token": "test_token",
-            "refresh_token": "test_refresh"
-        }
+        token_data = {"access_token": "test_token", "refresh_token": "test_refresh"}
         user_info = {"sub": "user123"}
 
         session_id = self.manager.store_session(
             token_data=token_data,
             user_info=user_info,
             state="test_state",
-            provider="github"
+            provider="github",
         )
 
         session = self.manager.get_session(session_id)
@@ -127,7 +121,7 @@ class TestOAuth2SessionManager:
             token_data={"access_token": "test"},
             user_info={"sub": "user"},
             state="",
-            provider="google"
+            provider="google",
         )
 
         # Manually set created_at to simulate old session (more than 10 minutes ago)
@@ -135,7 +129,7 @@ class TestOAuth2SessionManager:
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=OAUTH_SESSION_BUCKET,
-            config=self.config
+            config=self.config,
         )
         session_attr = bucket.get_attr(name=session_id)
         if session_attr and "data" in session_attr:
@@ -151,8 +145,7 @@ class TestOAuth2SessionManager:
     def test_complete_session_creates_actor(self):
         """Test that complete_session creates an actor with provided email."""
         # Mock the imports inside the function
-        with patch('actingweb.oauth2.create_oauth2_authenticator') as mock_create_auth:
-
+        with patch("actingweb.oauth2.create_oauth2_authenticator") as mock_create_auth:
             # Setup mocks
             mock_authenticator = Mock()
             mock_actor = Mock()
@@ -166,15 +159,12 @@ class TestOAuth2SessionManager:
             token_data = {
                 "access_token": "test_token",
                 "refresh_token": "test_refresh",
-                "expires_in": 3600
+                "expires_in": 3600,
             }
             user_info = {"sub": "user123"}
 
             session_id = self.manager.store_session(
-                token_data=token_data,
-                user_info=user_info,
-                state="",
-                provider="google"
+                token_data=token_data, user_info=user_info, state="", provider="google"
             )
 
             # Complete the session
@@ -183,7 +173,9 @@ class TestOAuth2SessionManager:
             # Verify
             assert actor_result is not None
             assert actor_result.id == "actor123"
-            mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with("user@example.com")
+            mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with(
+                "user@example.com"
+            )
 
             # Verify OAuth tokens were stored
             assert mock_actor.store.oauth_token == "test_token"
@@ -197,7 +189,7 @@ class TestOAuth2SessionManager:
             token_data={"access_token": "test"},
             user_info={"sub": "user"},
             state="",
-            provider="google"
+            provider="google",
         )
 
         # Try to complete with invalid email
@@ -209,7 +201,7 @@ class TestOAuth2SessionManager:
 
     def test_complete_session_clears_session(self):
         """Test that complete_session clears the session after use."""
-        with patch('actingweb.oauth2.create_oauth2_authenticator') as mock_create_auth:
+        with patch("actingweb.oauth2.create_oauth2_authenticator") as mock_create_auth:
             mock_authenticator = Mock()
             mock_actor = Mock()
             mock_actor.id = "actor123"
@@ -223,7 +215,7 @@ class TestOAuth2SessionManager:
                 token_data={"access_token": "test"},
                 user_info={"sub": "user"},
                 state="",
-                provider="google"
+                provider="google",
             )
 
             # Complete the session
@@ -243,21 +235,21 @@ class TestOAuth2SessionManager:
             token_data={"access_token": "test1"},
             user_info={"sub": "user1"},
             state="",
-            provider="google"
+            provider="google",
         )
 
         session_id2 = self.manager.store_session(
             token_data={"access_token": "test2"},
             user_info={"sub": "user2"},
             state="",
-            provider="google"
+            provider="google",
         )
 
         # Manually set created_at to simulate old sessions (more than 10 minutes ago)
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=OAUTH_SESSION_BUCKET,
-            config=self.config
+            config=self.config,
         )
         old_time = int(time.time()) - 700  # 11+ minutes ago (TTL is 600 seconds)
 
@@ -283,14 +275,14 @@ class TestOAuth2SessionManager:
             token_data={"access_token": "token1"},
             user_info={"sub": "user1"},
             state="state1",
-            provider="google"
+            provider="google",
         )
 
         session_id2 = self.manager.store_session(
             token_data={"access_token": "token2"},
             user_info={"sub": "user2"},
             state="state2",
-            provider="github"
+            provider="github",
         )
 
         session1 = self.manager.get_session(session_id1)
@@ -314,6 +306,6 @@ class TestOAuth2SessionManagerFactory:
         manager = get_oauth2_session_manager(config)
 
         assert manager is not None
-        assert hasattr(manager, 'store_session')
-        assert hasattr(manager, 'get_session')
-        assert hasattr(manager, 'complete_session')
+        assert hasattr(manager, "store_session")
+        assert hasattr(manager, "get_session")
+        assert hasattr(manager, "complete_session")

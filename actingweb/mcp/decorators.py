@@ -19,7 +19,7 @@ def mcp_tool(
     client_descriptions: dict[str, str] | None = None,
     title: str | None = None,
     output_schema: dict[str, Any] | None = None,
-    annotations: dict[str, Any] | None = None
+    annotations: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     """
     Decorator to expose an ActingWeb action as an MCP tool.
@@ -61,10 +61,21 @@ def mcp_tool(
         def handle_search(actor, action_name, data):
             return {"results": [...]}
     """
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         func._mcp_type = "tool"
-        func._mcp_metadata = {"name": name, "description": description, "input_schema": input_schema, "allowed_clients": allowed_clients, "client_descriptions": client_descriptions or {}, "title": title, "output_schema": output_schema, "annotations": annotations}
+        func._mcp_metadata = {
+            "name": name,
+            "description": description,
+            "input_schema": input_schema,
+            "allowed_clients": allowed_clients,
+            "client_descriptions": client_descriptions or {},
+            "title": title,
+            "output_schema": output_schema,
+            "annotations": annotations,
+        }
         return func
+
     return decorator
 
 
@@ -72,7 +83,7 @@ def mcp_resource(
     uri_template: str | None = None,
     name: str | None = None,
     description: str | None = None,
-    mime_type: str = "application/json"
+    mime_type: str = "application/json",
 ) -> Callable[..., Any]:
     """
     Decorator to expose an ActingWeb resource as an MCP resource.
@@ -89,17 +100,24 @@ def mcp_resource(
         def get_config(actor, path):
             return {"setting": "value"}
     """
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         func._mcp_type = "resource"
-        func._mcp_metadata = {"uri_template": uri_template, "name": name, "description": description, "mime_type": mime_type}
+        func._mcp_metadata = {
+            "uri_template": uri_template,
+            "name": name,
+            "description": description,
+            "mime_type": mime_type,
+        }
         return func
+
     return decorator
 
 
 def mcp_prompt(
     name: str | None = None,
     description: str | None = None,
-    arguments: list[dict[str, Any]] | None = None
+    arguments: list[dict[str, Any]] | None = None,
 ) -> Callable[..., Any]:
     """
     Decorator to expose an ActingWeb method as an MCP prompt.
@@ -121,23 +139,26 @@ def mcp_prompt(
         def generate_report_prompt(actor, method_name, data):
             return f"Generate a {data.get('report_type')} report"
     """
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         func._mcp_type = "prompt"
-        func._mcp_metadata = {"name": name, "description": description, "arguments": arguments or []}
+        func._mcp_metadata = {
+            "name": name,
+            "description": description,
+            "arguments": arguments or [],
+        }
         return func
+
     return decorator
 
 
 def get_mcp_metadata(func: Callable[..., Any]) -> dict[str, Any] | None:
     """Get MCP metadata from a decorated function."""
-    if hasattr(func, '_mcp_type') and hasattr(func, '_mcp_metadata'):
-        return {
-            "type": func._mcp_type,
-            **func._mcp_metadata
-        }
+    if hasattr(func, "_mcp_type") and hasattr(func, "_mcp_metadata"):
+        return {"type": func._mcp_type, **func._mcp_metadata}
     return None
 
 
 def is_mcp_exposed(func: Callable[..., Any]) -> bool:
     """Check if a function is exposed through MCP."""
-    return hasattr(func, '_mcp_type')
+    return hasattr(func, "_mcp_type")

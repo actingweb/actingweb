@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 class WwwHandler(base_handler.BaseHandler):
-
     def _get_consistent_urls(self, actor_id: str) -> dict[str, str]:
         """
         Get consistent URL variables for templates using config.root.
@@ -26,7 +25,7 @@ class WwwHandler(base_handler.BaseHandler):
         Raises:
             RuntimeError: If calculated base path doesn't match config.root
         """
-        if not self.config or not hasattr(self.config, 'root') or not self.config.root:
+        if not self.config or not hasattr(self.config, "root") or not self.config.root:
             raise RuntimeError("Config object with root property is required")
 
         # Extract base path from config.root
@@ -46,7 +45,11 @@ class WwwHandler(base_handler.BaseHandler):
                 if actor_id in request_parts:
                     actor_index = request_parts.index(actor_id)
                     detected_base_parts = request_parts[:actor_index]
-                    detected_base = "/" + "/".join(detected_base_parts) if detected_base_parts else ""
+                    detected_base = (
+                        "/" + "/".join(detected_base_parts)
+                        if detected_base_parts
+                        else ""
+                    )
 
                     # Validate that detected base matches config
                     if detected_base != base_path:
@@ -59,7 +62,9 @@ class WwwHandler(base_handler.BaseHandler):
                             f"Expected base '{base_path}' but detected '{detected_base}'"
                         )
 
-                    logger.debug(f"Base path validation successful: '{base_path}' matches request URL")
+                    logger.debug(
+                        f"Base path validation successful: '{base_path}' matches request URL"
+                    )
             except (ValueError, IndexError, AttributeError) as e:
                 logger.debug(f"Could not validate base path from request URL: {e}")
 
@@ -132,7 +137,11 @@ class WwwHandler(base_handler.BaseHandler):
 
                             # Test if property allows PUT operations (editing)
                             put_test = self.hooks.execute_property_hooks(
-                                prop_name, "put", actor_interface, prop_value, [prop_name]
+                                prop_name,
+                                "put",
+                                actor_interface,
+                                prop_value,
+                                [prop_name],
                             )
                             if put_test is None:
                                 # PUT operation is blocked, so this property is read-only
@@ -144,7 +153,11 @@ class WwwHandler(base_handler.BaseHandler):
             all_properties = properties.copy() if properties else {}
 
             # Discover standalone list properties using the proper interface
-            if myself and hasattr(myself, "property_lists") and myself.property_lists is not None:
+            if (
+                myself
+                and hasattr(myself, "property_lists")
+                and myself.property_lists is not None
+            ):
                 list_names = myself.property_lists.list_all()
                 logger.debug(f"Found list properties: {list_names}")
                 for list_name in list_names:
@@ -166,16 +179,22 @@ class WwwHandler(base_handler.BaseHandler):
                     try:
                         list_prop = getattr(myself.property_lists, prop_name)
                         list_length = len(list_prop)
-                        display_properties[prop_name] = f"[List with {list_length} items]"
+                        display_properties[prop_name] = (
+                            f"[List with {list_length} items]"
+                        )
                     except Exception as e:
-                        logger.error(f"Error getting length for list property '{prop_name}': {e}")
+                        logger.error(
+                            f"Error getting length for list property '{prop_name}': {e}"
+                        )
                         display_properties[prop_name] = "[List property]"
                 else:
                     # Regular property - use original value
                     display_properties[prop_name] = prop_value
 
             # Debug logging
-            logger.debug(f"Template values - properties: {list((display_properties or properties).keys())}")
+            logger.debug(
+                f"Template values - properties: {list((display_properties or properties).keys())}"
+            )
             logger.debug(f"Template values - list_properties: {list(list_properties)}")
 
             # Use consistent URL calculation
@@ -202,19 +221,31 @@ class WwwHandler(base_handler.BaseHandler):
             # Fall through to regular property handling
         elif "properties/" in path:
             prop_name = path.split("/")[1]
-            lookup = myself.property[prop_name] if prop_name and myself.property else None
-            method_override = self.request.params.get("_method", None) if self.request.params else None
+            lookup = (
+                myself.property[prop_name] if prop_name and myself.property else None
+            )
+            method_override = (
+                self.request.params.get("_method", None)
+                if self.request.params
+                else None
+            )
             if method_override and method_override.upper() == "DELETE":
                 # Execute property delete hook first to check if deletion is allowed
                 if self.hooks:
                     actor_interface = self._get_actor_interface(myself)
                     if actor_interface:
                         hook_result = self.hooks.execute_property_hooks(
-                            prop_name, "delete", actor_interface, lookup or {}, [prop_name]
+                            prop_name,
+                            "delete",
+                            actor_interface,
+                            lookup or {},
+                            [prop_name],
                         )
                         if hook_result is None:
                             # Hook rejected the deletion - return 403 Forbidden
-                            self.response.set_status(403, "Property deletion not allowed")
+                            self.response.set_status(
+                                403, "Property deletion not allowed"
+                            )
                             return
 
                 # Delete property if hooks allow it
@@ -235,7 +266,9 @@ class WwwHandler(base_handler.BaseHandler):
                         deleted = True
                     except Exception as e:
                         logger.error(f"Error deleting list property '{prop_name}': {e}")
-                        self.response.set_status(500, f"Error deleting list property: {str(e)}")
+                        self.response.set_status(
+                            500, f"Error deleting list property: {str(e)}"
+                        )
                         return
 
                 elif lookup and myself.property:
@@ -258,7 +291,11 @@ class WwwHandler(base_handler.BaseHandler):
                 if actor_interface:
                     prop_path = [prop_name] if prop_name else []
                     hook_result = self.hooks.execute_property_hooks(
-                        prop_name or "*", "get", actor_interface, lookup or {}, prop_path
+                        prop_name or "*",
+                        "get",
+                        actor_interface,
+                        lookup or {},
+                        prop_path,
                     )
                     if hook_result is None:
                         # Hook indicates property should not be accessible (hidden)
@@ -318,7 +355,11 @@ class WwwHandler(base_handler.BaseHandler):
             elif lookup is not None:
                 try:
                     # Check if this property is an old-style distributed list by looking for metadata
-                    if myself.property and hasattr(myself.property, "_config") and myself.property._config is not None:
+                    if (
+                        myself.property
+                        and hasattr(myself.property, "_config")
+                        and myself.property._config is not None
+                    ):
                         db = myself.property._config.DbProperty.DbProperty()
                         meta = db.get(actor_id=myself.id, name=f"{prop_name}-meta")
                         if meta is not None:
@@ -358,7 +399,9 @@ class WwwHandler(base_handler.BaseHandler):
                     "list_explanation": list_explanation,
                 }
             elif lookup is not None:
-                logger.debug(f"Template variables for {prop_name}: is_list_property=False")
+                logger.debug(
+                    f"Template variables for {prop_name}: is_list_property=False"
+                )
                 self.response.template_values = {
                     "id": myself.id,
                     "property": prop_name,
@@ -401,7 +444,12 @@ class WwwHandler(base_handler.BaseHandler):
             def get_sort_key(trust):
                 if isinstance(trust, dict):
                     # Try last_connected_at, then last_accessed, then created_at, then empty string
-                    return trust.get("last_connected_at") or trust.get("last_accessed") or trust.get("created_at") or ""
+                    return (
+                        trust.get("last_connected_at")
+                        or trust.get("last_accessed")
+                        or trust.get("created_at")
+                        or ""
+                    )
                 else:
                     # Object-like access
                     return (
@@ -420,10 +468,14 @@ class WwwHandler(base_handler.BaseHandler):
                 if isinstance(t, dict):
                     rel = t.get("relationship", "")
                     peerid = t.get("peerid", "")
-                    t["approveuri"] = f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
+                    t["approveuri"] = (
+                        f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
+                    )
 
                     # Check if this relationship has custom permissions
-                    t["has_custom_permissions"] = self._has_custom_permissions(myself.id or "", peerid)
+                    t["has_custom_permissions"] = self._has_custom_permissions(
+                        myself.id or "", peerid
+                    )
 
                     connection_metadata.append(
                         {
@@ -441,8 +493,12 @@ class WwwHandler(base_handler.BaseHandler):
                     rel = getattr(t, "relationship", "")
                     peerid = getattr(t, "peerid", "")
                     try:
-                        t.approveuri = f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
-                        t.has_custom_permissions = self._has_custom_permissions(myself.id or "", peerid)
+                        t.approveuri = (
+                            f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
+                        )
+                        t.has_custom_permissions = self._has_custom_permissions(
+                            myself.id or "", peerid
+                        )
                     except Exception:
                         pass
 
@@ -454,7 +510,9 @@ class WwwHandler(base_handler.BaseHandler):
                             "last_connected_at": getattr(t, "last_connected_at", None)
                             or getattr(t, "last_accessed", None)
                             or getattr(t, "created_at", None),
-                            "last_connected_via": getattr(t, "last_connected_via", None),
+                            "last_connected_via": getattr(
+                                t, "last_connected_via", None
+                            ),
                         }
                     )
 
@@ -463,7 +521,11 @@ class WwwHandler(base_handler.BaseHandler):
 
             # Enrich OAuth2 client trust relationships with client metadata if missing
             if oauth_clients:
-                client_index = {client.get("client_id"): client for client in oauth_clients if client.get("client_id")}
+                client_index = {
+                    client.get("client_id"): client
+                    for client in oauth_clients
+                    if client.get("client_id")
+                }
 
                 for rel in relationships:
                     if not isinstance(rel, dict):
@@ -480,7 +542,9 @@ class WwwHandler(base_handler.BaseHandler):
                         if not rel.get("oauth_client_id"):
                             rel["oauth_client_id"] = client_info.get("client_id")
 
-                        if not rel.get("client_name") and client_info.get("client_name"):
+                        if not rel.get("client_name") and client_info.get(
+                            "client_name"
+                        ):
                             rel["client_name"] = client_info.get("client_name")
 
                         # Refresh description when it still references the raw identifier
@@ -532,7 +596,9 @@ class WwwHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                hook_result = self.hooks.execute_callback_hooks("www", actor_interface, {"path": path, "method": "GET"})
+                hook_result = self.hooks.execute_callback_hooks(
+                    "www", actor_interface, {"path": path, "method": "GET"}
+                )
                 if hook_result is not None:
                     if isinstance(hook_result, str):
                         output = hook_result  # type: ignore[unreachable]
@@ -619,7 +685,9 @@ class WwwHandler(base_handler.BaseHandler):
     def _handle_new_trust_relationship(self, myself, actor_id: str) -> None:
         """Handle creation of a new trust relationship."""
         peer_url = self.request.get("peer_url")
-        relationship = self.request.get("relationship") or self.config.default_relationship
+        relationship = (
+            self.request.get("relationship") or self.config.default_relationship
+        )
         trust_type = self.request.get("trust_type") or ""
         description = self.request.get("description") or ""
 
@@ -629,9 +697,13 @@ class WwwHandler(base_handler.BaseHandler):
             return
 
         # Validate relationship name length
-        if relationship and len(relationship) > 100:  # Reasonable length limit for human-readable names
+        if (
+            relationship and len(relationship) > 100
+        ):  # Reasonable length limit for human-readable names
             self.response.set_status(400, "Relationship name too long")
-            self.response.write("Error: Relationship name must be 100 characters or less")
+            self.response.write(
+                "Error: Relationship name must be 100 characters or less"
+            )
             return
 
         # Normalize URL (add https:// if missing)
@@ -720,12 +792,18 @@ class WwwHandler(base_handler.BaseHandler):
 
                             # Redirect back to the property page
                             self.response.set_status(302, "Found")
-                            self.response.set_redirect(f"/{actor_id}/www/properties/{prop_name}")
+                            self.response.set_redirect(
+                                f"/{actor_id}/www/properties/{prop_name}"
+                            )
                             return
 
                         except Exception as e:
-                            logger.error(f"Error updating list metadata for '{prop_name}': {e}")
-                            self.response.set_status(500, f"Error updating list metadata: {str(e)}")
+                            logger.error(
+                                f"Error updating list metadata for '{prop_name}': {e}"
+                            )
+                            self.response.set_status(
+                                500, f"Error updating list metadata: {str(e)}"
+                            )
                             return
                     else:
                         self.response.set_status(404, "List property not found")
@@ -749,10 +827,14 @@ class WwwHandler(base_handler.BaseHandler):
                     if action == "add":
                         # Add new item to list
                         item_value = self.request.get("item_value")
-                        logger.debug(f"List item add request - prop_name: {prop_name}, item_value: {item_value}")
+                        logger.debug(
+                            f"List item add request - prop_name: {prop_name}, item_value: {item_value}"
+                        )
 
                         if not item_value:
-                            self.response.set_status(400, "Missing item_value parameter")
+                            self.response.set_status(
+                                400, "Missing item_value parameter"
+                            )
                             return
 
                         # Try to parse as JSON, fall back to string
@@ -772,7 +854,9 @@ class WwwHandler(base_handler.BaseHandler):
                             logger.debug(f"List length after append: {len(list_prop)}")
                         else:
                             logger.error("List properties not supported")
-                            self.response.set_status(500, "List properties not supported")
+                            self.response.set_status(
+                                500, "List properties not supported"
+                            )
                             return
 
                     elif action == "update":
@@ -781,7 +865,9 @@ class WwwHandler(base_handler.BaseHandler):
                         item_value = self.request.get("item_value")
 
                         if item_index is None or item_value is None:
-                            self.response.set_status(400, "Missing item_index or item_value parameter")
+                            self.response.set_status(
+                                400, "Missing item_index or item_value parameter"
+                            )
                             return
 
                         try:
@@ -800,11 +886,15 @@ class WwwHandler(base_handler.BaseHandler):
                         if myself and hasattr(myself, "property_lists"):
                             list_prop = getattr(myself.property_lists, prop_name)
                             if index < 0 or index >= len(list_prop):
-                                self.response.set_status(400, f"Index {index} out of range")
+                                self.response.set_status(
+                                    400, f"Index {index} out of range"
+                                )
                                 return
                             list_prop[index] = parsed_value
                         else:
-                            self.response.set_status(500, "List properties not supported")
+                            self.response.set_status(
+                                500, "List properties not supported"
+                            )
                             return
 
                     elif action == "delete":
@@ -812,7 +902,9 @@ class WwwHandler(base_handler.BaseHandler):
                         item_index = self.request.get("item_index")
 
                         if item_index is None:
-                            self.response.set_status(400, "Missing item_index parameter")
+                            self.response.set_status(
+                                400, "Missing item_index parameter"
+                            )
                             return
 
                         try:
@@ -825,11 +917,15 @@ class WwwHandler(base_handler.BaseHandler):
                         if myself and hasattr(myself, "property_lists"):
                             list_prop = getattr(myself.property_lists, prop_name)
                             if index < 0 or index >= len(list_prop):
-                                self.response.set_status(400, f"Index {index} out of range")
+                                self.response.set_status(
+                                    400, f"Index {index} out of range"
+                                )
                                 return
                             del list_prop[index]
                         else:
-                            self.response.set_status(500, "List properties not supported")
+                            self.response.set_status(
+                                500, "List properties not supported"
+                            )
                             return
 
                     else:
@@ -838,12 +934,16 @@ class WwwHandler(base_handler.BaseHandler):
 
                     # Redirect back to the property page
                     self.response.set_status(302, "Found")
-                    self.response.set_redirect(f"/{actor_id}/www/properties/{prop_name}")
+                    self.response.set_redirect(
+                        f"/{actor_id}/www/properties/{prop_name}"
+                    )
                     return
 
                 except Exception as e:
                     logger.error(f"Error in list item management: {e}")
-                    self.response.set_status(500, f"Error processing list item: {str(e)}")
+                    self.response.set_status(
+                        500, f"Error processing list item: {str(e)}"
+                    )
                     return
 
         # Initialize variables to avoid unbound issues
@@ -853,13 +953,21 @@ class WwwHandler(base_handler.BaseHandler):
 
         if path == "properties":
             # Get form parameters
-            property_name = self.request.get("property_name") or self.request.get("property")
-            property_value = self.request.get("property_value") or self.request.get("value")
-            property_type = self.request.get("property_type") or "simple"  # Default to simple
+            property_name = self.request.get("property_name") or self.request.get(
+                "property"
+            )
+            property_value = self.request.get("property_value") or self.request.get(
+                "value"
+            )
+            property_type = (
+                self.request.get("property_type") or "simple"
+            )  # Default to simple
 
         elif "properties/" in path:
             property_name = path.split("/")[1]
-            property_value = self.request.get("property_value") or self.request.get("value")
+            property_value = self.request.get("property_value") or self.request.get(
+                "value"
+            )
             property_type = "simple"  # Individual property updates are always simple
         # Handle property operations
         if property_name:
@@ -867,18 +975,26 @@ class WwwHandler(base_handler.BaseHandler):
                 # Handle list property creation
                 if property_type == "list":
                     # Create empty list property
-                    if myself and hasattr(myself, "property_lists") and myself.property_lists is not None:
+                    if (
+                        myself
+                        and hasattr(myself, "property_lists")
+                        and myself.property_lists is not None
+                    ):
                         # Check if list already exists using the proper interface
                         exists = myself.property_lists.exists(property_name)
                         if exists:
-                            self.response.set_status(400, f"List property '{property_name}' already exists")
+                            self.response.set_status(
+                                400, f"List property '{property_name}' already exists"
+                            )
                             return
 
                         # Create empty list by accessing it (this initializes the ListProperty)
                         list_prop = getattr(myself.property_lists, property_name)
 
                         # Initialize the list by ensuring metadata exists (this creates the list in the database)
-                        _ = len(list_prop)  # This will trigger metadata creation if it doesn't exist
+                        _ = len(
+                            list_prop
+                        )  # This will trigger metadata creation if it doesn't exist
 
                         # Set description and explanation if provided
                         description = self.request.get("description") or ""
@@ -894,10 +1010,17 @@ class WwwHandler(base_handler.BaseHandler):
                             actor_interface = self._get_actor_interface(myself)
                             if actor_interface:
                                 hook_result = self.hooks.execute_property_hooks(
-                                    property_name, "post", actor_interface, [], [property_name]
+                                    property_name,
+                                    "post",
+                                    actor_interface,
+                                    [],
+                                    [property_name],
                                 )
                                 if hook_result is None:
-                                    self.response.set_status(403, "List property creation not allowed by hooks")
+                                    self.response.set_status(
+                                        403,
+                                        "List property creation not allowed by hooks",
+                                    )
                                     return
                     else:
                         self.response.set_status(500, "List properties not supported")
@@ -907,11 +1030,15 @@ class WwwHandler(base_handler.BaseHandler):
                 elif property_type == "simple":
                     if not property_value:
                         # Missing value for simple property
-                        self.response.set_status(400, "Property value is required for simple properties")
+                        self.response.set_status(
+                            400, "Property value is required for simple properties"
+                        )
                         return
 
                     # Create or update property
-                    old_value = myself.property[property_name] if myself.property else None
+                    old_value = (
+                        myself.property[property_name] if myself.property else None
+                    )
                     is_new_property = old_value is None
 
                     # Execute property hooks before setting the property
@@ -921,27 +1048,39 @@ class WwwHandler(base_handler.BaseHandler):
                         if actor_interface:
                             hook_action = "post" if is_new_property else "put"
                             hook_result = self.hooks.execute_property_hooks(
-                                property_name, hook_action, actor_interface, property_value, [property_name]
+                                property_name,
+                                hook_action,
+                                actor_interface,
+                                property_value,
+                                [property_name],
                             )
                             if hook_result is None:
-                                self.response.set_status(403, "Property value not accepted by hooks")
+                                self.response.set_status(
+                                    403, "Property value not accepted by hooks"
+                                )
                                 return
                             final_value = hook_result
 
                     # Set the property with the potentially transformed value
                     if not myself.property:
-                        self.response.set_status(500, "PropertyStore is not initialized")
+                        self.response.set_status(
+                            500, "PropertyStore is not initialized"
+                        )
                         return
                     myself.property[property_name] = final_value
 
                 else:
                     # Unknown property type
-                    self.response.set_status(400, f"Unknown property type: {property_type}")
+                    self.response.set_status(
+                        400, f"Unknown property type: {property_type}"
+                    )
                     return
 
                 # Redirect back to properties page or init page after successful creation
                 self.response.set_status(302, "Found")
-                redirect_path = self.request.get("redirect_to") or f"/{actor_id}/www/properties"
+                redirect_path = (
+                    self.request.get("redirect_to") or f"/{actor_id}/www/properties"
+                )
                 self.response.set_redirect(redirect_path)
                 return
 

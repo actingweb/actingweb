@@ -77,7 +77,12 @@ class Attributes:
                 self.data[name] = None
         return self.data[name]
 
-    def set_attr(self, name: str | None = None, data: Any | None = None, timestamp: Any | None = None) -> bool:
+    def set_attr(
+        self,
+        name: str | None = None,
+        data: Any | None = None,
+        timestamp: Any | None = None,
+    ) -> bool:
         """Sets new data for this attribute"""
         if not self.actor_id or not self.bucket:
             return False
@@ -120,7 +125,12 @@ class Attributes:
         else:
             return False
 
-    def __init__(self, actor_id: str | None = None, bucket: str | None = None, config: Any | None = None) -> None:
+    def __init__(
+        self,
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        config: Any | None = None,
+    ) -> None:
         """A attribute must be initialised with actor_id and bucket"""
         self.config = config
         if self.config:

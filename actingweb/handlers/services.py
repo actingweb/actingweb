@@ -34,7 +34,9 @@ class ServicesHandler(BaseHandler):
             Response data
         """
         # Initialize authentication
-        actor = self.require_authenticated_actor(actor_id, "services", "GET", service_name)
+        actor = self.require_authenticated_actor(
+            actor_id, "services", "GET", service_name
+        )
         if not actor:
             logger.error(f"Authentication failed for service callback: {service_name}")
             return {"error": "Authentication failed"}
@@ -76,10 +78,18 @@ class ServicesHandler(BaseHandler):
         success = service_client.handle_callback(authorization_code, state)
 
         if success:
-            logger.info(f"Successfully authenticated {service_name} for actor {actor_id}")
-            return {"success": True, "message": f"Successfully connected to {service_name}", "service": service_name}
+            logger.info(
+                f"Successfully authenticated {service_name} for actor {actor_id}"
+            )
+            return {
+                "success": True,
+                "message": f"Successfully connected to {service_name}",
+                "service": service_name,
+            }
         else:
-            logger.error(f"Failed to process {service_name} callback for actor {actor_id}")
+            logger.error(
+                f"Failed to process {service_name} callback for actor {actor_id}"
+            )
             return {"error": f"Failed to connect to {service_name}"}
 
     def _get_service_registry(self):
@@ -105,9 +115,13 @@ class ServicesHandler(BaseHandler):
         """
         _ = kwargs  # Explicitly mark as unused
         # Initialize authentication
-        actor = self.require_authenticated_actor(actor_id, "services", "DELETE", service_name)
+        actor = self.require_authenticated_actor(
+            actor_id, "services", "DELETE", service_name
+        )
         if not actor:
-            logger.error(f"Authentication failed for service revocation: {service_name}")
+            logger.error(
+                f"Authentication failed for service revocation: {service_name}"
+            )
             return {"error": "Authentication failed"}
 
         # Get service registry

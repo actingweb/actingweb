@@ -220,7 +220,11 @@ class TestBasicActorFlow:
         """
         response = requests.post(
             f"{self.actor_url}/properties",
-            json={"var1": "value1æøå", "var2": "value2ÆØÅ", "var3": {"test3": "value3", "test4": "value4"}},
+            json={
+                "var1": "value1æøå",
+                "var2": "value2ÆØÅ",
+                "var3": {"test3": "value3", "test4": "value4"},
+            },
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 201
@@ -272,7 +276,7 @@ class TestBasicActorFlow:
         location_data = {
             "type": "mobile",
             "latitude": {"hours": 1, "minutes": 1, "seconds": 1},
-            "longitude": {"hours": 2, "minutes": 2, "seconds": 2}
+            "longitude": {"hours": 2, "minutes": 2, "seconds": 2},
         }
 
         response = requests.put(

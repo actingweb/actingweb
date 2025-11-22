@@ -69,7 +69,9 @@ class ListProperty:
 
         # Use fresh DB instance to avoid handle conflicts
         meta_db = self.config.DbProperty.DbProperty()
-        meta_str = meta_db.get(actor_id=self.actor_id, name=self._get_meta_property_name())
+        meta_str = meta_db.get(
+            actor_id=self.actor_id, name=self._get_meta_property_name()
+        )
 
         if meta_str is None:
             # No metadata exists, create default
@@ -117,7 +119,9 @@ class ListProperty:
             meta_json = json.dumps(meta)
             # Use fresh DB instance to avoid handle conflicts
             meta_db = self.config.DbProperty.DbProperty()
-            meta_db.set(actor_id=self.actor_id, name=meta_property_name, value=meta_json)
+            meta_db.set(
+                actor_id=self.actor_id, name=meta_property_name, value=meta_json
+            )
 
         self._meta_cache = meta
 
@@ -203,7 +207,11 @@ class ListProperty:
 
         # Use fresh DB instance to avoid handle conflicts
         item_db = self.config.DbProperty.DbProperty()
-        item_db.set(actor_id=self.actor_id, name=self._get_item_property_name(index), value=value_str)
+        item_db.set(
+            actor_id=self.actor_id,
+            name=self._get_item_property_name(index),
+            value=value_str,
+        )
 
         # Update metadata timestamp
         meta = self._load_metadata()
@@ -234,16 +242,26 @@ class ListProperty:
         for i in range(index + 1, length):
             # Use fresh DB instance to avoid handle conflicts
             item_db = self.config.DbProperty.DbProperty()
-            item_value = item_db.get(actor_id=self.actor_id, name=self._get_item_property_name(i))
+            item_value = item_db.get(
+                actor_id=self.actor_id, name=self._get_item_property_name(i)
+            )
 
             if item_value is not None:
                 # Move item from position i to position i-1
                 move_db = self.config.DbProperty.DbProperty()
-                move_db.set(actor_id=self.actor_id, name=self._get_item_property_name(i - 1), value=item_value)
+                move_db.set(
+                    actor_id=self.actor_id,
+                    name=self._get_item_property_name(i - 1),
+                    value=item_value,
+                )
 
                 # Delete the old position
                 delete_db = self.config.DbProperty.DbProperty()
-                delete_db.set(actor_id=self.actor_id, name=self._get_item_property_name(i), value=None)
+                delete_db.set(
+                    actor_id=self.actor_id,
+                    name=self._get_item_property_name(i),
+                    value=None,
+                )
 
         # Update metadata length
         meta = self._load_metadata()
@@ -271,7 +289,9 @@ class ListProperty:
         item_property_name = self._get_item_property_name(length)
         item_db = self.config.DbProperty.DbProperty()
         item_db.set(actor_id=self.actor_id, name=item_property_name, value=item_str)
-        logger.debug(f"append(): Stored item at '{item_property_name}' with value: {item_str}")
+        logger.debug(
+            f"append(): Stored item at '{item_property_name}' with value: {item_str}"
+        )
 
         # Update metadata
         meta = self._load_metadata()
@@ -293,7 +313,9 @@ class ListProperty:
         # Delete all item properties
         for i in range(length):
             item_db = self.config.DbProperty.DbProperty()
-            item_db.set(actor_id=self.actor_id, name=self._get_item_property_name(i), value=None)
+            item_db.set(
+                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
+            )
 
         # Reset metadata
         meta = self._create_default_metadata()
@@ -309,11 +331,15 @@ class ListProperty:
         # Delete all item properties
         for i in range(length):
             item_db = self.config.DbProperty.DbProperty()
-            item_db.set(actor_id=self.actor_id, name=self._get_item_property_name(i), value=None)
+            item_db.set(
+                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
+            )
 
         # Delete metadata
         meta_db = self.config.DbProperty.DbProperty()
-        meta_db.set(actor_id=self.actor_id, name=self._get_meta_property_name(), value=None)
+        meta_db.set(
+            actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
+        )
 
         # Clear cache
         self._meta_cache = None
@@ -382,10 +408,16 @@ class ListProperty:
 
         # Shift all items from index onwards up by one
         for i in range(length - 1, index - 1, -1):
-            item_value = self._db.get(actor_id=self.actor_id, name=self._get_item_property_name(i))
+            item_value = self._db.get(
+                actor_id=self.actor_id, name=self._get_item_property_name(i)
+            )
 
             if item_value is not None:
-                self._db.set(actor_id=self.actor_id, name=self._get_item_property_name(i + 1), value=item_value)
+                self._db.set(
+                    actor_id=self.actor_id,
+                    name=self._get_item_property_name(i + 1),
+                    value=item_value,
+                )
 
         # Insert the new item
         try:
@@ -393,7 +425,11 @@ class ListProperty:
         except (TypeError, ValueError):
             item_str = str(item)
 
-        self._db.set(actor_id=self.actor_id, name=self._get_item_property_name(index), value=item_str)
+        self._db.set(
+            actor_id=self.actor_id,
+            name=self._get_item_property_name(index),
+            value=item_str,
+        )
 
         # Update metadata
         meta = self._load_metadata()

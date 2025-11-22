@@ -7,7 +7,6 @@ Provides mock responses for:
 - MCP token issuance endpoint
 """
 
-
 import responses
 
 
@@ -175,8 +174,6 @@ class GitHubOAuth2Mock(OAuth2MockProvider):
         responses_mock.add(
             responses.GET,
             self.emails_url,
-            json=[
-                {"email": email, "verified": email_verified, "primary": True}
-            ],
+            json=[{"email": email, "verified": email_verified, "primary": True}],
             status=200,
         )

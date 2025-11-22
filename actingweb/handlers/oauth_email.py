@@ -33,14 +33,15 @@ class OAuth2EmailHandler(BaseHandler):
 
     def __init__(
         self,
-        webobj: Optional['aw_web_request.AWWebObj'] = None,
-        config: Optional['config_class.Config'] = None,
-        hooks: Optional['HookRegistry'] = None
+        webobj: Optional["aw_web_request.AWWebObj"] = None,
+        config: Optional["config_class.Config"] = None,
+        hooks: Optional["HookRegistry"] = None,
     ) -> None:
         if config is None:
             raise RuntimeError("Config is required for OAuth2EmailHandler")
         if webobj is None:
             from .. import aw_web_request
+
             webobj = aw_web_request.AWWebObj()
         super().__init__(webobj, config, hooks)
 
@@ -81,7 +82,7 @@ class OAuth2EmailHandler(BaseHandler):
             "provider": provider,
             "provider_display": provider_display,
             "message": f"Your {provider_display} account does not have a public email. Please enter your email address to continue.",
-            "error": None
+            "error": None,
         }
 
         return {}  # Template will be rendered by app
@@ -130,7 +131,7 @@ class OAuth2EmailHandler(BaseHandler):
                     "action": "/oauth/email",
                     "method": "POST",
                     "provider": "OAuth provider",
-                    "error": "Please enter a valid email address"
+                    "error": "Please enter a valid email address",
                 }
                 return {}
             return self.error_response(400, "Invalid email address")
@@ -163,17 +164,19 @@ class OAuth2EmailHandler(BaseHandler):
                         "provider": session.get("provider", "OAuth provider"),
                         "verified_emails": verified_emails,
                         "error": "Please select one of your verified email addresses",
-                        "show_dropdown": True
+                        "show_dropdown": True,
                     }
                     return {}
 
                 return self.error_response(
                     403,
-                    "Email not verified with OAuth provider. Please select from your verified emails."
+                    "Email not verified with OAuth provider. Please select from your verified emails.",
                 )
         else:
             # No verified emails from provider - user can enter any email but needs verification
-            logger.info(f"No verified emails from OAuth provider - {email} will require verification")
+            logger.info(
+                f"No verified emails from OAuth provider - {email} will require verification"
+            )
             email_requires_verification = True
 
         # Complete OAuth session with provided email
@@ -189,7 +192,7 @@ class OAuth2EmailHandler(BaseHandler):
                     "action": "/oauth/email",
                     "method": "POST",
                     "provider": "OAuth provider",
-                    "error": "Failed to create actor. Session may have expired."
+                    "error": "Failed to create actor. Session may have expired.",
                 }
                 return {}
             return self.error_response(500, "Failed to create actor")
@@ -200,7 +203,9 @@ class OAuth2EmailHandler(BaseHandler):
                 from ..interface.actor_interface import ActorInterface
 
                 registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
                 self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for actor_created: {e}")
@@ -225,8 +230,11 @@ class OAuth2EmailHandler(BaseHandler):
             if self.hooks:
                 try:
                     from ..interface.actor_interface import ActorInterface
+
                     registry = getattr(self.config, "service_registry", None)
-                    actor_interface = ActorInterface(core_actor=actor_instance, service_registry=registry)
+                    actor_interface = ActorInterface(
+                        core_actor=actor_instance, service_registry=registry
+                    )
 
                     verification_url = f"{self.config.proto}{self.config.fqdn}/{actor_instance.id}/www/verify_email?token={verification_token}"
 
@@ -235,7 +243,7 @@ class OAuth2EmailHandler(BaseHandler):
                         actor_interface,
                         email=email,
                         verification_url=verification_url,
-                        token=verification_token
+                        token=verification_token,
                     )
                 except Exception as e:
                     logger.error(f"Error in email_verification_required hook: {e}")
@@ -251,7 +259,7 @@ class OAuth2EmailHandler(BaseHandler):
                 str(oauth_token),
                 max_age=cookie_max_age,
                 path="/",
-                secure=True
+                secure=True,
             )
 
             logger.debug(f"Set oauth_token cookie for actor {actor_instance.id}")
@@ -261,7 +269,9 @@ class OAuth2EmailHandler(BaseHandler):
         self.response.set_status(302, "Found")
         self.response.set_redirect(redirect_url)
 
-        logger.info(f"Completed OAuth email flow for {email} -> actor {actor_instance.id}")
+        logger.info(
+            f"Completed OAuth email flow for {email} -> actor {actor_instance.id}"
+        )
 
         return {
             "status": "success",
@@ -269,7 +279,7 @@ class OAuth2EmailHandler(BaseHandler):
             "actor_id": actor_instance.id,
             "email": email,
             "redirect_url": redirect_url,
-            "redirect_performed": True
+            "redirect_performed": True,
         }
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
@@ -277,7 +287,7 @@ class OAuth2EmailHandler(BaseHandler):
         self.response.set_status(status_code)
 
         # For user-facing errors, try to render template
-        if status_code in [400, 500] and hasattr(self.response, 'template_values'):
+        if status_code in [400, 500] and hasattr(self.response, "template_values"):
             session_id = self.request.get("session") or ""
             self.response.template_values = {
                 "session_id": session_id,
@@ -285,11 +295,7 @@ class OAuth2EmailHandler(BaseHandler):
                 "method": "POST",
                 "provider": "OAuth provider",
                 "error": message,
-                "status_code": status_code
+                "status_code": status_code,
             }
 
-        return {
-            "error": True,
-            "status_code": status_code,
-            "message": message
-        }
+        return {"error": True, "status_code": status_code, "message": message}

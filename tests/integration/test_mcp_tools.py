@@ -206,7 +206,9 @@ class TestMCPToolsListCapabilities:
                     assert isinstance(tool["description"], str)
 
                 # inputSchema must be valid JSON Schema
-                assert "inputSchema" in tool, f"Tool {tool.get('name')} missing inputSchema"
+                assert "inputSchema" in tool, (
+                    f"Tool {tool.get('name')} missing inputSchema"
+                )
                 schema = tool["inputSchema"]
                 assert "type" in schema  # Required by JSON Schema
                 assert isinstance(schema, dict)
@@ -419,8 +421,9 @@ class TestMCPToolPermissions:
             headers={"Content-Type": "application/json"},
         )
 
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"tools/list failed: {response.status_code} {response.text}"
+        )
 
         data = response.json()
         assert "result" in data
@@ -447,27 +450,38 @@ class TestMCPToolPermissions:
             else:
                 # Has additional fields - good! Let's verify they're valid
                 valid_fields = {
-                    "name", "description", "inputSchema",
-                    "title", "outputSchema", "annotations", "meta"
+                    "name",
+                    "description",
+                    "inputSchema",
+                    "title",
+                    "outputSchema",
+                    "annotations",
+                    "meta",
                 }
                 for field in tool.keys():
-                    assert field in valid_fields, \
+                    assert field in valid_fields, (
                         f"Unexpected field '{field}' in tool - make sure we're using model_dump()"
+                    )
 
             # If annotations exist, verify structure
             if "annotations" in tool and tool["annotations"] is not None:
                 annotations = tool["annotations"]
-                assert isinstance(annotations, dict), \
+                assert isinstance(annotations, dict), (
                     "annotations should be a dict, not a Pydantic object"
+                )
 
                 # Verify annotations fields are valid
                 valid_annotation_fields = {
-                    "title", "readOnlyHint", "destructiveHint",
-                    "idempotentHint", "openWorldHint"
+                    "title",
+                    "readOnlyHint",
+                    "destructiveHint",
+                    "idempotentHint",
+                    "openWorldHint",
                 }
                 for field in annotations.keys():
-                    assert field in valid_annotation_fields, \
+                    assert field in valid_annotation_fields, (
                         f"Invalid annotation field: {field}"
+                    )
 
 
 class TestMCPToolResponseFormatRegression:
@@ -509,15 +523,10 @@ class TestMCPToolResponseFormatRegression:
         # Simulate the SDK server's response handling logic
         # This is the response format that comes from storage confirmation tools
         tool_response = {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "✅ Successfully stored: test data"
-                }
-            ],
+            "content": [{"type": "text", "text": "✅ Successfully stored: test data"}],
             "isError": False,  # This field MUST be preserved
             "success": True,
-            "memory_type": "memory_test"
+            "memory_type": "memory_test",
         }
 
         # Extract content items (simulating sdk_server.py:264-269)
@@ -534,15 +543,19 @@ class TestMCPToolResponseFormatRegression:
 
             # SDK server should create CallToolResult with isError flag
             result = CallToolResult(
-                content=text_contents if text_contents else [TextContent(type="text", text="")],
-                isError=is_error
+                content=text_contents
+                if text_contents
+                else [TextContent(type="text", text="")],
+                isError=is_error,
             )
 
             # Verify the CallToolResult preserves the flag
-            assert hasattr(result, 'isError'), \
+            assert hasattr(result, "isError"), (
                 "CallToolResult missing isError attribute - regression detected!"
-            assert result.isError is False, \
+            )
+            assert result.isError is False, (
                 f"isError should be False for success, got: {result.isError}"
+            )
             assert len(result.content) > 0, "Content should not be empty"
             assert result.content[0].text == "✅ Successfully stored: test data"  # type: ignore[arg-type,union-attr,attr-defined,return-value]
 
@@ -558,14 +571,11 @@ class TestMCPToolResponseFormatRegression:
         # Simulate error response from tool
         tool_response = {
             "content": [
-                {
-                    "type": "text",
-                    "text": "❌ Storage failed: validation error"
-                }
+                {"type": "text", "text": "❌ Storage failed: validation error"}
             ],
             "isError": True,  # This field MUST be preserved
             "success": False,
-            "error": "Validation failed"
+            "error": "Validation failed",
         }
 
         # Extract content items
@@ -580,15 +590,19 @@ class TestMCPToolResponseFormatRegression:
             is_error = tool_response["isError"]
 
             result = CallToolResult(
-                content=text_contents if text_contents else [TextContent(type="text", text="")],
-                isError=is_error
+                content=text_contents
+                if text_contents
+                else [TextContent(type="text", text="")],
+                isError=is_error,
             )
 
             # Verify the CallToolResult preserves the error flag
-            assert hasattr(result, 'isError'), \
+            assert hasattr(result, "isError"), (
                 "CallToolResult missing isError attribute for errors - regression detected!"
-            assert result.isError is True, \
+            )
+            assert result.isError is True, (
                 f"isError should be True for errors, got: {result.isError}"
+            )
             assert len(result.content) > 0, "Content should not be empty"
             assert "❌" in result.content[0].text, "Error indicator missing"  # type: ignore[arg-type,union-attr,attr-defined,return-value]
 
@@ -603,12 +617,7 @@ class TestMCPToolResponseFormatRegression:
 
         # Response without isError field (e.g., from structuredContent responses)
         tool_response = {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Search results: 5 items found"
-                }
-            ]
+            "content": [{"type": "text", "text": "Search results: 5 items found"}]
         }
 
         # Extract content items
@@ -620,7 +629,9 @@ class TestMCPToolResponseFormatRegression:
 
         # When no isError flag present, return plain content list (old behavior)
         if "isError" not in tool_response:
-            result = text_contents if text_contents else [TextContent(type="text", text="")]
+            result = (
+                text_contents if text_contents else [TextContent(type="text", text="")]
+            )
 
             # Verify plain list works
             assert isinstance(result, list), "Should return list when no isError"

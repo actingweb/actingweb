@@ -39,7 +39,9 @@ class TestCrossActorAuthorizationPrevention:
     4. System should REJECT - Bob cannot authorize access to Alice's actor
     """
 
-    def test_mcp_authorization_rejects_different_email(self, actor_factory: Any, test_app: str) -> None:
+    def test_mcp_authorization_rejects_different_email(
+        self, actor_factory: Any, test_app: str
+    ) -> None:
         """
         Test that MCP authorization is rejected when OAuth email doesn't match actor creator.
 
@@ -57,18 +59,16 @@ class TestCrossActorAuthorizationPrevention:
             actor_id=alice_actor_id,  # Alice's actor
             trust_type="mcp_client",  # This triggers trust relationship creation
             expected_email="",
-            user_agent=""
+            user_agent="",
         )
 
         # Step 3: Create request object for OAuth2 callback
         from actingweb import config as config_module
+
         config = config_module.Config(database="dynamodb")
 
         # Configure OAuth2
-        config.oauth = {
-            "client_id": "test_client",
-            "client_secret": "test_secret"
-        }
+        config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
 
@@ -77,11 +77,13 @@ class TestCrossActorAuthorizationPrevention:
             params={"code": "bob_auth_code", "state": state},
             body=None,
             headers={},
-            cookies={}
+            cookies={},
         )
 
         # Step 4: Mock OAuth2Authenticator methods to return Bob's credentials
-        with patch('actingweb.handlers.oauth2_callback.create_oauth2_authenticator') as mock_create_auth:
+        with patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator"
+        ) as mock_create_auth:
             mock_authenticator = MagicMock()
             mock_create_auth.return_value = mock_authenticator
             mock_authenticator.is_enabled.return_value = True
@@ -90,7 +92,7 @@ class TestCrossActorAuthorizationPrevention:
             mock_authenticator.exchange_code_for_token.return_value = {
                 "access_token": "bob_access_token",
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": 3600,
             }
 
             # Mock email extraction to return Bob's email (not Alice's!)
@@ -99,23 +101,35 @@ class TestCrossActorAuthorizationPrevention:
 
             # Step 5: Call the OAuth2 callback handler
             from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
             handler = OAuth2CallbackHandler(webobj, config, hooks=None)
             result = handler.get()
 
             # Step 6: Verify authorization was rejected (403 status)
-            assert webobj.response.status_code == 403, \
+            assert webobj.response.status_code == 403, (
                 f"Expected 403 Forbidden, got {webobj.response.status_code}"
+            )
 
             # Verify result contains error
-            assert "error" in result or result.get("status_code") == 403, \
+            assert "error" in result or result.get("status_code") == 403, (
                 f"Result should indicate error: {result}"
+            )
 
             # Verify error message mentions the mismatch
             error_msg = str(result.get("message", "")).lower()
-            assert any(keyword in error_msg for keyword in ["bob@example.com", "alice@example.com", "different", "doesn't belong"]), \
-                f"Error message should explain the mismatch: {result}"
+            assert any(
+                keyword in error_msg
+                for keyword in [
+                    "bob@example.com",
+                    "alice@example.com",
+                    "different",
+                    "doesn't belong",
+                ]
+            ), f"Error message should explain the mismatch: {result}"
 
-    def test_web_login_rejects_different_email(self, actor_factory: Any, test_app: str) -> None:
+    def test_web_login_rejects_different_email(
+        self, actor_factory: Any, test_app: str
+    ) -> None:
         """
         Test that web login is rejected when OAuth email doesn't match actor creator.
 
@@ -134,16 +148,14 @@ class TestCrossActorAuthorizationPrevention:
             actor_id=alice_actor_id,  # Alice's actor
             trust_type="",  # Empty trust_type = web login flow
             expected_email="",
-            user_agent=""
+            user_agent="",
         )
 
         # Step 3: Create request object
         from actingweb import config as config_module
+
         config = config_module.Config(database="dynamodb")
-        config.oauth = {
-            "client_id": "test_client",
-            "client_secret": "test_secret"
-        }
+        config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
 
@@ -152,11 +164,13 @@ class TestCrossActorAuthorizationPrevention:
             params={"code": "bob_auth_code", "state": state},
             body=None,
             headers={},
-            cookies={}
+            cookies={},
         )
 
         # Step 4: Mock OAuth2Authenticator to return Bob's credentials
-        with patch('actingweb.handlers.oauth2_callback.create_oauth2_authenticator') as mock_create_auth:
+        with patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator"
+        ) as mock_create_auth:
             mock_authenticator = MagicMock()
             mock_create_auth.return_value = mock_authenticator
             mock_authenticator.is_enabled.return_value = True
@@ -164,7 +178,7 @@ class TestCrossActorAuthorizationPrevention:
             mock_authenticator.exchange_code_for_token.return_value = {
                 "access_token": "bob_access_token",
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": 3600,
             }
 
             mock_authenticator.get_email_from_user_info.return_value = "bob@example.com"
@@ -172,18 +186,24 @@ class TestCrossActorAuthorizationPrevention:
 
             # Step 5: Call handler
             from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
             handler = OAuth2CallbackHandler(webobj, config, hooks=None)
             result = handler.get()
 
             # Step 6: Verify login was rejected (session fixation prevented)
-            assert webobj.response.status_code == 403, \
+            assert webobj.response.status_code == 403, (
                 f"Expected 403 Forbidden, got {webobj.response.status_code}"
+            )
 
             error_msg = str(result.get("message", "")).lower()
-            assert any(word in error_msg for word in ["authentication", "failed", "doesn't belong"]), \
-                f"Error should mention authentication failure: {result}"
+            assert any(
+                word in error_msg
+                for word in ["authentication", "failed", "doesn't belong"]
+            ), f"Error should mention authentication failure: {result}"
 
-    def test_self_authorization_succeeds(self, actor_factory: Any, test_app: str) -> None:
+    def test_self_authorization_succeeds(
+        self, actor_factory: Any, test_app: str
+    ) -> None:
         """
         Test that legitimate self-authorization succeeds.
 
@@ -200,16 +220,14 @@ class TestCrossActorAuthorizationPrevention:
             actor_id=alice_actor_id,  # Alice's own actor
             trust_type="mcp_client",
             expected_email="",
-            user_agent=""
+            user_agent="",
         )
 
         # Step 3: Create request object
         from actingweb import config as config_module
+
         config = config_module.Config(database="dynamodb")
-        config.oauth = {
-            "client_id": "test_client",
-            "client_secret": "test_secret"
-        }
+        config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
 
@@ -218,12 +236,14 @@ class TestCrossActorAuthorizationPrevention:
             params={"code": "alice_auth_code", "state": state},
             body=None,
             headers={},
-            cookies={}
+            cookies={},
         )
 
         # Step 4: Mock OAuth2Authenticator to return Alice's credentials
         # Patch where it's imported in the handler to avoid test pollution
-        with patch('actingweb.handlers.oauth2_callback.create_oauth2_authenticator') as mock_create_auth:
+        with patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator"
+        ) as mock_create_auth:
             mock_authenticator = MagicMock()
             mock_create_auth.return_value = mock_authenticator
             mock_authenticator.is_enabled.return_value = True
@@ -231,24 +251,30 @@ class TestCrossActorAuthorizationPrevention:
             mock_authenticator.exchange_code_for_token.return_value = {
                 "access_token": "alice_access_token",
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": 3600,
             }
 
-            mock_authenticator.get_email_from_user_info.return_value = "alice@example.com"
+            mock_authenticator.get_email_from_user_info.return_value = (
+                "alice@example.com"
+            )
             mock_authenticator.provider.name = "google"
 
             # Step 5: Call handler
             from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
             handler = OAuth2CallbackHandler(webobj, config, hooks=None)
             result = handler.get()
 
             # Step 6: Verify authorization succeeded (redirect or success)
-            assert webobj.response.status_code in [200, 302], \
+            assert webobj.response.status_code in [200, 302], (
                 f"Expected success (200 or 302), got {webobj.response.status_code}: {result}"
+            )
 
             # Verify not an error response
-            assert not result.get("error") or webobj.response.status_code in [200, 302], \
-                f"Self-authorization should succeed: {result}"
+            assert not result.get("error") or webobj.response.status_code in [
+                200,
+                302,
+            ], f"Self-authorization should succeed: {result}"
 
     def test_new_actor_creation_without_actor_id(self, test_app: str) -> None:
         """
@@ -263,16 +289,14 @@ class TestCrossActorAuthorizationPrevention:
             actor_id="",  # No actor_id = create new actor
             trust_type="mcp_client",
             expected_email="",
-            user_agent=""
+            user_agent="",
         )
 
         # Step 2: Create request object
         from actingweb import config as config_module
+
         config = config_module.Config(database="dynamodb")
-        config.oauth = {
-            "client_id": "test_client",
-            "client_secret": "test_secret"
-        }
+        config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
 
@@ -281,11 +305,13 @@ class TestCrossActorAuthorizationPrevention:
             params={"code": "bob_auth_code", "state": state},
             body=None,
             headers={},
-            cookies={}
+            cookies={},
         )
 
         # Step 3: Mock OAuth2Authenticator to return Bob's credentials
-        with patch('actingweb.handlers.oauth2_callback.create_oauth2_authenticator') as mock_create_auth:
+        with patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator"
+        ) as mock_create_auth:
             mock_authenticator = MagicMock()
             mock_create_auth.return_value = mock_authenticator
             mock_authenticator.is_enabled.return_value = True
@@ -299,25 +325,31 @@ class TestCrossActorAuthorizationPrevention:
             mock_authenticator.exchange_code_for_token.return_value = {
                 "access_token": "bob_access_token",
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": 3600,
             }
 
             mock_authenticator.get_email_from_user_info.return_value = "bob@example.com"
             mock_authenticator.provider.name = "google"
 
             # Mock actor creation
-            mock_authenticator.lookup_or_create_actor_by_identifier.return_value = mock_bob_actor
+            mock_authenticator.lookup_or_create_actor_by_identifier.return_value = (
+                mock_bob_actor
+            )
 
             # Step 4: Call handler
             from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
             handler = OAuth2CallbackHandler(webobj, config, hooks=None)
             result = handler.get()
 
             # Step 5: Verify new actor was created (success response)
-            assert webobj.response.status_code in [200, 302], \
+            assert webobj.response.status_code in [200, 302], (
                 f"Expected success creating new actor, got {webobj.response.status_code}: {result}"
+            )
 
-    def test_provider_id_mode_validation(self, actor_factory: Any, test_app: str) -> None:
+    def test_provider_id_mode_validation(
+        self, actor_factory: Any, test_app: str
+    ) -> None:
         """
         Test that provider ID mode (force_email_prop_as_creator=False) also validates ownership.
 
@@ -345,16 +377,14 @@ class TestEmailValidationSecurity:
             actor_id="",
             trust_type="",  # Web login
             expected_email="",
-            user_agent=""
+            user_agent="",
         )
 
         # Create request object
         from actingweb import config as config_module
+
         config = config_module.Config(database="dynamodb")
-        config.oauth = {
-            "client_id": "test_client",
-            "client_secret": "test_secret"
-        }
+        config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
 
@@ -363,11 +393,13 @@ class TestEmailValidationSecurity:
             params={"code": "auth_code", "state": state},
             body=None,
             headers={},
-            cookies={}
+            cookies={},
         )
 
         # Mock OAuth2Authenticator returning email (which will trigger verification)
-        with patch('actingweb.handlers.oauth2_callback.create_oauth2_authenticator') as mock_create_auth:
+        with patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator"
+        ) as mock_create_auth:
             mock_authenticator = MagicMock()
             mock_create_auth.return_value = mock_authenticator
             mock_authenticator.is_enabled.return_value = True
@@ -381,21 +413,27 @@ class TestEmailValidationSecurity:
             mock_authenticator.exchange_code_for_token.return_value = {
                 "access_token": "access_token",
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": 3600,
             }
 
-            mock_authenticator.get_email_from_user_info.return_value = "user@example.com"
+            mock_authenticator.get_email_from_user_info.return_value = (
+                "user@example.com"
+            )
             mock_authenticator.provider.name = "google"
 
             # Mock actor creation
-            mock_authenticator.lookup_or_create_actor_by_identifier.return_value = mock_actor
+            mock_authenticator.lookup_or_create_actor_by_identifier.return_value = (
+                mock_actor
+            )
 
             # Call handler
             from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
             handler = OAuth2CallbackHandler(webobj, config, hooks=None)
             result = handler.get()
 
             # Should redirect to actor www page or handle verification
             # (The exact behavior depends on email verification configuration)
-            assert webobj.response.status_code in [200, 302, 400, 502], \
+            assert webobj.response.status_code in [200, 302, 400, 502], (
                 f"Should handle email appropriately, got {webobj.response.status_code}: {result}"
+            )

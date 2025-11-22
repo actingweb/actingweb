@@ -243,13 +243,7 @@ class TestDevtestAttributesFlow:
         """
         response = requests.post(
             f"{self.actor_url}/devtest/attribute/bucket4",
-            json={
-                "vard1": "valued1",
-                "vard2": {
-                    "var1": "test1",
-                    "var2": "test2"
-                }
-            },
+            json={"vard1": "valued1", "vard2": {"var1": "test1", "var2": "test2"}},
             headers={"Content-Type": "application/json"},
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )

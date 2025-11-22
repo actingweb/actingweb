@@ -2,7 +2,6 @@ import logging
 
 
 class PeerTrustee:
-
     def get(self):
         if self.peertrustee and len(self.peertrustee) > 0:
             return self.peertrustee
@@ -58,7 +57,11 @@ class PeerTrustee:
         if peer_type:
             self.peer_type = peer_type
         elif not peer_type and short_type:
-            if not self.config or not self.config.actors or short_type not in self.config.actors:
+            if (
+                not self.config
+                or not self.config.actors
+                or short_type not in self.config.actors
+            ):
                 logging.error(
                     "Got request to initialise peer trustee with unknown shortpeer_type("
                     + (peer_type or "None")

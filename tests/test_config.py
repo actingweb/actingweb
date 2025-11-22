@@ -86,7 +86,6 @@ class TestConfigMethods:
         config.database = DatabaseType.DYNAMODB.value
         assert config.database == "dynamodb"
 
-
     def test_config_environment_types(self):
         """Test environment type handling."""
         config = Config()

@@ -116,7 +116,6 @@ class TestMCPAuthentication:
         assert "capabilities" in data["result"]
         assert "serverInfo" in data["result"]
 
-
     def test_list_tools(self, oauth2_client):
         """
         Test listing available MCP tools.
@@ -133,7 +132,9 @@ class TestMCPAuthentication:
 
         assert response.status_code == 200
         data = response.json()
-        assert "result" in data or "error" not in data, f"Got error: {data.get('error')}"
+        assert "result" in data or "error" not in data, (
+            f"Got error: {data.get('error')}"
+        )
         if "result" in data:
             assert "tools" in data["result"]
             # Should return a list of tools (may be empty if no actions configured)
@@ -202,19 +203,23 @@ class TestMCPAuthentication:
             headers={"Content-Type": "application/json"},
         )
 
-        assert tools_response.status_code == 200, \
+        assert tools_response.status_code == 200, (
             f"tools/list failed: {tools_response.json()}"
+        )
 
         tools_data = tools_response.json()
-        assert "result" in tools_data, \
+        assert "result" in tools_data, (
             f"Expected 'result' in response, got error: {tools_data.get('error')}"
+        )
         assert "tools" in tools_data["result"]
 
         # Verify all tools have valid (non-None) names
         for tool in tools_data["result"]["tools"]:
             assert "name" in tool, "Tool missing 'name' field"
             assert tool["name"] is not None, "Tool has None name"
-            assert isinstance(tool["name"], str), f"Tool name is not string: {type(tool['name'])}"
+            assert isinstance(tool["name"], str), (
+                f"Tool name is not string: {type(tool['name'])}"
+            )
             assert len(tool["name"]) > 0, "Tool name is empty string"
 
         # Test prompts/list - should not fail with validation error
@@ -224,19 +229,23 @@ class TestMCPAuthentication:
             headers={"Content-Type": "application/json"},
         )
 
-        assert prompts_response.status_code == 200, \
+        assert prompts_response.status_code == 200, (
             f"prompts/list failed: {prompts_response.json()}"
+        )
 
         prompts_data = prompts_response.json()
-        assert "result" in prompts_data, \
+        assert "result" in prompts_data, (
             f"Expected 'result' in response, got error: {prompts_data.get('error')}"
+        )
         assert "prompts" in prompts_data["result"]
 
         # Verify all prompts have valid (non-None) names
         for prompt in prompts_data["result"]["prompts"]:
             assert "name" in prompt, "Prompt missing 'name' field"
             assert prompt["name"] is not None, "Prompt has None name"
-            assert isinstance(prompt["name"], str), f"Prompt name is not string: {type(prompt['name'])}"
+            assert isinstance(prompt["name"], str), (
+                f"Prompt name is not string: {type(prompt['name'])}"
+            )
             assert len(prompt["name"]) > 0, "Prompt name is empty string"
 
         # Test resources/list - should not fail with validation error
@@ -246,17 +255,21 @@ class TestMCPAuthentication:
             headers={"Content-Type": "application/json"},
         )
 
-        assert resources_response.status_code == 200, \
+        assert resources_response.status_code == 200, (
             f"resources/list failed: {resources_response.json()}"
+        )
 
         resources_data = resources_response.json()
-        assert "result" in resources_data, \
+        assert "result" in resources_data, (
             f"Expected 'result' in response, got error: {resources_data.get('error')}"
+        )
         assert "resources" in resources_data["result"]
 
         # Verify all resources have valid (non-None) names
         for resource in resources_data["result"]["resources"]:
             assert "name" in resource, "Resource missing 'name' field"
             assert resource["name"] is not None, "Resource has None name"
-            assert isinstance(resource["name"], str), f"Resource name is not string: {type(resource['name'])}"
+            assert isinstance(resource["name"], str), (
+                f"Resource name is not string: {type(resource['name'])}"
+            )
             assert len(resource["name"]) > 0, "Resource name is empty string"

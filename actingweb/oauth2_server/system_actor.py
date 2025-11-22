@@ -46,21 +46,27 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
 
         if not sys_actor.actor:
             # Actor doesn't exist, create it
-            base_root = config.root if hasattr(config, 'root') else 'http://localhost/'
+            base_root = config.root if hasattr(config, "root") else "http://localhost/"
             url = f"{base_root}{OAUTH2_SYSTEM_ACTOR}"
-            passphrase = config.new_token() if hasattr(config, 'new_token') else 'oauth2-system-pass'
+            passphrase = (
+                config.new_token()
+                if hasattr(config, "new_token")
+                else "oauth2-system-pass"
+            )
 
             try:
                 created = sys_actor.create(
                     url=url,
                     creator="oauth2-system",
                     passphrase=passphrase,
-                    actor_id=OAUTH2_SYSTEM_ACTOR
+                    actor_id=OAUTH2_SYSTEM_ACTOR,
                 )
                 if created:
                     logger.info(f"Created OAuth2 system actor: {OAUTH2_SYSTEM_ACTOR}")
                 else:
-                    logger.error(f"Failed to create OAuth2 system actor: {OAUTH2_SYSTEM_ACTOR}")
+                    logger.error(
+                        f"Failed to create OAuth2 system actor: {OAUTH2_SYSTEM_ACTOR}"
+                    )
             except ClientError as e:
                 if e.response["Error"]["Code"] == "ResourceInUseException":
                     # Actor was created by another process concurrently - this is fine

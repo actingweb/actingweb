@@ -39,13 +39,17 @@ class ServiceRegistry:
             Self for method chaining
         """
         if not service_config.is_enabled():
-            logger.warning(f"Service '{service_config.name}' is not properly configured")
+            logger.warning(
+                f"Service '{service_config.name}' is not properly configured"
+            )
 
         self._services[service_config.name] = service_config
         logger.info(f"Registered service: {service_config.name}")
         return self
 
-    def register_service_from_dict(self, name: str, config: dict[str, Any]) -> "ServiceRegistry":
+    def register_service_from_dict(
+        self, name: str, config: dict[str, Any]
+    ) -> "ServiceRegistry":
         """
         Register a service from a configuration dictionary.
 
@@ -74,9 +78,13 @@ class ServiceRegistry:
         """Register Dropbox service using template."""
         return self.register_service(ServiceTemplates.dropbox(client_id, client_secret))
 
-    def register_gmail(self, client_id: str, client_secret: str, readonly: bool = True) -> "ServiceRegistry":
+    def register_gmail(
+        self, client_id: str, client_secret: str, readonly: bool = True
+    ) -> "ServiceRegistry":
         """Register Gmail service using template."""
-        return self.register_service(ServiceTemplates.gmail(client_id, client_secret, readonly))
+        return self.register_service(
+            ServiceTemplates.gmail(client_id, client_secret, readonly)
+        )
 
     def register_github(self, client_id: str, client_secret: str) -> "ServiceRegistry":
         """Register GitHub service using template."""

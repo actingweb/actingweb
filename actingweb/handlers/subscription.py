@@ -19,7 +19,9 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         subtarget = self.request.get("subtarget")
         resource = self.request.get("resource")
 
-        subscriptions = myself.get_subscriptions(peerid=peerid, target=target, subtarget=subtarget, resource=resource)
+        subscriptions = myself.get_subscriptions(
+            peerid=peerid, target=target, subtarget=subtarget, resource=resource
+        )
         if not subscriptions:
             if self.response:
                 self.response.set_status(404, "Not found")
@@ -88,7 +90,9 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         )
         if not remote_loc:
             if self.response:
-                self.response.set_status(408, "Unable to create remote subscription with peer")
+                self.response.set_status(
+                    408, "Unable to create remote subscription with peer"
+                )
             return
         if self.response:
             self.response.headers["Location"] = remote_loc
@@ -112,7 +116,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             subpath="<id>",
             method="GET",
             peerid=peerid,
-            approved=False  # Allow access even if not fully approved
+            approved=False,  # Allow access even if not fully approved
         ):
             if self.response:
                 self.response.set_status(403)
@@ -121,7 +125,9 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         subtarget = self.request.get("subtarget")
         resource = self.request.get("resource")
 
-        subscriptions = myself.get_subscriptions(peerid=peerid, target=target, subtarget=subtarget, resource=resource)
+        subscriptions = myself.get_subscriptions(
+            peerid=peerid, target=target, subtarget=subtarget, resource=resource
+        )
         if not subscriptions:
             if self.response:
                 self.response.set_status(404, "Not found")
@@ -174,12 +180,19 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
                 self.response.set_status(400, "No json body")
             return
         if peerid != auth_result.auth_obj.acl["peerid"]:
-            logging.warning("Peer " + peerid + " tried to create a subscription for peer " + auth_result.auth_obj.acl["peerid"])
+            logging.warning(
+                "Peer "
+                + peerid
+                + " tried to create a subscription for peer "
+                + auth_result.auth_obj.acl["peerid"]
+            )
             if self.response:
                 self.response.set_status(403, "Forbidden. Wrong peer id in request")
             return
         # We need to validate that this peer has GET rights on what it wants to subscribe to
-        if not auth_result.auth_obj.check_authorisation(path=target, subpath=subtarget or "", method="GET", peerid=peerid):
+        if not auth_result.auth_obj.check_authorisation(
+            path=target, subpath=subtarget or "", method="GET", peerid=peerid
+        ):
             if self.response:
                 self.response.set_status(403)
             return
@@ -227,7 +240,9 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "DELETE":
             self.delete(actor_id, peerid, subid)
             return
-        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid)
+        auth_result = self.authenticate_actor(
+            actor_id, "subscriptions", subpath=peerid + "/" + subid
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -276,7 +291,9 @@ class SubscriptionHandler(base_handler.BaseHandler):
             self.response.set_status(200, "Ok")
 
     def put(self, actor_id, peerid, subid):
-        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid)
+        auth_result = self.authenticate_actor(
+            actor_id, "subscriptions", subpath=peerid + "/" + subid
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -292,12 +309,16 @@ class SubscriptionHandler(base_handler.BaseHandler):
             if "sequence" in params:
                 seq = params["sequence"]
             else:
-                self.response.set_status(400, "Error in json body and no GET parameters")
+                self.response.set_status(
+                    400, "Error in json body and no GET parameters"
+                )
                 return
         except (TypeError, ValueError, KeyError):
             seq = self.request.get("sequence")
             if len(seq) == 0:
-                self.response.set_status(400, "Error in json body and no GET parameters")
+                self.response.set_status(
+                    400, "Error in json body and no GET parameters"
+                )
                 return
         try:
             if not isinstance(seq, int):
@@ -317,7 +338,9 @@ class SubscriptionHandler(base_handler.BaseHandler):
         return
 
     def delete(self, actor_id, peerid, subid):
-        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid)
+        auth_result = self.authenticate_actor(
+            actor_id, "subscriptions", subpath=peerid + "/" + subid
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -339,7 +362,9 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
     /subscriptions/<peerid>/<subid>/112"""
 
     def get(self, actor_id, peerid, subid, seqnr):
-        auth_result = self.authenticate_actor(actor_id, "subscriptions", subpath=peerid + "/" + subid + "/" + str(seqnr))
+        auth_result = self.authenticate_actor(
+            actor_id, "subscriptions", subpath=peerid + "/" + subid + "/" + str(seqnr)
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor

@@ -2,7 +2,6 @@ from typing import Any
 
 
 class AWRequest:
-
     def get_header(self, header: str = "") -> str:
         header = header.lower()
         if not self.headers:
@@ -29,7 +28,14 @@ class AWRequest:
             ret.append(k)
         return ret
 
-    def __init__(self, url: str | None = None, params: dict[str, Any] | None = None, body: str | None = None, headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        url: str | None = None,
+        params: dict[str, Any] | None = None,
+        body: str | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+    ) -> None:
         self.headers = headers
         self.params = params
         self.body = body
@@ -38,7 +44,6 @@ class AWRequest:
 
 
 class AWResponse:
-
     def set_status(self, code: int = 200, message: str = "Ok") -> bool | None:
         if not code or code < 100 or code > 599:
             return False
@@ -57,7 +62,14 @@ class AWResponse:
             self.body = body
         return None
 
-    def set_cookie(self, name: str, value: str, max_age: int = 1209600, path: str = "/", secure: bool = True) -> None:
+    def set_cookie(
+        self,
+        name: str,
+        value: str,
+        max_age: int = 1209600,
+        path: str = "/",
+        secure: bool = True,
+    ) -> None:
         self.cookies.append(
             {
                 "name": name,
@@ -82,8 +94,14 @@ class AWResponse:
 
 
 class AWWebObj:
-
-    def __init__(self, url: str | None = None, params: dict[str, Any] | None = None, body: str | None = None, headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        url: str | None = None,
+        params: dict[str, Any] | None = None,
+        body: str | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+    ) -> None:
         self.request = AWRequest(
             url=url, params=params, body=body, headers=headers, cookies=cookies
         )

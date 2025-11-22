@@ -402,19 +402,26 @@ class TestOAuth2CORSPreflight:
         )
 
         # Should succeed with 200
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"OPTIONS /oauth/register failed: {response.status_code} {response.text}"
+        )
 
         # Should have CORS headers
-        assert "Access-Control-Allow-Origin" in response.headers, \
+        assert "Access-Control-Allow-Origin" in response.headers, (
             "Missing CORS Allow-Origin header"
-        assert "Access-Control-Allow-Methods" in response.headers, \
+        )
+        assert "Access-Control-Allow-Methods" in response.headers, (
             "Missing CORS Allow-Methods header"
-        assert "Access-Control-Allow-Headers" in response.headers, \
+        )
+        assert "Access-Control-Allow-Headers" in response.headers, (
             "Missing CORS Allow-Headers header"
+        )
 
         # Verify CORS headers contain expected values
-        assert response.headers["Access-Control-Allow-Origin"] in ["*", "https://mcp-client.example.com"]
+        assert response.headers["Access-Control-Allow-Origin"] in [
+            "*",
+            "https://mcp-client.example.com",
+        ]
         assert "POST" in response.headers["Access-Control-Allow-Methods"]
         assert "OPTIONS" in response.headers["Access-Control-Allow-Methods"]
         assert "Content-Type" in response.headers["Access-Control-Allow-Headers"]
@@ -426,8 +433,9 @@ class TestOAuth2CORSPreflight:
             headers={"Origin": "https://mcp-client.example.com"},
         )
 
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"OPTIONS /oauth/authorize failed: {response.status_code} {response.text}"
+        )
         assert "Access-Control-Allow-Origin" in response.headers
         assert "Access-Control-Allow-Methods" in response.headers
 
@@ -438,8 +446,9 @@ class TestOAuth2CORSPreflight:
             headers={"Origin": "https://mcp-client.example.com"},
         )
 
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"OPTIONS /oauth/token failed: {response.status_code} {response.text}"
+        )
         assert "Access-Control-Allow-Origin" in response.headers
         assert "Access-Control-Allow-Methods" in response.headers
 
@@ -450,8 +459,9 @@ class TestOAuth2CORSPreflight:
             headers={"Origin": "https://mcp-client.example.com"},
         )
 
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"OPTIONS /oauth/logout failed: {response.status_code} {response.text}"
+        )
         assert "Access-Control-Allow-Origin" in response.headers
         assert "Access-Control-Allow-Methods" in response.headers
 
@@ -473,25 +483,30 @@ class TestOAuth2Discovery:
         """
         response = requests.get(f"{test_app}/.well-known/oauth-protected-resource/mcp")
 
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"Discovery endpoint failed: {response.status_code} {response.text}"
+        )
 
         data = response.json()
 
         # Verify structure
         assert "mcp_version" in data, "Missing mcp_version field"
-        assert "supported_protocol_versions" in data, "Missing supported_protocol_versions field"
+        assert "supported_protocol_versions" in data, (
+            "Missing supported_protocol_versions field"
+        )
         assert "capabilities" in data, "Missing capabilities field"
 
         # Verify version is from SDK (should be 2025-06-18 or newer, not hardcoded 2024-11-05)
         from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
         from mcp.types import LATEST_PROTOCOL_VERSION
 
-        assert data["mcp_version"] == LATEST_PROTOCOL_VERSION, \
+        assert data["mcp_version"] == LATEST_PROTOCOL_VERSION, (
             f"Expected mcp_version={LATEST_PROTOCOL_VERSION}, got {data['mcp_version']}"
+        )
 
-        assert data["supported_protocol_versions"] == SUPPORTED_PROTOCOL_VERSIONS, \
+        assert data["supported_protocol_versions"] == SUPPORTED_PROTOCOL_VERSIONS, (
             f"Expected supported_protocol_versions={SUPPORTED_PROTOCOL_VERSIONS}, got {data['supported_protocol_versions']}"
+        )
 
         # Verify capabilities structure
         assert isinstance(data["capabilities"], dict)

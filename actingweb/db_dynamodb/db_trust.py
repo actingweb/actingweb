@@ -71,7 +71,9 @@ class Trust(Model):
     peerid = UnicodeAttribute(range_key=True)
     baseuri = UnicodeAttribute()
     type = UnicodeAttribute()  # peer's ActingWeb mini-application type (e.g., "urn:actingweb:example.com:banking")
-    relationship = UnicodeAttribute()  # trust type (e.g., "friend", "admin", "partner") - defines permission level
+    relationship = (
+        UnicodeAttribute()
+    )  # trust type (e.g., "friend", "admin", "partner") - defines permission level
     secret = UnicodeAttribute()
     desc = UnicodeAttribute()
     approved = BooleanAttribute()
@@ -80,17 +82,25 @@ class Trust(Model):
     verification_token = UnicodeAttribute()
 
     # New attributes for unified trust system
-    peer_identifier = UnicodeAttribute(null=True)  # Email, username, UUID - service-specific identifier
-    established_via = UnicodeAttribute(null=True)  # 'actingweb', 'oauth2_interactive', 'oauth2_client'
+    peer_identifier = UnicodeAttribute(
+        null=True
+    )  # Email, username, UUID - service-specific identifier
+    established_via = UnicodeAttribute(
+        null=True
+    )  # 'actingweb', 'oauth2_interactive', 'oauth2_client'
     created_at = UTCDateTimeAttribute(null=True)  # When trust was created
     last_accessed = UTCDateTimeAttribute(null=True)  # Last time trust was used
     last_connected_via = UnicodeAttribute(null=True)  # How the trust was last accessed
 
     # Client metadata for OAuth2 clients (MCP, etc.)
-    client_name = UnicodeAttribute(null=True)  # Friendly name of the client (e.g., "ChatGPT", "Claude", "MCP Inspector")
+    client_name = UnicodeAttribute(
+        null=True
+    )  # Friendly name of the client (e.g., "ChatGPT", "Claude", "MCP Inspector")
     client_version = UnicodeAttribute(null=True)  # Version of the client software
     client_platform = UnicodeAttribute(null=True)  # Platform info from User-Agent
-    oauth_client_id = UnicodeAttribute(null=True)  # Reference to OAuth2 client ID for credentials-based clients
+    oauth_client_id = UnicodeAttribute(
+        null=True
+    )  # Reference to OAuth2 client ID for credentials-based clients
 
     # Indexes
     secret_index = SecretIndex()
@@ -113,10 +123,8 @@ class DbTrust:
             return None
         try:
             if not self.handle and peerid:
-                logging.debug("    Retrieving trust from db based on peerid(" + peerid + ")")
                 self.handle = Trust.get(actor_id, peerid, consistent_read=True)
             elif not self.handle and token:
-                logging.debug("    Retrieving trust from db based on token(" + token + ")")
                 res = Trust.secret_index.query(token)
                 for h in res:
                     if actor_id == h.id:
@@ -158,7 +166,9 @@ class DbTrust:
             result["last_connected_at"] = created_at_iso
 
         if hasattr(t, "last_connected_via") and t.last_connected_via:
-            result["last_connected_via"] = canonical_connection_method(t.last_connected_via)
+            result["last_connected_via"] = canonical_connection_method(
+                t.last_connected_via
+            )
 
         # Add client metadata for OAuth2 clients if they exist
         if hasattr(t, "client_name") and t.client_name:
@@ -234,7 +244,9 @@ class DbTrust:
                 # Keep existing value if parsing fails
 
         if last_connected_via is not None:
-            self.handle.last_connected_via = canonical_connection_method(last_connected_via)
+            self.handle.last_connected_via = canonical_connection_method(
+                last_connected_via
+            )
 
         # Handle client metadata for OAuth2 clients
         if client_name is not None:
@@ -317,16 +329,22 @@ class DbTrust:
         now = datetime.utcnow()
         created_timestamp = created_at or now
         if isinstance(created_timestamp, str):
-            created_timestamp = datetime.fromisoformat(created_timestamp.replace("Z", "+00:00"))
+            created_timestamp = datetime.fromisoformat(
+                created_timestamp.replace("Z", "+00:00")
+            )
         trust_kwargs["created_at"] = created_timestamp
 
         last_timestamp = last_accessed or created_timestamp
         if isinstance(last_timestamp, str):
-            last_timestamp = datetime.fromisoformat(last_timestamp.replace("Z", "+00:00"))
+            last_timestamp = datetime.fromisoformat(
+                last_timestamp.replace("Z", "+00:00")
+            )
         trust_kwargs["last_accessed"] = last_timestamp
 
         if "last_connected_via" not in trust_kwargs and established_via is not None:
-            trust_kwargs["last_connected_via"] = canonical_connection_method(established_via)
+            trust_kwargs["last_connected_via"] = canonical_connection_method(
+                established_via
+            )
 
         self.handle = Trust(**trust_kwargs)
         self.handle.save()

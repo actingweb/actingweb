@@ -10,6 +10,7 @@ try:
         create_permission_override,
         get_trust_permission_store,
     )
+
     PERMISSION_SYSTEM_AVAILABLE = True
 except ImportError:
     # Set fallback values for when permission system is not available
@@ -61,7 +62,9 @@ class TrustHandler(base_handler.BaseHandler):
             "peerid",
         )
 
-        pairs = myself.get_trust_relationships(relationship=relationship, peerid=peerid, trust_type=peer_type)
+        pairs = myself.get_trust_relationships(
+            relationship=relationship, peerid=peerid, trust_type=peer_type
+        )
         if not pairs or len(pairs) == 0:
             if self.response:
                 self.response.set_status(404, "Not found")
@@ -114,7 +117,12 @@ class TrustHandler(base_handler.BaseHandler):
             self.response.set_status(408, "Unable to create trust relationship")
             return
         self.response.headers["Location"] = str(
-            self.config.root + (myself.id or "") + "/trust/" + new_trust["relationship"] + "/" + new_trust["peerid"]
+            self.config.root
+            + (myself.id or "")
+            + "/trust/"
+            + new_trust["relationship"]
+            + "/"
+            + new_trust["peerid"]
         )
         out = json.dumps(new_trust)
         self.response.write(out)
@@ -140,7 +148,9 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
 
     def put(self, actor_id, relationship):
         # Use AuthResult for granular control since we need add_response=False
-        auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship, add_response=False)
+        auth_result = self.authenticate_actor(
+            actor_id, "trust", subpath=relationship, add_response=False
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -179,7 +189,9 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
 
     def delete(self, actor_id, relationship):
         # Use AuthResult for granular control since we need add_response=False
-        auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship, add_response=False)
+        auth_result = self.authenticate_actor(
+            actor_id, "trust", subpath=relationship, add_response=False
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -198,10 +210,14 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
     def post(self, actor_id, relationship):
         # This endpoint does not require authentication - trust creation can be done by peers
         # Load actor without any authentication or authorization checks
-        auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship, add_response=False)
+        auth_result = self.authenticate_actor(
+            actor_id, "trust", subpath=relationship, add_response=False
+        )
         if not auth_result.actor:
             self.response.set_status(404)
-            logging.debug("Got trust creation request for unknown Actor(" + str(actor_id) + ")")
+            logging.debug(
+                "Got trust creation request for unknown Actor(" + str(actor_id) + ")"
+            )
             return
         myself = auth_result.actor
         # Skip authentication and authorization checks for this public endpoint
@@ -244,7 +260,10 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if len(baseuri) == 0 or len(peerid) == 0 or len(peer_type) == 0:
             self.response.set_status(400, "Missing mandatory attributes")
             return
-        if self.config.auto_accept_default_relationship and self.config.default_relationship == relationship:
+        if (
+            self.config.auto_accept_default_relationship
+            and self.config.default_relationship == relationship
+        ):
             approved = True
         else:
             approved = False
@@ -266,7 +285,12 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(403, "Forbidden")
             return
         self.response.headers["Location"] = str(
-            self.config.root + (myself.id or "") + "/trust/" + new_trust["relationship"] + "/" + new_trust["peerid"]
+            self.config.root
+            + (myself.id or "")
+            + "/trust/"
+            + new_trust["relationship"]
+            + "/"
+            + new_trust["peerid"]
         )
         out = json.dumps(new_trust)
         self.response.write(out)
@@ -319,7 +343,9 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403)
             return
-        relationships = myself.get_trust_relationships(relationship=relationship, peerid=peerid)
+        relationships = myself.get_trust_relationships(
+            relationship=relationship, peerid=peerid
+        )
         if not relationships or len(relationships) == 0:
             if self.response:
                 self.response.set_status(404, "Not found")
@@ -327,7 +353,10 @@ class TrustPeerHandler(base_handler.BaseHandler):
         my_trust = relationships[0]
 
         # Check access based on authentication type (needed for verification logic)
-        _ = auth_result.auth_obj.acl.get("authenticated") and auth_result.auth_obj.acl.get("role") == "creator"  # pyright: ignore[reportUnusedExpression]
+        _ = (
+            auth_result.auth_obj.acl.get("authenticated")
+            and auth_result.auth_obj.acl.get("role") == "creator"
+        )  # pyright: ignore[reportUnusedExpression]
         is_peer_token = auth_result.auth_obj.trust is not None
 
         # The GET handler should return trust data for verification purposes but NOT modify verified status
@@ -336,7 +365,11 @@ class TrustPeerHandler(base_handler.BaseHandler):
         # Check if permissions query is requested
         include_permissions = self.request.get("permissions") == "true"
 
-        if include_permissions and PERMISSION_SYSTEM_AVAILABLE and get_trust_permission_store:
+        if (
+            include_permissions
+            and PERMISSION_SYSTEM_AVAILABLE
+            and get_trust_permission_store
+        ):
             # Add permission information to response
             permission_store = get_trust_permission_store(self.config)
             permissions = permission_store.get_permissions(actor_id, peerid)
@@ -351,7 +384,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     "prompts": permissions.prompts,
                     "created_by": permissions.created_by,
                     "updated_at": permissions.updated_at,
-                    "notes": permissions.notes
+                    "notes": permissions.notes,
                 }
             else:
                 my_trust["permissions"] = None
@@ -407,7 +440,9 @@ class TrustPeerHandler(base_handler.BaseHandler):
         else:
             if not auth_result.authorize("POST", "trust", "<type>/<id>"):
                 return
-        if myself.modify_trust_and_notify(relationship=relationship, peerid=peerid, peer_approved=peer_approved):
+        if myself.modify_trust_and_notify(
+            relationship=relationship, peerid=peerid, peer_approved=peer_approved
+        ):
             self.response.set_status(204, "Ok")
         else:
             self.response.set_status(500, "Not modified")
@@ -470,12 +505,18 @@ class TrustPeerHandler(base_handler.BaseHandler):
 
         # Update permissions if provided
         permissions_updated = True
-        if permission_updates is not None and PERMISSION_SYSTEM_AVAILABLE and get_trust_permission_store:
+        if (
+            permission_updates is not None
+            and PERMISSION_SYSTEM_AVAILABLE
+            and get_trust_permission_store
+        ):
             try:
                 permission_store = get_trust_permission_store(self.config)
 
                 # Check if permissions already exist
-                existing_permissions = permission_store.get_permissions(actor_id, peerid)
+                existing_permissions = permission_store.get_permissions(
+                    actor_id, peerid
+                )
 
                 if existing_permissions:
                     # Update existing permissions
@@ -488,15 +529,21 @@ class TrustPeerHandler(base_handler.BaseHandler):
                         actor_id=actor_id,
                         peer_id=peerid,
                         trust_type=relationship,  # Use relationship as trust type
-                        permission_updates=permission_updates
+                        permission_updates=permission_updates,
                     )
-                    permissions_updated = permission_store.store_permissions(permissions_obj)
+                    permissions_updated = permission_store.store_permissions(
+                        permissions_obj
+                    )
 
                 if not permissions_updated:
-                    logging.error(f"Failed to update permissions for trust relationship {actor_id}:{peerid}")
+                    logging.error(
+                        f"Failed to update permissions for trust relationship {actor_id}:{peerid}"
+                    )
 
             except Exception as e:
-                logging.error(f"Error updating permissions for trust relationship {actor_id}:{peerid}: {e}")
+                logging.error(
+                    f"Error updating permissions for trust relationship {actor_id}:{peerid}: {e}"
+                )
                 permissions_updated = False
 
         if trust_updated and permissions_updated:
@@ -506,8 +553,17 @@ class TrustPeerHandler(base_handler.BaseHandler):
 
     def delete(self, actor_id, relationship, peerid):
         # Use AuthResult for granular control since we need add_response=False and custom logic
-        auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship, add_response=False)
-        if not auth_result.actor or not auth_result.auth_obj or (auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401):
+        auth_result = self.authenticate_actor(
+            actor_id, "trust", subpath=relationship, add_response=False
+        )
+        if (
+            not auth_result.actor
+            or not auth_result.auth_obj
+            or (
+                auth_result.auth_obj.response["code"] != 200
+                and auth_result.auth_obj.response["code"] != 401
+            )
+        ):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
         myself = auth_result.actor
@@ -526,10 +582,16 @@ class TrustPeerHandler(base_handler.BaseHandler):
         # Prevent actors from deleting trust relationships with themselves
         if peerid == actor_id:
             if self.response:
-                self.response.set_status(400, "Cannot delete trust relationship with self")
+                self.response.set_status(
+                    400, "Cannot delete trust relationship with self"
+                )
             return
         is_peer = False
-        if auth_result.auth_obj and auth_result.auth_obj.trust and auth_result.auth_obj.trust["peerid"] == peerid:
+        if (
+            auth_result.auth_obj
+            and auth_result.auth_obj.trust
+            and auth_result.auth_obj.trust["peerid"] == peerid
+        ):
             is_peer = True
         else:
             # Use of GET param peer=true is a way of forcing no deletion of a peer
@@ -537,7 +599,9 @@ class TrustPeerHandler(base_handler.BaseHandler):
             peer_get = self.request.get("peer").lower()
             if peer_get.lower() == "true":
                 is_peer = True
-        relationships = myself.get_trust_relationships(relationship=relationship, peerid=peerid)
+        relationships = myself.get_trust_relationships(
+            relationship=relationship, peerid=peerid
+        )
         if not relationships or len(relationships) == 0:
             if self.response:
                 self.response.set_status(404, "Not found")
@@ -563,7 +627,9 @@ class TrustPermissionHandler(base_handler.BaseHandler):
 
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
         if not auth_result.success:
-            logging.error(f"TrustPermissionHandler auth failed: actor={auth_result.actor is not None}, auth_obj={auth_result.auth_obj is not None}, code={auth_result.auth_obj.response['code'] if auth_result.auth_obj else 'None'}")
+            logging.error(
+                f"TrustPermissionHandler auth failed: actor={auth_result.actor is not None}, auth_obj={auth_result.auth_obj is not None}, code={auth_result.auth_obj.response['code'] if auth_result.auth_obj else 'None'}"
+            )
             return
 
         # Same authorization as trust endpoint
@@ -590,26 +656,35 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                     "updated_at": custom_permissions.updated_at,
                     "notes": custom_permissions.notes,
                     "is_custom": True,
-                    "source": "custom_override"
+                    "source": "custom_override",
                 }
             else:
                 # No custom permissions, get defaults from trust type registry
                 # The 'relationship' parameter is the trust type (friend, admin, etc.)
                 try:
                     from ..trust_type_registry import get_registry
+
                     registry = get_registry(self.config)
                     logging.debug(f"Looking up trust type '{relationship}' in registry")
                     trust_type = registry.get_type(relationship)
 
                     if not trust_type:
-                        logging.error(f"Trust type '{relationship}' not found in registry")
-                        available_types = [t.name for t in registry.list_types()] if registry else []
+                        logging.error(
+                            f"Trust type '{relationship}' not found in registry"
+                        )
+                        available_types = (
+                            [t.name for t in registry.list_types()] if registry else []
+                        )
                         logging.error(f"Available trust types: {available_types}")
                         if self.response:
-                            self.response.set_status(404, f"Trust type '{relationship}' not found")
+                            self.response.set_status(
+                                404, f"Trust type '{relationship}' not found"
+                            )
                         return
 
-                    logging.debug(f"Found trust type '{relationship}': {trust_type.display_name}")
+                    logging.debug(
+                        f"Found trust type '{relationship}': {trust_type.display_name}"
+                    )
 
                     # Return default permissions from trust type
                     permission_data = {
@@ -626,12 +701,17 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                         "updated_at": None,
                         "notes": f"Default permissions for {trust_type.display_name}",
                         "is_custom": False,
-                        "source": "trust_type_default"
+                        "source": "trust_type_default",
                     }
                 except Exception as registry_error:
-                    logging.error(f"Error accessing trust type registry for {relationship}: {registry_error}")
+                    logging.error(
+                        f"Error accessing trust type registry for {relationship}: {registry_error}"
+                    )
                     if self.response:
-                        self.response.set_status(500, f"Error accessing trust type defaults: {registry_error}")
+                        self.response.set_status(
+                            500,
+                            f"Error accessing trust type defaults: {registry_error}",
+                        )
                     return
 
             out = json.dumps(permission_data)
@@ -669,7 +749,9 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             params = json.loads(body)
 
             # Validate trust relationship exists
-            relationships = myself.get_trust_relationships(relationship=relationship, peerid=peerid)
+            relationships = myself.get_trust_relationships(
+                relationship=relationship, peerid=peerid
+            )
             if not relationships or len(relationships) == 0:
                 if self.response:
                     self.response.set_status(404, "Trust relationship not found")
@@ -691,7 +773,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                     actor_id=actor_id,
                     peer_id=peerid,
                     trust_type=relationship,
-                    permission_updates=params
+                    permission_updates=params,
                 )
 
                 success = permission_store.store_permissions(permissions_obj)

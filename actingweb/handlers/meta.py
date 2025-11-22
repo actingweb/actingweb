@@ -5,7 +5,6 @@ from actingweb.handlers import base_handler
 
 
 class MetaHandler(base_handler.BaseHandler):
-
     def get(self, actor_id, path):
         # Meta endpoint allows unauthenticated access but still needs actor data
         myself = self.get_actor_allow_unauthenticated(actor_id, "meta", path)
@@ -32,11 +31,14 @@ class MetaHandler(base_handler.BaseHandler):
             # Add supported trust types if available
             try:
                 from ..trust_type_registry import get_registry
+
                 registry = get_registry(self.config)
                 trust_types = registry.list_types()
                 if trust_types:
                     # Convert trust types to a simple list of names for the meta endpoint
-                    supported_trust_types = [trust_type.name for trust_type in trust_types]
+                    supported_trust_types = [
+                        trust_type.name for trust_type in trust_types
+                    ]
                     values["aw_trust_types"] = supported_trust_types
             except Exception:
                 # If trust type registry is not available, don't include trust types
@@ -71,18 +73,21 @@ class MetaHandler(base_handler.BaseHandler):
             # Dedicated endpoint for supported trust types with more details
             try:
                 from ..trust_type_registry import get_registry
+
                 registry = get_registry(self.config)
                 trust_types = registry.list_types()
                 if trust_types:
                     # Return detailed trust type information
                     trust_type_details = []
                     for trust_type in trust_types:
-                        trust_type_details.append({
-                            "name": trust_type.name,
-                            "display_name": trust_type.display_name,
-                            "description": getattr(trust_type, 'description', ''),
-                            "created_by": trust_type.created_by
-                        })
+                        trust_type_details.append(
+                            {
+                                "name": trust_type.name,
+                                "display_name": trust_type.display_name,
+                                "description": getattr(trust_type, "description", ""),
+                                "created_by": trust_type.created_by,
+                            }
+                        )
                     out = json.dumps(trust_type_details)
                 else:
                     out = json.dumps([])

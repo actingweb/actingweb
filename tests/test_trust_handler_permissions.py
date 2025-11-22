@@ -14,7 +14,6 @@ from actingweb.trust_permissions import TrustPermissions
 
 
 class TestTrustHandlerPermissions(unittest.TestCase):
-
     def setUp(self):
         """Set up test fixtures."""
         self.config = Mock()
@@ -23,11 +22,13 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         self.response.headers = {}
 
         # Mock request body
-        self.request.body = json.dumps({
-            "properties": {"allowed": ["public/*"], "denied": ["private/*"]},
-            "methods": {"allowed": ["get_profile"]},
-            "notes": "Test permission override"
-        }).encode('utf-8')
+        self.request.body = json.dumps(
+            {
+                "properties": {"allowed": ["public/*"], "denied": ["private/*"]},
+                "methods": {"allowed": ["get_profile"]},
+                "notes": "Test permission override",
+            }
+        ).encode("utf-8")
 
         # Mock auth response
         self.auth_response = Mock()
@@ -37,12 +38,16 @@ class TestTrustHandlerPermissions(unittest.TestCase):
 
         # Mock actor
         self.actor = Mock()
-        self.actor.get_trust_relationships = Mock(return_value=[{
-            "peerid": "test-peer",
-            "relationship": "friend",
-            "approved": True,
-            "verified": True
-        }])
+        self.actor.get_trust_relationships = Mock(
+            return_value=[
+                {
+                    "peerid": "test-peer",
+                    "relationship": "friend",
+                    "approved": True,
+                    "verified": True,
+                }
+            ]
+        )
         self.actor.modify_trust_and_notify = Mock(return_value=True)
 
         # Mock permission store
@@ -64,9 +69,9 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         handler.require_authenticated_actor = Mock(return_value=self.actor)
         return auth_result
 
-    @patch('actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE', True)
-    @patch('actingweb.handlers.trust.get_trust_permission_store')
-    @patch('actingweb.trust.Trust')
+    @patch("actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE", True)
+    @patch("actingweb.handlers.trust.get_trust_permission_store")
+    @patch("actingweb.trust.Trust")
     def test_get_trust_with_permissions_query(self, mock_trust, mock_get_store):
         """Test GET /trust/{relationship}/{peerid}?permissions=true"""
         mock_get_store.return_value = self.permission_store
@@ -78,14 +83,16 @@ class TestTrustHandlerPermissions(unittest.TestCase):
             trust_type="friend",
             properties={"allowed": ["public/*"]},
             methods={"allowed": ["get_profile"]},
-            notes="Test permissions"
+            notes="Test permissions",
         )
         self.permission_store.get_permissions.return_value = test_permissions
 
         handler = TrustPeerHandler()
         handler.config = self.config
         handler.request = Mock()
-        handler.request.get = Mock(side_effect=lambda key: "true" if key == "permissions" else None)
+        handler.request.get = Mock(
+            side_effect=lambda key: "true" if key == "permissions" else None
+        )
         handler.response = self.response
 
         # Mock authentication
@@ -97,13 +104,17 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         self.response.write.assert_called_once()
         response_data = json.loads(self.response.write.call_args[0][0])
         self.assertIn("permissions", response_data)
-        self.assertEqual(response_data["permissions"]["properties"], {"allowed": ["public/*"]})
-        self.assertEqual(response_data["permissions"]["methods"], {"allowed": ["get_profile"]})
+        self.assertEqual(
+            response_data["permissions"]["properties"], {"allowed": ["public/*"]}
+        )
+        self.assertEqual(
+            response_data["permissions"]["methods"], {"allowed": ["get_profile"]}
+        )
         self.assertEqual(response_data["permissions"]["notes"], "Test permissions")
 
-    @patch('actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE', True)
-    @patch('actingweb.handlers.trust.get_trust_permission_store')
-    @patch('actingweb.handlers.trust.create_permission_override')
+    @patch("actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE", True)
+    @patch("actingweb.handlers.trust.get_trust_permission_store")
+    @patch("actingweb.handlers.trust.create_permission_override")
     def test_put_trust_with_permissions(self, mock_create_override, mock_get_store):
         """Test PUT /trust/{relationship}/{peerid} with permission updates"""
         mock_get_store.return_value = self.permission_store
@@ -124,14 +135,16 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         self._mock_authentication(handler)
 
         # Mock request body with permissions
-        handler.request.body = json.dumps({
-            "approved": True,
-            "desc": "Test relationship",
-            "permissions": {
-                "properties": {"allowed": ["public/*"], "denied": ["private/*"]},
-                "methods": {"allowed": ["get_profile"]}
+        handler.request.body = json.dumps(
+            {
+                "approved": True,
+                "desc": "Test relationship",
+                "permissions": {
+                    "properties": {"allowed": ["public/*"], "denied": ["private/*"]},
+                    "methods": {"allowed": ["get_profile"]},
+                },
             }
-        }).encode('utf-8')
+        ).encode("utf-8")
 
         handler.put("test-actor", "friend", "test-peer")
 
@@ -143,13 +156,15 @@ class TestTrustHandlerPermissions(unittest.TestCase):
             trust_type="friend",
             permission_updates={
                 "properties": {"allowed": ["public/*"], "denied": ["private/*"]},
-                "methods": {"allowed": ["get_profile"]}
-            }
+                "methods": {"allowed": ["get_profile"]},
+            },
         )
-        self.permission_store.store_permissions.assert_called_once_with(mock_permissions)
+        self.permission_store.store_permissions.assert_called_once_with(
+            mock_permissions
+        )
 
-    @patch('actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE', True)
-    @patch('actingweb.handlers.trust.get_trust_permission_store')
+    @patch("actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE", True)
+    @patch("actingweb.handlers.trust.get_trust_permission_store")
     def test_get_trust_permissions_handler(self, mock_get_store):
         """Test GET /trust/{relationship}/{peerid}/permissions"""
         mock_get_store.return_value = self.permission_store
@@ -161,7 +176,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
             trust_type="friend",
             properties={"allowed": ["public/*"]},
             methods={"allowed": ["get_profile"]},
-            notes="Test permissions"
+            notes="Test permissions",
         )
         self.permission_store.get_permissions.return_value = test_permissions
 
@@ -187,5 +202,5 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         self.assertEqual(response_data["notes"], "Test permissions")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

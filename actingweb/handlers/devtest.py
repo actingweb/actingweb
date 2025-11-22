@@ -6,7 +6,6 @@ from actingweb.handlers import base_handler
 
 
 class DevtestHandler(base_handler.BaseHandler):
-
     def put(self, actor_id, path):
         """Handles PUT for devtest"""
 
@@ -163,7 +162,9 @@ class DevtestHandler(base_handler.BaseHandler):
                 if isinstance(params, dict):
                     for _b, d in params.items():
                         for k, v in d.items():
-                            d[k]["timestamp"] = v["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+                            d[k]["timestamp"] = v["timestamp"].strftime(
+                                "%Y-%m-%d %H:%M:%S"
+                            )
                     out = json.dumps(params)
                     if self.response:
                         self.response.write(out)
@@ -223,7 +224,9 @@ class DevtestHandler(base_handler.BaseHandler):
                 # Create bucket with optional attributes from params
                 if params and isinstance(params, dict):
                     for key, value in params.items():
-                        bucket.set_attr(key, value, timestamp=datetime.datetime.utcnow())
+                        bucket.set_attr(
+                            key, value, timestamp=datetime.datetime.utcnow()
+                        )
                     # Return the created content as JSON
                     out = json.dumps(params)
                     if self.response:

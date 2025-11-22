@@ -36,7 +36,9 @@ class OAuth2ClientManager:
         self.config = config
         self._registry = MCPClientRegistry(config)
 
-    def create_client(self, client_name: str, trust_type: str = "mcp_client", **kwargs) -> dict[str, Any]:
+    def create_client(
+        self, client_name: str, trust_type: str = "mcp_client", **kwargs
+    ) -> dict[str, Any]:
         """
         Create a new OAuth2 client for this actor.
 
@@ -65,16 +67,22 @@ class OAuth2ClientManager:
                 **kwargs,
             }
 
-            logger.info(f"Creating OAuth2 client '{client_name}' for actor {self.actor_id}")
+            logger.info(
+                f"Creating OAuth2 client '{client_name}' for actor {self.actor_id}"
+            )
 
-            client_data = self._registry.register_client(self.actor_id, registration_data)
+            client_data = self._registry.register_client(
+                self.actor_id, registration_data
+            )
 
             if client_data:
                 # Add formatted creation time for convenience
-                if "created_at" in client_data and isinstance(client_data["created_at"], (int, float)):
-                    client_data["created_at_formatted"] = datetime.fromtimestamp(client_data["created_at"]).strftime(
-                        "%Y-%m-%d %H:%M"
-                    )
+                if "created_at" in client_data and isinstance(
+                    client_data["created_at"], (int, float)
+                ):
+                    client_data["created_at_formatted"] = datetime.fromtimestamp(
+                        client_data["created_at"]
+                    ).strftime("%Y-%m-%d %H:%M")
 
                 logger.info(f"OAuth2 client created: {client_data.get('client_id')}")
                 return client_data
@@ -119,13 +127,17 @@ class OAuth2ClientManager:
 
             # Add formatted metadata for convenience
             for client in clients:
-                if "created_at" in client and isinstance(client["created_at"], (int, float)):
-                    client["created_at_formatted"] = datetime.fromtimestamp(client["created_at"]).strftime(
-                        "%Y-%m-%d %H:%M"
-                    )
+                if "created_at" in client and isinstance(
+                    client["created_at"], (int, float)
+                ):
+                    client["created_at_formatted"] = datetime.fromtimestamp(
+                        client["created_at"]
+                    ).strftime("%Y-%m-%d %H:%M")
 
                 # Add display-friendly status
-                client["status"] = "active"  # Could be enhanced with actual status checking
+                client["status"] = (
+                    "active"  # Could be enhanced with actual status checking
+                )
 
             return clients
 
@@ -151,7 +163,9 @@ class OAuth2ClientManager:
                 return False
 
             if client_data.get("actor_id") != self.actor_id:
-                logger.error(f"OAuth2 client {client_id} does not belong to actor {self.actor_id}")
+                logger.error(
+                    f"OAuth2 client {client_id} does not belong to actor {self.actor_id}"
+                )
                 return False
 
             success = self._registry.delete_client(client_id)
@@ -180,7 +194,9 @@ class OAuth2ClientManager:
         """
         try:
             client_data = self._registry.validate_client(client_id, client_secret)
-            return client_data is not None and client_data.get("actor_id") == self.actor_id
+            return (
+                client_data is not None and client_data.get("actor_id") == self.actor_id
+            )
 
         except Exception as e:
             logger.error(f"Error validating OAuth2 client {client_id}: {e}")
@@ -206,12 +222,16 @@ class OAuth2ClientManager:
                 return None
 
             if client_data.get("actor_id") != self.actor_id:
-                logger.error(f"OAuth2 client {client_id} does not belong to actor {self.actor_id}")
+                logger.error(
+                    f"OAuth2 client {client_id} does not belong to actor {self.actor_id}"
+                )
                 return None
 
             # Only allow regeneration for custom clients (those starting with mcp_)
             if not client_id.startswith("mcp_"):
-                logger.error(f"Cannot regenerate secret for non-custom client {client_id}")
+                logger.error(
+                    f"Cannot regenerate secret for non-custom client {client_id}"
+                )
                 return None
 
             # Generate new client secret
@@ -226,10 +246,17 @@ class OAuth2ClientManager:
 
             # Verify the updated data was stored correctly by re-loading it
             verify_client_data = self._registry._load_client(client_id)
-            if verify_client_data and verify_client_data.get("client_secret") == new_client_secret:
-                logger.info(f"OAuth2 client secret successfully regenerated and verified for {client_id}")
+            if (
+                verify_client_data
+                and verify_client_data.get("client_secret") == new_client_secret
+            ):
+                logger.info(
+                    f"OAuth2 client secret successfully regenerated and verified for {client_id}"
+                )
             else:
-                logger.error(f"OAuth2 client secret regeneration failed - stored secret does not match for {client_id}")
+                logger.error(
+                    f"OAuth2 client secret regeneration failed - stored secret does not match for {client_id}"
+                )
                 logger.error(
                     f"Expected: {new_client_secret}, Got: {verify_client_data.get('client_secret') if verify_client_data else 'None'}"
                 )
@@ -244,7 +271,9 @@ class OAuth2ClientManager:
             return client_data
 
         except Exception as e:
-            logger.error(f"Error regenerating OAuth2 client secret for {client_id}: {e}")
+            logger.error(
+                f"Error regenerating OAuth2 client secret for {client_id}: {e}"
+            )
             return None
 
     def get_client_stats(self) -> dict[str, int | dict[str, int]]:
@@ -292,7 +321,9 @@ class OAuth2ClientManager:
         """Support iteration over clients."""
         return iter(self.list_clients())
 
-    def generate_access_token(self, client_id: str, scope: str = "mcp") -> dict[str, Any] | None:
+    def generate_access_token(
+        self, client_id: str, scope: str = "mcp"
+    ) -> dict[str, Any] | None:
         """
         Generate an access token for the specified OAuth2 client using client credentials flow.
 
@@ -308,12 +339,16 @@ class OAuth2ClientManager:
             # Verify client belongs to this actor and get client data
             client_data = self.get_client(client_id)
             if not client_data:
-                logger.error(f"OAuth2 client {client_id} not found for token generation")
+                logger.error(
+                    f"OAuth2 client {client_id} not found for token generation"
+                )
                 return None
 
             # Only allow access token generation for custom clients (those starting with mcp_)
             if not client_id.startswith("mcp_"):
-                logger.error(f"Cannot generate access token for non-custom client {client_id}")
+                logger.error(
+                    f"Cannot generate access token for non-custom client {client_id}"
+                )
                 return None
 
             # Use the token manager to create access token

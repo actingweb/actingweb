@@ -33,7 +33,7 @@ class OAuth2SessionManager:
     3. Complete actor creation once email is provided
     """
 
-    def __init__(self, config: 'config_class.Config'):
+    def __init__(self, config: "config_class.Config"):
         self.config = config
 
     def store_session(
@@ -42,7 +42,7 @@ class OAuth2SessionManager:
         user_info: dict[str, Any],
         state: str = "",
         provider: str = "google",
-        verified_emails: list[str] | None = None
+        verified_emails: list[str] | None = None,
     ) -> str:
         """
         Store OAuth2 session data temporarily in database.
@@ -79,11 +79,13 @@ class OAuth2SessionManager:
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=OAUTH_SESSION_BUCKET,
-            config=self.config
+            config=self.config,
         )
         bucket.set_attr(name=session_id, data=session_data)
 
-        logger.debug(f"Stored OAuth session {session_id[:8]}... for provider {provider}")
+        logger.debug(
+            f"Stored OAuth session {session_id[:8]}... for provider {provider}"
+        )
         return session_id
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
@@ -106,7 +108,7 @@ class OAuth2SessionManager:
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=OAUTH_SESSION_BUCKET,
-            config=self.config
+            config=self.config,
         )
         session_attr = bucket.get_attr(name=session_id)
 
@@ -124,9 +126,12 @@ class OAuth2SessionManager:
             return None
 
         from typing import cast
+
         return cast(dict[str, Any], session)
 
-    def complete_session(self, session_id: str, email: str) -> Optional['actor_module.Actor']:
+    def complete_session(
+        self, session_id: str, email: str
+    ) -> Optional["actor_module.Actor"]:
         """
         Complete OAuth flow with provided email and create actor.
 
@@ -139,7 +144,9 @@ class OAuth2SessionManager:
         """
         session = self.get_session(session_id)
         if not session:
-            logger.error(f"Cannot complete session {session_id[:8]}... - session not found or expired")
+            logger.error(
+                f"Cannot complete session {session_id[:8]}... - session not found or expired"
+            )
             return None
 
         try:
@@ -173,7 +180,9 @@ class OAuth2SessionManager:
 
             if actor_instance.store:
                 actor_instance.store.oauth_token = access_token
-                actor_instance.store.oauth_token_expiry = str(int(time.time()) + expires_in) if expires_in else None
+                actor_instance.store.oauth_token_expiry = (
+                    str(int(time.time()) + expires_in) if expires_in else None
+                )
                 if refresh_token:
                     actor_instance.store.oauth_refresh_token = refresh_token
                 actor_instance.store.oauth_token_timestamp = str(int(time.time()))
@@ -186,11 +195,13 @@ class OAuth2SessionManager:
             bucket = attribute.Attributes(
                 actor_id=OAUTH2_SYSTEM_ACTOR,
                 bucket=OAUTH_SESSION_BUCKET,
-                config=self.config
+                config=self.config,
             )
             bucket.delete_attr(name=session_id)
 
-            logger.info(f"Completed OAuth session for {email} -> actor {actor_instance.id}")
+            logger.info(
+                f"Completed OAuth session for {email} -> actor {actor_instance.id}"
+            )
 
             return actor_instance
 
@@ -215,7 +226,7 @@ class OAuth2SessionManager:
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=OAUTH_SESSION_BUCKET,
-            config=self.config
+            config=self.config,
         )
         bucket_data = bucket.get_bucket()
 
@@ -240,7 +251,7 @@ class OAuth2SessionManager:
         return len(expired)
 
 
-def get_oauth2_session_manager(config: 'config_class.Config') -> OAuth2SessionManager:
+def get_oauth2_session_manager(config: "config_class.Config") -> OAuth2SessionManager:
     """
     Factory function to get OAuth2SessionManager instance.
 

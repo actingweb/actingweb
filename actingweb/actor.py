@@ -50,7 +50,6 @@ class DummyPropertyClass:
 
 
 class Actor:
-
     ###################
     # Basic operations
     ###################
@@ -72,7 +71,9 @@ class Actor:
         if actor_id and config:
             self.store = attribute.InternalStore(actor_id=actor_id, config=config)
             self.property = property.PropertyStore(actor_id=actor_id, config=config)
-            self.property_lists = property.PropertyListStore(actor_id=actor_id, config=config)
+            self.property_lists = property.PropertyListStore(
+                actor_id=actor_id, config=config
+            )
         else:
             self.store = None
             self.property = None
@@ -101,7 +102,9 @@ class Actor:
                 "last_response_message": response.content,
                 "data": json.loads(response.content.decode("utf-8", "ignore")),
             }
-            logging.debug(f"Got peer info from url({url}) with body({response.content})")
+            logging.debug(
+                f"Got peer info from url({url}) with body({response.content})"
+            )
         except (TypeError, ValueError, KeyError):
             res = {
                 "last_response_code": 500,
@@ -126,7 +129,9 @@ class Actor:
             self.passphrase = self.actor["passphrase"]
             self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
             self.property = property.PropertyStore(actor_id=self.id, config=self.config)
-            self.property_lists = property.PropertyListStore(actor_id=self.id, config=self.config)
+            self.property_lists = property.PropertyListStore(
+                actor_id=self.id, config=self.config
+            )
             if self.config and self.config.force_email_prop_as_creator:
                 em = self.store.email
                 if em and em.lower() != self.creator:
@@ -137,7 +142,9 @@ class Actor:
             self.passphrase = None
         return self.actor
 
-    def get_from_property(self, name: str = "oauthId", value: str | None = None) -> None:
+    def get_from_property(
+        self, name: str = "oauthId", value: str | None = None
+    ) -> None:
         """Initialise an actor by matching on a stored property.
 
         Use with caution as the property's value de-facto becomes
@@ -146,7 +153,9 @@ class Actor:
         Also note that this is a costly operation as all properties
         of this type will be retrieved and proceessed.
         """
-        actor_id = property.Property(name=name, value=value, config=self.config).get_actor_id()
+        actor_id = property.Property(
+            name=name, value=value, config=self.config
+        ).get_actor_id()
         if not actor_id:
             self.id = None
             self.creator = None
@@ -233,7 +242,11 @@ class Actor:
                         anactor = Actor(actor_id=c["id"], config=self.config)
                         anactor.delete()
                 else:
-                    if self.config and self.config.force_email_prop_as_creator and self.creator == DEFAULT_CREATOR:
+                    if (
+                        self.config
+                        and self.config.force_email_prop_as_creator
+                        and self.creator == DEFAULT_CREATOR
+                    ):
                         for c in exists:
                             anactor = Actor(actor_id=c["id"], config=self.config)
                             em = anactor.store.email if anactor.store else None
@@ -258,32 +271,47 @@ class Actor:
         if not self.handle and self.config:
             self.handle = self.config.DbActor.DbActor()
         if self.handle:
-            self.handle.create(creator=self.creator, passphrase=self.passphrase, actor_id=self.id)
+            self.handle.create(
+                creator=self.creator, passphrase=self.passphrase, actor_id=self.id
+            )
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
-        self.property_lists = property.PropertyListStore(actor_id=self.id, config=self.config)
+        self.property_lists = property.PropertyListStore(
+            actor_id=self.id, config=self.config
+        )
 
         # Set trustee_root if provided
-        if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0 and self.store:
+        if (
+            trustee_root
+            and isinstance(trustee_root, str)
+            and len(trustee_root) > 0
+            and self.store
+        ):
             self.store.trustee_root = trustee_root
 
         # Execute actor_created lifecycle hook if hooks are provided
         if hooks:
             try:
                 from actingweb.interface.actor_interface import ActorInterface
+
                 registry = getattr(self.config, "service_registry", None)
                 actor_interface = ActorInterface(self, service_registry=registry)
                 hooks.execute_lifecycle_hooks("actor_created", actor_interface)
             except Exception as e:
                 # Log hook execution error but don't fail actor creation
                 import logging
-                logging.warning(f"Actor created successfully but lifecycle hook failed: {e}")
+
+                logging.warning(
+                    f"Actor created successfully but lifecycle hook failed: {e}"
+                )
 
         return True
 
     def modify(self, creator: str | None = None) -> bool:
         if not self.handle or not creator:
-            logging.debug("Attempted modify of actor with no handle or no param changed")
+            logging.debug(
+                "Attempted modify of actor with no handle or no param changed"
+            )
             return False
         if "@" in creator:
             creator = creator.lower()
@@ -300,7 +328,9 @@ class Actor:
             return
         self.delete_peer_trustee(shorttype="*")
         if not self.property_list:
-            self.property_list = property.Properties(actor_id=self.id, config=self.config)
+            self.property_list = property.Properties(
+                actor_id=self.id, config=self.config
+            )
         self.property_list.delete()
         subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
         subs.fetch()
@@ -310,7 +340,9 @@ class Actor:
         if relationships:
             for rel in relationships:
                 if isinstance(rel, dict) and "peerid" in rel:
-                    self.delete_reciprocal_trust(peerid=rel.get("peerid", ""), delete_peer=True)
+                    self.delete_reciprocal_trust(
+                        peerid=rel.get("peerid", ""), delete_peer=True
+                    )
         trusts.delete()
         buckets = attribute.Buckets(actor_id=self.id, config=self.config)
         buckets.delete()
@@ -337,7 +369,9 @@ class Actor:
     def delete_properties(self):
         """Deletes all properties."""
         if not self.property_list:
-            self.property_list = property.Properties(actor_id=self.id, config=self.config)
+            self.property_list = property.Properties(
+                actor_id=self.id, config=self.config
+            )
         return self.property_list.delete()
 
     def get_properties(self):
@@ -353,41 +387,60 @@ class Actor:
                 for t in self.config.actors:
                     self.delete_peer_trustee(shorttype=t)
             return True
-        if shorttype and self.config and self.config.actors and shorttype not in self.config.actors:
+        if (
+            shorttype
+            and self.config
+            and self.config.actors
+            and shorttype not in self.config.actors
+        ):
             logging.error(f"Got a request to delete an unknown actor type({shorttype})")
             return False
         peer_data = None
         new_peer = None
         if peerid:
-            new_peer = peertrustee.PeerTrustee(actor_id=self.id, peerid=peerid, config=self.config)
+            new_peer = peertrustee.PeerTrustee(
+                actor_id=self.id, peerid=peerid, config=self.config
+            )
             peer_data = new_peer.get()
             if not peer_data or len(peer_data) == 0:
                 return False
         elif shorttype:
-            new_peer = peertrustee.PeerTrustee(actor_id=self.id, short_type=shorttype, config=self.config)
+            new_peer = peertrustee.PeerTrustee(
+                actor_id=self.id, short_type=shorttype, config=self.config
+            )
             peer_data = new_peer.get()
             if not peer_data or len(peer_data) == 0:
                 return False
         if not peer_data:
             return False
-        logging.debug(f'Deleting peer actor at baseuri({peer_data["baseuri"]})')
+        logging.debug(f"Deleting peer actor at baseuri({peer_data['baseuri']})")
         u_p = b"trustee:" + peer_data["passphrase"].encode("utf-8")
         headers = {
             "Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8"),
         }
         try:
-            response = requests.delete(url=peer_data["baseuri"], headers=headers, timeout=(5, 10))
+            response = requests.delete(
+                url=peer_data["baseuri"], headers=headers, timeout=(5, 10)
+            )
             self.last_response_code = response.status_code
-            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+            self.last_response_message = (
+                response.content.decode("utf-8", "ignore")
+                if isinstance(response.content, bytes)
+                else str(response.content)
+            )
         except Exception:
-            logging.debug("Not able to delete peer actor remotely due to network issues")
+            logging.debug(
+                "Not able to delete peer actor remotely due to network issues"
+            )
             self.last_response_code = 408
             return False
         if response.status_code < 200 or response.status_code > 299:
             logging.debug("Not able to delete peer actor remotely, peer is unwilling")
             return False
         # Delete trust, peer is already deleted remotely
-        if peer_data and not self.delete_reciprocal_trust(peerid=peer_data["peerid"], delete_peer=False):
+        if peer_data and not self.delete_reciprocal_trust(
+            peerid=peer_data["peerid"], delete_peer=False
+        ):
             logging.debug("Not able to delete peer actor trust in db")
         if new_peer and not new_peer.delete():
             logging.debug("Not able to delete peer actor in db")
@@ -404,31 +457,54 @@ class Actor:
         """
         if not peerid and not shorttype:
             return None
-        if shorttype and self.config and self.config.actors and shorttype not in self.config.actors:
+        if (
+            shorttype
+            and self.config
+            and self.config.actors
+            and shorttype not in self.config.actors
+        ):
             logging.error(f"Got a request to create an unknown actor type({shorttype})")
             return None
         if peerid:
-            new_peer = peertrustee.PeerTrustee(actor_id=self.id, peerid=peerid, config=self.config)
+            new_peer = peertrustee.PeerTrustee(
+                actor_id=self.id, peerid=peerid, config=self.config
+            )
         else:
-            new_peer = peertrustee.PeerTrustee(actor_id=self.id, short_type=shorttype, config=self.config)
+            new_peer = peertrustee.PeerTrustee(
+                actor_id=self.id, short_type=shorttype, config=self.config
+            )
         peer_data = new_peer.get()
         if peer_data and len(peer_data) > 0:
             logging.debug("Found peer in getPeer, now checking existing trust...")
-            dbtrust = trust.Trust(actor_id=self.id, peerid=peer_data["peerid"], config=self.config)
+            dbtrust = trust.Trust(
+                actor_id=self.id, peerid=peer_data["peerid"], config=self.config
+            )
             new_trust = dbtrust.get()
             if new_trust and len(new_trust) > 0:
                 return peer_data
             logging.debug("Did not find existing trust, will create a new one")
         factory = ""
-        if self.config and self.config.actors and shorttype and shorttype in self.config.actors:
+        if (
+            self.config
+            and self.config.actors
+            and shorttype
+            and shorttype in self.config.actors
+        ):
             factory = self.config.actors[shorttype]["factory"]
         # If peer did not exist, create it as trustee
         if not peer_data or len(peer_data) == 0:
             if len(factory) == 0:
-                logging.error(f"Peer actor of shorttype({shorttype}) does not have factory set.")
-            params = {"creator": "trustee", "trustee_root": (self.config.root + self.id) if self.config else ""}
+                logging.error(
+                    f"Peer actor of shorttype({shorttype}) does not have factory set."
+                )
+            params = {
+                "creator": "trustee",
+                "trustee_root": (self.config.root + self.id) if self.config else "",
+            }
             data = json.dumps(params)
-            logging.debug(f"Creating peer actor at factory({factory}) with data({data})")
+            logging.debug(
+                f"Creating peer actor at factory({factory}) with data({data})"
+            )
             response = None
             try:
                 response = requests.post(
@@ -439,7 +515,11 @@ class Actor:
                 )
                 if response:
                     self.last_response_code = response.status_code
-                    self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                    self.last_response_message = (
+                        response.content.decode("utf-8", "ignore")
+                        if isinstance(response.content, bytes)
+                        else str(response.content)
+                    )
             except Exception:
                 logging.debug("Not able to create new peer actor")
                 self.last_response_code = 408
@@ -448,22 +528,34 @@ class Actor:
                 return None
             try:
                 if response and response.content:
-                    content_str = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                    content_str = (
+                        response.content.decode("utf-8", "ignore")
+                        if isinstance(response.content, bytes)
+                        else str(response.content)
+                    )
                     data = json.loads(content_str)
                 else:
                     data = {}
             except (TypeError, ValueError, KeyError):
-                logging.warning(f"Not able to parse response when creating peer at factory({factory})")
+                logging.warning(
+                    f"Not able to parse response when creating peer at factory({factory})"
+                )
                 return None
             if response and "Location" in response.headers:
                 baseuri = response.headers["Location"]
             elif response and "location" in response.headers:
                 baseuri = response.headers["location"]
             else:
-                logging.warning("No location uri found in response when creating a peer as trustee")
+                logging.warning(
+                    "No location uri found in response when creating a peer as trustee"
+                )
                 baseuri = ""
             res = self.get_peer_info(baseuri)
-            if not res or res["last_response_code"] < 200 or res["last_response_code"] >= 300:
+            if (
+                not res
+                or res["last_response_code"] < 200
+                or res["last_response_code"] >= 300
+            ):
                 return None
             info_peer = res["data"]
             if (
@@ -471,7 +563,9 @@ class Actor:
                 or ("id" in info_peer and not info_peer["id"])
                 or ("type" in info_peer and not info_peer["type"])
             ):
-                logging.info(f"Received invalid peer info when trying to create peer actor at: {factory}")
+                logging.info(
+                    f"Received invalid peer info when trying to create peer actor at: {factory}"
+                )
                 return None
             new_peer = peertrustee.PeerTrustee(
                 actor_id=self.id,
@@ -480,7 +574,9 @@ class Actor:
                 config=self.config,
             )
             if not new_peer.create(baseuri=baseuri, passphrase=data["passphrase"]):
-                logging.error(f"Failed to create in db new peer Actor({self.id}) at {baseuri}")
+                logging.error(
+                    f"Failed to create in db new peer Actor({self.id}) at {baseuri}"
+                )
                 return None
         # Now peer exists, create trust
         new_peer_data = new_peer.get()
@@ -488,7 +584,12 @@ class Actor:
             return None
         secret = self.config.new_token() if self.config else ""
         relationship = ""
-        if self.config and self.config.actors and shorttype and shorttype in self.config.actors:
+        if (
+            self.config
+            and self.config.actors
+            and shorttype
+            and shorttype in self.config.actors
+        ):
             relationship = self.config.actors[shorttype]["relationship"]
         new_trust = self.create_reciprocal_trust(
             url=new_peer_data["baseuri"],
@@ -497,7 +598,9 @@ class Actor:
             relationship=relationship,
         )
         if not new_trust or len(new_trust) == 0:
-            logging.warning(f"Not able to establish trust relationship with peer at factory({factory})")
+            logging.warning(
+                f"Not able to establish trust relationship with peer at factory({factory})"
+            )
         else:
             # Approve the relationship
             params = {
@@ -518,14 +621,20 @@ class Actor:
                     + (self.id or ""),
                     data=data,
                     headers=headers,
-                    timeout=(5, 10)
+                    timeout=(5, 10),
                 )
                 if response:
                     self.last_response_code = response.status_code
-                    self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                    self.last_response_message = (
+                        response.content.decode("utf-8", "ignore")
+                        if isinstance(response.content, bytes)
+                        else str(response.content)
+                    )
             except Exception:
                 self.last_response_code = 408
-                self.last_response_message = "Not able to approve peer actor trust remotely"
+                self.last_response_message = (
+                    "Not able to approve peer actor trust remotely"
+                )
             if self.last_response_code < 200 or self.last_response_code > 299:
                 logging.debug("Not able to delete peer actor remotely")
         return new_peer_data
@@ -543,7 +652,9 @@ class Actor:
         if relationships:
             for rel in relationships:
                 if isinstance(rel, dict):
-                    if len(relationship) > 0 and relationship != rel.get("relationship", ""):
+                    if len(relationship) > 0 and relationship != rel.get(
+                        "relationship", ""
+                    ):
                         continue
                     if len(peerid) > 0 and peerid != rel.get("peerid", ""):
                         continue
@@ -575,7 +686,9 @@ class Actor:
         """Changes a trust relationship and noties the peer if approval is changed."""
         if not relationship or not peerid:
             return False
-        relationships = self.get_trust_relationships(relationship=relationship, peerid=peerid)
+        relationships = self.get_trust_relationships(
+            relationship=relationship, peerid=peerid
+        )
         if not relationships:
             return False
         this_trust = relationships[0]
@@ -595,11 +708,21 @@ class Actor:
             # Note the POST here instead of PUT. POST is used to used to notify about
             # state change in the relationship (i.e. not change the object as PUT
             # would do)
-            logging.debug("Trust relationship has been approved, notifying peer at url(" + requrl + ")")
+            logging.debug(
+                "Trust relationship has been approved, notifying peer at url("
+                + requrl
+                + ")"
+            )
             try:
-                response = requests.post(url=requrl, data=data, headers=headers, timeout=(5, 10))
+                response = requests.post(
+                    url=requrl, data=data, headers=headers, timeout=(5, 10)
+                )
                 self.last_response_code = response.status_code
-                self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
             except Exception:
                 logging.debug("Not able to notify peer at url(" + requrl + ")")
                 self.last_response_code = 500
@@ -626,7 +749,7 @@ class Actor:
         secret=None,
         desc="",
         relationship="",  # trust type/permission level (e.g., "friend", "admin") - goes in URL
-        trust_type=""     # peer's expected ActingWeb mini-app type for validation (optional)
+        trust_type="",  # peer's expected ActingWeb mini-app type for validation (optional)
     ):
         """Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
 
@@ -639,11 +762,17 @@ class Actor:
         if not secret or len(secret) == 0:
             return False
         res = self.get_peer_info(url)
-        if not res or res["last_response_code"] < 200 or res["last_response_code"] >= 300:
+        if (
+            not res
+            or res["last_response_code"] < 200
+            or res["last_response_code"] >= 300
+        ):
             return False
         peer = res["data"]
         if not peer["id"] or not peer["type"] or len(peer["type"]) == 0:
-            logging.info("Received invalid peer info when trying to establish trust: " + url)
+            logging.info(
+                "Received invalid peer info when trying to establish trust: " + url
+            )
             return False
         if len(trust_type) > 0:
             if trust_type.lower() != peer["type"].lower():
@@ -665,7 +794,9 @@ class Actor:
             established_via="trust",
         ):
             logging.warning(
-                "Trying to establish a new Reciprocal trust when peer relationship already exists (" + peer["id"] + ")"
+                "Trying to establish a new Reciprocal trust when peer relationship already exists ("
+                + peer["id"]
+                + ")"
             )
             return False
         # Since we are initiating the relationship, we implicitly approve it
@@ -681,7 +812,13 @@ class Actor:
         }
         requrl = url + "/trust/" + relationship
         data = json.dumps(params)
-        logging.debug("Creating reciprocal trust at url(" + requrl + ") and body (" + str(data) + ")")
+        logging.debug(
+            "Creating reciprocal trust at url("
+            + requrl
+            + ") and body ("
+            + str(data)
+            + ")"
+        )
         try:
             response = requests.post(
                 url=requrl,
@@ -692,17 +829,25 @@ class Actor:
                 },
             )
             self.last_response_code = response.status_code
-            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+            self.last_response_message = (
+                response.content.decode("utf-8", "ignore")
+                if isinstance(response.content, bytes)
+                else str(response.content)
+            )
         except Exception:
             logging.debug("Not able to create trust with peer, deleting my trust.")
             dbtrust.delete()
             return False
         if self.last_response_code == 201 or self.last_response_code == 202:
             # Reload the trust to check if approval was done
-            mod_trust = trust.Trust(actor_id=self.id, peerid=peer["id"], config=self.config)
+            mod_trust = trust.Trust(
+                actor_id=self.id, peerid=peer["id"], config=self.config
+            )
             mod_trust_data = mod_trust.get()
             if not mod_trust_data or len(mod_trust_data) == 0:
-                logging.error("Couldn't find trust relationship after peer POST and verification")
+                logging.error(
+                    "Couldn't find trust relationship after peer POST and verification"
+                )
                 return False
             if self.last_response_code == 201:
                 # Already approved by peer (probably auto-approved)
@@ -750,22 +895,42 @@ class Actor:
                 "Authorization": "Bearer " + secret,
             }
             logging.debug(
-                "Verifying trust at requesting peer(" + peerid + ") at url (" + requrl + ") and secret(" + secret + ")"
+                "Verifying trust at requesting peer("
+                + peerid
+                + ") at url ("
+                + requrl
+                + ") and secret("
+                + secret
+                + ")"
             )
             try:
                 response = requests.get(url=requrl, headers=headers, timeout=(5, 10))
                 self.last_response_code = response.status_code
-                self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
                 try:
-                    logging.debug("Verifying trust response JSON:" + str(response.content))
-                    content_str = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+                    logging.debug(
+                        "Verifying trust response JSON:" + str(response.content)
+                    )
+                    content_str = (
+                        response.content.decode("utf-8", "ignore")
+                        if isinstance(response.content, bytes)
+                        else str(response.content)
+                    )
                     data = json.loads(content_str)
                     if data["verification_token"] == verification_token:
                         verified = True
                     else:
                         verified = False
                 except ValueError:
-                    logging.debug("No json body in response when verifying trust at url(" + requrl + ")")
+                    logging.debug(
+                        "No json body in response when verifying trust at url("
+                        + requrl
+                        + ")"
+                    )
                     verified = False
             except Exception:
                 logging.debug("No response when verifying trust at url" + requrl + ")")
@@ -807,8 +972,10 @@ class Actor:
             )
             # Additional safety check: prevent self-deletion if baseuri points to this actor
             is_self_deletion = (
-                rel.get("baseuri", "").endswith(f"/{self.id}") or
-                rel.get("baseuri", "") == f"{self.config.root}{self.id}" if self.config else False
+                rel.get("baseuri", "").endswith(f"/{self.id}")
+                or rel.get("baseuri", "") == f"{self.config.root}{self.id}"
+                if self.config
+                else False
             )
 
             if delete_peer and not is_oauth2_trust and not is_self_deletion:
@@ -820,29 +987,49 @@ class Actor:
                     }
                 logging.debug("Deleting reciprocal relationship at url(" + url + ")")
                 try:
-                    response = requests.delete(url=url, headers=headers, timeout=(5, 10))
+                    response = requests.delete(
+                        url=url, headers=headers, timeout=(5, 10)
+                    )
                 except Exception:
-                    logging.debug("Failed to delete reciprocal relationship at url(" + url + ")")
+                    logging.debug(
+                        "Failed to delete reciprocal relationship at url(" + url + ")"
+                    )
                     failed_once = True
                     continue
-                if (response.status_code < 200 or response.status_code > 299) and response.status_code != 404:
-                    logging.debug("Failed to delete reciprocal relationship at url(" + url + ")")
+                if (
+                    response.status_code < 200 or response.status_code > 299
+                ) and response.status_code != 404:
+                    logging.debug(
+                        "Failed to delete reciprocal relationship at url(" + url + ")"
+                    )
                     failed_once = True
                     continue
                 else:
                     success_once = True
             elif delete_peer and (is_oauth2_trust or is_self_deletion):
                 # Treat as successful remote delete for OAuth2 trusts and self-deletions
-                reason = "OAuth2-established trust" if is_oauth2_trust else "self-deletion detected"
-                logging.debug(f"Skipping remote delete for {reason}; deleting locally only")
+                reason = (
+                    "OAuth2-established trust"
+                    if is_oauth2_trust
+                    else "self-deletion detected"
+                )
+                logging.debug(
+                    f"Skipping remote delete for {reason}; deleting locally only"
+                )
                 success_once = True
             if not self.subs_list:
-                self.subs_list = subscription.Subscriptions(actor_id=self.id, config=self.config).fetch()
+                self.subs_list = subscription.Subscriptions(
+                    actor_id=self.id, config=self.config
+                ).fetch()
             # Delete this peer's subscriptions
             if self.subs_list:
                 for sub in self.subs_list:
                     if sub["peerid"] == rel["peerid"]:
-                        logging.debug("Deleting subscription(" + sub["subscriptionid"] + ") as part of trust deletion.")
+                        logging.debug(
+                            "Deleting subscription("
+                            + sub["subscriptionid"]
+                            + ") as part of trust deletion."
+                        )
                         sub_obj = self.get_subscription_obj(
                             peerid=sub["peerid"],
                             subid=sub["subscriptionid"],
@@ -850,7 +1037,9 @@ class Actor:
                         )
                         if sub_obj:
                             sub_obj.delete()
-            dbtrust = trust.Trust(actor_id=self.id, peerid=rel["peerid"], config=self.config)
+            dbtrust = trust.Trust(
+                actor_id=self.id, peerid=rel["peerid"], config=self.config
+            )
             dbtrust.delete()
         if delete_peer and (not success_once or failed_once):
             return False
@@ -881,7 +1070,9 @@ class Actor:
         )
         return new_sub.get()
 
-    def create_remote_subscription(self, peerid=None, target=None, subtarget=None, resource=None, granularity=None):
+    def create_remote_subscription(
+        self, peerid=None, target=None, subtarget=None, resource=None, granularity=None
+    ):
         """Creates a new subscription at peerid."""
         if not peerid or not target:
             return False
@@ -906,10 +1097,22 @@ class Actor:
             "Content-Type": "application/json",
         }
         try:
-            logging.debug("Creating remote subscription at url(" + requrl + ") with body (" + str(data) + ")")
-            response = requests.post(url=requrl, data=data, headers=headers, timeout=(5, 10))
+            logging.debug(
+                "Creating remote subscription at url("
+                + requrl
+                + ") with body ("
+                + str(data)
+                + ")"
+            )
+            response = requests.post(
+                url=requrl, data=data, headers=headers, timeout=(5, 10)
+            )
             self.last_response_code = response.status_code
-            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+            self.last_response_message = (
+                response.content.decode("utf-8", "ignore")
+                if isinstance(response.content, bytes)
+                else str(response.content)
+            )
         except Exception:
             return None
         try:
@@ -920,7 +1123,11 @@ class Actor:
                 + str(response.content)
                 + ")"
             )
-            content_str = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+            content_str = (
+                response.content.decode("utf-8", "ignore")
+                if isinstance(response.content, bytes)
+                else str(response.content)
+            )
             data = json.loads(content_str)
         except ValueError:
             return None
@@ -945,20 +1152,30 @@ class Actor:
         else:
             return None
 
-    def get_subscriptions(self, peerid=None, target=None, subtarget=None, resource=None, callback=False):
+    def get_subscriptions(
+        self, peerid=None, target=None, subtarget=None, resource=None, callback=False
+    ):
         """Retrieves subscriptions from db."""
         if not self.id:
             return None
         if not self.subs_list:
-            self.subs_list = subscription.Subscriptions(actor_id=self.id, config=self.config).fetch()
+            self.subs_list = subscription.Subscriptions(
+                actor_id=self.id, config=self.config
+            ).fetch()
         ret = []
         if self.subs_list:
             for sub in self.subs_list:
                 if not peerid or (peerid and sub["peerid"] == peerid):
                     if not target or (target and sub["target"] == target):
-                        if not subtarget or (subtarget and sub["subtarget"] == subtarget):
-                            if not resource or (resource and sub["resource"] == resource):
-                                if not callback or (callback and sub["callback"] == callback):
+                        if not subtarget or (
+                            subtarget and sub["subtarget"] == subtarget
+                        ):
+                            if not resource or (
+                                resource and sub["resource"] == resource
+                            ):
+                                if not callback or (
+                                    callback and sub["callback"] == callback
+                                ):
                                     ret.append(sub)
         return ret
 
@@ -998,7 +1215,13 @@ class Actor:
         if not sub or "callback" not in sub or not sub["callback"]:
             url = trust_rel["baseuri"] + "/subscriptions/" + self.id + "/" + subid
         else:
-            url = trust_rel["baseuri"] + "/callbacks/subscriptions/" + self.id + "/" + subid
+            url = (
+                trust_rel["baseuri"]
+                + "/callbacks/subscriptions/"
+                + self.id
+                + "/"
+                + subid
+            )
         headers = {
             "Authorization": "Bearer " + trust_rel["secret"],
         }
@@ -1006,11 +1229,17 @@ class Actor:
             logging.debug("Deleting remote subscription at url(" + url + ")")
             response = requests.delete(url=url, headers=headers, timeout=(5, 10))
             self.last_response_code = response.status_code
-            self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+            self.last_response_message = (
+                response.content.decode("utf-8", "ignore")
+                if isinstance(response.content, bytes)
+                else str(response.content)
+            )
             if response.status_code == 204:
                 return True
             else:
-                logging.debug("Failed to delete remote subscription at url(" + url + ")")
+                logging.debug(
+                    "Failed to delete remote subscription at url(" + url + ")"
+                )
                 return False
         except Exception:
             return False
@@ -1028,7 +1257,9 @@ class Actor:
         )
         return sub.delete()
 
-    def callback_subscription(self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None):
+    def callback_subscription(
+        self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
+    ):
         if not peerid or not diff or not sub or not blob:
             logging.warning("Missing parameters in callbackSubscription")
             return
@@ -1065,22 +1296,42 @@ class Actor:
                 + "/"
                 + str(diff["sequence"])
             )
-        requrl = trust_rel["baseuri"] + "/callbacks/subscriptions/" + self.id + "/" + sub["subscriptionid"]
+        requrl = (
+            trust_rel["baseuri"]
+            + "/callbacks/subscriptions/"
+            + self.id
+            + "/"
+            + sub["subscriptionid"]
+        )
         data = json.dumps(params)
         headers = {
             "Authorization": "Bearer " + trust_rel["secret"],
             "Content-Type": "application/json",
         }
         try:
-            logging.debug("Doing a callback on subscription at url(" + requrl + ") with body(" + str(data) + ")")
-            response = requests.post(url=requrl, data=data.encode("utf-8"), headers=headers, timeout=(5, 10))
+            logging.debug(
+                "Doing a callback on subscription at url("
+                + requrl
+                + ") with body("
+                + str(data)
+                + ")"
+            )
+            response = requests.post(
+                url=requrl, data=data.encode("utf-8"), headers=headers, timeout=(5, 10)
+            )
         except Exception:
             logging.debug("Peer did not respond to callback on url(" + requrl + ")")
             self.last_response_code = 0
-            self.last_response_message = "No response from peer for subscription callback"
+            self.last_response_message = (
+                "No response from peer for subscription callback"
+            )
             return
         self.last_response_code = response.status_code
-        self.last_response_message = response.content.decode("utf-8", "ignore") if isinstance(response.content, bytes) else str(response.content)
+        self.last_response_message = (
+            response.content.decode("utf-8", "ignore")
+            if isinstance(response.content, bytes)
+            else str(response.content)
+        )
         if response.status_code == 204 and sub["granularity"] == "high":
             if not sub_obj:
                 logging.warning("About to clear diff without having subobj set")
@@ -1096,7 +1347,9 @@ class Actor:
             return
         # Get all subscriptions, both with the specific subtarget/resource and those
         # without
-        subs = self.get_subscriptions(target=target, subtarget=None, resource=None, callback=False)
+        subs = self.get_subscriptions(
+            target=target, subtarget=None, resource=None, callback=False
+        )
         if not subs:
             subs = []
         if subtarget and resource:
@@ -1127,7 +1380,13 @@ class Actor:
             )
         else:
             logging.debug(
-                "register_diffs() - blob(" + blob + "), target(" + target + "), # of subs(" + str(len(subs)) + ")"
+                "register_diffs() - blob("
+                + blob
+                + "), target("
+                + target
+                + "), # of subs("
+                + str(len(subs))
+                + ")"
             )
         for sub in subs:
             # Skip the ones without correct subtarget
@@ -1138,7 +1397,9 @@ class Actor:
             if resource and sub["resource"] and sub["resource"] != resource:
                 logging.debug("     - no match on resource, skipping...")
                 continue
-            sub_obj = self.get_subscription_obj(peerid=sub["peerid"], subid=sub["subscriptionid"])
+            sub_obj = self.get_subscription_obj(
+                peerid=sub["peerid"], subid=sub["subscriptionid"]
+            )
             if not sub_obj:
                 continue
             sub_obj_data = sub_obj.get()
@@ -1156,13 +1417,21 @@ class Actor:
                 + ")"
             )
             # Subscription with a resource, but this diff is on a higher level
-            if (not resource or not subtarget) and sub_obj_data["subtarget"] and sub_obj_data["resource"]:
+            if (
+                (not resource or not subtarget)
+                and sub_obj_data["subtarget"]
+                and sub_obj_data["resource"]
+            ):
                 # Create a json diff on the subpart that this subscription
                 # covers
                 try:
                     jsonblob = json.loads(blob)
                     if not subtarget:
-                        subblob = json.dumps(jsonblob[sub_obj_data["subtarget"]][sub_obj_data["resource"]])
+                        subblob = json.dumps(
+                            jsonblob[sub_obj_data["subtarget"]][
+                                sub_obj_data["resource"]
+                            ]
+                        )
                     else:
                         subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
                 except (TypeError, ValueError, KeyError):
@@ -1203,7 +1472,11 @@ class Actor:
                         upblob[resource] = blob
                 finblob = json.dumps(upblob)
                 logging.debug(
-                    "         - diff has resource(" + resource + "), subscription has not, adding diff(" + finblob + ")"
+                    "         - diff has resource("
+                    + resource
+                    + "), subscription has not, adding diff("
+                    + finblob
+                    + ")"
                 )
             # Subscriptions with subtarget, but this diff is on a higher level
             elif not subtarget and sub_obj_data["subtarget"]:
@@ -1245,7 +1518,9 @@ class Actor:
                 )
             else:
                 # The diff is correct for the subscription
-                logging.debug("         - exact target/subtarget match, adding diff(" + blob + ")")
+                logging.debug(
+                    "         - exact target/subtarget match, adding diff(" + blob + ")"
+                )
                 finblob = blob
             if sub_obj:
                 diff = sub_obj.add_diff(blob=finblob)
@@ -1258,7 +1533,11 @@ class Actor:
                     + "). Will not send callback."
                 )
             else:
-                if self.config and self.config.module and self.config.module["deferred"]:
+                if (
+                    self.config
+                    and self.config.module
+                    and self.config.module["deferred"]
+                ):
                     self.config.module["deferred"].defer(
                         self.callback_subscription,
                         peerid=sub["peerid"],

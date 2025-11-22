@@ -2,6 +2,25 @@
 CHANGELOG
 =========
 
+v3.4.2: Nov 22, 2025
+-------------------
+
+ADDED
+~~~~~
+
+- Github action to push new package to pypi on merging PRs to master branch
+
+FIXED
+~~~~~
+
+- Fixed wrong URL in OAUTH2 discovery URL that prevented detection of dynamic client registration
+
+CHANGED
+~~~~~~~
+
+- Reduced unnecessary error logging for access and authentication
+- Ruff linting and formatting and pyright type fixes
+
 v3.4.1: Nov 8, 2025
 -------------------
 

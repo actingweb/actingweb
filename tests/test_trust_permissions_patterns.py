@@ -66,9 +66,9 @@ class TestTrustPermissionsExcludedPatterns:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read", "write"],
-                    "excluded_patterns": ["memory_personal", "memory_travel"]
+                    "excluded_patterns": ["memory_personal", "memory_travel"],
                 },
-                created_by="test"
+                created_by="test",
             )
 
             # Store permissions
@@ -107,9 +107,9 @@ class TestTrustPermissionsExcludedPatterns:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["memory_private", "memory_confidential"]
+                    "excluded_patterns": ["memory_private", "memory_confidential"],
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(permissions)
 
@@ -146,9 +146,9 @@ class TestTrustPermissionsExcludedPatterns:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": []
+                    "excluded_patterns": [],
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(permissions)
 
@@ -189,9 +189,9 @@ class TestTrustPermissionsExcludedPatterns:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": []
+                    "excluded_patterns": [],
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(permissions)
 
@@ -224,14 +224,10 @@ class TestTrustPermissionsPatternMatching:
             "memory_travel",
             "memory_food",
             "memory_health",
-            "memory_work"
+            "memory_work",
         ]
 
-        non_matching_names = [
-            "settings_private",
-            "notes_general",
-            "user_profile"
-        ]
+        non_matching_names = ["settings_private", "notes_general", "user_profile"]
 
         # All memory_ names should match
         for name in matching_names:
@@ -239,7 +235,9 @@ class TestTrustPermissionsPatternMatching:
 
         # Non-memory names should not match
         for name in non_matching_names:
-            assert not fnmatch.fnmatch(name, pattern), f"{name} should not match {pattern}"
+            assert not fnmatch.fnmatch(name, pattern), (
+                f"{name} should not match {pattern}"
+            )
 
     def test_method_pattern_matching(self):
         """
@@ -253,18 +251,13 @@ class TestTrustPermissionsPatternMatching:
 
         pattern = "get_*"
 
-        matching_methods = [
-            "get_profile",
-            "get_notes",
-            "get_memory",
-            "get_settings"
-        ]
+        matching_methods = ["get_profile", "get_notes", "get_memory", "get_settings"]
 
         non_matching_methods = [
             "list_items",
             "search_memories",
             "update_profile",
-            "delete_note"
+            "delete_note",
         ]
 
         for method in matching_methods:
@@ -290,14 +283,10 @@ class TestTrustPermissionsPatternMatching:
             "notes_work",
             "public_profile",
             "memory_travel",
-            "notes_2025"
+            "notes_2025",
         ]
 
-        non_matching_names = [
-            "private_settings",
-            "user_config",
-            "auth_token"
-        ]
+        non_matching_names = ["private_settings", "user_config", "auth_token"]
 
         # Should match at least one pattern
         for name in matching_names:
@@ -313,7 +302,9 @@ class TestTrustPermissionsPatternMatching:
 class TestTrustPermissionsInheritance:
     """Test permission inheritance from trust types."""
 
-    def test_individual_override_replaces_trust_type_for_category(self, aw_app, permission_store):
+    def test_individual_override_replaces_trust_type_for_category(
+        self, aw_app, permission_store
+    ):
         """
         Test that individual permissions override trust type for specific categories.
 
@@ -334,12 +325,12 @@ class TestTrustPermissionsInheritance:
                 properties={  # Override properties only
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["memory_personal"]
+                    "excluded_patterns": ["memory_personal"],
                 },
                 methods=None,  # Use trust type defaults
                 actions=None,  # Use trust type defaults
-                tools=None,    # Use trust type defaults
-                created_by="test"
+                tools=None,  # Use trust type defaults
+                created_by="test",
             )
             permission_store.store_permissions(permissions)
 
@@ -399,9 +390,9 @@ class TestTrustPermissionsRetrieval:
                     properties={
                         "patterns": ["memory_*"],
                         "operations": ["read"],
-                        "excluded_patterns": [f"memory_private_{client.id[:8]}"]  # type: ignore[arg-type]
+                        "excluded_patterns": [f"memory_private_{client.id[:8]}"],  # type: ignore[arg-type]
                     },
-                    created_by="test"
+                    created_by="test",
                 )
                 permission_store.store_permissions(permissions)
 
@@ -449,10 +440,10 @@ class TestTrustPermissionsComplexScenarios:
                         "memory_food",
                         "memory_health",
                         "memory_work",
-                        "memory_notes"
-                    ]
+                        "memory_notes",
+                    ],
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(permissions)
 
@@ -492,9 +483,9 @@ class TestTrustPermissionsComplexScenarios:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read", "write"],
-                    "excluded_patterns": []  # No exclusions = full access
+                    "excluded_patterns": [],  # No exclusions = full access
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(permissions)
 
@@ -528,9 +519,13 @@ class TestTrustPermissionsComplexScenarios:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["memory_travel", "memory_food", "memory_health"]
+                    "excluded_patterns": [
+                        "memory_travel",
+                        "memory_food",
+                        "memory_health",
+                    ],
                 },
-                created_by="test"
+                created_by="test",
             )
 
             # Claude: All memory types
@@ -541,9 +536,9 @@ class TestTrustPermissionsComplexScenarios:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read", "write"],
-                    "excluded_patterns": []
+                    "excluded_patterns": [],
                 },
-                created_by="test"
+                created_by="test",
             )
 
             # Cursor: Only work-related
@@ -554,9 +549,14 @@ class TestTrustPermissionsComplexScenarios:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["memory_personal", "memory_travel", "memory_food", "memory_health"]
+                    "excluded_patterns": [
+                        "memory_personal",
+                        "memory_travel",
+                        "memory_food",
+                        "memory_health",
+                    ],
                 },
-                created_by="test"
+                created_by="test",
             )
 
             # Store all permissions

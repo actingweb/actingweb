@@ -6,18 +6,22 @@ from actingweb.handlers import base_handler
 
 
 class CallbacksHandler(base_handler.BaseHandler):
-
     def get(self, actor_id, name):
         """Handles GETs to callbacks"""
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
-        auth_result = self._authenticate_dual_context(actor_id, "callbacks", "callbacks", name, add_response=False)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "callbacks", "callbacks", name, add_response=False
+        )
         if (
             not auth_result.actor
             or not auth_result.auth_obj
-            or (auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401)
+            or (
+                auth_result.auth_obj.response["code"] != 200
+                and auth_result.auth_obj.response["code"] != 401
+            )
         ):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
@@ -29,7 +33,9 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                hook_result = self.hooks.execute_callback_hooks(name, actor_interface, {"method": "GET"})
+                hook_result = self.hooks.execute_callback_hooks(
+                    name, actor_interface, {"method": "GET"}
+                )
                 result = bool(hook_result) if hook_result is not None else False
 
         if not result:
@@ -41,7 +47,9 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def delete(self, actor_id, name):
         """Handles deletion of callbacks, like subscriptions"""
-        auth_result = self._authenticate_dual_context(actor_id, "callbacks", "callbacks", name)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "callbacks", "callbacks", name
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -66,7 +74,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                 return
             self.response.set_status(404, "Not found")
             return
-        if not check.check_authorisation(path="callbacks", subpath=name, method="DELETE"):
+        if not check.check_authorisation(
+            path="callbacks", subpath=name, method="DELETE"
+        ):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -75,7 +85,9 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                hook_result = self.hooks.execute_callback_hooks(name, actor_interface, {"method": "DELETE"})
+                hook_result = self.hooks.execute_callback_hooks(
+                    name, actor_interface, {"method": "DELETE"}
+                )
                 result = bool(hook_result) if hook_result is not None else False
 
         if not result:
@@ -83,7 +95,9 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def post(self, actor_id, name):
         """Handles POST callbacks"""
-        auth_result = self._authenticate_dual_context(actor_id, "callbacks", "callbacks", name, add_response=False)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "callbacks", "callbacks", name, add_response=False
+        )
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Allow unauthenticated requests to /callbacks/subscriptions, so
@@ -92,7 +106,11 @@ class CallbacksHandler(base_handler.BaseHandler):
         if path[0] == "subscriptions":
             peerid = path[1]
             subid = path[2]
-            sub = myself.get_subscription(peerid=peerid, subid=subid, callback=True) if myself else None
+            sub = (
+                myself.get_subscription(peerid=peerid, subid=subid, callback=True)
+                if myself
+                else None
+            )
             if sub and len(sub) > 0:
                 logging.debug("Found subscription (" + str(sub) + ")")
                 if not check or not check.check_authorisation(
@@ -124,7 +142,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                     if actor_interface:
                         hook_data = params.copy()
                         hook_data.update({"subscription": sub, "peerid": peerid})
-                        hook_result = self.hooks.execute_callback_hooks("subscription", actor_interface, hook_data)
+                        hook_result = self.hooks.execute_callback_hooks(
+                            "subscription", actor_interface, hook_data
+                        )
                         result = bool(hook_result) if hook_result is not None else False
 
                 if result:
@@ -134,7 +154,11 @@ class CallbacksHandler(base_handler.BaseHandler):
                 return
             self.response.set_status(404, "Not found")
             return
-        if not myself or not check or (check.response["code"] != 200 and check.response["code"] != 401):
+        if (
+            not myself
+            or not check
+            or (check.response["code"] != 200 and check.response["code"] != 401)
+        ):
             auth.add_auth_response(appreq=self, auth_obj=check)
             return
         if not auth_result.authorize("POST", "callbacks", name):
@@ -158,7 +182,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                     hook_data = {}
 
                 hook_data["method"] = "POST"
-                hook_result = self.hooks.execute_callback_hooks(name, actor_interface, hook_data)
+                hook_result = self.hooks.execute_callback_hooks(
+                    name, actor_interface, hook_data
+                )
                 result = bool(hook_result) if hook_result is not None else False
 
         if not result:

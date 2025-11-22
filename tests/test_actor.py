@@ -217,6 +217,7 @@ class TestActorCreatorLookup:
         mock_config.DbActor.DbActor.return_value = mock_db_actor
 
         with patch.object(Actor, "get", autospec=True) as mock_get:
+
             def fake_get(self, actor_id=None):
                 if actor_id:
                     self.id = actor_id
@@ -319,5 +320,7 @@ class TestActorModernization:
 
         # Test f-string formatting (used in modernized Actor code)
         result = f"Getting peer info at url({url}) for actor({actor_id})"
-        expected = "Getting peer info at url(https://example.com) for actor(test-actor-123)"
+        expected = (
+            "Getting peer info at url(https://example.com) for actor(test-actor-123)"
+        )
         assert result == expected

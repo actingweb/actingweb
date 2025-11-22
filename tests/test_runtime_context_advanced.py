@@ -64,7 +64,7 @@ class TestRuntimeContextMCP:
             client_id="mcp_chatgpt_123",
             trust_relationship=None,  # Would be trust object in real usage
             peer_id="oauth2_client:chatgpt@openai.com:mcp_chatgpt_123",
-            token_data={"scope": "mcp"}
+            token_data={"scope": "mcp"},
         )
 
         # Get MCP context
@@ -84,9 +84,7 @@ class TestRuntimeContextMCP:
         runtime_context = RuntimeContext(core_actor)
 
         runtime_context.set_mcp_context(
-            client_id="mcp_test_123",
-            trust_relationship=None,
-            peer_id="test_peer"
+            client_id="mcp_test_123", trust_relationship=None, peer_id="test_peer"
         )
 
         request_type = runtime_context.get_request_type()
@@ -115,7 +113,7 @@ class TestRuntimeContextMCP:
         runtime_context.set_mcp_context(
             client_id="mcp_chatgpt_123",
             trust_relationship=mock_trust,
-            peer_id="test_peer"
+            peer_id="test_peer",
         )
 
         # Get client info
@@ -141,7 +139,7 @@ class TestRuntimeContextOAuth2:
         runtime_context.set_oauth2_context(
             client_id="oauth_client_123",
             user_email="user@example.com",
-            scopes=["read", "write"]
+            scopes=["read", "write"],
         )
 
         oauth2_context = runtime_context.get_oauth2_context()
@@ -161,9 +159,7 @@ class TestRuntimeContextOAuth2:
         runtime_context = RuntimeContext(core_actor)
 
         runtime_context.set_oauth2_context(
-            client_id="oauth_test",
-            user_email="test@example.com",
-            scopes=["read"]
+            client_id="oauth_test", user_email="test@example.com", scopes=["read"]
         )
 
         request_type = runtime_context.get_request_type()
@@ -187,7 +183,7 @@ class TestRuntimeContextWeb:
             session_id="sess_abc123",
             user_agent="Mozilla/5.0",
             ip_address="192.168.1.1",
-            authenticated_user="user@example.com"
+            authenticated_user="user@example.com",
         )
 
         web_context = runtime_context.get_web_context()
@@ -205,10 +201,7 @@ class TestRuntimeContextWeb:
         core_actor = CoreActor(test_actor.id, config=config)
         runtime_context = RuntimeContext(core_actor)
 
-        runtime_context.set_web_context(
-            session_id="test_session",
-            user_agent="Chrome"
-        )
+        runtime_context.set_web_context(session_id="test_session", user_agent="Chrome")
 
         request_type = runtime_context.get_request_type()
         assert request_type == "web"
@@ -229,9 +222,7 @@ class TestRuntimeContextCleanup:
 
         # Set MCP context
         runtime_context.set_mcp_context(
-            client_id="mcp_test",
-            trust_relationship=None,
-            peer_id="test_peer"
+            client_id="mcp_test", trust_relationship=None, peer_id="test_peer"
         )
 
         # Verify it's set
@@ -262,9 +253,7 @@ class TestRuntimeContextCleanup:
             # Set MCP context for actor1
             runtime_context1 = RuntimeContext(core_actor1)
             runtime_context1.set_mcp_context(
-                client_id="mcp_actor1",
-                trust_relationship=None,
-                peer_id="actor1_peer"
+                client_id="mcp_actor1", trust_relationship=None, peer_id="actor1_peer"
             )
 
             # Set OAuth2 context for actor2
@@ -272,7 +261,7 @@ class TestRuntimeContextCleanup:
             runtime_context2.set_oauth2_context(
                 client_id="oauth_actor2",
                 user_email="actor2@example.com",
-                scopes=["read"]
+                scopes=["read"],
             )
 
             # Verify isolation
@@ -309,9 +298,7 @@ class TestRuntimeContextClientDetection:
             client_version = "GPT-4"
 
         runtime_context.set_mcp_context(
-            client_id="mcp_chatgpt",
-            trust_relationship=MockTrust(),
-            peer_id="test_peer"
+            client_id="mcp_chatgpt", trust_relationship=MockTrust(), peer_id="test_peer"
         )
 
         client_info = get_client_info_from_context(core_actor)
@@ -333,9 +320,7 @@ class TestRuntimeContextClientDetection:
             client_version = "3.5"
 
         runtime_context.set_mcp_context(
-            client_id="mcp_claude",
-            trust_relationship=MockTrust(),
-            peer_id="test_peer"
+            client_id="mcp_claude", trust_relationship=MockTrust(), peer_id="test_peer"
         )
 
         client_info = get_client_info_from_context(core_actor)
@@ -373,7 +358,7 @@ class TestRuntimeContextCustomContext:
         custom_data = {
             "service_id": "custom_service_123",
             "api_version": "v2",
-            "features": ["advanced_search"]
+            "features": ["advanced_search"],
         }
         runtime_context.set_custom_context("my_service", custom_data)
 

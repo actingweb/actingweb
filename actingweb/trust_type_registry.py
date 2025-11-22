@@ -47,7 +47,7 @@ class TrustType:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'TrustType':
+    def from_dict(cls, data: dict[str, Any]) -> "TrustType":
         """Create from dictionary loaded from storage."""
         return cls(**data)
 
@@ -84,7 +84,7 @@ class TrustTypeRegistry:
             return attribute.Attributes(
                 actor_id=ACTINGWEB_SYSTEM_ACTOR,
                 bucket=TRUST_TYPES_BUCKET,
-                config=self.config
+                config=self.config,
             )
         except Exception as e:
             logger.error(f"Error accessing trust types bucket: {e}")
@@ -93,21 +93,35 @@ class TrustTypeRegistry:
     # Backward-compatibility helpers for tests that expect a system actor
     def _get_system_actor(self) -> Any | None:
         try:
-            if self._system_actor is not None and getattr(self._system_actor, 'id', None) == ACTINGWEB_SYSTEM_ACTOR:
+            if (
+                self._system_actor is not None
+                and getattr(self._system_actor, "id", None) == ACTINGWEB_SYSTEM_ACTOR
+            ):
                 return self._system_actor
             sys_actor = actor_module.Actor(ACTINGWEB_SYSTEM_ACTOR, config=self.config)
-            if not getattr(sys_actor, 'id', None):
+            if not getattr(sys_actor, "id", None):
                 # Create if missing
-                base_root = getattr(self.config, 'root', '') or 'http://localhost/'
+                base_root = getattr(self.config, "root", "") or "http://localhost/"
                 url = f"{base_root}{ACTINGWEB_SYSTEM_ACTOR}"
-                passphrase = self.config.new_token() if hasattr(self.config, 'new_token') else 'system-pass'
+                passphrase = (
+                    self.config.new_token()
+                    if hasattr(self.config, "new_token")
+                    else "system-pass"
+                )
                 try:
-                    created = sys_actor.create(url=url, creator="system", passphrase=passphrase, actor_id=ACTINGWEB_SYSTEM_ACTOR)
+                    created = sys_actor.create(
+                        url=url,
+                        creator="system",
+                        passphrase=passphrase,
+                        actor_id=ACTINGWEB_SYSTEM_ACTOR,
+                    )
                     if not created:
                         return None
                 except ClientError as e:
                     if e.response["Error"]["Code"] == "ResourceInUseException":
-                        logger.debug("System actor table already exists; another worker created it")
+                        logger.debug(
+                            "System actor table already exists; another worker created it"
+                        )
                         # Continue with the actor instance even if creation failed due to existing table
                     else:
                         raise  # Re-raise genuine errors
@@ -230,7 +244,10 @@ def initialize_registry(config: config_class.Config) -> None:
         logger.info("Initializing trust type registry...")
         _registry = TrustTypeRegistry(config)
         _register_default_types(_registry)
-        logger.info(f"Trust type registry initialized with {len(_registry.list_types())} types")
+        logger.info(
+            f"Trust type registry initialized with {len(_registry.list_types())} types"
+        )
+
 
 def get_registry(config: config_class.Config) -> TrustTypeRegistry:
     """Get the singleton trust type registry, initializing lazily if needed."""
@@ -253,26 +270,17 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         base_permissions={
             "properties": {
                 "patterns": ["public/*", "shared/*"],
-                "operations": ["read"]
+                "operations": ["read"],
             },
             "methods": {
                 "allowed": ["get_*", "list_*", "export_*"],
-                "denied": ["delete_*", "admin_*"]
+                "denied": ["delete_*", "admin_*"],
             },
-            "actions": {
-                "allowed": [],
-                "denied": ["*"]
-            },
-            "tools": {
-                "allowed": [],
-                "denied": ["*"]
-            },
-            "resources": {
-                "patterns": ["public/*"],
-                "operations": ["read"]
-            }
+            "actions": {"allowed": [], "denied": ["*"]},
+            "tools": {"allowed": [], "denied": ["*"]},
+            "resources": {"patterns": ["public/*"], "operations": ["read"]},
         },
-        oauth_scope="actingweb.viewer"
+        oauth_scope="actingweb.viewer",
     )
 
     # Friend - Standard trusted relationship
@@ -284,27 +292,24 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
             "properties": {
                 "patterns": ["*"],
                 "operations": ["read", "write"],
-                "excluded_patterns": ["private/*", "security/*", "_internal/*"]
+                "excluded_patterns": ["private/*", "security/*", "_internal/*"],
             },
             "methods": {
                 "allowed": ["*"],
-                "denied": ["delete_*", "admin_*", "system_*"]
+                "denied": ["delete_*", "admin_*", "system_*"],
             },
             "actions": {
                 "allowed": ["*"],
-                "denied": ["delete_*", "admin_*", "system_*"]
+                "denied": ["delete_*", "admin_*", "system_*"],
             },
-            "tools": {
-                "allowed": ["*"],
-                "denied": ["admin_*", "system_*"]
-            },
+            "tools": {"allowed": ["*"], "denied": ["admin_*", "system_*"]},
             "resources": {
                 "patterns": ["*"],
                 "operations": ["read", "write"],
-                "excluded_patterns": ["private/*", "security/*"]
-            }
+                "excluded_patterns": ["private/*", "security/*"],
+            },
         },
-        oauth_scope="actingweb.friend"
+        oauth_scope="actingweb.friend",
     )
 
     # Partner - Enhanced access for business partners
@@ -316,27 +321,18 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
             "properties": {
                 "patterns": ["*"],
                 "operations": ["read", "write"],
-                "excluded_patterns": ["_internal/*"]
+                "excluded_patterns": ["_internal/*"],
             },
-            "methods": {
-                "allowed": ["*"],
-                "denied": ["admin_*", "system_*"]
-            },
-            "actions": {
-                "allowed": ["*"],
-                "denied": ["admin_*", "system_*"]
-            },
-            "tools": {
-                "allowed": ["*"],
-                "denied": ["admin_*", "system_*"]
-            },
+            "methods": {"allowed": ["*"], "denied": ["admin_*", "system_*"]},
+            "actions": {"allowed": ["*"], "denied": ["admin_*", "system_*"]},
+            "tools": {"allowed": ["*"], "denied": ["admin_*", "system_*"]},
             "resources": {
                 "patterns": ["*"],
                 "operations": ["read", "write"],
-                "excluded_patterns": ["security/*"]
-            }
+                "excluded_patterns": ["security/*"],
+            },
         },
-        oauth_scope="actingweb.partner"
+        oauth_scope="actingweb.partner",
     )
 
     # Admin - Full access
@@ -347,23 +343,14 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         base_permissions={
             "properties": {
                 "patterns": ["*"],
-                "operations": ["read", "write", "delete"]
+                "operations": ["read", "write", "delete"],
             },
-            "methods": {
-                "allowed": ["*"]
-            },
-            "actions": {
-                "allowed": ["*"]
-            },
-            "tools": {
-                "allowed": ["*"]
-            },
-            "resources": {
-                "patterns": ["*"],
-                "operations": ["read", "write", "delete"]
-            }
+            "methods": {"allowed": ["*"]},
+            "actions": {"allowed": ["*"]},
+            "tools": {"allowed": ["*"]},
+            "resources": {"patterns": ["*"], "operations": ["read", "write", "delete"]},
         },
-        oauth_scope="actingweb.admin"
+        oauth_scope="actingweb.admin",
     )
 
     # MCP Client - AI assistant access with secure defaults
@@ -375,33 +362,67 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
             "properties": {
                 "patterns": ["public/*", "shared/*", "notes/*", "profile/*"],
                 "operations": ["read"],
-                "excluded_patterns": ["private/*", "security/*", "_internal/*", "oauth_*", "auth_*"]
+                "excluded_patterns": [
+                    "private/*",
+                    "security/*",
+                    "_internal/*",
+                    "oauth_*",
+                    "auth_*",
+                ],
             },
             "methods": {
-                "allowed": ["get_*", "list_*", "search_*", "export_*"],  # Safe read-only methods
-                "denied": ["delete_*", "admin_*", "system_*", "oauth_*", "auth_*"]
+                "allowed": [
+                    "get_*",
+                    "list_*",
+                    "search_*",
+                    "export_*",
+                ],  # Safe read-only methods
+                "denied": ["delete_*", "admin_*", "system_*", "oauth_*", "auth_*"],
             },
             "actions": {
                 "allowed": ["search", "fetch", "export"],  # Safe informational actions
-                "denied": ["delete_*", "admin_*", "system_*", "oauth_*", "auth_*"]
+                "denied": ["delete_*", "admin_*", "system_*", "oauth_*", "auth_*"],
             },
             "tools": {
                 # Allow common MCP tools including a generic 'list' tool name
                 # Some MCP clients (e.g., mcp_power) use 'list' without suffix
-                "allowed": ["search", "fetch", "create_note", "list", "get_*", "list_*"],  # Common MCP tools
-                "denied": ["admin_*", "system_*", "delete_*", "oauth_*", "auth_*"]
+                "allowed": [
+                    "search",
+                    "fetch",
+                    "create_note",
+                    "list",
+                    "get_*",
+                    "list_*",
+                ],  # Common MCP tools
+                "denied": ["admin_*", "system_*", "delete_*", "oauth_*", "auth_*"],
             },
             "resources": {
-                "patterns": ["public/*", "shared/*", "notes://*", "usage://*", "actingweb://properties/all"],
+                "patterns": [
+                    "public/*",
+                    "shared/*",
+                    "notes://*",
+                    "usage://*",
+                    "actingweb://properties/all",
+                ],
                 "operations": ["read"],
-                "excluded_patterns": ["private/*", "security/*", "oauth://*", "auth://*"]
+                "excluded_patterns": [
+                    "private/*",
+                    "security/*",
+                    "oauth://*",
+                    "auth://*",
+                ],
             },
             "prompts": {
-                "allowed": ["analyze_*", "create_*", "summarize_*", "generate_*"]  # AI-specific prompts
-            }
+                "allowed": [
+                    "analyze_*",
+                    "create_*",
+                    "summarize_*",
+                    "generate_*",
+                ]  # AI-specific prompts
+            },
         },
         allow_user_override=True,  # Users should customize MCP permissions
-        oauth_scope="actingweb.mcp"
+        oauth_scope="actingweb.mcp",
     )
 
     # Associate - Traditional default ActingWeb relationship
@@ -410,28 +431,16 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         display_name="Associate",
         description="Basic ActingWeb peer relationship with limited access",
         base_permissions={
-            "properties": {
-                "patterns": ["public/*"],
-                "operations": ["read"]
-            },
+            "properties": {"patterns": ["public/*"], "operations": ["read"]},
             "methods": {
                 "allowed": ["get_*", "ping"],
-                "denied": ["delete_*", "admin_*", "system_*"]
+                "denied": ["delete_*", "admin_*", "system_*"],
             },
-            "actions": {
-                "allowed": [],
-                "denied": ["*"]
-            },
-            "tools": {
-                "allowed": [],
-                "denied": ["*"]
-            },
-            "resources": {
-                "patterns": ["public/*"],
-                "operations": ["read"]
-            }
+            "actions": {"allowed": [], "denied": ["*"]},
+            "tools": {"allowed": [], "denied": ["*"]},
+            "resources": {"patterns": ["public/*"], "operations": ["read"]},
         },
-        oauth_scope="actingweb.associate"
+        oauth_scope="actingweb.associate",
     )
 
     # Register all default types (maintaining ActingWeb compatibility)
@@ -441,4 +450,6 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
         try:
             registry.register_type(trust_type)
         except Exception as e:
-            logger.error(f"Failed to register default trust type {trust_type.name}: {e}")
+            logger.error(
+                f"Failed to register default trust type {trust_type.name}: {e}"
+            )

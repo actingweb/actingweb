@@ -65,7 +65,10 @@ def test_handle_callback_stores_tokens(service_config, actor_interface, aw_confi
         "access_token": "token",
         "refresh_token": "refresh",
     }
-    with patch("actingweb.interface.services.service_client.OAuth2Authenticator", return_value=authenticator):
+    with patch(
+        "actingweb.interface.services.service_client.OAuth2Authenticator",
+        return_value=authenticator,
+    ):
         client = ServiceClient(service_config, actor_interface, aw_config)
         success = client.handle_callback("code", "state")
 
@@ -80,7 +83,10 @@ def test_make_request_refreshes_token(service_config, actor_interface, aw_config
         "access_token": "new-token",
         "refresh_token": "new-refresh",
     }
-    with patch("actingweb.interface.services.service_client.OAuth2Authenticator", return_value=authenticator):
+    with patch(
+        "actingweb.interface.services.service_client.OAuth2Authenticator",
+        return_value=authenticator,
+    ):
         client = ServiceClient(service_config, actor_interface, aw_config)
         client._access_token = "expired"
         client._refresh_token = "refresh"
@@ -106,7 +112,10 @@ def test_make_request_handles_failure(service_config, actor_interface, aw_config
         client._access_token = "token"
 
         error_response = _make_response(status_code=500, text="error")
-        with patch("actingweb.interface.services.service_client.requests.request", return_value=error_response):
+        with patch(
+            "actingweb.interface.services.service_client.requests.request",
+            return_value=error_response,
+        ):
             result = client.get("/resource")
 
     assert result is None
@@ -118,7 +127,10 @@ def test_revoke_tokens(service_config, actor_interface, aw_config):
         client._access_token = "token"
         client._refresh_token = "refresh"
 
-    with patch("actingweb.interface.services.service_client.requests.post", return_value=_make_response()):
+    with patch(
+        "actingweb.interface.services.service_client.requests.post",
+        return_value=_make_response(),
+    ):
         success = client.revoke_tokens()
 
     assert success

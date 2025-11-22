@@ -7,7 +7,6 @@ from typing import Any
 
 
 class Config:
-
     def __init__(self, **kwargs: Any) -> None:
         #########
         # Basic settings for this app
@@ -192,16 +191,24 @@ class Config:
 
         # Base supported options
         base_supported = [
-            "www", "oauth", "callbacks", "trust", "onewaytrust",
-            "subscriptions", "actions", "resources", "methods",
-            "sessions", "nestedproperties"
+            "www",
+            "oauth",
+            "callbacks",
+            "trust",
+            "onewaytrust",
+            "subscriptions",
+            "actions",
+            "resources",
+            "methods",
+            "sessions",
+            "nestedproperties",
         ]
 
         # Add optional features if available
         if self._check_trust_permissions_available():
             base_supported.append("trustpermissions")
 
-        if kwargs.get('mcp', False):
+        if kwargs.get("mcp", False):
             base_supported.append("mcp")
 
         self.aw_supported = ",".join(base_supported)
@@ -234,6 +241,7 @@ class Config:
                 trust_permissions,  # pyright: ignore[reportUnusedImport]
                 trust_type_registry,  # pyright: ignore[reportUnusedImport]
             )
+
             # If all imports succeed, the system is available
             return True
         except ImportError:

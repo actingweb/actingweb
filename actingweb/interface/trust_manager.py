@@ -155,7 +155,9 @@ class TrustManager:
     def relationships(self) -> list[TrustRelationship]:
         """Get all trust relationships."""
         relationships = self._core_actor.get_trust_relationships()
-        return [TrustRelationship(rel) for rel in relationships if isinstance(rel, dict)]
+        return [
+            TrustRelationship(rel) for rel in relationships if isinstance(rel, dict)
+        ]
 
     def find_relationship(
         self, peer_id: str = "", relationship: str = "", trust_type: str = ""
@@ -176,11 +178,17 @@ class TrustManager:
         return None
 
     def create_relationship(
-        self, peer_url: str, relationship: str = "friend", secret: str = "", description: str = ""
+        self,
+        peer_url: str,
+        relationship: str = "friend",
+        secret: str = "",
+        description: str = "",
     ) -> TrustRelationship | None:
         """Create a new trust relationship with another actor."""
         if not secret:
-            secret = self._core_actor.config.new_token() if self._core_actor.config else ""
+            secret = (
+                self._core_actor.config.new_token() if self._core_actor.config else ""
+            )
 
         rel_data = self._core_actor.create_reciprocal_trust(
             url=peer_url, secret=secret, desc=description, relationship=relationship
@@ -203,7 +211,9 @@ class TrustManager:
 
     def delete_relationship(self, peer_id: str) -> bool:
         """Delete a trust relationship."""
-        result = self._core_actor.delete_reciprocal_trust(peerid=peer_id, delete_peer=True)
+        result = self._core_actor.delete_reciprocal_trust(
+            peerid=peer_id, delete_peer=True
+        )
         return bool(result)
 
     def delete_all_relationships(self) -> bool:
@@ -294,7 +304,9 @@ class TrustManager:
                     if tt_fb:
                         trust_type = fallback
         except RuntimeError:
-            logging.debug("Trust type registry not initialized - using provided trust_type as-is")
+            logging.debug(
+                "Trust type registry not initialized - using provided trust_type as-is"
+            )
             pass
         except Exception as e:
             logging.debug(f"Error accessing trust type registry: {e}")
@@ -316,7 +328,11 @@ class TrustManager:
             # For MCP clients, include client_id to ensure each client gets its own trust relationship
             # Format: "oauth2:email_at_example_dot_com:client_123abc"
             normalized_email = email.replace("@", "_at_").replace(".", "_dot_")
-            normalized_client = client_id.replace("@", "_at_").replace(".", "_dot_").replace(":", "_colon_")
+            normalized_client = (
+                client_id.replace("@", "_at_")
+                .replace(".", "_dot_")
+                .replace(":", "_colon_")
+            )
             peer_id = f"{source}:{normalized_email}:{normalized_client}"
         else:
             # Legacy format for backward compatibility
@@ -374,7 +390,9 @@ class TrustManager:
                             modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
 
                     db.modify(**modify_kwargs)
-                    logging.debug(f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}")
+                    logging.debug(
+                        f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
+                    )
             except Exception:
                 pass
         else:
@@ -383,14 +401,20 @@ class TrustManager:
                 from ..db_dynamodb.db_trust import DbTrust
 
                 db = DbTrust()
-                secret = self._core_actor.config.new_token() if self._core_actor.config else ""
+                secret = (
+                    self._core_actor.config.new_token()
+                    if self._core_actor.config
+                    else ""
+                )
                 baseuri = ""
                 # For OAuth2 clients, don't set baseuri as they don't have ActingWeb endpoints
                 # Only set baseuri for regular actor-to-actor trust relationships
                 if source != "oauth2_client":
                     try:
                         if self._core_actor.config and self._core_actor.id:
-                            baseuri = f"{self._core_actor.config.root}{self._core_actor.id}"
+                            baseuri = (
+                                f"{self._core_actor.config.root}{self._core_actor.id}"
+                            )
                     except Exception:
                         baseuri = ""
 
@@ -398,13 +422,15 @@ class TrustManager:
                 if source == "oauth2_client":
                     # OAuth2 client trust: actor approves client creation, but client must authenticate to be peer_approved
                     local_approved = str(True)  # Actor approves the client
-                    remote_approved = False     # Client not approved until successful authentication
+                    remote_approved = (
+                        False  # Client not approved until successful authentication
+                    )
                     desc_name = client_name or email
                     desc = f"OAuth2 client: {desc_name}"
                 else:
                     # Regular OAuth2 user trust: both sides approved after successful OAuth flow
                     local_approved = str(True)  # Actor approves the user
-                    remote_approved = True      # User already authenticated via OAuth
+                    remote_approved = True  # User already authenticated via OAuth
                     desc = f"OAuth trust for {email}"
 
                 # Build client metadata dict (only include non-None values)
@@ -444,7 +470,9 @@ class TrustManager:
                         f"Successfully created OAuth trust relationship: peer_id={peer_id}, trust_type={trust_type}, source={source}"
                     )
                 else:
-                    logging.error(f"Failed to create OAuth trust relationship in database: peer_id={peer_id}")
+                    logging.error(
+                        f"Failed to create OAuth trust relationship in database: peer_id={peer_id}"
+                    )
                     return False
             except Exception as e:
                 logging.error(f"Exception creating OAuth trust relationship: {e}")

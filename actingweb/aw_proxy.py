@@ -45,7 +45,11 @@ class AwProxy:
                     self.trust = None
 
     def _bearer_headers(self):
-        return {"Authorization": "Bearer " + self.trust["secret"]} if self.trust and self.trust.get("secret") else {}
+        return (
+            {"Authorization": "Bearer " + self.trust["secret"]}
+            if self.trust and self.trust.get("secret")
+            else {}
+        )
 
     def _basic_headers(self):
         if not self.peer_passphrase:
@@ -66,9 +70,19 @@ class AwProxy:
                     return requests.delete(url=url, headers=bh, timeout=(5, 10))
             else:
                 if method == "POST":
-                    return requests.post(url=url, data=data, headers={**bh, "Content-Type": "application/json"}, timeout=(5, 10))
+                    return requests.post(
+                        url=url,
+                        data=data,
+                        headers={**bh, "Content-Type": "application/json"},
+                        timeout=(5, 10),
+                    )
                 if method == "PUT":
-                    return requests.put(url=url, data=data, headers={**bh, "Content-Type": "application/json"}, timeout=(5, 10))
+                    return requests.put(
+                        url=url,
+                        data=data,
+                        headers={**bh, "Content-Type": "application/json"},
+                        timeout=(5, 10),
+                    )
         except Exception:
             return None
         return None
@@ -181,7 +195,10 @@ class AwProxy:
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
         data = json.dumps(params)
-        headers = {"Authorization": "Bearer " + self.trust["secret"], "Content-Type": "application/json"}
+        headers = {
+            "Authorization": "Bearer " + self.trust["secret"],
+            "Content-Type": "application/json",
+        }
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logging.debug(
             "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
@@ -231,9 +248,7 @@ class AwProxy:
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logging.debug("Deleting trust peer resource at (" + url + ")")
         try:
-            response = requests.delete(
-                url=url, headers=headers, timeout=(5, 10)
-            )
+            response = requests.delete(url=url, headers=headers, timeout=(5, 10))
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("DELETE", url)
                 if retry is not None:

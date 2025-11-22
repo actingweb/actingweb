@@ -3,7 +3,9 @@ from actingweb.oauth_state import decode_state, encode_state, validate_expected_
 
 def test_encode_decode_roundtrip_minimal():
     state = encode_state(csrf="abc123")
-    csrf, redirect, actor_id, trust_type, expected_email, user_agent = decode_state(state)
+    csrf, redirect, actor_id, trust_type, expected_email, user_agent = decode_state(
+        state
+    )
     assert csrf == "abc123"
     assert redirect == ""
     assert actor_id == ""
@@ -21,7 +23,9 @@ def test_encode_decode_with_all_fields_and_extra():
         expected_email="user@example.com",
         extra={"foo": "bar"},
     )
-    csrf, redirect, actor_id, trust_type, expected_email, user_agent = decode_state(state)
+    csrf, redirect, actor_id, trust_type, expected_email, user_agent = decode_state(
+        state
+    )
     assert csrf == "csrf-token"
     assert redirect == "https://example.com/return"
     assert actor_id == "actor_1"
@@ -43,4 +47,3 @@ def test_validate_expected_email_matches():
 def test_validate_expected_email_rejects_mismatch():
     state = encode_state(csrf="c", expected_email="user@example.com")
     assert validate_expected_email(state, "other@example.com") is False
-

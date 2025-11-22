@@ -63,14 +63,24 @@ class HookRegistry:
     def __init__(self) -> None:
         self._property_hooks: dict[str, dict[str, list[Callable[..., Any]]]] = {}
         self._callback_hooks: dict[str, list[Callable[..., Any]]] = {}
-        self._app_callback_hooks: dict[str, list[Callable[..., Any]]] = {}  # New: for application-level callbacks
+        self._app_callback_hooks: dict[
+            str, list[Callable[..., Any]]
+        ] = {}  # New: for application-level callbacks
         self._subscription_hooks: list[Callable[..., Any]] = []
         self._lifecycle_hooks: dict[str, list[Callable[..., Any]]] = {}
-        self._method_hooks: dict[str, list[Callable[..., Any]]] = {}  # New: for method hooks
-        self._action_hooks: dict[str, list[Callable[..., Any]]] = {}  # New: for action hooks
+        self._method_hooks: dict[
+            str, list[Callable[..., Any]]
+        ] = {}  # New: for method hooks
+        self._action_hooks: dict[
+            str, list[Callable[..., Any]]
+        ] = {}  # New: for action hooks
 
     def _check_hook_permission(
-        self, hook_type: str, resource_name: str, actor: Any, auth_context: dict[str, Any] | None = None
+        self,
+        hook_type: str,
+        resource_name: str,
+        actor: Any,
+        auth_context: dict[str, Any] | None = None,
     ) -> bool:
         """
         Check if hook execution is permitted based on unified access control.
@@ -112,19 +122,32 @@ class HookRegistry:
             if PERMISSION_SYSTEM_AVAILABLE:
                 evaluator = get_permission_evaluator(config)  # type: ignore
             else:
-                logging.warning("Permission system is not available due to failed import.")
+                logging.warning(
+                    "Permission system is not available due to failed import."
+                )
                 return True
 
             if hook_type == "property":
                 hook_operation = auth_context.get("operation", "get")
                 # Map hook operations to permission operations
-                operation_map = {"get": "read", "put": "write", "post": "write", "delete": "delete"}
+                operation_map = {
+                    "get": "read",
+                    "put": "write",
+                    "post": "write",
+                    "delete": "delete",
+                }
                 permission_operation = operation_map.get(hook_operation, "read")
-                result = evaluator.evaluate_property_access(actor_id, peer_id, resource_name, permission_operation)
+                result = evaluator.evaluate_property_access(
+                    actor_id, peer_id, resource_name, permission_operation
+                )
             elif hook_type == "method":
-                result = evaluator.evaluate_method_access(actor_id, peer_id, resource_name)
+                result = evaluator.evaluate_method_access(
+                    actor_id, peer_id, resource_name
+                )
             elif hook_type == "action":
-                result = evaluator.evaluate_action_access(actor_id, peer_id, resource_name)
+                result = evaluator.evaluate_action_access(
+                    actor_id, peer_id, resource_name
+                )
             else:
                 logging.warning(f"Unknown hook type for permission check: {hook_type}")
                 return True
@@ -132,7 +155,9 @@ class HookRegistry:
             if result == PermissionResult.ALLOWED:  # type: ignore
                 return True
             elif result == PermissionResult.DENIED:  # type: ignore
-                logging.info(f"Hook access denied: {hook_type}:{resource_name} for {actor_id} -> {peer_id}")
+                logging.info(
+                    f"Hook access denied: {hook_type}:{resource_name} for {actor_id} -> {peer_id}"
+                )
                 return False
             else:  # NOT_FOUND
                 # No specific permission rule - allow for backward compatibility
@@ -142,7 +167,9 @@ class HookRegistry:
             logging.error(f"Error in hook permission check: {e}")
             return True  # Allow on errors to maintain compatibility
 
-    def register_property_hook(self, property_name: str, func: Callable[..., Any]) -> None:
+    def register_property_hook(
+        self, property_name: str, func: Callable[..., Any]
+    ) -> None:
         """
         Register a property hook function.
 
@@ -151,7 +178,12 @@ class HookRegistry:
             func: Function with signature (actor, operation, value, path) -> Any
         """
         if property_name not in self._property_hooks:
-            self._property_hooks[property_name] = {"get": [], "put": [], "post": [], "delete": []}
+            self._property_hooks[property_name] = {
+                "get": [],
+                "put": [],
+                "post": [],
+                "delete": [],
+            }
 
         # Register for all operations unless function specifies otherwise
         operations = getattr(func, "_operations", ["get", "put", "post", "delete"])
@@ -159,7 +191,9 @@ class HookRegistry:
             if op in self._property_hooks[property_name]:
                 self._property_hooks[property_name][op].append(func)
 
-    def register_callback_hook(self, callback_name: str, func: Callable[..., Any]) -> None:
+    def register_callback_hook(
+        self, callback_name: str, func: Callable[..., Any]
+    ) -> None:
         """
         Register a callback hook function.
 
@@ -171,7 +205,9 @@ class HookRegistry:
             self._callback_hooks[callback_name] = []
         self._callback_hooks[callback_name].append(func)
 
-    def register_app_callback_hook(self, callback_name: str, func: Callable[..., Any]) -> None:
+    def register_app_callback_hook(
+        self, callback_name: str, func: Callable[..., Any]
+    ) -> None:
         """
         Register an application-level callback hook function.
 
@@ -245,7 +281,9 @@ class HookRegistry:
             auth_context["operation"] = operation  # Add operation to context
 
         property_path = "/".join([property_name] + (path or []))
-        if not self._check_hook_permission("property", property_path, actor, auth_context):
+        if not self._check_hook_permission(
+            "property", property_path, actor, auth_context
+        ):
             logging.debug(f"Property hook permission denied for {property_path}")
             return None if operation in ["put", "post"] else value
 
@@ -278,7 +316,9 @@ class HookRegistry:
 
         return value
 
-    def execute_callback_hooks(self, callback_name: str, actor: Any, data: Any) -> bool | dict[str, Any]:
+    def execute_callback_hooks(
+        self, callback_name: str, actor: Any, data: Any
+    ) -> bool | dict[str, Any]:
         """Execute callback hooks and return whether callback was processed or result data."""
         processed = False
         result_data: dict[str, Any] | None = None
@@ -312,7 +352,9 @@ class HookRegistry:
             return result_data
         return processed
 
-    def execute_app_callback_hooks(self, callback_name: str, data: Any) -> bool | dict[str, Any]:
+    def execute_app_callback_hooks(
+        self, callback_name: str, data: Any
+    ) -> bool | dict[str, Any]:
         """Execute application-level callback hooks (no actor context)."""
         processed = False
         result_data: dict[str, Any] | None = None
@@ -334,7 +376,9 @@ class HookRegistry:
             return result_data
         return processed
 
-    def execute_subscription_hooks(self, actor: Any, subscription: dict[str, Any], peer_id: str, data: Any) -> bool:
+    def execute_subscription_hooks(
+        self, actor: Any, subscription: dict[str, Any], peer_id: str, data: Any
+    ) -> bool:
         """Execute subscription hooks and return whether subscription was processed."""
         processed = False
 
@@ -363,7 +407,11 @@ class HookRegistry:
         return result
 
     def execute_method_hooks(
-        self, method_name: str, actor: Any, data: Any, auth_context: dict[str, Any] | None = None
+        self,
+        method_name: str,
+        actor: Any,
+        data: Any,
+        auth_context: dict[str, Any] | None = None,
     ) -> Any:
         """Execute method hooks with transparent permission checking."""
         # Check permission before executing hooks
@@ -398,7 +446,11 @@ class HookRegistry:
         return result
 
     def execute_action_hooks(
-        self, action_name: str, actor: Any, data: Any, auth_context: dict[str, Any] | None = None
+        self,
+        action_name: str,
+        actor: Any,
+        data: Any,
+        auth_context: dict[str, Any] | None = None,
     ) -> Any:
         """Execute action hooks with transparent permission checking."""
         # Check permission before executing hooks
@@ -437,7 +489,9 @@ class HookRegistry:
 _hook_registry = HookRegistry()
 
 
-def property_hook(property_name: str = "*", operations: list[str] | None = None) -> Callable[..., Any]:
+def property_hook(
+    property_name: str = "*", operations: list[str] | None = None
+) -> Callable[..., Any]:
     """
     Decorator for registering property hooks.
 

@@ -25,7 +25,9 @@ def canonical_connection_method(method: str | None) -> str | None:
 
     # Validate input is a string
     if not isinstance(method, str):
-        logging.warning(f"Connection method must be string, got {type(method)}: {method}")
+        logging.warning(
+            f"Connection method must be string, got {type(method)}: {method}"
+        )
         return None
 
     lowered = method.lower().strip()
@@ -62,7 +64,9 @@ class Trust:
         elif self.peerid and not self.token:
             self.trust = self.handle.get(actor_id=self.actor_id, peerid=self.peerid)
         else:
-            self.trust = self.handle.get(actor_id=self.actor_id, peerid=self.peerid, token=self.token)
+            self.trust = self.handle.get(
+                actor_id=self.actor_id, peerid=self.peerid, token=self.token
+            )
         return self.trust
 
     def delete(self) -> bool:
@@ -151,7 +155,9 @@ class Trust:
         """Create a new trust relationship"""
         self.trust = {"baseuri": baseuri, "type": peer_type}
         if not relationship or len(relationship) == 0:
-            self.trust["relationship"] = self.config.default_relationship if self.config else ""
+            self.trust["relationship"] = (
+                self.config.default_relationship if self.config else ""
+            )
         else:
             self.trust["relationship"] = relationship
         if not secret or len(secret) == 0:
@@ -161,7 +167,9 @@ class Trust:
         # Be absolutely sure that the secret is not already used
         if self.config:
             testhandle = self.config.DbTrust.DbTrust()
-            if testhandle.is_token_in_db(actor_id=self.actor_id, token=self.trust["secret"]):
+            if testhandle.is_token_in_db(
+                actor_id=self.actor_id, token=self.trust["secret"]
+            ):
                 logging.warning("Found a non-unique token where it should be unique")
                 return False
         self.trust["approved"] = str(approved).lower()
@@ -170,12 +178,16 @@ class Trust:
         if verification_token:
             self.trust["verification_token"] = verification_token
         else:
-            self.trust["verification_token"] = self.config.new_token() if self.config else ""
+            self.trust["verification_token"] = (
+                self.config.new_token() if self.config else ""
+            )
         self.trust["desc"] = desc or ""
         self.trust["id"] = self.actor_id or ""
         self.trust["peerid"] = self.peerid or ""
         if not self.trust.get("verification_token"):
-            self.trust["verification_token"] = self.config.new_token() if self.config else ""
+            self.trust["verification_token"] = (
+                self.config.new_token() if self.config else ""
+            )
         if not self.handle:
             return False
         return self.handle.create(
@@ -214,7 +226,9 @@ class Trust:
             logging.debug("No actorid set in initialisation of trust")
             return
         if not peerid and not token:
-            logging.debug("Both peerid and token are not set in initialisation of trust. One must be set.")
+            logging.debug(
+                "Both peerid and token are not set in initialisation of trust. One must be set."
+            )
             return
         if not token and (not peerid or len(peerid) == 0):
             logging.debug("No peerid set in initialisation of trust")

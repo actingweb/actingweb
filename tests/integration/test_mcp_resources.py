@@ -157,9 +157,7 @@ class TestMCPResourceRead:
                     assert "uri" in content
                     assert "mimeType" in content
                     # Content must be text, blob, or resource
-                    assert any(
-                        key in content for key in ["text", "blob", "resource"]
-                    )
+                    assert any(key in content for key in ["text", "blob", "resource"])
 
     def test_read_nonexistent_resource(self, oauth2_client):
         """

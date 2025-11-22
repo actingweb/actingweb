@@ -21,8 +21,9 @@ from ..permission_evaluator import (
 class MethodsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/methods endpoint."""
 
-
-    def _check_method_permission(self, actor_id: str, auth_obj, method_name: str) -> bool:
+    def _check_method_permission(
+        self, actor_id: str, auth_obj, method_name: str
+    ) -> bool:
         """
         Check method permission using the unified access control system.
 
@@ -35,11 +36,15 @@ class MethodsHandler(base_handler.BaseHandler):
             True if access is allowed, False otherwise
         """
         # Get peer ID from auth object (if authenticated via trust relationship)
-        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
+        peer_id = (
+            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
+        )
 
         if not peer_id:
             # No peer relationship - fall back to legacy authorization for basic/oauth auth
-            return auth_obj.check_authorisation(path="methods", subpath=method_name, method="GET")
+            return auth_obj.check_authorisation(
+                path="methods", subpath=method_name, method="GET"
+            )
 
         # Use permission evaluator for peer-based access
         try:
@@ -49,24 +54,31 @@ class MethodsHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
-                logging.info(f"Method access denied: {actor_id} -> {peer_id} -> {method_name}")
+                logging.info(
+                    f"Method access denied: {actor_id} -> {peer_id} -> {method_name}"
+                )
                 return False
             else:  # NOT_FOUND
                 # No specific permission rule - fall back to legacy for backward compatibility
-                return auth_obj.check_authorisation(path="methods", subpath=method_name, method="GET")
+                return auth_obj.check_authorisation(
+                    path="methods", subpath=method_name, method="GET"
+                )
 
         except Exception as e:
-            logging.error(f"Error in method permission evaluation for {actor_id}:{peer_id}:{method_name}: {e}")
+            logging.error(
+                f"Error in method permission evaluation for {actor_id}:{peer_id}:{method_name}: {e}"
+            )
             # Fall back to legacy authorization on errors
-            return auth_obj.check_authorisation(path="methods", subpath=method_name, method="GET")
+            return auth_obj.check_authorisation(
+                path="methods", subpath=method_name, method="GET"
+            )
 
     def _create_auth_context(self, auth_obj) -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
-        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
-        return {
-            'peer_id': peer_id,
-            'config': self.config
-        }
+        peer_id = (
+            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
+        )
+        return {"peer_id": peer_id, "config": self.config}
 
     def get(self, actor_id: str, name: str = "") -> None:
         """
@@ -82,9 +94,16 @@ class MethodsHandler(base_handler.BaseHandler):
             self.post(actor_id, name)
             return
 
-        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name, add_response=False)
-        if not auth_result.actor or not auth_result.auth_obj or (
-            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
+        auth_result = self.authenticate_actor(
+            actor_id, "methods", subpath=name, add_response=False
+        )
+        if (
+            not auth_result.actor
+            or not auth_result.auth_obj
+            or (
+                auth_result.auth_obj.response["code"] != 200
+                and auth_result.auth_obj.response["code"] != 401
+            )
         ):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
@@ -106,7 +125,9 @@ class MethodsHandler(base_handler.BaseHandler):
                     result = {"methods": list(self.hooks._method_hooks.keys())}
                 else:
                     auth_context = self._create_auth_context(check)
-                    result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "GET"}, auth_context)
+                    result = self.hooks.execute_method_hooks(
+                        name, actor_interface, {"method": "GET"}, auth_context
+                    )
 
         if result is not None:
             if self.response:
@@ -123,9 +144,16 @@ class MethodsHandler(base_handler.BaseHandler):
 
         POST /methods/method_name - Execute method with JSON-RPC support
         """
-        auth_result = self.authenticate_actor(actor_id, "methods", subpath=name, add_response=False)
-        if not auth_result.actor or not auth_result.auth_obj or (
-            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
+        auth_result = self.authenticate_actor(
+            actor_id, "methods", subpath=name, add_response=False
+        )
+        if (
+            not auth_result.actor
+            or not auth_result.auth_obj
+            or (
+                auth_result.auth_obj.response["code"] != 200
+                and auth_result.auth_obj.response["code"] != 401
+            )
         ):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
@@ -165,7 +193,9 @@ class MethodsHandler(base_handler.BaseHandler):
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface:
                     auth_context = self._create_auth_context(check)
-                    result = self.hooks.execute_method_hooks(name, actor_interface, params, auth_context)
+                    result = self.hooks.execute_method_hooks(
+                        name, actor_interface, params, auth_context
+                    )
 
         if result is not None:
             if self.response:
@@ -200,7 +230,9 @@ class MethodsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 auth_context = self._create_auth_context(check)
-                hook_result = self.hooks.execute_method_hooks(name, actor_interface, {"method": "DELETE"}, auth_context)
+                hook_result = self.hooks.execute_method_hooks(
+                    name, actor_interface, {"method": "DELETE"}, auth_context
+                )
                 result = hook_result is not None
 
         if result:
@@ -210,7 +242,9 @@ class MethodsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
 
-    def _handle_jsonrpc_request(self, params: dict[str, Any], method_name: str, myself, auth_obj) -> dict[str, Any] | None:
+    def _handle_jsonrpc_request(
+        self, params: dict[str, Any], method_name: str, myself, auth_obj
+    ) -> dict[str, Any] | None:
         """
         Handle JSON-RPC 2.0 request.
 
@@ -228,9 +262,9 @@ class MethodsHandler(base_handler.BaseHandler):
                 "error": {
                     "code": -32600,
                     "message": "Invalid Request",
-                    "data": "Missing method"
+                    "data": "Missing method",
                 },
-                "id": params.get("id")
+                "id": params.get("id"),
             }
 
         # If method name is in URL, it should match the JSON-RPC method
@@ -240,9 +274,9 @@ class MethodsHandler(base_handler.BaseHandler):
                 "error": {
                     "code": -32600,
                     "message": "Invalid Request",
-                    "data": "Method name mismatch"
+                    "data": "Method name mismatch",
                 },
-                "id": params.get("id")
+                "id": params.get("id"),
             }
 
         # Extract method parameters
@@ -256,7 +290,9 @@ class MethodsHandler(base_handler.BaseHandler):
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface:
                     auth_context = self._create_auth_context(auth_obj)
-                    result = self.hooks.execute_method_hooks(params["method"], actor_interface, method_params, auth_context)
+                    result = self.hooks.execute_method_hooks(
+                        params["method"], actor_interface, method_params, auth_context
+                    )
 
             if result is not None:
                 # Success response
@@ -271,20 +307,13 @@ class MethodsHandler(base_handler.BaseHandler):
                 # Method not found or error
                 return {
                     "jsonrpc": "2.0",
-                    "error": {
-                        "code": -32601,
-                        "message": "Method not found"
-                    },
-                    "id": params.get("id")
+                    "error": {"code": -32601, "message": "Method not found"},
+                    "id": params.get("id"),
                 }
         except Exception as e:
             logging.error(f"Error executing method {params['method']}: {e}")
             return {
                 "jsonrpc": "2.0",
-                "error": {
-                    "code": -32603,
-                    "message": "Internal error",
-                    "data": str(e)
-                },
-                "id": params.get("id")
+                "error": {"code": -32603, "message": "Internal error", "data": str(e)},
+                "id": params.get("id"),
             }

@@ -65,14 +65,26 @@ class ActorInterface:
             self._service_registry = service_registry
         else:
             config = getattr(core_actor, "config", None)
-            registry_from_config = getattr(config, "service_registry", None) if config is not None else None
+            registry_from_config = (
+                getattr(config, "service_registry", None)
+                if config is not None
+                else None
+            )
             self._service_registry = registry_from_config
         self._services = None  # Will be initialized on first access
 
     @classmethod
-    def create(cls, creator: str, config: 'Config', actor_id: str | None = None,
-               passphrase: str | None = None, delete_existing: bool = False,
-               trustee_root: str | None = None, hooks: Any = None, service_registry=None) -> 'ActorInterface':
+    def create(
+        cls,
+        creator: str,
+        config: "Config",
+        actor_id: str | None = None,
+        passphrase: str | None = None,
+        delete_existing: bool = False,
+        trustee_root: str | None = None,
+        hooks: Any = None,
+        service_registry=None,
+    ) -> "ActorInterface":
         """
         Create a new actor.
 
@@ -104,7 +116,7 @@ class ActorInterface:
             actor_id=actor_id,
             delete=delete_existing,
             trustee_root=trustee_root,
-            hooks=hooks
+            hooks=hooks,
         )
 
         if not success:
@@ -113,7 +125,9 @@ class ActorInterface:
         return cls(core_actor, service_registry)
 
     @classmethod
-    def get_by_id(cls, actor_id: str, config: 'Config', service_registry=None) -> Optional['ActorInterface']:
+    def get_by_id(
+        cls, actor_id: str, config: "Config", service_registry=None
+    ) -> Optional["ActorInterface"]:
         """
         Get an existing actor by ID.
 
@@ -133,7 +147,9 @@ class ActorInterface:
         return None
 
     @classmethod
-    def get_by_creator(cls, creator: str, config: 'Config', service_registry=None) -> Optional['ActorInterface']:
+    def get_by_creator(
+        cls, creator: str, config: "Config", service_registry=None
+    ) -> Optional["ActorInterface"]:
         """
         Get an existing actor by creator.
 
@@ -153,7 +169,13 @@ class ActorInterface:
         return None
 
     @classmethod
-    def get_by_property(cls, property_name: str, property_value: str, config: 'Config', service_registry=None) -> Optional['ActorInterface']:
+    def get_by_property(
+        cls,
+        property_name: str,
+        property_value: str,
+        config: "Config",
+        service_registry=None,
+    ) -> Optional["ActorInterface"]:
         """
         Get an existing actor by property value.
 
@@ -200,8 +222,13 @@ class ActorInterface:
     def properties(self) -> PropertyStore:
         """Actor properties."""
         if self._property_store is None:
-            if not hasattr(self._core_actor, 'property') or self._core_actor.property is None:
-                raise RuntimeError("Actor properties not available - actor may not be properly initialized")
+            if (
+                not hasattr(self._core_actor, "property")
+                or self._core_actor.property is None
+            ):
+                raise RuntimeError(
+                    "Actor properties not available - actor may not be properly initialized"
+                )
             self._property_store = PropertyStore(self._core_actor.property)
         return self._property_store
 
@@ -211,7 +238,10 @@ class ActorInterface:
         if self._property_list_store is None:
             # Import here to avoid circular imports
             from ..property import PropertyListStore
-            self._property_list_store = PropertyListStore(actor_id=self.id, config=self._core_actor.config)
+
+            self._property_list_store = PropertyListStore(
+                actor_id=self.id, config=self._core_actor.config
+            )
         return self._property_list_store
 
     @property
@@ -233,13 +263,18 @@ class ActorInterface:
         """Third-party service client manager."""
         if self._services is None:
             if self._service_registry is None:
-                raise RuntimeError("No service registry available. Configure services using ActingWebApp.add_service() methods.")
+                raise RuntimeError(
+                    "No service registry available. Configure services using ActingWebApp.add_service() methods."
+                )
             # Import fixed after removing init_actingweb
             try:
                 from .services.service_registry import ActorServices
+
                 self._services = ActorServices(self, self._service_registry)
             except ImportError as e:
-                raise RuntimeError("ActorServices not available. Service registry functionality requires proper installation.") from e
+                raise RuntimeError(
+                    "ActorServices not available. Service registry functionality requires proper installation."
+                ) from e
         return self._services
 
     @property
@@ -305,7 +340,7 @@ class ActorInterface:
             "url": self.url,
             "properties": self.properties.to_dict(),
             "trust_relationships": len(self.trust.relationships),
-            "subscriptions": len(self.subscriptions.all_subscriptions)
+            "subscriptions": len(self.subscriptions.all_subscriptions),
         }
 
     def __str__(self) -> str:

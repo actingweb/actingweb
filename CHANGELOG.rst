@@ -2,8 +2,13 @@
 CHANGELOG
 =========
 
-v3.4.2: TBD, 2025
+v3.4.2: Nov 22, 2025
 -------------------
+
+ADDED
+~~~~~
+
+- Github action to push new package to pypi on merging PRs to master branch
 
 FIXED
 ~~~~~

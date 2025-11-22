@@ -77,7 +77,9 @@ def test_services_handler_callback_uses_registry():
     )
     handler.require_authenticated_actor = Mock(return_value=actor_core)
 
-    result = handler.get("actor-123", "crm_service", code="auth-code", state="opaque-state")
+    result = handler.get(
+        "actor-123", "crm_service", code="auth-code", state="opaque-state"
+    )
 
     assert result == {
         "success": True,

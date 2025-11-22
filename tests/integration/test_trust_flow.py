@@ -67,7 +67,7 @@ class TestTrustActorFlow:
         Spec: docs/actingweb-spec.rst:454-505
         """
         # Create actor2 on the peer server (port 5556) instead of main server
-        peer_url = getattr(http_client, 'peer_url', http_client.base_url)
+        peer_url = getattr(http_client, "peer_url", http_client.base_url)
         response = http_client.post(
             f"{peer_url}/",
             json={"creator": self.creator2},
@@ -101,7 +101,9 @@ class TestTrustActorFlow:
         )
 
         # With mock, should succeed with 201 or 202
-        assert response.status_code in [201, 202], f"Got {response.status_code}: {response.text}"
+        assert response.status_code in [201, 202], (
+            f"Got {response.status_code}: {response.text}"
+        )
 
         data = response.json()
         assert "secret" in data
@@ -113,7 +115,12 @@ class TestTrustActorFlow:
             assert data["desc"]
         # approved should be false initially (pending peer approval)
         if "approved" in data:
-            assert data["approved"] in [False, "false", True, "true"]  # May auto-approve
+            assert data["approved"] in [
+                False,
+                "false",
+                True,
+                "true",
+            ]  # May auto-approve
         if "verified" in data:
             assert data["verified"] in [False, "false", True, "true"]
 

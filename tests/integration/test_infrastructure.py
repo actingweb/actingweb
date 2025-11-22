@@ -5,7 +5,6 @@ Basic tests to verify the test infrastructure is working.
 """
 
 
-
 def test_docker_services(docker_services):
     """Test that DynamoDB is running via Docker."""
     import requests

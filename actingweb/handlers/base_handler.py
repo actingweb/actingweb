@@ -1,4 +1,3 @@
-
 from typing import TYPE_CHECKING, Any, Optional
 
 from actingweb import aw_web_request
@@ -10,19 +9,18 @@ if TYPE_CHECKING:
 
 
 class BaseHandler:
-
     def __init__(
         self,
         webobj: aw_web_request.AWWebObj = aw_web_request.AWWebObj(),
         config: config_class.Config = config_class.Config(),
-        hooks: Optional['HookRegistry'] = None,
+        hooks: Optional["HookRegistry"] = None,
     ) -> None:
         self.request = webobj.request
         self.response = webobj.response
         self.config = config
         self.hooks = hooks
 
-    def _get_actor_interface(self, actor) -> Optional['ActorInterface']:
+    def _get_actor_interface(self, actor) -> Optional["ActorInterface"]:
         """Get ActorInterface wrapper for given actor."""
         if actor:
             from actingweb.interface.actor_interface import ActorInterface
@@ -31,7 +29,14 @@ class BaseHandler:
             return ActorInterface(actor, service_registry=registry)
         return None
 
-    def _authenticate_dual_context(self, actor_id: str, api_path: str, web_subpath: str, name: str = "", add_response: bool = True) -> 'AuthResult':
+    def _authenticate_dual_context(
+        self,
+        actor_id: str,
+        api_path: str,
+        web_subpath: str,
+        name: str = "",
+        add_response: bool = True,
+    ) -> "AuthResult":
         """
         Authenticate supporting both web UI (OAuth) and API (basic) access.
 
@@ -54,12 +59,12 @@ class BaseHandler:
         is_web_ui_request = False
         try:
             # Check for OAuth cookie indicating web UI context
-            if hasattr(self.request, 'cookies') and self.request.cookies:
-                is_web_ui_request = 'oauth_token' in self.request.cookies
-            elif hasattr(self.request, 'get'):
+            if hasattr(self.request, "cookies") and self.request.cookies:
+                is_web_ui_request = "oauth_token" in self.request.cookies
+            elif hasattr(self.request, "get"):
                 # Alternative cookie access pattern for different frameworks
                 try:
-                    oauth_cookie = self.request.get('oauth_token', cookie=True)  # type: ignore
+                    oauth_cookie = self.request.get("oauth_token", cookie=True)  # type: ignore
                     is_web_ui_request = oauth_cookie is not None
                 except TypeError:
                     # Framework doesn't support cookie parameter
@@ -70,12 +75,16 @@ class BaseHandler:
 
         if is_web_ui_request:
             # Web UI context - use OAuth authentication
-            return self._authenticate_internal(actor_id, "www", web_subpath, add_response)
+            return self._authenticate_internal(
+                actor_id, "www", web_subpath, add_response
+            )
         else:
             # API context - use basic authentication
             return self._authenticate_internal(actor_id, api_path, name, add_response)
 
-    def _authenticate_internal(self, actor_id: str, path: str, subpath: str = "", add_response: bool = True) -> 'AuthResult':
+    def _authenticate_internal(
+        self, actor_id: str, path: str, subpath: str = "", add_response: bool = True
+    ) -> "AuthResult":
         """
         Internal authentication implementation that replaces auth.init_actingweb().
 
@@ -104,7 +113,7 @@ class BaseHandler:
         auth_obj.check_authentication(appreq=self, path=fullpath)
 
         # Check if actor was found during authentication
-        if not hasattr(auth_obj, 'actor') or not auth_obj.actor:
+        if not hasattr(auth_obj, "actor") or not auth_obj.actor:
             if add_response and self.response:
                 self.response.set_status(404, "Actor not found")
             return AuthResult(None, auth_obj, self.response)
@@ -115,8 +124,9 @@ class BaseHandler:
 
         return AuthResult(auth_obj.actor, auth_obj, self.response)
 
-    def require_authenticated_actor(self, actor_id: str, path: str, method: str = "GET",
-                                  subpath: str = "") -> Any | None:
+    def require_authenticated_actor(
+        self, actor_id: str, path: str, method: str = "GET", subpath: str = ""
+    ) -> Any | None:
         """
         Simplified actor authentication and authorization in one call.
 
@@ -145,8 +155,13 @@ class BaseHandler:
 
         return auth_result.actor
 
-    def authenticate_actor(self, actor_id: str, path: str = "", subpath: str = "",
-                          add_response: bool = True) -> 'AuthResult':
+    def authenticate_actor(
+        self,
+        actor_id: str,
+        path: str = "",
+        subpath: str = "",
+        add_response: bool = True,
+    ) -> "AuthResult":
         """
         Authenticate actor and return detailed auth result.
 
@@ -164,7 +179,9 @@ class BaseHandler:
         """
         return self._authenticate_internal(actor_id, path, subpath, add_response)
 
-    def get_actor_allow_unauthenticated(self, actor_id: str, path: str = "", subpath: str = "") -> Any | None:
+    def get_actor_allow_unauthenticated(
+        self, actor_id: str, path: str = "", subpath: str = ""
+    ) -> Any | None:
         """
         Get actor allowing unauthenticated access (for public endpoints like meta).
 
@@ -179,7 +196,9 @@ class BaseHandler:
         Returns:
             Actor object if it exists, None otherwise. Sets 404 if actor doesn't exist.
         """
-        auth_result = self._authenticate_internal(actor_id, path, subpath, add_response=False)
+        auth_result = self._authenticate_internal(
+            actor_id, path, subpath, add_response=False
+        )
 
         if not auth_result.actor:
             if self.response:
@@ -187,7 +206,9 @@ class BaseHandler:
             return None
 
         # For public endpoints, still check authorization but allow unauthenticated access
-        if auth_result.auth_obj and not auth_result.auth_obj.check_authorisation(path=path, subpath=subpath, method="GET", approved=False):
+        if auth_result.auth_obj and not auth_result.auth_obj.check_authorisation(
+            path=path, subpath=subpath, method="GET", approved=False
+        ):
             if self.response:
                 self.response.set_status(403)
             return None
@@ -206,9 +227,11 @@ class AuthResult:
     @property
     def success(self) -> bool:
         """True if actor exists and authentication succeeded."""
-        return (self.actor is not None and
-                self.auth_obj is not None and
-                self.auth_obj.response["code"] == 200)
+        return (
+            self.actor is not None
+            and self.auth_obj is not None
+            and self.auth_obj.response["code"] == 200
+        )
 
     @property
     def authenticated(self) -> bool:
@@ -230,7 +253,9 @@ class AuthResult:
         if not self.success:
             return False
 
-        if self.auth_obj.check_authorisation(path=path, subpath=subpath, method=method.upper()):
+        if self.auth_obj.check_authorisation(
+            path=path, subpath=subpath, method=method.upper()
+        ):
             return True
         else:
             if self.response:

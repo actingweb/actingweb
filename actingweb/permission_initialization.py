@@ -65,7 +65,9 @@ def initialize_permission_system(config: config_class.Config) -> None:
 
     if initialization_errors:
         error_summary = "; ".join(initialization_errors)
-        raise RuntimeError(f"ActingWeb permission system initialization failed: {error_summary}")
+        raise RuntimeError(
+            f"ActingWeb permission system initialization failed: {error_summary}"
+        )
 
     logger.debug("ActingWeb permission system initialized successfully")
 

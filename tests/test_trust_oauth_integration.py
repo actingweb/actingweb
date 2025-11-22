@@ -65,8 +65,7 @@ class TestTrustCreationOnClientRegistration:
 
             # Create OAuth2 client
             client_data = client_manager.create_client(
-                client_name="ChatGPT",
-                trust_type="mcp_client"
+                client_name="ChatGPT", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -83,7 +82,9 @@ class TestTrustCreationOnClientRegistration:
                     matching_trust = trust
                     break
 
-            assert matching_trust is not None, f"No trust relationship found for client {client_id}"
+            assert matching_trust is not None, (
+                f"No trust relationship found for client {client_id}"
+            )
         finally:
             actor.delete()
 
@@ -103,8 +104,7 @@ class TestTrustCreationOnClientRegistration:
 
             # Create client with specific trust type
             client_data = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -141,8 +141,7 @@ class TestTrustCreationOnClientRegistration:
 
             for name in client_names:
                 client_data = client_manager.create_client(
-                    client_name=name,
-                    trust_type="mcp_client"
+                    client_name=name, trust_type="mcp_client"
                 )
                 client_ids.append(client_data["client_id"])
 
@@ -157,7 +156,9 @@ class TestTrustCreationOnClientRegistration:
                     if client_id in trust.peerid:
                         matching_trust = trust
                         break
-                assert matching_trust is not None, f"No trust found for client {client_id}"
+                assert matching_trust is not None, (
+                    f"No trust found for client {client_id}"
+                )
         finally:
             actor.delete()
 
@@ -181,8 +182,7 @@ class TestTrustAttributesForOAuth:
 
             # Create client with specific name
             client_data = client_manager.create_client(
-                client_name="ChatGPT Assistant",
-                trust_type="mcp_client"
+                client_name="ChatGPT Assistant", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -216,8 +216,7 @@ class TestTrustAttributesForOAuth:
 
             # Create client
             client_data = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -251,8 +250,7 @@ class TestTrustAttributesForOAuth:
 
             # Create client
             client_data = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -290,8 +288,7 @@ class TestTrustDeletionOnClientDeletion:
 
             # Create client
             client_data = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -344,8 +341,7 @@ class TestPermissionChecksWithOAuth:
 
             # Create client
             client_data = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -378,8 +374,7 @@ class TestPermissionChecksWithOAuth:
 
             # Create client
             client_data = client_manager.create_client(
-                client_name="ChatGPT",
-                trust_type="mcp_client"
+                client_name="ChatGPT", trust_type="mcp_client"
             )
             client_id = client_data["client_id"]
 
@@ -401,9 +396,9 @@ class TestPermissionChecksWithOAuth:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["memory_personal", "memory_travel"]
+                    "excluded_patterns": ["memory_personal", "memory_travel"],
                 },
-                created_by="test"
+                created_by="test",
             )
             success = permission_store.store_permissions(permissions)
             assert success
@@ -429,26 +424,24 @@ class TestRealisticOAuthTrustScenarios:
         """
         config = aw_app.get_config()
         actor = ActorInterface.create(creator="user@example.com", config=config)
+        assert actor.id is not None, "Actor creation failed - id is None"
 
         try:
             client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Connect ChatGPT - restricted access
             chatgpt = client_manager.create_client(
-                client_name="ChatGPT",
-                trust_type="mcp_client"
+                client_name="ChatGPT", trust_type="mcp_client"
             )
 
             # Connect Claude - full access
             claude = client_manager.create_client(
-                client_name="Claude",
-                trust_type="mcp_client"
+                client_name="Claude", trust_type="mcp_client"
             )
 
             # Connect Cursor - work-only access
             cursor = client_manager.create_client(
-                client_name="Cursor",
-                trust_type="mcp_client"
+                client_name="Cursor", trust_type="mcp_client"
             )
 
             # Find trust relationships for each client
@@ -485,9 +478,13 @@ class TestRealisticOAuthTrustScenarios:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["memory_travel", "memory_food", "memory_work"]
+                    "excluded_patterns": [
+                        "memory_travel",
+                        "memory_food",
+                        "memory_work",
+                    ],
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(chatgpt_perms)
 
@@ -499,9 +496,9 @@ class TestRealisticOAuthTrustScenarios:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read", "write"],
-                    "excluded_patterns": []
+                    "excluded_patterns": [],
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(claude_perms)
 
@@ -513,16 +510,26 @@ class TestRealisticOAuthTrustScenarios:
                 properties={
                     "patterns": ["memory_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["memory_personal", "memory_travel", "memory_food"]
+                    "excluded_patterns": [
+                        "memory_personal",
+                        "memory_travel",
+                        "memory_food",
+                    ],
                 },
-                created_by="test"
+                created_by="test",
             )
             permission_store.store_permissions(cursor_perms)
 
             # Verify each has different permissions
-            chatgpt_stored = permission_store.get_permissions(actor.id, chatgpt_trust.peerid)  # type: ignore[arg-type]
-            claude_stored = permission_store.get_permissions(actor.id, claude_trust.peerid)  # type: ignore[arg-type]
-            cursor_stored = permission_store.get_permissions(actor.id, cursor_trust.peerid)  # type: ignore[arg-type]
+            chatgpt_stored = permission_store.get_permissions(
+                actor.id, chatgpt_trust.peerid
+            )  # type: ignore[arg-type]
+            claude_stored = permission_store.get_permissions(
+                actor.id, claude_trust.peerid
+            )  # type: ignore[arg-type]
+            cursor_stored = permission_store.get_permissions(
+                actor.id, cursor_trust.peerid
+            )  # type: ignore[arg-type]
 
             assert len(chatgpt_stored.properties["excluded_patterns"]) == 3  # type: ignore[arg-type]
             assert len(claude_stored.properties["excluded_patterns"]) == 0  # type: ignore[arg-type]

@@ -33,6 +33,7 @@ class _FakeProperty:
 
 class _FakeActor:
     _STORE: dict[str, dict] = {}
+
     def __init__(self, actor_id=None, config=None):
         self.id = actor_id
         self.creator = "system"
@@ -58,9 +59,9 @@ class TestTrustRegistryIntegration(unittest.TestCase):
     def setUpClass(cls):
         """Set up test environment with temporary database."""
         # Use in-memory database for testing
-        cls.db_file = tempfile.mktemp(suffix='.db')
-        os.environ['AWS_DB_HOST'] = f'file://{cls.db_file}'
-        os.environ['AWS_DB_PREFIX'] = 'test_actingweb'
+        cls.db_file = tempfile.mktemp(suffix=".db")
+        os.environ["AWS_DB_HOST"] = f"file://{cls.db_file}"
+        os.environ["AWS_DB_PREFIX"] = "test_actingweb"
 
     @classmethod
     def tearDownClass(cls):
@@ -73,9 +74,12 @@ class TestTrustRegistryIntegration(unittest.TestCase):
         self.config = config_class.Config()
         # Clear any existing registry instance
         import actingweb.trust_type_registry
+
         actingweb.trust_type_registry._registry = None
         # Patch Actor to avoid hitting real DB
-        self._patcher = patch('actingweb.trust_type_registry.actor_module.Actor', _FakeActor)
+        self._patcher = patch(
+            "actingweb.trust_type_registry.actor_module.Actor", _FakeActor
+        )
         self._patcher.start()
 
     def tearDown(self):
@@ -93,10 +97,14 @@ class TestTrustRegistryIntegration(unittest.TestCase):
 
         # Check that default types are present
         type_names = [t.name for t in trust_types]
-        expected_defaults = ['viewer', 'friend', 'partner', 'admin', 'mcp_client']
+        expected_defaults = ["viewer", "friend", "partner", "admin", "mcp_client"]
 
         for expected in expected_defaults:
-            self.assertIn(expected, type_names, f"Default trust type '{expected}' should be present")
+            self.assertIn(
+                expected,
+                type_names,
+                f"Default trust type '{expected}' should be present",
+            )
 
     def test_register_custom_type(self):
         """Test registering a custom trust type."""
@@ -108,9 +116,9 @@ class TestTrustRegistryIntegration(unittest.TestCase):
             description="A custom trust type for testing",
             base_permissions={
                 "properties": {"patterns": ["test/*"], "operations": ["read"]},
-                "methods": {"allowed": ["test_*"]}
+                "methods": {"allowed": ["test_*"]},
             },
-            oauth_scope="actingweb.custom_test"
+            oauth_scope="actingweb.custom_test",
         )
 
         # Register the custom type
@@ -133,7 +141,7 @@ class TestTrustRegistryIntegration(unittest.TestCase):
             name="persistence_test",
             display_name="Persistence Test",
             description="Testing persistence",
-            base_permissions={"test": "value"}
+            base_permissions={"test": "value"},
         )
 
         registry1.register_type(test_type)
@@ -141,6 +149,7 @@ class TestTrustRegistryIntegration(unittest.TestCase):
         # Clear registry cache and create new instance
         registry1.clear_cache()
         import actingweb.trust_type_registry
+
         actingweb.trust_type_registry._registry = None
 
         registry2 = get_registry(self.config)
@@ -173,7 +182,7 @@ class TestTrustRegistryIntegration(unittest.TestCase):
             name="",  # Empty name should fail
             display_name="Invalid",
             description="This should fail",
-            base_permissions={}
+            base_permissions={},
         )
 
         success = registry.register_type(invalid_type)
@@ -184,5 +193,5 @@ class TestTrustRegistryIntegration(unittest.TestCase):
         self.assertIsNone(retrieved)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -24,7 +24,7 @@ class TestTrustType(unittest.TestCase):
             name="test_type",
             display_name="Test Type",
             description="A test trust type",
-            base_permissions={"properties": {"allowed": ["*"]}}
+            base_permissions={"properties": {"allowed": ["*"]}},
         )
 
         self.assertEqual(trust_type.name, "test_type")
@@ -39,16 +39,13 @@ class TestTrustType(unittest.TestCase):
             name="valid",
             display_name="Valid Type",
             description="Valid",
-            base_permissions={}
+            base_permissions={},
         )
         self.assertTrue(valid_type.validate())
 
         # Invalid - no name
         invalid_type = TrustType(
-            name="",
-            display_name="Invalid",
-            description="Invalid",
-            base_permissions={}
+            name="", display_name="Invalid", description="Invalid", base_permissions={}
         )
         self.assertFalse(invalid_type.validate())
 
@@ -57,7 +54,7 @@ class TestTrustType(unittest.TestCase):
             name="invalid2",
             display_name="Invalid 2",
             description="Invalid",
-            base_permissions="not a dict"  # type: ignore[arg-type]
+            base_permissions="not a dict",  # type: ignore[arg-type]
         )
         self.assertFalse(invalid_type2.validate())
 
@@ -68,7 +65,7 @@ class TestTrustType(unittest.TestCase):
             display_name="Test",
             description="Test type",
             base_permissions={"test": "value"},
-            oauth_scope="test.scope"
+            oauth_scope="test.scope",
         )
 
         # Convert to dict
@@ -94,19 +91,23 @@ class TestTrustTypeRegistry(unittest.TestCase):
         # Mock actor for testing with simple property store
         self.mock_actor = Mock()
         self.mock_actor.id = TRUST_TYPE_SYSTEM_ACTOR
+
         class _FakeProperty:
             def __init__(self):
                 self._data = {}
+
             def __getattr__(self, name):
                 return self._data.get(name)
+
             def __setattr__(self, name, value):
                 if name == "_data":
                     object.__setattr__(self, name, value)
                 else:
                     self._data[name] = value
+
         self.mock_actor.property = _FakeProperty()
 
-    @patch('actingweb.trust_type_registry.actor_module.Actor')
+    @patch("actingweb.trust_type_registry.actor_module.Actor")
     def test_system_actor_creation(self, mock_actor_class):
         """Test system actor creation."""
         # Mock actor that doesn't exist initially
@@ -117,8 +118,10 @@ class TestTrustTypeRegistry(unittest.TestCase):
         # First call should try to load existing actor
         # Second call should create new actor
         def side_effect(*args, **kwargs):
-            if 'actor_id' in kwargs:
-                mock_actor_instance.create(actor_id=TRUST_TYPE_SYSTEM_ACTOR, creator="system")
+            if "actor_id" in kwargs:
+                mock_actor_instance.create(
+                    actor_id=TRUST_TYPE_SYSTEM_ACTOR, creator="system"
+                )
                 return mock_actor_instance
             return mock_actor_instance
 
@@ -128,7 +131,7 @@ class TestTrustTypeRegistry(unittest.TestCase):
         self.assertIsNotNone(system_actor)
         mock_actor_instance.create.assert_called_once()
 
-    @patch('actingweb.trust_type_registry.actor_module.Actor')
+    @patch("actingweb.trust_type_registry.actor_module.Actor")
     def test_register_trust_type(self, mock_actor_class):
         """Test registering a trust type."""
         mock_actor_class.return_value = self.mock_actor
@@ -137,7 +140,7 @@ class TestTrustTypeRegistry(unittest.TestCase):
             name="test_register",
             display_name="Test Register",
             description="Test registration",
-            base_permissions={"test": "permissions"}
+            base_permissions={"test": "permissions"},
         )
 
         result = self.registry.register_type(trust_type)
@@ -147,7 +150,7 @@ class TestTrustTypeRegistry(unittest.TestCase):
         expected_property = f"trust_type:{trust_type.name}"
         self.assertIsNotNone(self.mock_actor.property.__getattr__(expected_property))
 
-    @patch('actingweb.trust_type_registry.actor_module.Actor')
+    @patch("actingweb.trust_type_registry.actor_module.Actor")
     def test_get_trust_type(self, mock_actor_class):
         """Test retrieving a trust type."""
         mock_actor_class.return_value = self.mock_actor
@@ -160,48 +163,60 @@ class TestTrustTypeRegistry(unittest.TestCase):
             "base_permissions": {"test": "permissions"},
             "allow_user_override": True,
             "oauth_scope": None,
-            "created_by": "system"
+            "created_by": "system",
         }
 
         # Preload property value directly and query
-        self.mock_actor.property._data["trust_type:test_get"] = json.dumps(trust_type_data)
-        with patch('actingweb.trust_type_registry.actor_module.Actor', return_value=self.mock_actor):
+        self.mock_actor.property._data["trust_type:test_get"] = json.dumps(
+            trust_type_data
+        )
+        with patch(
+            "actingweb.trust_type_registry.actor_module.Actor",
+            return_value=self.mock_actor,
+        ):
             trust_type = self.registry.get_type("test_get")
 
         self.assertIsNotNone(trust_type)
         self.assertEqual(trust_type.name, "test_get")  # type: ignore
         self.assertEqual(trust_type.display_name, "Test Get")  # type: ignore
 
-    @patch('actingweb.trust_type_registry.actor_module.Actor')
+    @patch("actingweb.trust_type_registry.actor_module.Actor")
     def test_list_trust_types(self, mock_actor_class):
         """Test listing all trust types."""
         mock_actor_class.return_value = self.mock_actor
 
         # Mock properties with trust types
         mock_properties = {
-            "trust_type:type1": json.dumps({
-                "name": "type1",
-                "display_name": "Type 1",
-                "description": "First type",
-                "base_permissions": {},
-                "allow_user_override": True,
-                "oauth_scope": None,
-                "created_by": "system"
-            }),
-            "trust_type:type2": json.dumps({
-                "name": "type2",
-                "display_name": "Type 2",
-                "description": "Second type",
-                "base_permissions": {},
-                "allow_user_override": True,
-                "oauth_scope": None,
-                "created_by": "system"
-            }),
-            "other_property": "not a trust type"
+            "trust_type:type1": json.dumps(
+                {
+                    "name": "type1",
+                    "display_name": "Type 1",
+                    "description": "First type",
+                    "base_permissions": {},
+                    "allow_user_override": True,
+                    "oauth_scope": None,
+                    "created_by": "system",
+                }
+            ),
+            "trust_type:type2": json.dumps(
+                {
+                    "name": "type2",
+                    "display_name": "Type 2",
+                    "description": "Second type",
+                    "base_permissions": {},
+                    "allow_user_override": True,
+                    "oauth_scope": None,
+                    "created_by": "system",
+                }
+            ),
+            "other_property": "not a trust type",
         }
 
         self.mock_actor.get_properties.return_value = mock_properties
-        with patch('actingweb.trust_type_registry.actor_module.Actor', return_value=self.mock_actor):
+        with patch(
+            "actingweb.trust_type_registry.actor_module.Actor",
+            return_value=self.mock_actor,
+        ):
             trust_types = self.registry.list_types()
 
         self.assertEqual(len(trust_types), 2)
@@ -215,7 +230,7 @@ class TestTrustTypeRegistry(unittest.TestCase):
             name="",  # Invalid name
             display_name="Invalid",
             description="Invalid",
-            base_permissions={}
+            base_permissions={},
         )
 
         result = self.registry.register_type(invalid_type)
@@ -235,5 +250,5 @@ class TestRegistrySingleton(unittest.TestCase):
         self.assertIs(registry1, registry2)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

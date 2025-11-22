@@ -80,7 +80,9 @@ class ServiceClient:
     def _save_tokens(self, access_token: str, refresh_token: str | None = None) -> None:
         """Save OAuth tokens to actor storage."""
         if not self.actor.property:
-            logger.warning(f"Cannot save tokens for service {self.service_config.name} - no property store")
+            logger.warning(
+                f"Cannot save tokens for service {self.service_config.name} - no property store"
+            )
             return
 
         access_token_key = f"service_{self.service_config.name}_access_token"
@@ -114,8 +116,7 @@ class ServiceClient:
 
         # Create authorization URL using OAuth2 authenticator
         return self.authenticator.create_authorization_url(
-            state=state,
-            redirect_after_auth=redirect_uri
+            state=state, redirect_after_auth=redirect_uri
         )
 
     def handle_callback(self, authorization_code: str, state: str = "") -> bool:
@@ -131,10 +132,14 @@ class ServiceClient:
         """
         try:
             # Exchange code for tokens
-            token_response = self.authenticator.exchange_code_for_token(authorization_code, state)
+            token_response = self.authenticator.exchange_code_for_token(
+                authorization_code, state
+            )
 
             if not token_response or "access_token" not in token_response:
-                logger.error(f"Failed to exchange authorization code for {self.service_config.name}")
+                logger.error(
+                    f"Failed to exchange authorization code for {self.service_config.name}"
+                )
                 return False
 
             # Save tokens
@@ -143,7 +148,9 @@ class ServiceClient:
 
             self._save_tokens(access_token, refresh_token)
 
-            logger.info(f"Successfully authenticated {self.service_config.name} for actor {self.actor.id}")
+            logger.info(
+                f"Successfully authenticated {self.service_config.name} for actor {self.actor.id}"
+            )
             return True
 
         except Exception as e:
@@ -156,11 +163,15 @@ class ServiceClient:
             return False
 
         try:
-            token_response = self.authenticator.refresh_access_token(self._refresh_token)
+            token_response = self.authenticator.refresh_access_token(
+                self._refresh_token
+            )
 
             if token_response and "access_token" in token_response:
                 new_access_token = token_response["access_token"]
-                new_refresh_token = token_response.get("refresh_token", self._refresh_token)
+                new_refresh_token = token_response.get(
+                    "refresh_token", self._refresh_token
+                )
 
                 self._save_tokens(new_access_token, new_refresh_token)
                 logger.info(f"Refreshed access token for {self.service_config.name}")
@@ -171,9 +182,14 @@ class ServiceClient:
 
         return False
 
-    def _make_request(self, method: str, endpoint: str, params: dict[str, Any] | None = None,
-                     data: dict[str, Any] | str | bytes | None = None,
-                     headers: dict[str, str] | None = None) -> dict[str, Any] | None:
+    def _make_request(
+        self,
+        method: str,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | str | bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
         """
         Make authenticated API request to the service.
 
@@ -192,17 +208,19 @@ class ServiceClient:
             return None
 
         # Build full URL
-        if endpoint.startswith(('http://', 'https://')):
+        if endpoint.startswith(("http://", "https://")):
             url = endpoint
         elif self.service_config.base_api_url:
             url = urljoin(self.service_config.base_api_url, endpoint)
         else:
-            raise ValueError(f"No base_api_url configured for {self.service_config.name} and endpoint is not absolute")
+            raise ValueError(
+                f"No base_api_url configured for {self.service_config.name} and endpoint is not absolute"
+            )
 
         # Prepare headers
         request_headers = {
             "Authorization": f"Bearer {self._access_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         if headers:
             request_headers.update(headers)
@@ -219,12 +237,14 @@ class ServiceClient:
                 params=params,
                 data=data,
                 headers=request_headers,
-                timeout=(5, 30)  # 5s connect, 30s read timeout
+                timeout=(5, 30),  # 5s connect, 30s read timeout
             )
 
             # Handle authentication errors
             if response.status_code == 401:
-                logger.info(f"Access token expired for {self.service_config.name}, attempting refresh")
+                logger.info(
+                    f"Access token expired for {self.service_config.name}, attempting refresh"
+                )
                 if self._refresh_token_if_needed():
                     # Retry with new token
                     request_headers["Authorization"] = f"Bearer {self._access_token}"
@@ -234,15 +254,19 @@ class ServiceClient:
                         params=params,
                         data=data,
                         headers=request_headers,
-                        timeout=(5, 30)
+                        timeout=(5, 30),
                     )
                 else:
-                    logger.error(f"Unable to refresh token for {self.service_config.name}")
+                    logger.error(
+                        f"Unable to refresh token for {self.service_config.name}"
+                    )
                     return None
 
             # Handle other error status codes
             if response.status_code >= 400:
-                logger.error(f"API request failed for {self.service_config.name}: {response.status_code} {response.text}")
+                logger.error(
+                    f"API request failed for {self.service_config.name}: {response.status_code} {response.text}"
+                )
                 return None
 
             # Return JSON response or empty dict for 204 No Content
@@ -255,21 +279,33 @@ class ServiceClient:
             logger.error(f"Error making request to {self.service_config.name}: {e}")
             return None
 
-    def get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def get(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
         """Make GET request to the service API."""
         return self._make_request("GET", endpoint, params=params)
 
-    def post(self, endpoint: str, data: dict[str, Any] | str | bytes | None = None,
-             params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def post(
+        self,
+        endpoint: str,
+        data: dict[str, Any] | str | bytes | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Make POST request to the service API."""
         return self._make_request("POST", endpoint, params=params, data=data)
 
-    def put(self, endpoint: str, data: dict[str, Any] | str | bytes | None = None,
-            params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def put(
+        self,
+        endpoint: str,
+        data: dict[str, Any] | str | bytes | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Make PUT request to the service API."""
         return self._make_request("PUT", endpoint, params=params, data=data)
 
-    def delete(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def delete(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
         """Make DELETE request to the service API."""
         return self._make_request("DELETE", endpoint, params=params)
 
@@ -283,13 +319,17 @@ class ServiceClient:
                 response = requests.post(
                     self.service_config.revocation_uri,
                     data={"token": self._access_token},
-                    timeout=(5, 10)
+                    timeout=(5, 10),
                 )
                 if response.status_code >= 400:
-                    logger.warning(f"Failed to revoke token with {self.service_config.name}: {response.status_code}")
+                    logger.warning(
+                        f"Failed to revoke token with {self.service_config.name}: {response.status_code}"
+                    )
                     success = False
             except Exception as e:
-                logger.error(f"Error revoking token with {self.service_config.name}: {e}")
+                logger.error(
+                    f"Error revoking token with {self.service_config.name}: {e}"
+                )
                 success = False
 
         # Clear stored tokens

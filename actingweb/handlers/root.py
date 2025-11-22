@@ -4,7 +4,6 @@ from actingweb.handlers import base_handler
 
 
 class RootHandler(base_handler.BaseHandler):
-
     def get(self, actor_id):
         if self.request.get("_method") == "DELETE":
             self.delete(actor_id)

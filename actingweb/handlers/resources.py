@@ -5,9 +5,10 @@ from actingweb.handlers import base_handler
 
 
 class ResourcesHandler(base_handler.BaseHandler):
-
     def get(self, actor_id, name):
-        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "resources", "resources", name
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -18,7 +19,9 @@ class ResourcesHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, {"method": "GET"})
+                pair = self.hooks.execute_callback_hooks(
+                    f"resource_{name}", actor_interface, {"method": "GET"}
+                )
         if pair:
             out = json.dumps(pair)
             if self.response:
@@ -30,7 +33,9 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def delete(self, actor_id, name):
-        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "resources", "resources", name
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -41,7 +46,9 @@ class ResourcesHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, {"method": "DELETE"})
+                pair = self.hooks.execute_callback_hooks(
+                    f"resource_{name}", actor_interface, {"method": "DELETE"}
+                )
         if pair:
             if isinstance(pair, int) and 100 <= pair <= 999:
                 return
@@ -56,7 +63,9 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def put(self, actor_id, name):
-        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "resources", "resources", name
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -83,7 +92,9 @@ class ResourcesHandler(base_handler.BaseHandler):
             if actor_interface:
                 data = params.copy()
                 data["method"] = "PUT"
-                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, data)
+                pair = self.hooks.execute_callback_hooks(
+                    f"resource_{name}", actor_interface, data
+                )
         if pair:
             if isinstance(pair, int) and 100 <= pair <= 999:
                 return
@@ -98,7 +109,9 @@ class ResourcesHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
 
     def post(self, actor_id, name):
-        auth_result = self._authenticate_dual_context(actor_id, "resources", "resources", name)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "resources", "resources", name
+        )
         if not auth_result.success:
             return
         myself = auth_result.actor
@@ -125,7 +138,9 @@ class ResourcesHandler(base_handler.BaseHandler):
             if actor_interface:
                 data = params.copy()
                 data["method"] = "POST"
-                pair = self.hooks.execute_callback_hooks(f"resource_{name}", actor_interface, data)
+                pair = self.hooks.execute_callback_hooks(
+                    f"resource_{name}", actor_interface, data
+                )
         if pair:
             if isinstance(pair, int) and 100 <= pair <= 999:
                 return

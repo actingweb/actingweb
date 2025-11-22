@@ -280,7 +280,9 @@ class TestMCPPermissionErrorHandling:
             data = response.json()
 
             # Response must have either result or error, not both
-            assert ("result" in data) != ("error" in data), "Must have either result or error"
+            assert ("result" in data) != ("error" in data), (
+                "Must have either result or error"
+            )
 
             # If there's an error, verify it's properly formatted
             if "error" in data:
@@ -368,7 +370,9 @@ class TestMCPPermissionFiltering:
         # Should get the same tools both times
         tools1_names = {t["name"] for t in tools1}
         tools2_names = {t["name"] for t in tools2}
-        assert tools1_names == tools2_names, "Tool list should be consistent across requests"
+        assert tools1_names == tools2_names, (
+            "Tool list should be consistent across requests"
+        )
 
 
 class TestMCPRuntimeContextIntegration:
@@ -402,7 +406,9 @@ class TestMCPRuntimeContextIntegration:
 
         assert response.status_code == 200
         data = response.json()
-        assert "result" in data, "Should have result when authenticated with proper context"
+        assert "result" in data, (
+            "Should have result when authenticated with proper context"
+        )
 
         # The key assertion: tools should be filtered based on permissions
         # If context is not set, ALL tools would be returned (no filtering)

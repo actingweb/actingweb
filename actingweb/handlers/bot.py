@@ -1,9 +1,7 @@
-
 from actingweb.handlers import base_handler
 
 
 class BotHandler(base_handler.BaseHandler):
-
     def post(self, path):
         """Handles POST callbacks for bots."""
         # Validate bot configuration and token
@@ -19,7 +17,7 @@ class BotHandler(base_handler.BaseHandler):
             hook_data = {
                 "path": path,
                 "method": "POST",
-                "bot_token": bot_token  # Provide bot token to hooks for service calls
+                "bot_token": bot_token,  # Provide bot token to hooks for service calls
             }
             # Parse request body if available
             try:
@@ -30,6 +28,7 @@ class BotHandler(base_handler.BaseHandler):
                     else:
                         body_str = body
                     import json
+
                     hook_data["body"] = json.loads(body_str)
             except (TypeError, ValueError, KeyError):
                 pass  # No body or invalid JSON

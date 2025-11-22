@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from actingweb.interface import ActingWebApp
 
 # Suppress uvicorn access logs for cleaner test output
-logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 def create_test_app(
@@ -73,7 +73,7 @@ def create_test_app(
     fastapi_app = FastAPI(title="ActingWeb Test Harness")
 
     # Get templates directory for FastAPI
-    template_dir = os.path.join(os.path.dirname(__file__), 'templates')
+    template_dir = os.path.join(os.path.dirname(__file__), "templates")
 
     # Integrate with FastAPI (this will automatically initialize system actors)
     aw_app.integrate_fastapi(fastapi_app, templates_dir=template_dir)

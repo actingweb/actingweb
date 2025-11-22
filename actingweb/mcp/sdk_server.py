@@ -63,14 +63,15 @@ from .decorators import get_mcp_metadata, is_mcp_exposed
 
 logger = logging.getLogger(__name__)
 
+
 def _get_config_from_actor(actor: Any) -> Any:
     """Helper function to extract config from actor."""
     # Try different ways to get config depending on actor implementation
-    if hasattr(actor, '_config'):
+    if hasattr(actor, "_config"):
         return actor._config
-    elif hasattr(actor, 'config'):
+    elif hasattr(actor, "config"):
         return actor.config
-    elif hasattr(actor, 'core_actor') and hasattr(actor.core_actor, 'config'):
+    elif hasattr(actor, "core_actor") and hasattr(actor.core_actor, "config"):
         return actor.core_actor.config
     return None
 
@@ -85,7 +86,9 @@ class ActingWebMCPServer:
 
     def __init__(self, actor_id: str, hooks: HookRegistry, actor: ActorInterface):
         if not MCP_AVAILABLE:
-            raise ImportError("Official MCP SDK not available. Install with: pip install mcp")
+            raise ImportError(
+                "Official MCP SDK not available. Install with: pip install mcp"
+            )
 
         self.actor_id = actor_id
         self.hooks = hooks
@@ -108,8 +111,8 @@ class ActingWebMCPServer:
 
             if self.hooks:
                 # Get trust context and peer_id first
-                trust_context = getattr(self.actor, '_mcp_trust_context', None)
-                peer_id = trust_context.get('peer_id') if trust_context else None
+                trust_context = getattr(self.actor, "_mcp_trust_context", None)
+                peer_id = trust_context.get("peer_id") if trust_context else None
 
                 # Get permission evaluator and trust context
                 config = _get_config_from_actor(self.actor)
@@ -119,7 +122,9 @@ class ActingWebMCPServer:
                     try:
                         evaluator = get_permission_evaluator(config)
                     except RuntimeError:
-                        logger.debug("Permission evaluator not initialized - skipping permission checks")
+                        logger.debug(
+                            "Permission evaluator not initialized - skipping permission checks"
+                        )
                         evaluator = None
                     except Exception as e:
                         logger.warning(f"Error accessing permission evaluator: {e}")
@@ -135,18 +140,30 @@ class ActingWebMCPServer:
                                 # Check permission for this tool
                                 if peer_id and evaluator:
                                     permission_result = evaluator.evaluate_permission(
-                                        self.actor_id, peer_id, PermissionType.TOOLS, tool_name
+                                        self.actor_id,
+                                        peer_id,
+                                        PermissionType.TOOLS,
+                                        tool_name,
                                     )
                                     if permission_result != PermissionResult.ALLOWED:
-                                        logger.debug(f"Tool '{tool_name}' filtered out - access denied for peer {peer_id}")
+                                        logger.debug(
+                                            f"Tool '{tool_name}' filtered out - access denied for peer {peer_id}"
+                                        )
                                         continue
 
                                 # Build tool with optional fields
                                 tool_kwargs = {
                                     "name": tool_name,
-                                    "description": metadata.get("description", f"Execute {action_name} action"),
+                                    "description": metadata.get(
+                                        "description", f"Execute {action_name} action"
+                                    ),
                                     "inputSchema": metadata.get(
-                                        "input_schema", {"type": "object", "properties": {}, "required": []}
+                                        "input_schema",
+                                        {
+                                            "type": "object",
+                                            "properties": {},
+                                            "required": [],
+                                        },
                                     ),
                                 }
 
@@ -156,22 +173,31 @@ class ActingWebMCPServer:
 
                                 # Add optional output schema
                                 if metadata.get("output_schema"):
-                                    tool_kwargs["outputSchema"] = metadata["output_schema"]
+                                    tool_kwargs["outputSchema"] = metadata[
+                                        "output_schema"
+                                    ]
 
                                 # Add optional annotations for safety metadata
                                 if metadata.get("annotations"):
                                     from mcp.types import ToolAnnotations
+
                                     annotations_dict = metadata["annotations"]
-                                    tool_kwargs["annotations"] = ToolAnnotations(**annotations_dict)
+                                    tool_kwargs["annotations"] = ToolAnnotations(
+                                        **annotations_dict
+                                    )
 
                                 tool = Tool(**tool_kwargs)
                                 tools.append(tool)
 
-            logger.debug(f"Listed {len(tools)} tools for actor {self.actor_id} (after permission filtering)")
+            logger.debug(
+                f"Listed {len(tools)} tools for actor {self.actor_id} (after permission filtering)"
+            )
             return tools
 
         @self.server.call_tool()
-        async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:  # pyright: ignore[reportUnusedFunction]
+        async def handle_call_tool(
+            name: str, arguments: dict[str, Any]
+        ) -> list[TextContent]:  # pyright: ignore[reportUnusedFunction]
             """Execute a tool (ActingWeb action hook) with permission checking."""
             if not self.hooks:
                 raise ValueError("No hooks registry available")
@@ -179,16 +205,20 @@ class ActingWebMCPServer:
             # Check permission before execution
             config = _get_config_from_actor(self.actor)
             evaluator = get_permission_evaluator(config) if config else None
-            trust_context = getattr(self.actor, '_mcp_trust_context', None)
-            peer_id = trust_context.get('peer_id') if trust_context else None
+            trust_context = getattr(self.actor, "_mcp_trust_context", None)
+            peer_id = trust_context.get("peer_id") if trust_context else None
 
             if peer_id and evaluator:
                 permission_result = evaluator.evaluate_permission(
                     self.actor_id, peer_id, PermissionType.TOOLS, name
                 )
                 if permission_result != PermissionResult.ALLOWED:
-                    logger.warning(f"Tool execution denied for '{name}' - peer {peer_id} lacks permission")
-                    raise ValueError(f"Access denied: You don't have permission to use tool '{name}'")
+                    logger.warning(
+                        f"Tool execution denied for '{name}' - peer {peer_id} lacks permission"
+                    )
+                    raise ValueError(
+                        f"Access denied: You don't have permission to use tool '{name}'"
+                    )
 
             # Find the corresponding action hook
             for action_name, hook_list in self.hooks._action_hooks.items():
@@ -214,12 +244,18 @@ class ActingWebMCPServer:
                                     else:
                                         result_text = str(result)
 
-                                    logger.debug(f"Tool {name} executed successfully for actor {self.actor_id}")
+                                    logger.debug(
+                                        f"Tool {name} executed successfully for actor {self.actor_id}"
+                                    )
                                     return [TextContent(type="text", text=result_text)]
 
                                 except Exception as e:
                                     logger.error(f"Error executing tool {name}: {e}")
-                                    return [TextContent(type="text", text=f"Error: {str(e)}")]
+                                    return [
+                                        TextContent(
+                                            type="text", text=f"Error: {str(e)}"
+                                        )
+                                    ]
 
             raise ValueError(f"Tool not found: {name}")
 
@@ -232,8 +268,8 @@ class ActingWebMCPServer:
             # Get permission evaluator and trust context
             config = _get_config_from_actor(self.actor)
             evaluator = get_permission_evaluator(config) if config else None
-            trust_context = getattr(self.actor, '_mcp_trust_context', None)
-            peer_id = trust_context.get('peer_id') if trust_context else None
+            trust_context = getattr(self.actor, "_mcp_trust_context", None)
+            peer_id = trust_context.get("peer_id") if trust_context else None
 
             # Dynamic resources from method hooks decorated with @mcp_resource
             if self.hooks and hasattr(self.hooks, "_method_hooks"):
@@ -242,15 +278,23 @@ class ActingWebMCPServer:
                         if is_mcp_exposed(hook):
                             metadata = get_mcp_metadata(hook)
                             if metadata and metadata.get("type") == "resource":
-                                uri_template = metadata.get("uri_template") or f"actingweb://{method_name}"
+                                uri_template = (
+                                    metadata.get("uri_template")
+                                    or f"actingweb://{method_name}"
+                                )
 
                                 # Check permission for this resource
                                 if peer_id and evaluator:
                                     permission_result = evaluator.evaluate_permission(
-                                        self.actor_id, peer_id, PermissionType.RESOURCES, uri_template
+                                        self.actor_id,
+                                        peer_id,
+                                        PermissionType.RESOURCES,
+                                        uri_template,
                                     )
                                     if permission_result != PermissionResult.ALLOWED:
-                                        logger.debug(f"Resource '{uri_template}' filtered out - access denied for peer {peer_id}")
+                                        logger.debug(
+                                            f"Resource '{uri_template}' filtered out - access denied for peer {peer_id}"
+                                        )
                                         continue
 
                                 # Create a resource entry using the template
@@ -258,8 +302,13 @@ class ActingWebMCPServer:
                                     res = Resource(
                                         uri=uri_template,  # type: ignore[arg-type]
                                         name=metadata.get("name", method_name),
-                                        description=metadata.get("description", f"Resource provided by {method_name}"),
-                                        mimeType=metadata.get("mime_type", "application/json"),
+                                        description=metadata.get(
+                                            "description",
+                                            f"Resource provided by {method_name}",
+                                        ),
+                                        mimeType=metadata.get(
+                                            "mime_type", "application/json"
+                                        ),
                                     )
                                     resources.append(res)
                                 except Exception as e:
@@ -267,7 +316,9 @@ class ActingWebMCPServer:
                                         f"Skipping resource for method {method_name} due to error building descriptor: {e}"
                                     )
 
-            logger.debug(f"Listed {len(resources)} resources for actor {self.actor_id} (after permission filtering)")
+            logger.debug(
+                f"Listed {len(resources)} resources for actor {self.actor_id} (after permission filtering)"
+            )
             return resources
 
         @self.server.read_resource()
@@ -278,16 +329,20 @@ class ActingWebMCPServer:
             # Check permission before accessing resource
             config = _get_config_from_actor(self.actor)
             evaluator = get_permission_evaluator(config) if config else None
-            trust_context = getattr(self.actor, '_mcp_trust_context', None)
-            peer_id = trust_context.get('peer_id') if trust_context else None
+            trust_context = getattr(self.actor, "_mcp_trust_context", None)
+            peer_id = trust_context.get("peer_id") if trust_context else None
 
             if peer_id and evaluator:
                 permission_result = evaluator.evaluate_permission(
                     self.actor_id, peer_id, PermissionType.RESOURCES, uri_str
                 )
                 if permission_result != PermissionResult.ALLOWED:
-                    logger.warning(f"Resource access denied for '{uri_str}' - peer {peer_id} lacks permission")
-                    raise ValueError(f"Access denied: You don't have permission to access resource '{uri_str}'")
+                    logger.warning(
+                        f"Resource access denied for '{uri_str}' - peer {peer_id} lacks permission"
+                    )
+                    raise ValueError(
+                        f"Access denied: You don't have permission to access resource '{uri_str}'"
+                    )
 
             try:
                 if uri_str == "actingweb://properties/all":
@@ -295,9 +350,18 @@ class ActingWebMCPServer:
                     props = {}
                     if hasattr(self.actor, "properties") and self.actor.properties:
                         # Get property names and values, excluding sensitive ones
-                        sensitive_props = {"oauth_token", "oauth_refresh_token", "auth_token", "password", "secret"}
+                        sensitive_props = {
+                            "oauth_token",
+                            "oauth_refresh_token",
+                            "auth_token",
+                            "password",
+                            "secret",
+                        }
                         for prop_name in dir(self.actor.properties):
-                            if not prop_name.startswith("_") and prop_name not in sensitive_props:
+                            if (
+                                not prop_name.startswith("_")
+                                and prop_name not in sensitive_props
+                            ):
                                 try:
                                     value = getattr(self.actor.properties, prop_name)
                                     if not callable(value):
@@ -307,7 +371,9 @@ class ActingWebMCPServer:
 
                     import json
 
-                    return json.dumps({"actor_id": self.actor_id, "properties": props}, indent=2)
+                    return json.dumps(
+                        {"actor_id": self.actor_id, "properties": props}, indent=2
+                    )
 
                 else:
                     # Try dynamic resource hooks from @mcp_resource-decorated method hooks
@@ -317,19 +383,26 @@ class ActingWebMCPServer:
                                 if is_mcp_exposed(hook):
                                     metadata = get_mcp_metadata(hook)
                                     if metadata and metadata.get("type") == "resource":
-                                        template = metadata.get("uri_template") or f"actingweb://{method_name}"
+                                        template = (
+                                            metadata.get("uri_template")
+                                            or f"actingweb://{method_name}"
+                                        )
 
                                         # Convert template to regex and attempt a match
                                         variables: dict[str, str] | None = None
                                         try:
-                                            variables = _match_uri_template(template, uri_str)
+                                            variables = _match_uri_template(
+                                                template, uri_str
+                                            )
                                         except Exception:
                                             variables = None
 
                                         if variables is not None:
                                             # Execute the method hook with extracted variables
                                             try:
-                                                result = hook(self.actor, method_name, variables)
+                                                result = hook(
+                                                    self.actor, method_name, variables
+                                                )
                                                 if asyncio.iscoroutine(result):
                                                     result = await result
 
@@ -362,8 +435,8 @@ class ActingWebMCPServer:
 
             if self.hooks:
                 # Get trust context and peer_id first
-                trust_context = getattr(self.actor, '_mcp_trust_context', None)
-                peer_id = trust_context.get('peer_id') if trust_context else None
+                trust_context = getattr(self.actor, "_mcp_trust_context", None)
+                peer_id = trust_context.get("peer_id") if trust_context else None
 
                 # Get permission evaluator and trust context
                 config = _get_config_from_actor(self.actor)
@@ -373,7 +446,9 @@ class ActingWebMCPServer:
                     try:
                         evaluator = get_permission_evaluator(config)
                     except RuntimeError:
-                        logger.debug("Permission evaluator not initialized - skipping permission checks")
+                        logger.debug(
+                            "Permission evaluator not initialized - skipping permission checks"
+                        )
                         evaluator = None
                     except Exception as e:
                         logger.warning(f"Error accessing permission evaluator: {e}")
@@ -389,24 +464,36 @@ class ActingWebMCPServer:
                                 # Check permission for this prompt
                                 if peer_id and evaluator:
                                     permission_result = evaluator.evaluate_permission(
-                                        self.actor_id, peer_id, PermissionType.PROMPTS, prompt_name
+                                        self.actor_id,
+                                        peer_id,
+                                        PermissionType.PROMPTS,
+                                        prompt_name,
                                     )
                                     if permission_result != PermissionResult.ALLOWED:
-                                        logger.debug(f"Prompt '{prompt_name}' filtered out - access denied for peer {peer_id}")
+                                        logger.debug(
+                                            f"Prompt '{prompt_name}' filtered out - access denied for peer {peer_id}"
+                                        )
                                         continue
 
                                 prompt = Prompt(
                                     name=prompt_name,
-                                    description=metadata.get("description", f"Generate prompt for {method_name}"),
+                                    description=metadata.get(
+                                        "description",
+                                        f"Generate prompt for {method_name}",
+                                    ),
                                     arguments=metadata.get("arguments", []),
                                 )
                                 prompts.append(prompt)
 
-            logger.debug(f"Listed {len(prompts)} prompts for actor {self.actor_id} (after permission filtering)")
+            logger.debug(
+                f"Listed {len(prompts)} prompts for actor {self.actor_id} (after permission filtering)"
+            )
             return prompts
 
         @self.server.get_prompt()
-        async def handle_get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:  # pyright: ignore[reportUnusedFunction]
+        async def handle_get_prompt(
+            name: str, arguments: dict[str, str] | None
+        ) -> GetPromptResult:  # pyright: ignore[reportUnusedFunction]
             """Get a prompt by name (execute method hook) with permission checking."""
             if not self.hooks:
                 raise ValueError("No hooks registry available")
@@ -414,16 +501,20 @@ class ActingWebMCPServer:
             # Check permission before execution
             config = _get_config_from_actor(self.actor)
             evaluator = get_permission_evaluator(config) if config else None
-            trust_context = getattr(self.actor, '_mcp_trust_context', None)
-            peer_id = trust_context.get('peer_id') if trust_context else None
+            trust_context = getattr(self.actor, "_mcp_trust_context", None)
+            peer_id = trust_context.get("peer_id") if trust_context else None
 
             if peer_id and evaluator:
                 permission_result = evaluator.evaluate_permission(
                     self.actor_id, peer_id, PermissionType.PROMPTS, name
                 )
                 if permission_result != PermissionResult.ALLOWED:
-                    logger.warning(f"Prompt access denied for '{name}' - peer {peer_id} lacks permission")
-                    raise ValueError(f"Access denied: You don't have permission to access prompt '{name}'")
+                    logger.warning(
+                        f"Prompt access denied for '{name}' - peer {peer_id} lacks permission"
+                    )
+                    raise ValueError(
+                        f"Access denied: You don't have permission to access prompt '{name}'"
+                    )
 
             # Find the corresponding method hook
             for method_name, hook_list in self.hooks._method_hooks.items():
@@ -452,20 +543,27 @@ class ActingWebMCPServer:
                                     else:
                                         prompt_text = str(result)
 
-                                    logger.debug(f"Prompt {name} generated successfully for actor {self.actor_id}")
+                                    logger.debug(
+                                        f"Prompt {name} generated successfully for actor {self.actor_id}"
+                                    )
                                     # Return as GetPromptResult - typically contains the prompt text
                                     return GetPromptResult(
                                         description=f"Generated prompt for {name}",
                                         messages=[
                                             PromptMessage(
-                                                role="user", content=TextContent(type="text", text=prompt_text)
+                                                role="user",
+                                                content=TextContent(
+                                                    type="text", text=prompt_text
+                                                ),
                                             )
                                         ],
                                     )
 
                                 except Exception as e:
                                     logger.error(f"Error generating prompt {name}: {e}")
-                                    raise ValueError(f"Error generating prompt {name}: {str(e)}") from e
+                                    raise ValueError(
+                                        f"Error generating prompt {name}: {str(e)}"
+                                    ) from e
 
             raise ValueError(f"Prompt not found: {name}")
 
@@ -481,7 +579,9 @@ class MCPServerManager:
     def __init__(self) -> None:
         self._servers: dict[str, ActingWebMCPServer] = {}
 
-    def get_server(self, actor_id: str, hook_registry: HookRegistry, actor: ActorInterface) -> ActingWebMCPServer:
+    def get_server(
+        self, actor_id: str, hook_registry: HookRegistry, actor: ActorInterface
+    ) -> ActingWebMCPServer:
         """
         Get or create an MCP server for the given actor.
 

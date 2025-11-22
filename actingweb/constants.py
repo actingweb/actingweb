@@ -110,15 +110,23 @@ AUTH_CODE_INDEX_BUCKET = "auth_code_index"
 ACCESS_TOKEN_INDEX_BUCKET = "access_token_index"
 REFRESH_TOKEN_INDEX_BUCKET = "refresh_token_index"
 CLIENT_INDEX_BUCKET = "client_index"
-OAUTH_SESSION_BUCKET = "oauth_sessions"  # Temporary OAuth sessions for postponed actor creation
+OAUTH_SESSION_BUCKET = (
+    "oauth_sessions"  # Temporary OAuth sessions for postponed actor creation
+)
 
 # OAuth2 token storage (per-trust)
-OAUTH_TOKENS_PREFIX = "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREFIX + peer_id]
+OAUTH_TOKENS_PREFIX = (
+    "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREFIX + peer_id]
+)
 
 # Establishment methods for trust relationships
 ESTABLISHED_VIA_ACTINGWEB = "actingweb"  # Traditional ActingWeb protocol handshake
-ESTABLISHED_VIA_OAUTH2_INTERACTIVE = "oauth2_interactive"  # OAuth2 interactive user authentication flow
-ESTABLISHED_VIA_OAUTH2_CLIENT = "oauth2_client"  # OAuth2 client credentials flow (MCP clients)
+ESTABLISHED_VIA_OAUTH2_INTERACTIVE = (
+    "oauth2_interactive"  # OAuth2 interactive user authentication flow
+)
+ESTABLISHED_VIA_OAUTH2_CLIENT = (
+    "oauth2_client"  # OAuth2 client credentials flow (MCP clients)
+)
 
 # Email verification settings
 EMAIL_VERIFICATION_TOKEN_LENGTH = 32  # Length of URL-safe verification tokens

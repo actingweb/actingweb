@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class PermissionResult(Enum):
     """Permission evaluation results."""
+
     ALLOWED = "allowed"
     DENIED = "denied"
     NOT_FOUND = "not_found"  # No matching rule found
@@ -37,6 +38,7 @@ class PermissionResult(Enum):
 
 class PermissionType(Enum):
     """Types of permissions that can be evaluated."""
+
     PROPERTIES = "properties"
     METHODS = "methods"
     ACTIONS = "actions"
@@ -67,7 +69,7 @@ class PermissionEvaluator:
         peer_id: str,
         permission_type: PermissionType,
         target: str,
-        operation: str = "access"
+        operation: str = "access",
     ) -> PermissionResult:
         """
         Evaluate a specific permission request.
@@ -86,13 +88,17 @@ class PermissionEvaluator:
             # Get the effective permissions for this trust relationship
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
-                logger.warning(f"No effective permissions found for {actor_id}:{peer_id}")
+                logger.warning(
+                    f"No effective permissions found for {actor_id}:{peer_id}"
+                )
                 return PermissionResult.NOT_FOUND
 
             # Get the permission rules for this type
             permission_rules = effective_perms.get(permission_type.value)
             if not permission_rules:
-                logger.debug(f"No {permission_type.value} permissions defined for {actor_id}:{peer_id}")
+                logger.debug(
+                    f"No {permission_type.value} permissions defined for {actor_id}:{peer_id}"
+                )
                 return PermissionResult.NOT_FOUND
 
             # Evaluate the permission rules
@@ -100,19 +106,19 @@ class PermissionEvaluator:
 
             # Only log denials for security monitoring
             if result == PermissionResult.DENIED:
-                logger.warning(f"Permission denied: {actor_id}:{peer_id} -> {permission_type.value}:{target}:{operation}")
+                logger.warning(
+                    f"Permission denied: {actor_id}:{peer_id} -> {permission_type.value}:{target}:{operation}"
+                )
             return result
 
         except Exception as e:
-            logger.error(f"Error evaluating permission for {actor_id}:{peer_id} -> {permission_type.value}:{target}: {e}")
+            logger.error(
+                f"Error evaluating permission for {actor_id}:{peer_id} -> {permission_type.value}:{target}: {e}"
+            )
             return PermissionResult.DENIED
 
     def evaluate_property_access(
-        self,
-        actor_id: str,
-        peer_id: str,
-        property_path: str,
-        operation: str
+        self, actor_id: str, peer_id: str, property_path: str, operation: str
     ) -> PermissionResult:
         """
         Evaluate property access permissions.
@@ -131,14 +137,11 @@ class PermissionEvaluator:
             peer_id=peer_id,
             permission_type=PermissionType.PROPERTIES,
             target=property_path,
-            operation=operation
+            operation=operation,
         )
 
     def evaluate_method_access(
-        self,
-        actor_id: str,
-        peer_id: str,
-        method_name: str
+        self, actor_id: str, peer_id: str, method_name: str
     ) -> PermissionResult:
         """
         Evaluate method access permissions.
@@ -156,14 +159,11 @@ class PermissionEvaluator:
             peer_id=peer_id,
             permission_type=PermissionType.METHODS,
             target=method_name,
-            operation="call"
+            operation="call",
         )
 
     def evaluate_action_access(
-        self,
-        actor_id: str,
-        peer_id: str,
-        action_name: str
+        self, actor_id: str, peer_id: str, action_name: str
     ) -> PermissionResult:
         """
         Evaluate action access permissions.
@@ -181,14 +181,11 @@ class PermissionEvaluator:
             peer_id=peer_id,
             permission_type=PermissionType.ACTIONS,
             target=action_name,
-            operation="execute"
+            operation="execute",
         )
 
     def evaluate_tool_access(
-        self,
-        actor_id: str,
-        peer_id: str,
-        tool_name: str
+        self, actor_id: str, peer_id: str, tool_name: str
     ) -> PermissionResult:
         """
         Evaluate MCP tool access permissions.
@@ -206,15 +203,11 @@ class PermissionEvaluator:
             peer_id=peer_id,
             permission_type=PermissionType.TOOLS,
             target=tool_name,
-            operation="use"
+            operation="use",
         )
 
     def evaluate_resource_access(
-        self,
-        actor_id: str,
-        peer_id: str,
-        resource_path: str,
-        operation: str = "read"
+        self, actor_id: str, peer_id: str, resource_path: str, operation: str = "read"
     ) -> PermissionResult:
         """
         Evaluate MCP resource access permissions.
@@ -233,14 +226,11 @@ class PermissionEvaluator:
             peer_id=peer_id,
             permission_type=PermissionType.RESOURCES,
             target=resource_path,
-            operation=operation
+            operation=operation,
         )
 
     def evaluate_prompt_access(
-        self,
-        actor_id: str,
-        peer_id: str,
-        prompt_name: str
+        self, actor_id: str, peer_id: str, prompt_name: str
     ) -> PermissionResult:
         """
         Evaluate MCP prompt access permissions.
@@ -258,7 +248,7 @@ class PermissionEvaluator:
             peer_id=peer_id,
             permission_type=PermissionType.PROMPTS,
             target=prompt_name,
-            operation="invoke"
+            operation="invoke",
         )
 
     def get_allowed_items(
@@ -266,7 +256,7 @@ class PermissionEvaluator:
         actor_id: str,
         peer_id: str,
         permission_type: PermissionType,
-        operation: str = "access"
+        operation: str = "access",
     ) -> list[str]:
         """
         Get list of explicitly allowed items for a permission type.
@@ -310,10 +300,14 @@ class PermissionEvaluator:
             return allowed_items
 
         except Exception as e:
-            logger.error(f"Error getting allowed items for {actor_id}:{peer_id} -> {permission_type.value}: {e}")
+            logger.error(
+                f"Error getting allowed items for {actor_id}:{peer_id} -> {permission_type.value}: {e}"
+            )
             return []
 
-    def _get_effective_permissions(self, actor_id: str, peer_id: str) -> dict[str, Any] | None:
+    def _get_effective_permissions(
+        self, actor_id: str, peer_id: str
+    ) -> dict[str, Any] | None:
         """
         Get the effective permissions for a trust relationship.
 
@@ -347,7 +341,14 @@ class PermissionEvaluator:
             override_dict = {}
 
             # Extract non-None override fields
-            for field in ["properties", "methods", "actions", "tools", "resources", "prompts"]:
+            for field in [
+                "properties",
+                "methods",
+                "actions",
+                "tools",
+                "resources",
+                "prompts",
+            ]:
                 override_value = getattr(permission_override, field, None)
                 if override_value is not None:
                     override_dict[field] = override_value
@@ -359,7 +360,9 @@ class PermissionEvaluator:
 
         return effective_permissions
 
-    def _lookup_trust_type_from_database(self, actor_id: str, peer_id: str) -> str | None:
+    def _lookup_trust_type_from_database(
+        self, actor_id: str, peer_id: str
+    ) -> str | None:
         """
         Look up trust type (relationship) from the database.
 
@@ -387,14 +390,13 @@ class PermissionEvaluator:
             return None
 
         except Exception as e:
-            logger.error(f"Error looking up trust relationship {actor_id}:{peer_id}: {e}")
+            logger.error(
+                f"Error looking up trust relationship {actor_id}:{peer_id}: {e}"
+            )
             return None
 
     def _evaluate_rules(
-        self,
-        permission_rules: dict[str, Any],
-        target: str,
-        operation: str
+        self, permission_rules: dict[str, Any], target: str, operation: str
     ) -> PermissionResult:
         """
         Evaluate permission rules against a specific target and operation.
@@ -492,21 +494,22 @@ class PermissionEvaluator:
         escaped = re.escape(pattern)
 
         # Replace escaped glob wildcards with regex equivalents
-        escaped = escaped.replace(r'\*', '.*')  # * matches any characters
-        escaped = escaped.replace(r'\?', '.')   # ? matches single character
+        escaped = escaped.replace(r"\*", ".*")  # * matches any characters
+        escaped = escaped.replace(r"\?", ".")  # ? matches single character
 
         # Anchor the pattern to match the entire string
-        return f'^{escaped}$'
+        return f"^{escaped}$"
 
 
 # Convenience functions for common permission checks
+
 
 def check_property_access(
     config: config_class.Config,
     actor_id: str,
     peer_id: str,
     property_path: str,
-    operation: str
+    operation: str,
 ) -> bool:
     """
     Quick property access check.
@@ -515,15 +518,14 @@ def check_property_access(
         True if access is allowed, False otherwise
     """
     evaluator = PermissionEvaluator(config)
-    result = evaluator.evaluate_property_access(actor_id, peer_id, property_path, operation)
+    result = evaluator.evaluate_property_access(
+        actor_id, peer_id, property_path, operation
+    )
     return result == PermissionResult.ALLOWED
 
 
 def check_method_access(
-    config: config_class.Config,
-    actor_id: str,
-    peer_id: str,
-    method_name: str
+    config: config_class.Config, actor_id: str, peer_id: str, method_name: str
 ) -> bool:
     """
     Quick method access check.
@@ -537,10 +539,7 @@ def check_method_access(
 
 
 def check_tool_access(
-    config: config_class.Config,
-    actor_id: str,
-    peer_id: str,
-    tool_name: str
+    config: config_class.Config, actor_id: str, peer_id: str, tool_name: str
 ) -> bool:
     """
     Quick MCP tool access check.
@@ -565,6 +564,7 @@ def initialize_permission_evaluator(config: config_class.Config) -> None:
         _permission_evaluator = PermissionEvaluator(config)
         logger.info("Permission evaluator initialized")
 
+
 def get_permission_evaluator(config: config_class.Config) -> PermissionEvaluator:
     """Get the singleton permission evaluator (must be initialized first).
 
@@ -579,5 +579,7 @@ def get_permission_evaluator(config: config_class.Config) -> PermissionEvaluator
             "Call initialize_permission_evaluator() at application startup to avoid this."
         )
         initialize_permission_evaluator(config)
-    assert _permission_evaluator is not None, "PermissionEvaluator should be initialized"
+    assert _permission_evaluator is not None, (
+        "PermissionEvaluator should be initialized"
+    )
     return _permission_evaluator

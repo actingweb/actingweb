@@ -23,7 +23,9 @@ class FakeCoreActor:
         self._trusts: dict[str, dict[str, Any]] = {}
 
     # Minimal API used by TrustManager
-    def get_trust_relationships(self, peerid: str = "", relationship: str = "", trust_type: str = ""):
+    def get_trust_relationships(
+        self, peerid: str = "", relationship: str = "", trust_type: str = ""
+    ):
         if peerid:
             if peerid in self._trusts:
                 return [self._trusts[peerid]]
@@ -91,9 +93,18 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
                 actor._trusts[self._db[db_key]["peerid"]].update(kwargs)  # type: ignore[index]
             return True
 
-    monkeypatch.setitem(__import__("sys").modules, "actingweb.db_dynamodb.db_trust", type("M", (), {"DbTrust": FakeDbTrust}))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "actingweb.db_dynamodb.db_trust",
+        type("M", (), {"DbTrust": FakeDbTrust}),
+    )
 
-    oauth_tokens = {"access_token": "at", "refresh_token": "rt", "expires_at": 1234, "token_type": "Bearer"}
+    oauth_tokens = {
+        "access_token": "at",
+        "refresh_token": "rt",
+        "expires_at": 1234,
+        "token_type": "Bearer",
+    }
     ok = tm.create_or_update_oauth_trust(
         email="user@example.com",
         trust_type="mcp_client",

@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 # Global caches for MCP performance optimization
 _token_cache: dict[str, dict[str, Any]] = {}  # token -> validation data
-_actor_cache: dict[str, dict[str, Any]] = {}  # actor_id -> {actor, trust_context, last_accessed}
+_actor_cache: dict[
+    str, dict[str, Any]
+] = {}  # actor_id -> {actor, trust_context, last_accessed}
 _trust_cache: dict[str, Any] = {}  # actor_id -> trust_relationship
 _cache_ttl = 300  # 5 minutes cache TTL
 
@@ -74,7 +76,9 @@ class MCPHandler(BaseHandler):
 
         # Clean token cache
         expired_tokens = [
-            token for token, data in _token_cache.items() if current_time - data.get("cached_at", 0) > _cache_ttl
+            token
+            for token, data in _token_cache.items()
+            if current_time - data.get("cached_at", 0) > _cache_ttl
         ]
         for token in expired_tokens:
             del _token_cache[token]
@@ -113,7 +117,11 @@ class MCPHandler(BaseHandler):
                     "resources": True,  # We support resources
                     "prompts": True,  # We support prompts
                 },
-                "transport": {"type": "http", "endpoint": "/mcp", "supported_versions": ["2024-11-05"]},
+                "transport": {
+                    "type": "http",
+                    "endpoint": "/mcp",
+                    "supported_versions": ["2024-11-05"],
+                },
                 "authentication": {
                     "required": True,
                     "type": "oauth2",
@@ -156,7 +164,9 @@ class MCPHandler(BaseHandler):
                 self.response.headers["WWW-Authenticate"] = www_auth
                 self.response.set_status(401, "Unauthorized")
 
-                return self._create_jsonrpc_error(request_id, -32002, "Authentication required for MCP access")
+                return self._create_jsonrpc_error(
+                    request_id, -32002, "Authentication required for MCP access"
+                )
 
             # Extract and update client info if provided in the request
             # MCP clients send clientInfo with many requests, not just initialize
@@ -178,11 +188,15 @@ class MCPHandler(BaseHandler):
             elif method == "resources/read":
                 return self._handle_resource_read(request_id, params, actor)
             else:
-                return self._create_jsonrpc_error(request_id, -32601, f"Method not found: {method}")
+                return self._create_jsonrpc_error(
+                    request_id, -32601, f"Method not found: {method}"
+                )
 
         except Exception as e:
             logger.error(f"Error handling MCP POST request: {e}")
-            return self._create_jsonrpc_error(data.get("id"), -32603, f"Internal error: {str(e)}")
+            return self._create_jsonrpc_error(
+                data.get("id"), -32603, f"Internal error: {str(e)}"
+            )
 
     def _has_mcp_tools(self) -> bool:
         """Check if server has any MCP-exposed tools."""
@@ -232,7 +246,9 @@ class MCPHandler(BaseHandler):
                         return True
         return False
 
-    def _handle_initialize(self, request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
+    def _handle_initialize(
+        self, request_id: Any, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle MCP initialize request."""
         # Store client info for later use during OAuth2 authentication
         client_info = params.get("clientInfo", {})
@@ -259,7 +275,9 @@ class MCPHandler(BaseHandler):
 
         # Tools capability
         if self._has_mcp_tools():
-            capabilities["tools"] = {"listChanged": True}  # Indicates tools can be dynamically discovered
+            capabilities["tools"] = {
+                "listChanged": True
+            }  # Indicates tools can be dynamically discovered
 
         # Resources capability
         if self._has_mcp_resources():
@@ -270,7 +288,9 @@ class MCPHandler(BaseHandler):
 
         # Prompts capability
         if self._has_mcp_prompts():
-            capabilities["prompts"] = {"listChanged": True}  # Prompts can be dynamically discovered
+            capabilities["prompts"] = {
+                "listChanged": True
+            }  # Prompts can be dynamically discovered
 
         return {
             "jsonrpc": "2.0",
@@ -312,13 +332,19 @@ class MCPHandler(BaseHandler):
             client_type = None
             try:
                 from ..runtime_context import get_client_info_from_context
+
                 client_info = get_client_info_from_context(actor)
                 if client_info and client_info.get("name"):
                     client_name = client_info["name"].lower()
                     # Classify client type based on name patterns
-                    if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
+                    if any(
+                        pattern in client_name
+                        for pattern in ["openai", "chatgpt", "gpt"]
+                    ):
                         client_type = "chatgpt"
-                    elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
+                    elif any(
+                        pattern in client_name for pattern in ["claude", "anthropic"]
+                    ):
                         client_type = "claude"
                     elif "cursor" in client_name:
                         client_type = "cursor"
@@ -336,9 +362,15 @@ class MCPHandler(BaseHandler):
                             fallback_client_info = cached_info["client_info"]
                             if fallback_client_info.get("name"):
                                 client_name = fallback_client_info["name"].lower()
-                                if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
+                                if any(
+                                    pattern in client_name
+                                    for pattern in ["openai", "chatgpt", "gpt"]
+                                ):
                                     client_type = "chatgpt"
-                                elif any(pattern in client_name for pattern in ["claude", "anthropic"]):
+                                elif any(
+                                    pattern in client_name
+                                    for pattern in ["claude", "anthropic"]
+                                ):
                                     client_type = "claude"
                                 elif "cursor" in client_name:
                                     client_type = "cursor"
@@ -369,7 +401,9 @@ class MCPHandler(BaseHandler):
                     allowed_clients = metadata.get("allowed_clients")
                     if allowed_clients and client_type:
                         if client_type not in allowed_clients:
-                            logger.debug(f"Tool '{tool_name}' filtered out for client type '{client_type}' (allowed: {allowed_clients})")
+                            logger.debug(
+                                f"Tool '{tool_name}' filtered out for client type '{client_type}' (allowed: {allowed_clients})"
+                            )
                             continue
 
                     # Filter by permissions when we have context
@@ -383,10 +417,14 @@ class MCPHandler(BaseHandler):
                                 operation="use",
                             )
                             if decision != PermissionResult.ALLOWED:
-                                logger.debug(f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})")
+                                logger.debug(
+                                    f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})"
+                                )
                                 continue
                         except Exception as e:
-                            logger.warning(f"Error evaluating tool permission for '{tool_name}': {e}")
+                            logger.warning(
+                                f"Error evaluating tool permission for '{tool_name}': {e}"
+                            )
                             # Fail-open on evaluation errors to avoid hard lockouts
 
                     # Use client-specific description if available
@@ -394,7 +432,10 @@ class MCPHandler(BaseHandler):
                     if client_type and client_type in client_descriptions:
                         description = client_descriptions[client_type]
                     else:
-                        description = metadata.get("description") or f"Execute {action_name} action"
+                        description = (
+                            metadata.get("description")
+                            or f"Execute {action_name} action"
+                        )
 
                     tool_def = {
                         "name": tool_name,
@@ -433,24 +474,28 @@ class MCPHandler(BaseHandler):
                                 "name": fallback_client_info["name"],
                                 "version": fallback_client_info.get("version", ""),
                                 "platform": "",
-                                "type": "mcp"
+                                "type": "mcp",
                             }
-                            logger.debug(f"Using fallback client info from cache: {client_info}")
+                            logger.debug(
+                                f"Using fallback client info from cache: {client_info}"
+                            )
 
             if client_info and client_info.get("name"):
                 client_name = client_info["name"].lower()
 
                 # Apply ChatGPT-specific formatting if needed
-                if any(pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]):
+                if any(
+                    pattern in client_name for pattern in ["openai", "chatgpt", "gpt"]
+                ):
                     # ChatGPT MCP specification requires direct JSON structure for tools/list (not JSON-encoded text)
-                    logger.debug(f"Applying ChatGPT formatting for tools/list: {len(tools)} tools (client: {client_name})")
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": tools_result
-                    }
+                    logger.debug(
+                        f"Applying ChatGPT formatting for tools/list: {len(tools)} tools (client: {client_name})"
+                    )
+                    return {"jsonrpc": "2.0", "id": request_id, "result": tools_result}
         except Exception as e:
-            logger.debug(f"Could not apply client-specific formatting for tools/list: {e}")
+            logger.debug(
+                f"Could not apply client-specific formatting for tools/list: {e}"
+            )
             # Fall back to standard formatting
 
         return {"jsonrpc": "2.0", "id": request_id, "result": tools_result}
@@ -475,7 +520,9 @@ class MCPHandler(BaseHandler):
             try:
                 evaluator = get_permission_evaluator(self.config) if peer_id else None
             except Exception as e:
-                logger.debug(f"Permission evaluator unavailable during resources/list: {e}")
+                logger.debug(
+                    f"Permission evaluator unavailable during resources/list: {e}"
+                )
                 evaluator = None
 
             # Discover MCP resources from method hooks
@@ -488,7 +535,9 @@ class MCPHandler(BaseHandler):
                         continue
 
                     # Decorator stores 'uri_template'; fall back to actingweb://{method_name}
-                    uri_template = metadata.get("uri_template") or f"actingweb://{method_name}"
+                    uri_template = (
+                        metadata.get("uri_template") or f"actingweb://{method_name}"
+                    )
 
                     # Filter by permissions when available
                     if peer_id and evaluator:
@@ -506,12 +555,16 @@ class MCPHandler(BaseHandler):
                                 )
                                 continue
                         except Exception as e:
-                            logger.warning(f"Error evaluating resource permission for '{uri_template}': {e}")
+                            logger.warning(
+                                f"Error evaluating resource permission for '{uri_template}': {e}"
+                            )
 
                     resource_def = {
                         "uri": uri_template,
-                        "name": metadata.get("name") or method_name.replace("_", " ").title(),
-                        "description": metadata.get("description") or f"Access {method_name} resource",
+                        "name": metadata.get("name")
+                        or method_name.replace("_", " ").title(),
+                        "description": metadata.get("description")
+                        or f"Access {method_name} resource",
                         # Output key follows MCP spec; decorator uses 'mime_type'
                         "mimeType": metadata.get("mime_type", "application/json"),
                     }
@@ -539,7 +592,9 @@ class MCPHandler(BaseHandler):
             try:
                 evaluator = get_permission_evaluator(self.config) if peer_id else None
             except Exception as e:
-                logger.debug(f"Permission evaluator unavailable during prompts/list: {e}")
+                logger.debug(
+                    f"Permission evaluator unavailable during prompts/list: {e}"
+                )
                 evaluator = None
 
             # Discover MCP prompts from method hooks
@@ -569,11 +624,14 @@ class MCPHandler(BaseHandler):
                                 )
                                 continue
                         except Exception as e:
-                            logger.warning(f"Error evaluating prompt permission for '{prompt_name}': {e}")
+                            logger.warning(
+                                f"Error evaluating prompt permission for '{prompt_name}': {e}"
+                            )
 
                     prompt_def = {
                         "name": prompt_name,
-                        "description": metadata.get("description") or f"Generate prompt for {method_name}",
+                        "description": metadata.get("description")
+                        or f"Generate prompt for {method_name}",
                     }
 
                     # Add arguments if provided
@@ -585,7 +643,9 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": prompts}}
 
-    def _handle_tool_call(self, request_id: Any, params: dict[str, Any], actor: Any) -> dict[str, Any]:
+    def _handle_tool_call(
+        self, request_id: Any, params: dict[str, Any], actor: Any
+    ) -> dict[str, Any]:
         """Handle MCP tools/call request."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -594,7 +654,9 @@ class MCPHandler(BaseHandler):
             return self._create_jsonrpc_error(request_id, -32602, "Missing tool name")
 
         if not self.hooks:
-            return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
+            return self._create_jsonrpc_error(
+                request_id, -32603, "No hooks registry available"
+            )
 
         # Check permission before finding/dispatching the hook
         try:
@@ -655,17 +717,27 @@ class MCPHandler(BaseHandler):
                                     return {
                                         "jsonrpc": "2.0",
                                         "id": request_id,
-                                        "result": {"content": [{"type": "text", "text": str(result)}]},
+                                        "result": {
+                                            "content": [
+                                                {"type": "text", "text": str(result)}
+                                            ]
+                                        },
                                     }
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
                                 return self._create_jsonrpc_error(
-                                    request_id, -32603, f"Tool execution failed: {str(e)}"
+                                    request_id,
+                                    -32603,
+                                    f"Tool execution failed: {str(e)}",
                                 )
 
-        return self._create_jsonrpc_error(request_id, -32601, f"Tool not found: {tool_name}")
+        return self._create_jsonrpc_error(
+            request_id, -32601, f"Tool not found: {tool_name}"
+        )
 
-    def _handle_prompt_get(self, request_id: Any, params: dict[str, Any], actor: Any) -> dict[str, Any]:
+    def _handle_prompt_get(
+        self, request_id: Any, params: dict[str, Any], actor: Any
+    ) -> dict[str, Any]:
         """Handle MCP prompts/get request."""
         prompt_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -674,7 +746,9 @@ class MCPHandler(BaseHandler):
             return self._create_jsonrpc_error(request_id, -32602, "Missing prompt name")
 
         if not self.hooks:
-            return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
+            return self._create_jsonrpc_error(
+                request_id, -32603, "No hooks registry available"
+            )
 
         # Check permission before finding/dispatching the hook
         try:
@@ -690,7 +764,11 @@ class MCPHandler(BaseHandler):
             if peer_id:
                 evaluator = get_permission_evaluator(self.config)
                 decision = evaluator.evaluate_permission(
-                    actor.id, peer_id, PermissionType.PROMPTS, prompt_name, operation="invoke"
+                    actor.id,
+                    peer_id,
+                    PermissionType.PROMPTS,
+                    prompt_name,
+                    operation="invoke",
                 )
                 if decision != PermissionResult.ALLOWED:
                     return self._create_jsonrpc_error(
@@ -732,30 +810,49 @@ class MCPHandler(BaseHandler):
                                     "id": request_id,
                                     "result": {
                                         "description": metadata.get(
-                                            "description", f"Generated prompt for {method_name}"
+                                            "description",
+                                            f"Generated prompt for {method_name}",
                                         ),
                                         "messages": [
-                                            {"role": "user", "content": {"type": "text", "text": prompt_text}}
+                                            {
+                                                "role": "user",
+                                                "content": {
+                                                    "type": "text",
+                                                    "text": prompt_text,
+                                                },
+                                            }
                                         ],
                                     },
                                 }
                             except Exception as e:
-                                logger.error(f"Error generating prompt {prompt_name}: {e}")
+                                logger.error(
+                                    f"Error generating prompt {prompt_name}: {e}"
+                                )
                                 return self._create_jsonrpc_error(
-                                    request_id, -32603, f"Prompt generation failed: {str(e)}"
+                                    request_id,
+                                    -32603,
+                                    f"Prompt generation failed: {str(e)}",
                                 )
 
-        return self._create_jsonrpc_error(request_id, -32601, f"Prompt not found: {prompt_name}")
+        return self._create_jsonrpc_error(
+            request_id, -32601, f"Prompt not found: {prompt_name}"
+        )
 
-    def _handle_resource_read(self, request_id: Any, params: dict[str, Any], actor: Any) -> dict[str, Any]:
+    def _handle_resource_read(
+        self, request_id: Any, params: dict[str, Any], actor: Any
+    ) -> dict[str, Any]:
         """Handle MCP resources/read request."""
         uri = params.get("uri")
 
         if not uri:
-            return self._create_jsonrpc_error(request_id, -32602, "Missing resource URI")
+            return self._create_jsonrpc_error(
+                request_id, -32602, "Missing resource URI"
+            )
 
         if not self.hooks:
-            return self._create_jsonrpc_error(request_id, -32603, "No hooks registry available")
+            return self._create_jsonrpc_error(
+                request_id, -32603, "No hooks registry available"
+            )
 
         try:
             # Check permission before accessing resource
@@ -771,7 +868,11 @@ class MCPHandler(BaseHandler):
                 if peer_id and uri:
                     evaluator = get_permission_evaluator(self.config)
                     decision = evaluator.evaluate_permission(
-                        actor.id, peer_id, PermissionType.RESOURCES, uri, operation="read"
+                        actor.id,
+                        peer_id,
+                        PermissionType.RESOURCES,
+                        uri,
+                        operation="read",
                     )
                     if decision != PermissionResult.ALLOWED:
                         return self._create_jsonrpc_error(
@@ -795,7 +896,9 @@ class MCPHandler(BaseHandler):
                         if metadata and metadata.get("type") == "resource":
                             # Prefer 'uri_template' from decorator; fall back to legacy
                             resource_uri = (
-                                metadata.get("uri_template") or metadata.get("uri") or f"actingweb://{method_name}"
+                                metadata.get("uri_template")
+                                or metadata.get("uri")
+                                or f"actingweb://{method_name}"
                             )
                             uri_pattern = metadata.get("uri_pattern")
 
@@ -803,7 +906,9 @@ class MCPHandler(BaseHandler):
                             uri_matches = False
                             variables: dict[str, str] | None = None
                             try:
-                                variables = _match_uri_template(str(resource_uri), str(uri))
+                                variables = _match_uri_template(
+                                    str(resource_uri), str(uri)
+                                )
                             except Exception:
                                 variables = None
                             if variables is not None:
@@ -813,7 +918,9 @@ class MCPHandler(BaseHandler):
                                     if re.match(uri_pattern, str(uri)):
                                         uri_matches = True
                                 except re.error:
-                                    logger.warning(f"Invalid URI pattern in resource metadata: {uri_pattern}")
+                                    logger.warning(
+                                        f"Invalid URI pattern in resource metadata: {uri_pattern}"
+                                    )
 
                             if uri_matches:
                                 try:
@@ -847,7 +954,9 @@ class MCPHandler(BaseHandler):
                                                 {
                                                     "uri": uri,
                                                     # Output key follows MCP spec; decorator uses 'mime_type'
-                                                    "mimeType": metadata.get("mime_type", "application/json"),
+                                                    "mimeType": metadata.get(
+                                                        "mime_type", "application/json"
+                                                    ),
                                                     "text": content_text,
                                                 }
                                             ]
@@ -856,16 +965,24 @@ class MCPHandler(BaseHandler):
                                 except Exception as e:
                                     logger.error(f"Error executing resource {uri}: {e}")
                                     return self._create_jsonrpc_error(
-                                        request_id, -32603, f"Resource execution failed: {str(e)}"
+                                        request_id,
+                                        -32603,
+                                        f"Resource execution failed: {str(e)}",
                                     )
 
-            return self._create_jsonrpc_error(request_id, -32601, f"Resource not found: {uri}")
+            return self._create_jsonrpc_error(
+                request_id, -32601, f"Resource not found: {uri}"
+            )
 
         except Exception as e:
             logger.error(f"Error reading resource {uri}: {e}")
-            return self._create_jsonrpc_error(request_id, -32603, f"Resource read failed: {str(e)}")
+            return self._create_jsonrpc_error(
+                request_id, -32603, f"Resource read failed: {str(e)}"
+            )
 
-    def _handle_notifications_initialized(self, request_id: Any, params: dict[str, Any]) -> dict[str, Any]:
+    def _handle_notifications_initialized(
+        self, request_id: Any, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle MCP notifications/initialized request."""
         # This is a notification that the client has finished initialization
         # According to MCP spec, this is a notification (no response expected)
@@ -882,9 +999,15 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 
-    def _create_jsonrpc_error(self, request_id: Any, code: int, message: str) -> dict[str, Any]:
+    def _create_jsonrpc_error(
+        self, request_id: Any, code: int, message: str
+    ) -> dict[str, Any]:
         """Create a JSON-RPC error response."""
-        return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {"code": code, "message": message},
+        }
 
     def authenticate_and_get_actor_cached(self) -> Any:
         """
@@ -923,7 +1046,10 @@ class MCPHandler(BaseHandler):
                 # Check actor cache
                 if actor_id in _actor_cache:
                     cached_actor_data = _actor_cache[actor_id]
-                    if current_time - cached_actor_data.get("last_accessed", 0) < _cache_ttl:
+                    if (
+                        current_time - cached_actor_data.get("last_accessed", 0)
+                        < _cache_ttl
+                    ):
                         _cache_stats["actor_hits"] += 1
                         # Update last accessed time
                         cached_actor_data["last_accessed"] = current_time
@@ -945,13 +1071,17 @@ class MCPHandler(BaseHandler):
                         runtime_context.set_mcp_context(
                             client_id=client_id,
                             trust_relationship=trust_relationship,
-                            peer_id=trust_relationship.peerid if trust_relationship else "",
+                            peer_id=trust_relationship.peerid
+                            if trust_relationship
+                            else "",
                             token_data=token_data,
                         )
 
                         # Log cache performance periodically
                         total_requests = sum(_cache_stats.values())
-                        if total_requests > 0 and total_requests % 10 == 0:  # Every 10 requests
+                        if (
+                            total_requests > 0 and total_requests % 10 == 0
+                        ):  # Every 10 requests
                             logger.debug(
                                 f"MCP cache stats - Token hits: {_cache_stats['token_hits']}, Actor hits: {_cache_stats['actor_hits']}, Trust hits: {_cache_stats['trust_hits']}"
                             )
@@ -990,16 +1120,22 @@ class MCPHandler(BaseHandler):
             }
 
             # Get or create actor (with caching)
-            actor_interface = self._get_or_create_actor_cached(actor_id, token_data, current_time)
+            actor_interface = self._get_or_create_actor_cached(
+                actor_id, token_data, current_time
+            )
             if not actor_interface:
                 return None
 
             # Lookup and cache trust relationship
-            trust_relationship = self._lookup_mcp_trust_relationship(actor_interface, client_id, token_data)
+            trust_relationship = self._lookup_mcp_trust_relationship(
+                actor_interface, client_id, token_data
+            )
             _trust_cache[actor_id] = trust_relationship
 
             # Mark client as peer_approved on successful authentication (if not already)
-            self._mark_client_peer_approved(actor_interface, client_id, trust_relationship)
+            self._mark_client_peer_approved(
+                actor_interface, client_id, trust_relationship
+            )
 
             # Store runtime context for permission checking and client identification
             runtime_context = RuntimeContext(actor_interface)
@@ -1010,7 +1146,9 @@ class MCPHandler(BaseHandler):
                 token_data=token_data,
             )
 
-            logger.debug(f"Successfully authenticated MCP client {client_id} -> actor {actor_id} with trust context")
+            logger.debug(
+                f"Successfully authenticated MCP client {client_id} -> actor {actor_id} with trust context"
+            )
             return actor_interface
 
         except Exception as e:
@@ -1057,7 +1195,9 @@ class MCPHandler(BaseHandler):
                 )
 
                 if created_actor:
-                    logger.info(f"Successfully created ActingWeb actor {actor_id} for OAuth2 user {user_email}")
+                    logger.info(
+                        f"Successfully created ActingWeb actor {actor_id} for OAuth2 user {user_email}"
+                    )
                     core_actor = actor_module.Actor(actor_id, self.config)
                 else:
                     logger.error(f"Failed to create ActingWeb actor {actor_id}")
@@ -1068,14 +1208,21 @@ class MCPHandler(BaseHandler):
                 return None
 
         registry = getattr(self.config, "service_registry", None)
-        actor_interface = ActorInterface(core_actor=core_actor, service_registry=registry)
+        actor_interface = ActorInterface(
+            core_actor=core_actor, service_registry=registry
+        )
 
         # Cache the actor
-        _actor_cache[actor_id] = {"actor": actor_interface, "last_accessed": current_time}
+        _actor_cache[actor_id] = {
+            "actor": actor_interface,
+            "last_accessed": current_time,
+        }
 
         return actor_interface
 
-    def _lookup_mcp_trust_relationship(self, actor: ActorInterface, client_id: str, token_data: dict[str, Any]) -> Any:
+    def _lookup_mcp_trust_relationship(
+        self, actor: ActorInterface, client_id: str, token_data: dict[str, Any]
+    ) -> Any:
         """
         Lookup trust relationship for MCP client.
 
@@ -1093,7 +1240,9 @@ class MCPHandler(BaseHandler):
         try:
             # Debug: List all existing trust relationships
             all_trusts = actor.trust.relationships
-            logger.debug(f"DEBUG: Found {len(all_trusts)} total trust relationships for actor {actor.id}")
+            logger.debug(
+                f"DEBUG: Found {len(all_trusts)} total trust relationships for actor {actor.id}"
+            )
             for trust in all_trusts:
                 peer_id = getattr(trust, "peerid", "unknown")
                 established_via = getattr(trust, "established_via", "unknown")
@@ -1104,33 +1253,35 @@ class MCPHandler(BaseHandler):
 
             # Prefer direct lookup by normalized email-derived peer_id if available
             user_email = token_data.get("email") or token_data.get("user_email")
-            logger.debug(f"DEBUG: Looking up MCP trust for client_id: {client_id}, user_email: {user_email}")
+            logger.debug(
+                f"DEBUG: Looking up MCP trust for client_id: {client_id}, user_email: {user_email}"
+            )
             if user_email:
                 normalized_email = user_email.replace("@", "_at_").replace(".", "_dot_")
 
-                normalized_client = client_id.replace("@", "_at_").replace(".", "_dot_").replace(":", "_colon_")
+                normalized_client = (
+                    client_id.replace("@", "_at_")
+                    .replace(".", "_dot_")
+                    .replace(":", "_colon_")
+                )
                 peer_id_unique = f"oauth2:{normalized_email}:{normalized_client}"
-                logger.debug(f"DEBUG: Attempting unique peer_id lookup: {peer_id_unique}")
+                logger.debug(
+                    f"DEBUG: Attempting unique peer_id lookup: {peer_id_unique}"
+                )
                 direct = actor.trust.get_relationship(peer_id_unique)
                 if direct:
-                    logger.debug(f"Found MCP trust via unique peer_id: {peer_id_unique}")
+                    logger.debug(
+                        f"Found MCP trust via unique peer_id: {peer_id_unique}"
+                    )
                     return direct
 
             trusts = actor.trust.relationships
 
             # Fallback: scan for established_via='oauth2' or 'oauth2_client' and matching trust_type if provided
             desired_type = token_data.get("trust_type") or "mcp_client"
-            logger.debug(f"DEBUG: Token data: {token_data}")
-            logger.debug(
-                f"DEBUG: Scanning {len(trusts)} trusts for established_via='oauth2' or 'oauth2_client' with desired_type: {desired_type}"
-            )
             for trust in trusts:
                 via = getattr(trust, "established_via", None)
                 rel = getattr(trust, "relationship", None)
-                peer_ident = getattr(trust, "peer_identifier", None)
-                logger.debug(
-                    f"DEBUG: Checking trust - via: {via}, rel: {rel}, peer_ident: {peer_ident}, user_email: {user_email}"
-                )
 
                 # Match on established_via AND client_id to ensure correct client
                 if via == "oauth2":
@@ -1163,10 +1314,17 @@ class MCPHandler(BaseHandler):
                 # Fallback: If established_via is None but this looks like an OAuth2 trust
                 # (peer_id starts with 'oauth2:' or 'oauth2_client:'), assume it should be valid
                 peer_id_str = str(getattr(trust, "peerid", ""))
-                if via is None and (peer_id_str.startswith("oauth2:") or peer_id_str.startswith("oauth2_client:")):
+                if via is None and (
+                    peer_id_str.startswith("oauth2:")
+                    or peer_id_str.startswith("oauth2_client:")
+                ):
                     # Check if this trust is for the specific client_id
                     if client_id in peer_id_str:
-                        trust_type = "oauth2_client" if peer_id_str.startswith("oauth2_client:") else "oauth2"
+                        trust_type = (
+                            "oauth2_client"
+                            if peer_id_str.startswith("oauth2_client:")
+                            else "oauth2"
+                        )
                         logger.warning(
                             f"Found {trust_type} trust with missing established_via - assuming valid: peer={trust.peerid}, rel={rel}"
                         )
@@ -1179,7 +1337,9 @@ class MCPHandler(BaseHandler):
                             f"OAuth2 trust (no established_via) for different client, skipping: peer={trust.peerid}, client_id={client_id}"
                         )
 
-            logger.warning(f"No trust found for MCP client {client_id}; permissions will be empty")
+            logger.warning(
+                f"No trust found for MCP client {client_id}; permissions will be empty"
+            )
             logger.debug(
                 f"DEBUG: Trust lookup failed - no matching trust found with established_via='oauth2' or 'oauth2_client' and desired_type: {desired_type}"
             )
@@ -1191,8 +1351,15 @@ class MCPHandler(BaseHandler):
 
     def get_auth_header(self) -> str | None:
         """Get Authorization header from request."""
-        if hasattr(self, "request") and self.request and hasattr(self.request, "headers") and self.request.headers:
-            auth_header = self.request.headers.get("Authorization") or self.request.headers.get("authorization")
+        if (
+            hasattr(self, "request")
+            and self.request
+            and hasattr(self.request, "headers")
+            and self.request.headers
+        ):
+            auth_header = self.request.headers.get(
+                "Authorization"
+            ) or self.request.headers.get("authorization")
             return str(auth_header) if auth_header is not None else None
         return None
 
@@ -1224,7 +1391,9 @@ class MCPHandler(BaseHandler):
             "message": "Please authenticate with Google to access MCP",
         }
 
-    def validate_google_token_and_check_actor_email(self, bearer_token: str, expected_actor_id: str) -> bool:
+    def validate_google_token_and_check_actor_email(
+        self, bearer_token: str, expected_actor_id: str
+    ) -> bool:
         """
         Validate Google OAuth2 token and verify it matches the expected actor's email.
 
@@ -1250,7 +1419,9 @@ class MCPHandler(BaseHandler):
             response = requests.get(url=tokeninfo_url, timeout=(5, 10))
 
             if response.status_code != 200:
-                logger.debug(f"Google tokeninfo validation failed: {response.status_code}")
+                logger.debug(
+                    f"Google tokeninfo validation failed: {response.status_code}"
+                )
                 return False
 
             token_info = response.json()
@@ -1280,7 +1451,9 @@ class MCPHandler(BaseHandler):
 
             actor_instance = actor_module.Actor(expected_actor_id, config=self.config)
             if not actor_instance.actor:
-                logger.error(f"Actor {expected_actor_id} not found for email validation")
+                logger.error(
+                    f"Actor {expected_actor_id} not found for email validation"
+                )
                 return False
 
             # Get the actor's creator (usually email) or check email property
@@ -1296,7 +1469,9 @@ class MCPHandler(BaseHandler):
                 pass
 
             if not actor_email:
-                logger.warning(f"Actor {expected_actor_id} has no email to validate against")
+                logger.warning(
+                    f"Actor {expected_actor_id} has no email to validate against"
+                )
                 return False
 
             actor_email = actor_email.lower()
@@ -1345,7 +1520,9 @@ class MCPHandler(BaseHandler):
             logger.debug(f"Could not update client info from request: {e}")
             # Non-critical, don't raise exception
 
-    def _update_trust_with_client_info(self, actor, client_info: dict[str, Any]) -> None:
+    def _update_trust_with_client_info(
+        self, actor, client_info: dict[str, Any]
+    ) -> None:
         """
         Update trust relationship with MCP client metadata instead of storing in actor properties.
 
@@ -1361,7 +1538,9 @@ class MCPHandler(BaseHandler):
             mcp_context = runtime_context.get_mcp_context()
 
             if not mcp_context or not mcp_context.peer_id:
-                logger.debug("No MCP context or peer_id in runtime context, cannot update trust with client info")
+                logger.debug(
+                    "No MCP context or peer_id in runtime context, cannot update trust with client info"
+                )
                 return
 
             peer_id = mcp_context.peer_id
@@ -1377,7 +1556,9 @@ class MCPHandler(BaseHandler):
             if not client_platform and "implementation" in client_info:
                 impl = client_info["implementation"]
                 if isinstance(impl, dict):
-                    client_platform = f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
+                    client_platform = (
+                        f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
+                    )
 
             # Update the trust relationship with client metadata and connection timestamp
             from datetime import datetime
@@ -1388,8 +1569,12 @@ class MCPHandler(BaseHandler):
             core_actor = actor_module.Actor(actor.id, config=self.config)
             if core_actor.actor:
                 # Get the relationship type from the trust relationship
-                relationship = getattr(mcp_context.trust_relationship, "relationship", "mcp_client")
-                established_via = getattr(mcp_context.trust_relationship, "established_via", "oauth2_client")
+                relationship = getattr(
+                    mcp_context.trust_relationship, "relationship", "mcp_client"
+                )
+                established_via = getattr(
+                    mcp_context.trust_relationship, "established_via", "oauth2_client"
+                )
 
                 # Update last connection timestamp
                 now_iso = datetime.utcnow().isoformat()
@@ -1404,11 +1589,17 @@ class MCPHandler(BaseHandler):
                     last_connected_via=canonical_connection_method(established_via),
                 )
                 if success:
-                    logger.info(f"Updated trust relationship {peer_id} with client info: {client_name}")
+                    logger.info(
+                        f"Updated trust relationship {peer_id} with client info: {client_name}"
+                    )
                 else:
-                    logger.warning(f"Failed to update trust relationship {peer_id} with client info")
+                    logger.warning(
+                        f"Failed to update trust relationship {peer_id} with client info"
+                    )
             else:
-                logger.error(f"Could not load actor {actor.id} to update trust with client info")
+                logger.error(
+                    f"Could not load actor {actor.id} to update trust with client info"
+                )
 
         except Exception as e:
             logger.error(f"Could not update trust with client info: {e}")
@@ -1420,11 +1611,18 @@ class MCPHandler(BaseHandler):
 
         # Use client IP and user agent as session key
         session_key = self._get_session_key()
-        _mcp_client_info_cache[session_key] = {"client_info": client_info, "timestamp": time.time()}
+        _mcp_client_info_cache[session_key] = {
+            "client_info": client_info,
+            "timestamp": time.time(),
+        }
 
         # Clean up old entries (older than 10 minutes)
         current_time = time.time()
-        expired_keys = [key for key, data in _mcp_client_info_cache.items() if current_time - data["timestamp"] > 600]
+        expired_keys = [
+            key
+            for key, data in _mcp_client_info_cache.items()
+            if current_time - data["timestamp"] > 600
+        ]
         for key in expired_keys:
             del _mcp_client_info_cache[key]
 
@@ -1485,7 +1683,9 @@ class MCPHandler(BaseHandler):
 
         return token_found
 
-    def _mark_client_peer_approved(self, actor_interface, client_id: str, trust_relationship) -> None:
+    def _mark_client_peer_approved(
+        self, actor_interface, client_id: str, trust_relationship
+    ) -> None:
         """
         Mark OAuth2 client as peer_approved on successful authentication.
 
@@ -1499,7 +1699,9 @@ class MCPHandler(BaseHandler):
         """
         try:
             if not trust_relationship:
-                logger.debug(f"No trust relationship found to mark as peer_approved for client {client_id}")
+                logger.debug(
+                    f"No trust relationship found to mark as peer_approved for client {client_id}"
+                )
                 return
 
             # Check if this is an OAuth2 client trust that needs peer approval
@@ -1519,7 +1721,9 @@ class MCPHandler(BaseHandler):
 
             # Check current peer_approved status
             current_peer_approved = getattr(trust_relationship, "peer_approved", False)
-            logger.debug(f"Current peer_approved status for client {client_id}: {current_peer_approved}")
+            logger.debug(
+                f"Current peer_approved status for client {client_id}: {current_peer_approved}"
+            )
 
             if current_peer_approved:
                 # Already marked as peer_approved
@@ -1533,15 +1737,23 @@ class MCPHandler(BaseHandler):
             if core_actor.actor:
                 success = core_actor.modify_trust_and_notify(
                     peerid=peer_id,
-                    relationship=getattr(trust_relationship, "relationship", "mcp_client"),
+                    relationship=getattr(
+                        trust_relationship, "relationship", "mcp_client"
+                    ),
                     peer_approved=True,
                 )
                 if success:
-                    logger.info(f"Marked OAuth2 client {client_id} as peer_approved after successful authentication")
+                    logger.info(
+                        f"Marked OAuth2 client {client_id} as peer_approved after successful authentication"
+                    )
                 else:
-                    logger.warning(f"Failed to mark OAuth2 client {client_id} as peer_approved")
+                    logger.warning(
+                        f"Failed to mark OAuth2 client {client_id} as peer_approved"
+                    )
             else:
-                logger.error(f"Could not load actor {actor_interface.id} to mark client peer_approved")
+                logger.error(
+                    f"Could not load actor {actor_interface.id} to mark client peer_approved"
+                )
 
         except Exception as e:
             logger.error(f"Error marking client {client_id} as peer_approved: {e}")
@@ -1559,6 +1771,8 @@ class MCPHandler(BaseHandler):
             except Exception as e:
                 logger.error(f"Error adding WWW-Authenticate header: {e}")
                 if hasattr(self, "response") and self.response:
-                    self.response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb MCP"'
+                    self.response.headers["WWW-Authenticate"] = (
+                        'Bearer realm="ActingWeb MCP"'
+                    )
 
         return {"error": True, "status_code": status_code, "message": message}

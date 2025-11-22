@@ -68,7 +68,7 @@ class TestOAuth2ClientCreation:
                 client_name="ChatGPT",
                 trust_type="mcp_client",
                 client_uri="https://chatgpt.com",
-                redirect_uris=["https://chatgpt.com/callback"]
+                redirect_uris=["https://chatgpt.com/callback"],
             )
 
             # Verify response structure
@@ -98,7 +98,13 @@ class TestOAuth2ClientCreation:
             client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create 5 different MCP clients (realistic actingweb_mcp scenario)
-            client_names = ["ChatGPT", "Claude", "Cursor", "Windsurf", "Custom Assistant"]
+            client_names = [
+                "ChatGPT",
+                "Claude",
+                "Cursor",
+                "Windsurf",
+                "Custom Assistant",
+            ]
             created_clients = []
 
             for name in client_names:
@@ -106,7 +112,9 @@ class TestOAuth2ClientCreation:
                     client_name=name,
                     trust_type="mcp_client",
                     client_uri=f"https://{name.lower().replace(' ', '')}.com",
-                    redirect_uris=[f"https://{name.lower().replace(' ', '')}.com/callback"]
+                    redirect_uris=[
+                        f"https://{name.lower().replace(' ', '')}.com/callback"
+                    ],
                 )
                 created_clients.append(client_data)
 
@@ -143,8 +151,7 @@ class TestOAuth2ClientCreation:
 
             for trust_type in trust_types:
                 client_data = client_manager.create_client(
-                    client_name=f"Client {trust_type}",
-                    trust_type=trust_type
+                    client_name=f"Client {trust_type}", trust_type=trust_type
                 )
                 clients[trust_type] = client_data
 
@@ -192,10 +199,7 @@ class TestOAuth2ClientListing:
 
             # Create 3 clients
             for _, name in enumerate(["ChatGPT", "Claude", "Cursor"]):  # type: ignore[arg-type]
-                client_manager.create_client(
-                    client_name=name,
-                    trust_type="mcp_client"
-                )
+                client_manager.create_client(client_name=name, trust_type="mcp_client")
 
             # List all clients
             clients = client_manager.list_clients()
@@ -223,7 +227,9 @@ class TestOAuth2ClientListing:
             client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Create client
-            client_manager.create_client(client_name="Test Client", trust_type="mcp_client")
+            client_manager.create_client(
+                client_name="Test Client", trust_type="mcp_client"
+            )
 
             # List clients
             clients = client_manager.list_clients()
@@ -257,8 +263,7 @@ class TestOAuth2ClientRetrieval:
 
             # Create client
             created = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = created["client_id"]
 
@@ -288,8 +293,7 @@ class TestOAuth2ClientRetrieval:
             # Create client for actor1
             client_manager1 = OAuth2ClientManager(actor1.id, config)  # type: ignore[arg-type]
             created = client_manager1.create_client(
-                client_name="Actor1 Client",
-                trust_type="mcp_client"
+                client_name="Actor1 Client", trust_type="mcp_client"
             )
             client_id = created["client_id"]
 
@@ -342,8 +346,7 @@ class TestOAuth2ClientDeletion:
 
             # Create client
             created = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = created["client_id"]
 
@@ -376,7 +379,9 @@ class TestOAuth2ClientDeletion:
             # Create 3 clients
             client_ids = []
             for name in ["Client1", "Client2", "Client3"]:
-                created = client_manager.create_client(client_name=name, trust_type="mcp_client")
+                created = client_manager.create_client(
+                    client_name=name, trust_type="mcp_client"
+                )
                 client_ids.append(created["client_id"])
 
             # Verify 3 clients listed
@@ -432,7 +437,9 @@ class TestOAuth2ClientDeletion:
         try:
             # Create client for actor1
             client_manager1 = OAuth2ClientManager(actor1.id, config)  # type: ignore[arg-type]
-            created = client_manager1.create_client(client_name="Actor1 Client", trust_type="mcp_client")
+            created = client_manager1.create_client(
+                client_name="Actor1 Client", trust_type="mcp_client"
+            )
             client_id = created["client_id"]
 
             # Try to delete from actor2's manager
@@ -469,13 +476,14 @@ class TestOAuth2AccessTokenGeneration:
 
             # Create client (must start with mcp_ for token generation)
             created = client_manager.create_client(
-                client_name="Test Client",
-                trust_type="mcp_client"
+                client_name="Test Client", trust_type="mcp_client"
             )
             client_id = created["client_id"]
 
             # Generate access token
-            token_response = client_manager.generate_access_token(client_id, scope="mcp")
+            token_response = client_manager.generate_access_token(
+                client_id, scope="mcp"
+            )
 
             # Verify OAuth2 token response structure
             assert token_response is not None
@@ -500,7 +508,9 @@ class TestOAuth2AccessTokenGeneration:
             client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
 
             # Try to generate token for non-existent client
-            token_response = client_manager.generate_access_token("mcp_nonexistent12345")
+            token_response = client_manager.generate_access_token(
+                "mcp_nonexistent12345"
+            )
 
             assert token_response is None
         finally:
@@ -526,20 +536,17 @@ class TestOAuth2ClientManagerRealisticScenarios:
 
             # User connects ChatGPT
             chatgpt = client_manager.create_client(
-                client_name="ChatGPT",
-                trust_type="mcp_client"
+                client_name="ChatGPT", trust_type="mcp_client"
             )
 
             # User connects Claude
             _ = client_manager.create_client(  # noqa: F841  # type: ignore[arg-type]
-                client_name="Claude",
-                trust_type="mcp_client"
+                client_name="Claude", trust_type="mcp_client"
             )
 
             # User connects Cursor
             _ = client_manager.create_client(  # noqa: F841  # type: ignore[arg-type]
-                client_name="Cursor",
-                trust_type="mcp_client"
+                client_name="Cursor", trust_type="mcp_client"
             )
 
             # User views all connected assistants

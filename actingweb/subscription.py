@@ -23,7 +23,12 @@ class Subscription:
         return self.subscription
 
     def create(
-        self, target: str | None = None, subtarget: str | None = None, resource: str | None = None, granularity: str | None = None, seqnr: int = 1
+        self,
+        target: str | None = None,
+        subtarget: str | None = None,
+        resource: str | None = None,
+        granularity: str | None = None,
+        seqnr: int = 1,
     ) -> bool:
         """Create new subscription and push it to db"""
         if self.subscription and len(self.subscription) > 0:

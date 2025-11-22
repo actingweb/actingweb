@@ -690,7 +690,10 @@ class TestSubscriptionActorFlow:
                             if "data" in sub_data and len(sub_data["data"]) > 0:
                                 # Verify nested structure
                                 first_data = sub_data["data"][0]["data"]
-                                if isinstance(first_data, dict) and "data1" in first_data:
+                                if (
+                                    isinstance(first_data, dict)
+                                    and "data1" in first_data
+                                ):
                                     assert first_data["data1"]["str2"] == "initial"
                                 assert sub_data["data"][0]["sequence"] == 1
                         break

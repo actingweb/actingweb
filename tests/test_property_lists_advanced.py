@@ -68,21 +68,25 @@ class TestPropertyListDynamicCreation:
             "memory_travel",
             "memory_food",
             "memory_health",
-            "memory_work"
+            "memory_work",
         ]
 
         for memory_type in memory_types:
             prop_list = getattr(test_actor.property_lists, memory_type)
-            prop_list.append({
-                "id": 1,
-                "content": f"Test data for {memory_type}",
-                "created_at": "2025-10-03T10:00:00"
-            })
+            prop_list.append(
+                {
+                    "id": 1,
+                    "content": f"Test data for {memory_type}",
+                    "created_at": "2025-10-03T10:00:00",
+                }
+            )
 
         # Verify all exist
         all_lists = test_actor.property_lists.list_all()
         for memory_type in memory_types:
-            assert memory_type in all_lists, f"Expected {memory_type} in list_all() output"
+            assert memory_type in all_lists, (
+                f"Expected {memory_type} in list_all() output"
+            )
 
         # Verify content retrieval
         personal_list = test_actor.property_lists.memory_personal
@@ -102,7 +106,7 @@ class TestPropertyListDynamicCreation:
             "memory_test_123",
             "memory_user_defined_type",
             "notes_2025",
-            "list_with_numbers_456"
+            "list_with_numbers_456",
         ]
 
         for name in test_names:
@@ -136,14 +140,28 @@ class TestPropertyListMetadataStorage:
             "emoji": "✈️",
             "keywords": ["flight", "hotel", "vacation", "trip"],
             "created_at": "2025-10-03T10:00:00",
-            "created_by": "mcp_auto"
+            "created_by": "mcp_auto",
         }
         prop_list.insert(0, metadata)
 
         # Add actual data items
-        prop_list.append({"id": 1, "content": "Paris trip 2025", "created_at": "2025-10-03T11:00:00"})
-        prop_list.append({"id": 2, "content": "Tokyo flight booked", "created_at": "2025-10-03T12:00:00"})
-        prop_list.append({"id": 3, "content": "Hotel reservation confirmed", "created_at": "2025-10-03T13:00:00"})
+        prop_list.append(
+            {"id": 1, "content": "Paris trip 2025", "created_at": "2025-10-03T11:00:00"}
+        )
+        prop_list.append(
+            {
+                "id": 2,
+                "content": "Tokyo flight booked",
+                "created_at": "2025-10-03T12:00:00",
+            }
+        )
+        prop_list.append(
+            {
+                "id": 3,
+                "content": "Hotel reservation confirmed",
+                "created_at": "2025-10-03T13:00:00",
+            }
+        )
 
         # Retrieve and verify order is preserved
         items = prop_list.to_list()
@@ -174,7 +192,7 @@ class TestPropertyListMetadataStorage:
             "type_name": "memory_notes",
             "display_name": "Quick Notes",
             "description": "Short notes and reminders",
-            "created_at": "2025-10-03T10:00:00"
+            "created_at": "2025-10-03T10:00:00",
         }
         prop_list.insert(0, metadata)
 
@@ -434,11 +452,13 @@ class TestPropertyListLargeData:
 
         # Add 100 items
         for i in range(100):
-            prop_list.append({
-                "id": i + 1,
-                "content": f"Memory item {i + 1}",
-                "created_at": f"2025-10-03T{i % 24:02d}:00:00"
-            })
+            prop_list.append(
+                {
+                    "id": i + 1,
+                    "content": f"Memory item {i + 1}",
+                    "created_at": f"2025-10-03T{i % 24:02d}:00:00",
+                }
+            )
 
         # Verify all items are stored
         items = prop_list.to_list()
@@ -462,17 +482,16 @@ class TestPropertyListLargeData:
             "memory_travel",
             "memory_food",
             "memory_work",
-            "memory_health"
+            "memory_health",
         ]
 
         # Create 5 lists with 20 items each
         for memory_type in memory_types:
             prop_list = getattr(test_actor.property_lists, memory_type)
             for i in range(20):
-                prop_list.append({
-                    "id": i + 1,
-                    "content": f"{memory_type} item {i + 1}"
-                })
+                prop_list.append(
+                    {"id": i + 1, "content": f"{memory_type} item {i + 1}"}
+                )
 
         # Verify all lists exist
         all_lists = test_actor.property_lists.list_all()

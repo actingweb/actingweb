@@ -11,7 +11,6 @@ from pynamodb.models import Model
 
 
 class PeerTrustee(Model):
-
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_peertrustees"
         read_capacity_units = 1

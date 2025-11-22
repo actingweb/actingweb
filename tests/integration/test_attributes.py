@@ -49,12 +49,9 @@ class TestAttributesFlow:
                     "notifications": {
                         "email": True,
                         "sms": False,
-                        "frequency": "daily"
+                        "frequency": "daily",
                     },
-                    "privacy": {
-                        "public_profile": True,
-                        "show_email": False
-                    }
+                    "privacy": {"public_profile": True, "show_email": False},
                 }
             }
         }
@@ -96,7 +93,7 @@ class TestAttributesFlow:
         """
         array_data = {
             "tags": ["important", "work", "urgent"],
-            "numbers": [1, 2, 3, 4, 5]
+            "numbers": [1, 2, 3, 4, 5],
         }
 
         response = requests.post(
@@ -126,7 +123,7 @@ class TestAttributesFlow:
             "emoji": "Hello 👋 World 🌍",
             "symbols": "!@#$%^&*()",
             "quotes": 'He said "hello"',
-            "newlines": "Line1\nLine2\nLine3"
+            "newlines": "Line1\nLine2\nLine3",
         }
 
         response = requests.post(

@@ -45,8 +45,13 @@ class ActingWebOAuth2Server:
         self.google_authenticator = create_oauth2_authenticator(config, "google")
         self.github_authenticator = create_oauth2_authenticator(config, "github")
 
-        if not self.google_authenticator.is_enabled() and not self.github_authenticator.is_enabled():
-            logger.warning("OAuth2 not configured - MCP OAuth2 server will not work properly")
+        if (
+            not self.google_authenticator.is_enabled()
+            and not self.github_authenticator.is_enabled()
+        ):
+            logger.warning(
+                "OAuth2 not configured - MCP OAuth2 server will not work properly"
+            )
 
     def handle_client_registration(
         self, registration_data: dict[str, Any], actor_id: str | None = None
@@ -74,7 +79,9 @@ class ActingWebOAuth2Server:
             # Register the client
             response = self.client_registry.register_client(actor_id, registration_data)
 
-            logger.debug(f"Registered MCP client {response['client_id']} for actor {actor_id}")
+            logger.debug(
+                f"Registered MCP client {response['client_id']} for actor {actor_id}"
+            )
             return response
 
         except ValueError as e:
@@ -83,7 +90,9 @@ class ActingWebOAuth2Server:
             logger.error(f"Client registration error: {e}")
             raise ValueError("Internal server error during client registration") from e
 
-    def handle_authorization_request(self, params: dict[str, Any], method: str = "GET") -> dict[str, Any]:
+    def handle_authorization_request(
+        self, params: dict[str, Any], method: str = "GET"
+    ) -> dict[str, Any]:
         """
         Handle OAuth2 authorization request.
 
@@ -111,10 +120,15 @@ class ActingWebOAuth2Server:
                 return self._error_response("invalid_request", "client_id is required")
 
             if not redirect_uri:
-                return self._error_response("invalid_request", "redirect_uri is required")
+                return self._error_response(
+                    "invalid_request", "redirect_uri is required"
+                )
 
             if response_type != "code":
-                return self._error_response("unsupported_response_type", "Only 'code' response type is supported")
+                return self._error_response(
+                    "unsupported_response_type",
+                    "Only 'code' response type is supported",
+                )
 
             # Validate client and redirect URI
             client_data = self.client_registry.validate_client(client_id)
@@ -127,12 +141,18 @@ class ActingWebOAuth2Server:
             # PKCE validation
             if code_challenge:
                 if code_challenge_method not in ["plain", "S256"]:
-                    return self._error_response("invalid_request", "Unsupported code_challenge_method")
+                    return self._error_response(
+                        "invalid_request", "Unsupported code_challenge_method"
+                    )
                 if code_challenge_method == "S256" and len(code_challenge) < 43:
-                    return self._error_response("invalid_request", "code_challenge too short for S256")
+                    return self._error_response(
+                        "invalid_request", "code_challenge too short for S256"
+                    )
             elif client_data.get("token_endpoint_auth_method") == "none":
                 # For public clients (auth method "none"), PKCE is required
-                return self._error_response("invalid_request", "code_challenge required for public clients")
+                return self._error_response(
+                    "invalid_request", "code_challenge required for public clients"
+                )
 
             if method == "GET":
                 # Show email form (same UX as GET /)
@@ -152,7 +172,9 @@ class ActingWebOAuth2Server:
                 # Email is required if no provider specified (old email form flow)
                 # Provider is required if no email specified (new OAuth button flow)
                 if not email and not provider:
-                    return self._error_response("invalid_request", "Email or provider is required")
+                    return self._error_response(
+                        "invalid_request", "Email or provider is required"
+                    )
 
                 # Get trust type from form submission
                 trust_type = params.get("trust_type", "mcp_client").strip()
@@ -173,22 +195,32 @@ class ActingWebOAuth2Server:
                 if provider == "github":
                     # GitHub OAuth flow
                     oauth_url = self.github_authenticator.create_authorization_url(
-                        state=mcp_state, redirect_after_auth="", email_hint=email if email else ""
+                        state=mcp_state,
+                        redirect_after_auth="",
+                        email_hint=email if email else "",
                     )
                 else:
                     # Default to Google OAuth (or when email is provided)
                     # For MCP flows, we need to use a special method that preserves the encrypted state
-                    oauth_url = self._create_google_oauth_url_for_mcp(mcp_state, email if email else "")
+                    oauth_url = self._create_google_oauth_url_for_mcp(
+                        mcp_state, email if email else ""
+                    )
 
                     if not oauth_url:
-                        logger.error("Failed to create MCP Google OAuth2 URL, falling back to standard method")
+                        logger.error(
+                            "Failed to create MCP Google OAuth2 URL, falling back to standard method"
+                        )
                         # Fallback to standard method
                         oauth_url = self.google_authenticator.create_authorization_url(
-                            state=mcp_state, redirect_after_auth="", email_hint=email if email else ""
+                            state=mcp_state,
+                            redirect_after_auth="",
+                            email_hint=email if email else "",
                         )
 
                 if not oauth_url:
-                    return self._error_response("server_error", "Failed to create authorization URL")
+                    return self._error_response(
+                        "server_error", "Failed to create authorization URL"
+                    )
 
                 return {"action": "redirect", "url": oauth_url}
 
@@ -223,16 +255,24 @@ class ActingWebOAuth2Server:
             # Handle OAuth2 errors
             if error:
                 logger.warning(f"Google OAuth2 error: {error}")
-                return self._error_response("access_denied", f"Google OAuth2 error: {error}")
+                return self._error_response(
+                    "access_denied", f"Google OAuth2 error: {error}"
+                )
 
             if not code or not state:
-                return self._error_response("invalid_request", "Missing code or state parameter")
+                return self._error_response(
+                    "invalid_request", "Missing code or state parameter"
+                )
 
             # Extract MCP context from state
             mcp_context = self.state_manager.extract_mcp_context(state)
             if not mcp_context:
-                logger.warning("Failed to extract MCP context from state - invalid or expired")
-                return self._error_response("invalid_request", "Invalid or expired state parameter")
+                logger.warning(
+                    "Failed to extract MCP context from state - invalid or expired"
+                )
+                return self._error_response(
+                    "invalid_request", "Invalid or expired state parameter"
+                )
 
             client_id = mcp_context.get("client_id")
             redirect_uri = mcp_context.get("redirect_uri")
@@ -241,27 +281,41 @@ class ActingWebOAuth2Server:
             code_challenge_method = mcp_context.get("code_challenge_method")
 
             if not client_id or not redirect_uri:
-                return self._error_response("invalid_request", "Invalid MCP context in state")
+                return self._error_response(
+                    "invalid_request", "Invalid MCP context in state"
+                )
 
             # Exchange Google authorization code for tokens
-            google_token_data = self.google_authenticator.exchange_code_for_token(code, "")
+            google_token_data = self.google_authenticator.exchange_code_for_token(
+                code, ""
+            )
             if not google_token_data:
-                return self._error_response("invalid_grant", "Failed to exchange Google authorization code")
+                return self._error_response(
+                    "invalid_grant", "Failed to exchange Google authorization code"
+                )
 
             # Get user info from Google
             access_token = google_token_data.get("access_token", "")
-            user_info = self.google_authenticator.validate_token_and_get_user_info(access_token)
+            user_info = self.google_authenticator.validate_token_and_get_user_info(
+                access_token
+            )
             if not user_info:
-                return self._error_response("invalid_grant", "Failed to get user information from Google")
+                return self._error_response(
+                    "invalid_grant", "Failed to get user information from Google"
+                )
 
             email = user_info.get("email")
             if not email:
-                return self._error_response("invalid_grant", "No email address from Google")
+                return self._error_response(
+                    "invalid_grant", "No email address from Google"
+                )
 
             # Get or create actor for this user
             actor_obj = self._get_or_create_actor_for_email(email)
             if not actor_obj:
-                return self._error_response("server_error", "Failed to create or retrieve user actor")
+                return self._error_response(
+                    "server_error", "Failed to create or retrieve user actor"
+                )
 
             # Determine trust type and establishment source
             trust_type = mcp_context.get("trust_type", "mcp_client")
@@ -281,7 +335,9 @@ class ActingWebOAuth2Server:
                 from ..oauth2 import create_oauth2_trust_relationship
 
                 registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(core_actor=actor_obj, service_registry=registry)
+                actor_interface = ActorInterface(
+                    core_actor=actor_obj, service_registry=registry
+                )
                 trust_created = create_oauth2_trust_relationship(
                     actor=actor_interface,
                     email=email,
@@ -295,7 +351,9 @@ class ActingWebOAuth2Server:
                         f"Failed to create trust for actor {actor_obj.id} and user {email} (via={established_via}, type={effective_trust_type})"
                     )
             except Exception as trust_error:
-                logger.error(f"Exception while creating trust for actor {actor_obj.id}: {trust_error}")
+                logger.error(
+                    f"Exception while creating trust for actor {actor_obj.id}: {trust_error}"
+                )
 
             # Create authorization code for MCP client (store email and trust_type for later token exchange)
             auth_code = self.token_manager.create_authorization_code(
@@ -315,7 +373,9 @@ class ActingWebOAuth2Server:
 
             callback_url = f"{redirect_uri}?{urlencode(redirect_params)}"
 
-            logger.info(f"OAuth2 authorization completed for client {client_id}, user {email}")
+            logger.info(
+                f"OAuth2 authorization completed for client {client_id}, user {email}"
+            )
 
             # Store MCP client info if available from initialization
             self._store_mcp_client_info_in_trust(actor_obj, client_id)
@@ -346,13 +406,17 @@ class ActingWebOAuth2Server:
             elif grant_type == "client_credentials":
                 return self._handle_client_credentials_grant(params)
             else:
-                return self._error_response("unsupported_grant_type", f"Grant type '{grant_type}' not supported")
+                return self._error_response(
+                    "unsupported_grant_type", f"Grant type '{grant_type}' not supported"
+                )
 
         except Exception as e:
             logger.error(f"Token request error: {e}")
             return self._error_response("server_error", "Internal server error")
 
-    def _handle_authorization_code_grant(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _handle_authorization_code_grant(
+        self, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle authorization_code grant type."""
 
         code = params.get("code")
@@ -373,21 +437,33 @@ class ActingWebOAuth2Server:
         if not client_data:
             # For PKCE clients, allow validation without client_secret
             client_data = self.client_registry.validate_client(client_id)
-            if not client_data or client_data.get("token_endpoint_auth_method") != "none":
-                return self._error_response("invalid_client", "Invalid client credentials")
+            if (
+                not client_data
+                or client_data.get("token_endpoint_auth_method") != "none"
+            ):
+                return self._error_response(
+                    "invalid_client", "Invalid client credentials"
+                )
 
         # PKCE validation for public clients
         if client_data.get("token_endpoint_auth_method") == "none":
             if not code_verifier:
-                return self._error_response("invalid_request", "code_verifier required for public clients")
+                return self._error_response(
+                    "invalid_request", "code_verifier required for public clients"
+                )
 
         # Exchange authorization code for ActingWeb token
         token_response = self.token_manager.exchange_authorization_code(
-            code=code, client_id=client_id, client_secret=client_secret, code_verifier=code_verifier
+            code=code,
+            client_id=client_id,
+            client_secret=client_secret,
+            code_verifier=code_verifier,
         )
 
         if not token_response:
-            return self._error_response("invalid_grant", "Invalid or expired authorization code")
+            return self._error_response(
+                "invalid_grant", "Invalid or expired authorization code"
+            )
 
         # Trust relationships are created during OAuth2 callback, not here
 
@@ -412,16 +488,22 @@ class ActingWebOAuth2Server:
 
         # Refresh the access token
         token_response = self.token_manager.refresh_access_token(
-            refresh_token=refresh_token, client_id=client_id, client_secret=client_secret
+            refresh_token=refresh_token,
+            client_id=client_id,
+            client_secret=client_secret,
         )
 
         if not token_response:
-            return self._error_response("invalid_grant", "Invalid or expired refresh token")
+            return self._error_response(
+                "invalid_grant", "Invalid or expired refresh token"
+            )
 
         logger.info(f"Refreshed ActingWeb access token for client {client_id}")
         return token_response
 
-    def _handle_client_credentials_grant(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _handle_client_credentials_grant(
+        self, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Handle client_credentials grant type."""
         client_id = params.get("client_id")
         client_secret = params.get("client_secret")
@@ -442,7 +524,9 @@ class ActingWebOAuth2Server:
         actor_id = client_data.get("actor_id")
         if not actor_id:
             logger.error(f"No actor_id found for client {client_id}")
-            return self._error_response("invalid_client", "Client not properly configured")
+            return self._error_response(
+                "invalid_client", "Client not properly configured"
+            )
 
         # For client credentials flow, we need to determine the trust type
         # Use the trust type from the client registration
@@ -451,13 +535,19 @@ class ActingWebOAuth2Server:
         # Generate access token directly for the client
         # In client credentials flow, there's no user interaction - the client acts on its own behalf
         token_response = self.token_manager.create_access_token(
-            actor_id=actor_id, client_id=client_id, scope=scope, trust_type=trust_type, grant_type="client_credentials"
+            actor_id=actor_id,
+            client_id=client_id,
+            scope=scope,
+            trust_type=trust_type,
+            grant_type="client_credentials",
         )
 
         if not token_response:
             return self._error_response("server_error", "Failed to create access token")
 
-        logger.info(f"Created client credentials access token for client {client_id} -> actor {actor_id}")
+        logger.info(
+            f"Created client credentials access token for client {client_id} -> actor {actor_id}"
+        )
         return token_response
 
     def handle_discovery_request(self) -> dict[str, Any]:
@@ -476,8 +566,16 @@ class ActingWebOAuth2Server:
             "registration_endpoint": f"{base_url}/oauth/register",
             "scopes_supported": ["mcp"],
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+            "grant_types_supported": [
+                "authorization_code",
+                "refresh_token",
+                "client_credentials",
+            ],
+            "token_endpoint_auth_methods_supported": [
+                "client_secret_post",
+                "client_secret_basic",
+                "none",
+            ],
             "code_challenge_methods_supported": ["S256"],
             "service_documentation": f"{base_url}/mcp/info",
             "mcp_resource": f"{base_url}/mcp",
@@ -516,23 +614,33 @@ class ActingWebOAuth2Server:
                     token_validation = self.token_manager.validate_access_token(token)
                     if token_validation:
                         actor_id, client_id, _ = token_validation
-                        logger.info(f"Token validated for actor {actor_id}, client {client_id}")
+                        logger.info(
+                            f"Token validated for actor {actor_id}, client {client_id}"
+                        )
 
                         # Revoke access token using the generic revoke method
                         success = self.token_manager.revoke_token(token)
                         if success:
-                            logger.info(f"Successfully revoked token for client {client_id} for actor {actor_id}")
+                            logger.info(
+                                f"Successfully revoked token for client {client_id} for actor {actor_id}"
+                            )
                         else:
                             logger.error(
                                 f"Token revocation failed for client {client_id} - revoke_token returned False"
                             )
                     else:
-                        logger.warning(f"Logout attempted with invalid or expired token: {token[:20]}...")
+                        logger.warning(
+                            f"Logout attempted with invalid or expired token: {token[:20]}..."
+                        )
                 except Exception as revoke_error:
-                    logger.error(f"Token revocation failed with exception: {revoke_error}")
+                    logger.error(
+                        f"Token revocation failed with exception: {revoke_error}"
+                    )
                     import traceback
 
-                    logger.error(f"Token revocation error traceback: {traceback.format_exc()}")
+                    logger.error(
+                        f"Token revocation error traceback: {traceback.format_exc()}"
+                    )
                     # Continue with logout process even if revocation fails
             else:
                 logger.info("Logout requested without token - clearing cookies only")
@@ -574,7 +682,9 @@ class ActingWebOAuth2Server:
                     creator=email,
                     config=self.config,
                     passphrase=passphrase,
-                    hooks=getattr(self.config, "_hooks", None),  # Pass hooks if available for lifecycle events
+                    hooks=getattr(
+                        self.config, "_hooks", None
+                    ),  # Pass hooks if available for lifecycle events
                 )
 
                 # Get the core actor for backward compatibility
@@ -586,12 +696,16 @@ class ActingWebOAuth2Server:
                     return None
 
             except Exception as create_error:
-                logger.error(f"Failed to create actor for email {email}: {create_error}")
+                logger.error(
+                    f"Failed to create actor for email {email}: {create_error}"
+                )
                 return None
 
             # Verify the actor has the necessary components
             if not actor_obj.property:
-                logger.error(f"Actor {actor_obj.id} does not have property object set after creation")
+                logger.error(
+                    f"Actor {actor_obj.id} does not have property object set after creation"
+                )
                 return None
 
             return actor_obj
@@ -657,7 +771,9 @@ class ActingWebOAuth2Server:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return ""
 
-    def _store_mcp_client_info_in_trust(self, actor_obj: "Actor", client_id: str) -> None:
+    def _store_mcp_client_info_in_trust(
+        self, actor_obj: "Actor", client_id: str
+    ) -> None:
         """Store MCP client info in the trust relationship for the OAuth2 client."""
         try:
             import time
@@ -684,7 +800,9 @@ class ActingWebOAuth2Server:
                 client_name = client_info.get("name", "mcp_client")
 
                 # Update trust relationship with client metadata instead of actor properties
-                self._update_trust_with_client_info_oauth(actor_interface, client_id, client_info)
+                self._update_trust_with_client_info_oauth(
+                    actor_interface, client_id, client_info
+                )
 
                 logger.info(
                     f"Stored MCP client info in trust relationship for actor {actor_obj.id}, client {client_name}"
@@ -695,7 +813,10 @@ class ActingWebOAuth2Server:
             # This is not critical, so we don't raise the exception
 
     def _update_trust_with_client_info_oauth(
-        self, actor_interface: "ActorInterface", client_id: str, client_info: dict[str, Any]
+        self,
+        actor_interface: "ActorInterface",
+        client_id: str,
+        client_info: dict[str, Any],
     ) -> None:
         """
         Update trust relationship with MCP client metadata for OAuth2 server context.
@@ -720,7 +841,9 @@ class ActingWebOAuth2Server:
                     break
 
             if not target_trust:
-                logger.debug(f"No trust relationship found for OAuth2 client {client_id}")
+                logger.debug(
+                    f"No trust relationship found for OAuth2 client {client_id}"
+                )
                 return
 
             # Extract client metadata
@@ -732,7 +855,9 @@ class ActingWebOAuth2Server:
             if "implementation" in client_info:
                 impl = client_info["implementation"]
                 if isinstance(impl, dict):
-                    client_platform = f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
+                    client_platform = (
+                        f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
+                    )
 
             # Update the trust relationship
             from .. import actor as actor_module
@@ -750,7 +875,9 @@ class ActingWebOAuth2Server:
                         f"Updated trust relationship {target_trust.peerid} with OAuth2 client info: {client_name}"
                     )
                 else:
-                    logger.warning(f"Failed to update trust relationship {target_trust.peerid} with OAuth2 client info")
+                    logger.warning(
+                        f"Failed to update trust relationship {target_trust.peerid} with OAuth2 client info"
+                    )
 
         except Exception as e:
             logger.debug(f"Could not update trust with OAuth2 client info: {e}")

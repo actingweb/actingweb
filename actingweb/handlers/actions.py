@@ -21,8 +21,9 @@ from ..permission_evaluator import (
 class ActionsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/actions endpoint."""
 
-
-    def _check_action_permission(self, actor_id: str, auth_obj, action_name: str) -> bool:
+    def _check_action_permission(
+        self, actor_id: str, auth_obj, action_name: str
+    ) -> bool:
         """
         Check action permission using the unified access control system.
 
@@ -35,11 +36,15 @@ class ActionsHandler(base_handler.BaseHandler):
             True if access is allowed, False otherwise
         """
         # Get peer ID from auth object (if authenticated via trust relationship)
-        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
+        peer_id = (
+            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
+        )
 
         if not peer_id:
             # No peer relationship - fall back to legacy authorization for basic/oauth auth
-            return auth_obj.check_authorisation(path="actions", subpath=action_name, method="GET")
+            return auth_obj.check_authorisation(
+                path="actions", subpath=action_name, method="GET"
+            )
 
         # Use permission evaluator for peer-based access
         try:
@@ -49,24 +54,31 @@ class ActionsHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
-                logging.info(f"Action access denied: {actor_id} -> {peer_id} -> {action_name}")
+                logging.info(
+                    f"Action access denied: {actor_id} -> {peer_id} -> {action_name}"
+                )
                 return False
             else:  # NOT_FOUND
                 # No specific permission rule - fall back to legacy for backward compatibility
-                return auth_obj.check_authorisation(path="actions", subpath=action_name, method="GET")
+                return auth_obj.check_authorisation(
+                    path="actions", subpath=action_name, method="GET"
+                )
 
         except Exception as e:
-            logging.error(f"Error in action permission evaluation for {actor_id}:{peer_id}:{action_name}: {e}")
+            logging.error(
+                f"Error in action permission evaluation for {actor_id}:{peer_id}:{action_name}: {e}"
+            )
             # Fall back to legacy authorization on errors
-            return auth_obj.check_authorisation(path="actions", subpath=action_name, method="GET")
+            return auth_obj.check_authorisation(
+                path="actions", subpath=action_name, method="GET"
+            )
 
     def _create_auth_context(self, auth_obj) -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
-        peer_id = getattr(auth_obj.acl, 'peerid', '') if hasattr(auth_obj, 'acl') else ''
-        return {
-            'peer_id': peer_id,
-            'config': self.config
-        }
+        peer_id = (
+            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
+        )
+        return {"peer_id": peer_id, "config": self.config}
 
     def get(self, actor_id: str, name: str = "") -> None:
         """
@@ -82,9 +94,16 @@ class ActionsHandler(base_handler.BaseHandler):
             self.post(actor_id, name)
             return
 
-        auth_result = self.authenticate_actor(actor_id, "actions", subpath=name, add_response=False)
-        if not auth_result.actor or not auth_result.auth_obj or (
-            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
+        auth_result = self.authenticate_actor(
+            actor_id, "actions", subpath=name, add_response=False
+        )
+        if (
+            not auth_result.actor
+            or not auth_result.auth_obj
+            or (
+                auth_result.auth_obj.response["code"] != 200
+                and auth_result.auth_obj.response["code"] != 401
+            )
         ):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
@@ -106,7 +125,9 @@ class ActionsHandler(base_handler.BaseHandler):
                     result = {"actions": list(self.hooks._action_hooks.keys())}
                 else:
                     auth_context = self._create_auth_context(check)
-                    result = self.hooks.execute_action_hooks(name, actor_interface, {"method": "GET"}, auth_context)
+                    result = self.hooks.execute_action_hooks(
+                        name, actor_interface, {"method": "GET"}, auth_context
+                    )
         if result is not None:
             if self.response:
                 self.response.set_status(200, "OK")
@@ -122,9 +143,16 @@ class ActionsHandler(base_handler.BaseHandler):
 
         POST /actions/action_name - Execute action
         """
-        auth_result = self.authenticate_actor(actor_id, "actions", subpath=name, add_response=False)
-        if not auth_result.actor or not auth_result.auth_obj or (
-            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
+        auth_result = self.authenticate_actor(
+            actor_id, "actions", subpath=name, add_response=False
+        )
+        if (
+            not auth_result.actor
+            or not auth_result.auth_obj
+            or (
+                auth_result.auth_obj.response["code"] != 200
+                and auth_result.auth_obj.response["code"] != 401
+            )
         ):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
@@ -157,7 +185,9 @@ class ActionsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 auth_context = self._create_auth_context(check)
-                result = self.hooks.execute_action_hooks(name, actor_interface, params, auth_context)
+                result = self.hooks.execute_action_hooks(
+                    name, actor_interface, params, auth_context
+                )
 
         if result is not None:
             if self.response:
@@ -174,9 +204,16 @@ class ActionsHandler(base_handler.BaseHandler):
 
         PUT /actions/action_name - Execute action (same as POST)
         """
-        auth_result = self.authenticate_actor(actor_id, "actions", subpath=name, add_response=False)
-        if not auth_result.actor or not auth_result.auth_obj or (
-            auth_result.auth_obj.response["code"] != 200 and auth_result.auth_obj.response["code"] != 401
+        auth_result = self.authenticate_actor(
+            actor_id, "actions", subpath=name, add_response=False
+        )
+        if (
+            not auth_result.actor
+            or not auth_result.auth_obj
+            or (
+                auth_result.auth_obj.response["code"] != 200
+                and auth_result.auth_obj.response["code"] != 401
+            )
         ):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
@@ -209,7 +246,9 @@ class ActionsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 auth_context = self._create_auth_context(check)
-                result = self.hooks.execute_action_hooks(name, actor_interface, params, auth_context)
+                result = self.hooks.execute_action_hooks(
+                    name, actor_interface, params, auth_context
+                )
 
         if result is not None:
             if self.response:
@@ -243,7 +282,9 @@ class ActionsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 auth_context = self._create_auth_context(check)
-                hook_result = self.hooks.execute_action_hooks(name, actor_interface, {"method": "DELETE"}, auth_context)
+                hook_result = self.hooks.execute_action_hooks(
+                    name, actor_interface, {"method": "DELETE"}, auth_context
+                )
                 result = bool(hook_result)
 
         if result:

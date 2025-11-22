@@ -32,22 +32,29 @@ class PropertyListStore:
         try:
             if self._config:
                 db_list = self._config.DbProperty.DbPropertyList()
-                all_props = db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
+                all_props = (
+                    db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
+                )
                 for prop_name in all_props.keys():
-                    if prop_name.startswith('list:') and prop_name.endswith('-meta'):
+                    if prop_name.startswith("list:") and prop_name.endswith("-meta"):
                         # Extract list name: "list:name-meta" -> "name"
-                        list_name = prop_name[5:-5]  # Remove 'list:' prefix and '-meta' suffix
+                        list_name = prop_name[
+                            5:-5
+                        ]  # Remove 'list:' prefix and '-meta' suffix
                         list_names.append(list_name)
         except Exception as e:
             import logging
+
             logger = logging.getLogger(__name__)
             logger.error(f"Error in list_all(): {e}")
         return list_names
 
     def __getattr__(self, k: str) -> ListProperty:
         """Return a ListProperty for the requested list name."""
-        if k.startswith('_'):
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{k}'")
+        if k.startswith("_"):
+            raise AttributeError(
+                f"'{self.__class__.__name__}' object has no attribute '{k}'"
+            )
 
         # Validate actor_id is not None before creating ListProperty
         if self._actor_id is None:
@@ -58,7 +65,6 @@ class PropertyListStore:
 
 
 class PropertyStore:
-
     def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         self._actor_id = actor_id
         self._config = config
@@ -154,7 +160,13 @@ class Property:
     def get_actor_id(self) -> str | None:
         return self.actor_id
 
-    def __init__(self, actor_id: str | None = None, name: str | None = None, value: Any | None = None, config: Any | None = None) -> None:
+    def __init__(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        value: Any | None = None,
+        config: Any | None = None,
+    ) -> None:
         """A property must be initialised with actor_id and name or
         name and value (to find an actor's property of a certain value)
         """

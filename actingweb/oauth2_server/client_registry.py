@@ -31,7 +31,9 @@ class MCPClientRegistry:
         # Use Attributes system for private storage instead of underscore properties
         self.clients_bucket = "mcp_clients"  # Private attribute bucket for client data
 
-    def register_client(self, actor_id: str, registration_data: dict[str, Any]) -> dict[str, Any]:
+    def register_client(
+        self, actor_id: str, registration_data: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Register an MCP client for a specific actor and create corresponding trust relationship.
 
@@ -100,7 +102,9 @@ class MCPClientRegistry:
         logger.debug(f"Registered MCP client {client_id} for actor {actor_id}")
         return response
 
-    def validate_client(self, client_id: str, client_secret: str | None = None) -> dict[str, Any] | None:
+    def validate_client(
+        self, client_id: str, client_secret: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Validate client credentials.
 
@@ -120,13 +124,19 @@ class MCPClientRegistry:
             stored_secret = client_data.get("client_secret")
             if stored_secret != client_secret:
                 logger.warning(f"Invalid client secret for client {client_id}")
-                logger.debug(f"Client secret validation failed - Expected length: {len(stored_secret) if stored_secret else 0}, Provided length: {len(client_secret)}")
-                logger.debug(f"Client last regenerated: {client_data.get('secret_regenerated_at', 'Never')}")
+                logger.debug(
+                    f"Client secret validation failed - Expected length: {len(stored_secret) if stored_secret else 0}, Provided length: {len(client_secret)}"
+                )
+                logger.debug(
+                    f"Client last regenerated: {client_data.get('secret_regenerated_at', 'Never')}"
+                )
                 return None
             else:
                 logger.debug(f"Client secret validation successful for {client_id}")
                 if client_data.get("secret_regenerated_at"):
-                    logger.debug(f"Using regenerated secret from {client_data.get('secret_regenerated_at')}")
+                    logger.debug(
+                        f"Using regenerated secret from {client_data.get('secret_regenerated_at')}"
+                    )
 
         return client_data
 
@@ -173,7 +183,9 @@ class MCPClientRegistry:
         """
         try:
             # Use the proper ActingWeb pattern with attribute buckets
-            bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
+            bucket = attribute.Attributes(
+                actor_id=actor_id, bucket="mcp_clients", config=self.config
+            )
 
             # Get all client attributes from the bucket
             bucket_data = bucket.get_bucket()
@@ -214,34 +226,50 @@ class MCPClientRegistry:
                 return False
 
             # Delete from actor's bucket
-            bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
+            bucket = attribute.Attributes(
+                actor_id=actor_id, bucket="mcp_clients", config=self.config
+            )
             bucket.delete_attr(name=client_id)
 
             # Delete from global index
             try:
-                global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
+                global_bucket = attribute.Attributes(
+                    actor_id=OAUTH2_SYSTEM_ACTOR,
+                    bucket=CLIENT_INDEX_BUCKET,
+                    config=self.config,
+                )
                 global_bucket.delete_attr(name=client_id)
             except Exception as e:
-                logger.warning(f"Failed to remove client {client_id} from global index: {e}")
+                logger.warning(
+                    f"Failed to remove client {client_id} from global index: {e}"
+                )
 
             # Delete corresponding trust relationship
             self._delete_client_trust_relationship(actor_id, client_id)
 
-            logger.info(f"Successfully deleted OAuth2 client {client_id} for actor {actor_id}")
+            logger.info(
+                f"Successfully deleted OAuth2 client {client_id} for actor {actor_id}"
+            )
             return True
 
         except Exception as e:
             logger.error(f"Error deleting client {client_id}: {e}")
             return False
 
-    def _store_client(self, actor_id: str, client_id: str, client_data: dict[str, Any]) -> None:
+    def _store_client(
+        self, actor_id: str, client_id: str, client_data: dict[str, Any]
+    ) -> None:
         """Store client data using ActingWeb attributes bucket."""
         try:
             # Use the proper ActingWeb pattern with attribute buckets
-            bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
+            bucket = attribute.Attributes(
+                actor_id=actor_id, bucket="mcp_clients", config=self.config
+            )
 
             # Store client data in the bucket
-            logger.debug(f"Storing client {client_id} in mcp_clients bucket for actor {actor_id}")
+            logger.debug(
+                f"Storing client {client_id} in mcp_clients bucket for actor {actor_id}"
+            )
             bucket.set_attr(name=client_id, data=client_data)
             logger.debug("Successfully stored client data")
 
@@ -266,7 +294,9 @@ class MCPClientRegistry:
             # The client_id contains the actor context in our implementation
             # We can optimize this later with proper indexing
 
-            client_data: dict[str, Any] | None = self._search_client_in_actors(client_id)
+            client_data: dict[str, Any] | None = self._search_client_in_actors(
+                client_id
+            )
             return client_data
 
         except Exception as e:
@@ -296,7 +326,11 @@ class MCPClientRegistry:
         try:
             # Use global attribute bucket for client index
             # This stores client_id -> actor_id mapping
-            global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
+            global_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=CLIENT_INDEX_BUCKET,
+                config=self.config,
+            )
 
             # Get the actor ID for this client
             actor_id_attr = global_bucket.get_attr(name=client_id)
@@ -308,7 +342,9 @@ class MCPClientRegistry:
                 return None
 
             # Load the actual client data from the actor's bucket
-            client_bucket = attribute.Attributes(actor_id=actor_id, bucket="mcp_clients", config=self.config)
+            client_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket="mcp_clients", config=self.config
+            )
             client_attr = client_bucket.get_attr(name=client_id)
             if not client_attr or "data" not in client_attr:
                 return None
@@ -321,7 +357,9 @@ class MCPClientRegistry:
             logger.error(f"Error loading client from global index: {e}")
             return None
 
-    def _create_client_trust_relationship(self, actor_id: str, client_id: str, client_data: dict[str, Any]) -> None:
+    def _create_client_trust_relationship(
+        self, actor_id: str, client_id: str, client_data: dict[str, Any]
+    ) -> None:
         """
         Create a trust relationship for the OAuth2 client.
 
@@ -341,12 +379,16 @@ class MCPClientRegistry:
             # Load the actor
             core_actor = actor_module.Actor(actor_id, config=self.config)
             if not core_actor.actor:
-                logger.error(f"Cannot create trust relationship - actor {actor_id} not found")
+                logger.error(
+                    f"Cannot create trust relationship - actor {actor_id} not found"
+                )
                 return
 
             # Create ActorInterface wrapper
             registry = getattr(self.config, "service_registry", None)
-            actor_interface = ActorInterface(core_actor=core_actor, service_registry=registry)
+            actor_interface = ActorInterface(
+                core_actor=core_actor, service_registry=registry
+            )
             trust_manager = TrustManager(core_actor)
 
             # Create trust relationship using OAuth2 client credentials flow
@@ -372,19 +414,27 @@ class MCPClientRegistry:
                 # Find the newly created trust relationship and add client metadata
                 trust_relationship = None
                 for trust in actor_interface.trust.relationships:
-                    if hasattr(trust, 'peerid') and client_id in trust.peerid:
+                    if hasattr(trust, "peerid") and client_id in trust.peerid:
                         trust_relationship = trust
                         break
 
                 if trust_relationship:
                     # Store client metadata in trust relationship
-                    trust_desc = f"OAuth2 Client: {client_data.get('client_name', client_id)}"
-                    logger.debug(f"Enhanced trust relationship for OAuth2 client: {trust_desc}")
+                    trust_desc = (
+                        f"OAuth2 Client: {client_data.get('client_name', client_id)}"
+                    )
+                    logger.debug(
+                        f"Enhanced trust relationship for OAuth2 client: {trust_desc}"
+                    )
             else:
-                logger.error(f"Failed to create trust relationship for OAuth2 client {client_id}")
+                logger.error(
+                    f"Failed to create trust relationship for OAuth2 client {client_id}"
+                )
 
         except Exception as e:
-            logger.error(f"Error creating trust relationship for client {client_id}: {e}")
+            logger.error(
+                f"Error creating trust relationship for client {client_id}: {e}"
+            )
             # Don't raise - client registration can continue without trust relationship
 
     def _delete_client_trust_relationship(self, actor_id: str, client_id: str) -> None:
@@ -402,12 +452,16 @@ class MCPClientRegistry:
             # Load the actor
             core_actor = actor_module.Actor(actor_id, config=self.config)
             if not core_actor.actor:
-                logger.error(f"Cannot delete trust relationship - actor {actor_id} not found")
+                logger.error(
+                    f"Cannot delete trust relationship - actor {actor_id} not found"
+                )
                 return
 
             # Create ActorInterface wrapper
             registry = getattr(self.config, "service_registry", None)
-            actor_interface = ActorInterface(core_actor=core_actor, service_registry=registry)
+            actor_interface = ActorInterface(
+                core_actor=core_actor, service_registry=registry
+            )
 
             # Find and delete the trust relationship for this client
             # The peer ID should be in format "oauth2_client:client_id"
@@ -419,31 +473,43 @@ class MCPClientRegistry:
 
             deleted = False
             for trust in actor_interface.trust.relationships:
-                if hasattr(trust, 'peerid'):
+                if hasattr(trust, "peerid"):
                     peer_id = trust.peerid
                     # Check if this trust relationship belongs to our client
                     for pattern in expected_peer_patterns:
                         if pattern in peer_id or peer_id.endswith(client_id):
                             try:
                                 # Delete the trust relationship
-                                success = actor_interface.trust.delete_relationship(peer_id)
+                                success = actor_interface.trust.delete_relationship(
+                                    peer_id
+                                )
                                 if success:
-                                    logger.info(f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}")
+                                    logger.info(
+                                        f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
+                                    )
                                     deleted = True
                                     break
                                 else:
-                                    logger.warning(f"Failed to delete trust relationship {peer_id} for client {client_id}")
+                                    logger.warning(
+                                        f"Failed to delete trust relationship {peer_id} for client {client_id}"
+                                    )
                             except Exception as e:
-                                logger.error(f"Error deleting trust relationship {peer_id} for client {client_id}: {e}")
+                                logger.error(
+                                    f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
+                                )
 
                 if deleted:
                     break
 
             if not deleted:
-                logger.warning(f"No trust relationship found to delete for OAuth2 client {client_id}")
+                logger.warning(
+                    f"No trust relationship found to delete for OAuth2 client {client_id}"
+                )
 
         except Exception as e:
-            logger.error(f"Error deleting trust relationship for client {client_id}: {e}")
+            logger.error(
+                f"Error deleting trust relationship for client {client_id}: {e}"
+            )
             # Don't raise - client deletion can continue
 
     def _update_global_index(self, client_id: str, actor_id: str) -> None:
@@ -451,7 +517,11 @@ class MCPClientRegistry:
         try:
             # Use global attribute bucket for client index
             # This stores client_id -> actor_id mapping
-            global_bucket = attribute.Attributes(actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=self.config)
+            global_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=CLIENT_INDEX_BUCKET,
+                config=self.config,
+            )
 
             # Store the client_id -> actor_id mapping
             global_bucket.set_attr(name=client_id, data=actor_id)

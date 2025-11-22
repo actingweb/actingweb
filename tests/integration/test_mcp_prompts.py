@@ -360,8 +360,9 @@ class TestMCPPromptsIntegration:
         )
 
         # Should not get 500 Internal Server Error
-        assert response.status_code == 200, \
+        assert response.status_code == 200, (
             f"prompts/list failed with status {response.status_code}: {response.text}"
+        )
 
         data = response.json()
 
@@ -372,8 +373,9 @@ class TestMCPPromptsIntegration:
         assert data["id"] == 10
 
         # Should have result, not error
-        assert "result" in data, \
+        assert "result" in data, (
             f"Expected 'result' in response, got error: {data.get('error')}"
+        )
         assert "error" not in data
 
         # Verify prompts structure
@@ -392,8 +394,9 @@ class TestMCPPromptsIntegration:
             arguments = prompt["arguments"]
             assert isinstance(arguments, list)
             for arg in arguments:
-                assert isinstance(arg, dict), \
+                assert isinstance(arg, dict), (
                     f"PromptArgument not serialized to dict: {type(arg)}"
+                )
                 # Verify standard PromptArgument fields
                 assert "name" in arg
                 # description and required are optional

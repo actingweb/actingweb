@@ -26,7 +26,9 @@ def encode_state(
         "actor_id": actor_id,
         "trust_type": trust_type,
         "expected_email": expected_email,
-        "user_agent": user_agent[:100] if user_agent else "",  # Truncate to prevent large state
+        "user_agent": user_agent[:100]
+        if user_agent
+        else "",  # Truncate to prevent large state
     }
     if extra:
         data.update(extra)
@@ -88,5 +90,3 @@ def validate_expected_email(state: str, authenticated_email: str) -> bool:
         return expected == authenticated_email.strip().lower()
     except Exception:
         return True
-
-

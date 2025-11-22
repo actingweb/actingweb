@@ -19,6 +19,7 @@ CHANGED
 ~~~~~~~
 
 - Reduced unnecessary error logging for access and authentication
+- Ruff linting and formatting and pyright type fixes
 
 v3.4.1: Nov 8, 2025
 -------------------

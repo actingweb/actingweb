@@ -87,7 +87,9 @@ class DbProperty:
             return None
         return str(self.handle.value) if self.handle.value else None
 
-    def get_actor_id_from_property(self, name: str | None = None, value: str | None = None) -> str | None:
+    def get_actor_id_from_property(
+        self, name: str | None = None, value: str | None = None
+    ) -> str | None:
         """Retrives an actor_id based on the value of a property."""
         if not name or not value:
             return None
@@ -100,7 +102,9 @@ class DbProperty:
             return None
         return str(self.handle.id) if self.handle.id else None
 
-    def set(self, actor_id: str | None = None, name: str | None = None, value: Any = None) -> bool:
+    def set(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
         """Sets a new value for the property name"""
         if not name:
             return False
@@ -166,7 +170,9 @@ class DbPropertyList:
         else:
             return None
 
-    def fetch_all_including_lists(self, actor_id: str | None = None) -> dict[str, str] | None:
+    def fetch_all_including_lists(
+        self, actor_id: str | None = None
+    ) -> dict[str, str] | None:
         """Retrieves ALL properties including list properties - for internal PropertyListStore use"""
         if not actor_id:
             return None

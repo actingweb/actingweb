@@ -44,12 +44,12 @@ class ServiceConfig:
     def is_enabled(self) -> bool:
         """Check if service is properly configured."""
         return bool(
-            self.name and
-            self.client_id and
-            self.client_secret and
-            self.scopes and
-            self.auth_uri and
-            self.token_uri
+            self.name
+            and self.client_id
+            and self.client_secret
+            and self.scopes
+            and self.auth_uri
+            and self.token_uri
         )
 
     def to_oauth2_config(self) -> dict[str, Any]:
@@ -90,11 +90,15 @@ class ServiceTemplates:
         )
 
     @staticmethod
-    def gmail(client_id: str, client_secret: str, readonly: bool = True) -> ServiceConfig:
+    def gmail(
+        client_id: str, client_secret: str, readonly: bool = True
+    ) -> ServiceConfig:
         """Gmail service configuration template."""
-        scopes = ["https://www.googleapis.com/auth/gmail.readonly"] if readonly else [
-            "https://www.googleapis.com/auth/gmail.modify"
-        ]
+        scopes = (
+            ["https://www.googleapis.com/auth/gmail.readonly"]
+            if readonly
+            else ["https://www.googleapis.com/auth/gmail.modify"]
+        )
         return ServiceConfig(
             name="gmail",
             client_id=client_id,
@@ -105,7 +109,7 @@ class ServiceTemplates:
             userinfo_uri="https://www.googleapis.com/oauth2/v2/userinfo",
             revocation_uri="https://oauth2.googleapis.com/revoke",
             base_api_url="https://www.googleapis.com/gmail/v1",
-            extra_params={"access_type": "offline", "prompt": "consent"}
+            extra_params={"access_type": "offline", "prompt": "consent"},
         )
 
     @staticmethod

@@ -59,7 +59,10 @@ def docker_services():
         for _ in range(max_retries):
             try:
                 response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
-                if response.status_code in [200, 400]:  # DynamoDB responds with 400 to /
+                if response.status_code in [
+                    200,
+                    400,
+                ]:  # DynamoDB responds with 400 to /
                     break
             except requests.exceptions.ConnectionError:
                 pass
@@ -113,7 +116,7 @@ def test_app(docker_services):  # pylint: disable=unused-argument
             fastapi_app,
             host="0.0.0.0",
             port=TEST_APP_PORT,
-            log_level="error"  # Suppress logs during tests
+            log_level="error",  # Suppress logs during tests
         )
 
     thread = Thread(target=run_app, daemon=True)
@@ -170,12 +173,7 @@ def www_test_app(docker_services):  # pylint: disable=unused-argument
 
     # Run in background thread with uvicorn
     def run_app():
-        uvicorn.run(
-            fastapi_app,
-            host="0.0.0.0",
-            port=WWW_TEST_PORT,
-            log_level="error"
-        )
+        uvicorn.run(fastapi_app, host="0.0.0.0", port=WWW_TEST_PORT, log_level="error")
 
     thread = Thread(target=run_app, daemon=True)
     thread.start()
@@ -225,12 +223,7 @@ def peer_app(docker_services):  # pylint: disable=unused-argument
 
     # Run in background thread with uvicorn
     def run_app():
-        uvicorn.run(
-            fastapi_app,
-            host="0.0.0.0",
-            port=PEER_APP_PORT,
-            log_level="error"
-        )
+        uvicorn.run(fastapi_app, host="0.0.0.0", port=PEER_APP_PORT, log_level="error")
 
     thread = Thread(target=run_app, daemon=True)
     thread.start()
@@ -383,9 +376,7 @@ def trust_helper():
             )
 
             if response.status_code != 201:
-                raise RuntimeError(
-                    f"Failed to initiate trust: {response.status_code}"
-                )
+                raise RuntimeError(f"Failed to initiate trust: {response.status_code}")
 
             trust = response.json()
             trust["url"] = response.headers["Location"]
@@ -409,5 +400,3 @@ def trust_helper():
             return trust
 
     return TrustHelper()
-
-

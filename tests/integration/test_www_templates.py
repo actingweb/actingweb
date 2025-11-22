@@ -18,7 +18,6 @@ This test suite runs sequentially - each test depends on the previous ones.
 """
 
 
-
 class TestWWWTemplates:
     """
     Sequential test flow for www template verification.
@@ -173,7 +172,9 @@ class TestWWWTemplates:
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
 
-        assert response.status_code in [200, 201], f"Failed to create list property: {response.text}"
+        assert response.status_code in [200, 201], (
+            f"Failed to create list property: {response.text}"
+        )
 
         # Add an item using PUT to the list property (standard approach)
         response = requests.put(
@@ -206,9 +207,9 @@ class TestWWWTemplates:
         assert self.actor_id in html, "actor_id should be in list property template"  # type: ignore[arg-type]
         assert "test_list" in html, "property name should be in template"
         # Should show list indicator (either "List with X items" or the items themselves)
-        assert (
-            "list_item_1" in html or "List with" in html or "value" in html
-        ), "list content or indicator should be in template"
+        assert "list_item_1" in html or "List with" in html or "value" in html, (
+            "list content or indicator should be in template"
+        )
 
     def test_009_create_trust_relationship(self, www_test_app):
         """Create a trust relationship for testing trust template."""
@@ -297,9 +298,9 @@ class TestWWWTemplates:
         assert self.actor_id in html, "actor_id should be in trust new template"  # type: ignore[arg-type]
         assert "POST" in html or "post" in html, "form method should be in template"
         # Should have form for creating trust relationships
-        assert (
-            "peer" in html.lower() or "url" in html.lower()
-        ), "form fields should be in template"
+        assert "peer" in html.lower() or "url" in html.lower(), (
+            "form fields should be in template"
+        )
 
     def test_012_cleanup_actor(self, www_test_app):
         """Delete the test actor."""
@@ -341,7 +342,9 @@ class TestWWWTemplateURLConsistency:
         actor_data = response.json()
         TestWWWTemplateURLConsistency.actor_id = actor_data["id"]
         TestWWWTemplateURLConsistency.passphrase = actor_data["passphrase"]
-        TestWWWTemplateURLConsistency.actor_url = f"{www_test_app}/{TestWWWTemplateURLConsistency.actor_id}"
+        TestWWWTemplateURLConsistency.actor_url = (
+            f"{www_test_app}/{TestWWWTemplateURLConsistency.actor_id}"
+        )
 
     def test_002_verify_url_consistency_across_pages(self, www_test_app):
         """
@@ -363,13 +366,13 @@ class TestWWWTemplateURLConsistency:
             assert response.status_code == 200, f"Page {page} should be accessible"
 
             html = response.text
-            assert (
-                actor_www_pattern in html
-            ), f"actor_www URL pattern should be in {page} page"
+            assert actor_www_pattern in html, (
+                f"actor_www URL pattern should be in {page} page"
+            )
             # actor_root pattern should also be present (as substring of actor_www)
-            assert (
-                actor_root_pattern in html
-            ), f"actor_root URL pattern should be in {page} page"
+            assert actor_root_pattern in html, (
+                f"actor_root URL pattern should be in {page} page"
+            )
 
     def test_003_cleanup_actor(self, www_test_app):
         """Delete the test actor."""

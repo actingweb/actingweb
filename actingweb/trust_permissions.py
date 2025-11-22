@@ -28,7 +28,7 @@ class TrustPermissions:
     """
 
     actor_id: str  # The actor granting permissions
-    peer_id: str   # The peer receiving permissions
+    peer_id: str  # The peer receiving permissions
     trust_type: str  # The trust type this relationship is based on
 
     # Permission overrides (None means use trust type default)
@@ -49,7 +49,7 @@ class TrustPermissions:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'TrustPermissions':
+    def from_dict(cls, data: dict[str, Any]) -> "TrustPermissions":
         """Create from dictionary loaded from storage."""
         return cls(**data)
 
@@ -87,23 +87,27 @@ class TrustPermissionStore:
         """Get the trust permissions attribute bucket for an actor."""
         try:
             return attribute.Attributes(
-                actor_id=actor_id,
-                bucket=TRUST_PERMISSIONS_BUCKET,
-                config=self.config
+                actor_id=actor_id, bucket=TRUST_PERMISSIONS_BUCKET, config=self.config
             )
         except Exception as e:
-            logger.error(f"Error accessing trust permissions bucket for actor {actor_id}: {e}")
+            logger.error(
+                f"Error accessing trust permissions bucket for actor {actor_id}: {e}"
+            )
             return None
 
     def store_permissions(self, permissions: TrustPermissions) -> bool:
         """Store trust relationship permissions."""
         if not permissions.validate():
-            logger.error(f"Invalid trust permissions definition: {permissions.get_permission_key()}")
+            logger.error(
+                f"Invalid trust permissions definition: {permissions.get_permission_key()}"
+            )
             return False
 
         bucket = self._get_permissions_bucket(permissions.actor_id)
         if not bucket:
-            logger.error(f"Cannot access trust permissions bucket for actor {permissions.actor_id}")
+            logger.error(
+                f"Cannot access trust permissions bucket for actor {permissions.actor_id}"
+            )
             return False
 
         try:
@@ -112,8 +116,7 @@ class TrustPermissionStore:
             permissions_data = permissions.to_dict()
 
             success = bucket.set_attr(
-                name=permission_key,
-                data=json.dumps(permissions_data)
+                name=permission_key, data=json.dumps(permissions_data)
             )
 
             if success:
@@ -127,7 +130,9 @@ class TrustPermissionStore:
                 return False
 
         except Exception as e:
-            logger.error(f"Error storing trust permissions {permissions.get_permission_key()}: {e}")
+            logger.error(
+                f"Error storing trust permissions {permissions.get_permission_key()}: {e}"
+            )
             return False
 
     def get_permissions(self, actor_id: str, peer_id: str) -> TrustPermissions | None:
@@ -222,12 +227,16 @@ class TrustPermissionStore:
             logger.error(f"Error deleting trust permissions {actor_id}:{peer_id}: {e}")
             return False
 
-    def update_permissions(self, actor_id: str, peer_id: str, updates: dict[str, Any]) -> bool:
+    def update_permissions(
+        self, actor_id: str, peer_id: str, updates: dict[str, Any]
+    ) -> bool:
         """Update specific permission fields for a trust relationship."""
         # Load existing permissions
         existing = self.get_permissions(actor_id, peer_id)
         if not existing:
-            logger.error(f"Cannot update non-existent permissions for {actor_id}:{peer_id}")
+            logger.error(
+                f"Cannot update non-existent permissions for {actor_id}:{peer_id}"
+            )
             return False
 
         try:
@@ -258,7 +267,10 @@ class TrustPermissionStore:
 
 # Permission helper functions
 
-def merge_permissions(base_permissions: dict[str, Any], override_permissions: dict[str, Any] | None) -> dict[str, Any]:
+
+def merge_permissions(
+    base_permissions: dict[str, Any], override_permissions: dict[str, Any] | None
+) -> dict[str, Any]:
     """
     Merge base permissions with override permissions.
 
@@ -295,10 +307,7 @@ def merge_permissions(base_permissions: dict[str, Any], override_permissions: di
 
 
 def create_permission_override(
-    actor_id: str,
-    peer_id: str,
-    trust_type: str,
-    permission_updates: dict[str, Any]
+    actor_id: str, peer_id: str, trust_type: str, permission_updates: dict[str, Any]
 ) -> TrustPermissions:
     """
     Create a permission override object for a trust relationship.
@@ -324,7 +333,7 @@ def create_permission_override(
         resources=permission_updates.get("resources"),
         prompts=permission_updates.get("prompts"),
         created_by=permission_updates.get("created_by", "system"),
-        notes=permission_updates.get("notes")
+        notes=permission_updates.get("notes"),
     )
 
     return permissions
@@ -342,9 +351,12 @@ def initialize_trust_permission_store(config: config_class.Config) -> None:
         _permission_store = TrustPermissionStore(config)
         logger.info("Trust permission store initialized")
 
+
 def get_trust_permission_store(config: config_class.Config) -> TrustPermissionStore:
     """Get the singleton trust permission store (must be initialized first)."""
     global _permission_store
     if _permission_store is None:
-        raise RuntimeError("Trust permission store not initialized. Call initialize_trust_permission_store() at application startup.")
+        raise RuntimeError(
+            "Trust permission store not initialized. Call initialize_trust_permission_store() at application startup."
+        )
     return _permission_store

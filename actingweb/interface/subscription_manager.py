@@ -112,20 +112,25 @@ class SubscriptionManager:
             return []
         return [SubscriptionInfo(sub) for sub in subscriptions if isinstance(sub, dict)]
 
-    def get_subscriptions_for_target(self, target: str, subtarget: str = "",
-                                   resource: str = "") -> list[SubscriptionInfo]:
+    def get_subscriptions_for_target(
+        self, target: str, subtarget: str = "", resource: str = ""
+    ) -> list[SubscriptionInfo]:
         """Get all subscriptions for a specific target."""
         subscriptions = self._core_actor.get_subscriptions(
-            target=target,
-            subtarget=subtarget or None,
-            resource=resource or None
+            target=target, subtarget=subtarget or None, resource=resource or None
         )
         if subscriptions is None:
             return []
         return [SubscriptionInfo(sub) for sub in subscriptions if isinstance(sub, dict)]
 
-    def subscribe_to_peer(self, peer_id: str, target: str, subtarget: str = "",
-                         resource: str = "", granularity: str = "high") -> str | None:
+    def subscribe_to_peer(
+        self,
+        peer_id: str,
+        target: str,
+        subtarget: str = "",
+        resource: str = "",
+        granularity: str = "high",
+    ) -> str | None:
         """
         Subscribe to another actor's data.
 
@@ -136,7 +141,7 @@ class SubscriptionManager:
             target=target,
             subtarget=subtarget or None,
             resource=resource or None,
-            granularity=granularity
+            granularity=granularity,
         )
         # Handle the case where the method returns False instead of None
         return result if result and isinstance(result, str) else None
@@ -144,10 +149,14 @@ class SubscriptionManager:
     def unsubscribe(self, peer_id: str, subscription_id: str) -> bool:
         """Unsubscribe from a peer's data."""
         # Try to delete remote subscription first
-        remote_result = self._core_actor.delete_remote_subscription(peerid=peer_id, subid=subscription_id)
+        remote_result = self._core_actor.delete_remote_subscription(
+            peerid=peer_id, subid=subscription_id
+        )
         if remote_result:
             # Then delete local subscription
-            local_result = self._core_actor.delete_subscription(peerid=peer_id, subid=subscription_id)
+            local_result = self._core_actor.delete_subscription(
+                peerid=peer_id, subid=subscription_id
+            )
             return bool(local_result)
         return False
 
@@ -160,36 +169,46 @@ class SubscriptionManager:
                 success = False
         return success
 
-    def notify_subscribers(self, target: str, data: dict[str, Any],
-                         subtarget: str = "", resource: str = "") -> None:
+    def notify_subscribers(
+        self, target: str, data: dict[str, Any], subtarget: str = "", resource: str = ""
+    ) -> None:
         """
         Notify all subscribers of changes to the specified target.
 
         This will trigger callbacks to all actors subscribed to this target.
         """
         import json
+
         blob = json.dumps(data) if isinstance(data, dict) else str(data)
 
         self._core_actor.register_diffs(
             target=target,
             subtarget=subtarget or None,
             resource=resource or None,
-            blob=blob
+            blob=blob,
         )
 
-    def get_subscription(self, peer_id: str, subscription_id: str) -> SubscriptionInfo | None:
+    def get_subscription(
+        self, peer_id: str, subscription_id: str
+    ) -> SubscriptionInfo | None:
         """Get a specific subscription."""
-        sub_data = self._core_actor.get_subscription(peerid=peer_id, subid=subscription_id)
+        sub_data = self._core_actor.get_subscription(
+            peerid=peer_id, subid=subscription_id
+        )
         if sub_data and isinstance(sub_data, dict):
             return SubscriptionInfo(sub_data)
         return None
 
-    def has_subscribers_for(self, target: str, subtarget: str = "", resource: str = "") -> bool:
+    def has_subscribers_for(
+        self, target: str, subtarget: str = "", resource: str = ""
+    ) -> bool:
         """Check if there are any subscribers for the given target."""
         subscriptions = self.get_subscriptions_for_target(target, subtarget, resource)
         return len([sub for sub in subscriptions if sub.is_callback]) > 0
 
-    def get_subscribers_for(self, target: str, subtarget: str = "", resource: str = "") -> list[str]:
+    def get_subscribers_for(
+        self, target: str, subtarget: str = "", resource: str = ""
+    ) -> list[str]:
         """Get list of peer IDs subscribed to the given target."""
         subscriptions = self.get_subscriptions_for_target(target, subtarget, resource)
         return [sub.peer_id for sub in subscriptions if sub.is_callback]
@@ -201,9 +220,7 @@ class SubscriptionManager:
         success = True
         for sub in subscriptions:
             result = self._core_actor.delete_subscription(
-                peerid=peer_id,
-                subid=sub.subscription_id,
-                callback=sub.is_callback
+                peerid=peer_id, subid=sub.subscription_id, callback=sub.is_callback
             )
             if not result:
                 success = False

@@ -52,7 +52,9 @@ class TestMCPOAuth2ClientRegistration:
             except Exception:
                 pass
 
-        assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text[:200]}"
+        assert response.status_code == 201, (
+            f"Expected 201, got {response.status_code}. Response: {response.text[:200]}"
+        )
         client_data = response.json()
 
         # Verify response contains required fields
@@ -102,9 +104,7 @@ class TestMCPOAuth2Authorization:
         assert response.status_code == 201
         return response.json()
 
-    def test_authorization_endpoint_get(
-        self, http_client, base_url, registered_client
-    ):
+    def test_authorization_endpoint_get(self, http_client, base_url, registered_client):
         """
         Test GET /oauth/authorize shows authorization form.
 
@@ -156,7 +156,11 @@ class TestMCPOAuth2TokenExchange:
             json={
                 "client_name": "Test Token Client",
                 "redirect_uris": ["http://localhost:3000/callback"],
-                "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
+                "grant_types": [
+                    "authorization_code",
+                    "refresh_token",
+                    "client_credentials",
+                ],
                 "response_types": ["code"],
                 "scope": "mcp",
             },

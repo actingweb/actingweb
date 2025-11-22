@@ -18,5 +18,5 @@ __all__ = [
     "mcp_resource",
     "mcp_prompt",
     "MCPServerManager",
-    "get_server_manager"
+    "get_server_manager",
 ]

@@ -37,7 +37,9 @@ class OAuth2StateManager:
         self.state_lifetime = 600  # 10 minutes
 
         if Fernet is None:
-            raise ImportError("cryptography package is required for OAuth2 state management")
+            raise ImportError(
+                "cryptography package is required for OAuth2 state management"
+            )
 
         # Generate or retrieve encryption key
         self.encryption_key = self._get_or_create_encryption_key()
@@ -54,7 +56,11 @@ class OAuth2StateManager:
             Encrypted state parameter string
         """
         # Create state data
-        state_data = {"timestamp": int(time.time()), "csrf_token": secrets.token_hex(16), "mcp_context": mcp_context}
+        state_data = {
+            "timestamp": int(time.time()),
+            "csrf_token": secrets.token_hex(16),
+            "mcp_context": mcp_context,
+        }
 
         # Serialize and encrypt
         state_json = json.dumps(state_data)
@@ -63,7 +69,9 @@ class OAuth2StateManager:
         # Base64 encode for URL safety
         state_param = base64.urlsafe_b64encode(encrypted_state).decode("utf-8")
 
-        logger.debug(f"Created state parameter for MCP client {mcp_context.get('client_id', 'unknown')}")
+        logger.debug(
+            f"Created state parameter for MCP client {mcp_context.get('client_id', 'unknown')}"
+        )
         return state_param
 
     def validate_and_extract_state(self, state_param: str) -> dict[str, Any] | None:
@@ -82,7 +90,7 @@ class OAuth2StateManager:
             state_bytes = state_param.encode("utf-8")
             missing_padding = len(state_bytes) % 4
             if missing_padding:
-                state_bytes += b'=' * (4 - missing_padding)
+                state_bytes += b"=" * (4 - missing_padding)
             encrypted_state = base64.urlsafe_b64decode(state_bytes)
 
             # Decrypt
@@ -98,7 +106,9 @@ class OAuth2StateManager:
             # Extract MCP context
             mcp_context: dict[str, Any] = state_data.get("mcp_context", {})
 
-            logger.debug(f"Validated state parameter for MCP client {mcp_context.get('client_id', 'unknown')}")
+            logger.debug(
+                f"Validated state parameter for MCP client {mcp_context.get('client_id', 'unknown')}"
+            )
             return mcp_context
 
         except Exception as e:
@@ -106,8 +116,14 @@ class OAuth2StateManager:
             return None
 
     def create_mcp_state(
-        self, client_id: str, original_state: str | None, redirect_uri: str, email_hint: str | None = None,
-        trust_type: str | None = None, code_challenge: str | None = None, code_challenge_method: str | None = None
+        self,
+        client_id: str,
+        original_state: str | None,
+        redirect_uri: str,
+        email_hint: str | None = None,
+        trust_type: str | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
     ) -> str:
         """
         Create state parameter for MCP OAuth2 flow with trust type selection.
@@ -147,7 +163,9 @@ class OAuth2StateManager:
         Returns:
             MCP context or None if invalid
         """
-        logger.debug(f"Extracting MCP context from state: {state_param[:50]}... (truncated)")
+        logger.debug(
+            f"Extracting MCP context from state: {state_param[:50]}... (truncated)"
+        )
         state_data = self.validate_and_extract_state(state_param)
         logger.debug(f"Validated state data: {state_data}")
         if not state_data:
@@ -158,7 +176,9 @@ class OAuth2StateManager:
         flow_type = state_data.get("flow_type")
         logger.debug(f"Flow type from state: {flow_type}")
         if flow_type != "mcp_oauth2":
-            logger.warning(f"State parameter is not for MCP OAuth2 flow, got: {flow_type}")
+            logger.warning(
+                f"State parameter is not for MCP OAuth2 flow, got: {flow_type}"
+            )
             return None
 
         logger.debug("Successfully extracted MCP context")
@@ -194,9 +214,13 @@ class OAuth2StateManager:
 
             # Try to get existing key from system actor properties
             try:
-                key_str = getattr(sys_actor.property, "oauth2_state_encryption_key", None)
+                key_str = getattr(
+                    sys_actor.property, "oauth2_state_encryption_key", None
+                )
                 if key_str:
-                    logger.debug("Retrieved OAuth2 state encryption key from system actor")
+                    logger.debug(
+                        "Retrieved OAuth2 state encryption key from system actor"
+                    )
                     return base64.urlsafe_b64decode(key_str.encode("utf-8"))
             except Exception as e:
                 logger.debug(f"Failed to retrieve existing encryption key: {e}")
@@ -210,12 +234,16 @@ class OAuth2StateManager:
             # Store key in system actor properties
             try:
                 sys_actor.property.oauth2_state_encryption_key = key_str  # type: ignore[union-attr]
-                logger.info("Generated and stored new OAuth2 state encryption key in system actor")
+                logger.info(
+                    "Generated and stored new OAuth2 state encryption key in system actor"
+                )
                 return key
             except Exception as e:
                 logger.error(f"Failed to store encryption key in system actor: {e}")
                 # Fall back to in-memory key with warning
-                logger.warning("Using in-memory encryption key (not persistent across restarts)")
+                logger.warning(
+                    "Using in-memory encryption key (not persistent across restarts)"
+                )
                 return key
 
         except Exception as e:

@@ -45,11 +45,20 @@ class TestDefaultTrustTypes:
         registry = get_registry(config)
 
         # Verify default trust types exist
-        default_types = ["friend", "partner", "admin", "viewer", "associate", "mcp_client"]
+        default_types = [
+            "friend",
+            "partner",
+            "admin",
+            "viewer",
+            "associate",
+            "mcp_client",
+        ]
 
         for trust_type_name in default_types:
             trust_type = registry.get_type(trust_type_name)
-            assert trust_type is not None, f"Default trust type {trust_type_name} should exist"
+            assert trust_type is not None, (
+                f"Default trust type {trust_type_name} should exist"
+            )
 
     def test_mcp_client_trust_type_has_permissions(self, aw_app):
         """
@@ -111,14 +120,14 @@ class TestCustomTrustTypeRegistration:
                 "properties": {
                     "patterns": ["memory_*", "notes_*"],
                     "operations": ["read"],
-                    "excluded_patterns": []
+                    "excluded_patterns": [],
                 },
                 "methods": ["get_*", "list_*"],
                 "tools": ["search"],
                 "resources": ["notes://*"],
-                "prompts": []
+                "prompts": [],
             },
-            oauth_scope="actingweb.custom_assistant"
+            oauth_scope="actingweb.custom_assistant",
         )
 
         # Verify registration
@@ -156,23 +165,35 @@ class TestCustomTrustTypeRegistration:
                 "name": "ai_reader",
                 "display_name": "Read-Only AI",
                 "permissions": {
-                    "properties": {"patterns": ["memory_*"], "operations": ["read"], "excluded_patterns": []},
-                }
+                    "properties": {
+                        "patterns": ["memory_*"],
+                        "operations": ["read"],
+                        "excluded_patterns": [],
+                    },
+                },
             },
             {
                 "name": "ai_writer",
                 "display_name": "Write-Enabled AI",
                 "permissions": {
-                    "properties": {"patterns": ["memory_*"], "operations": ["read", "write"], "excluded_patterns": []},
-                }
+                    "properties": {
+                        "patterns": ["memory_*"],
+                        "operations": ["read", "write"],
+                        "excluded_patterns": [],
+                    },
+                },
             },
             {
                 "name": "ai_admin",
                 "display_name": "Admin AI",
                 "permissions": {
-                    "properties": {"patterns": ["*"], "operations": ["read", "write", "delete"], "excluded_patterns": []},
-                }
-            }
+                    "properties": {
+                        "patterns": ["*"],
+                        "operations": ["read", "write", "delete"],
+                        "excluded_patterns": [],
+                    },
+                },
+            },
         ]
 
         for custom_type_config in custom_types:
@@ -181,7 +202,7 @@ class TestCustomTrustTypeRegistration:
                 display_name=custom_type_config["display_name"],
                 description=f"Custom type: {custom_type_config['name']}",
                 permissions=custom_type_config["permissions"],
-                oauth_scope=f"actingweb.{custom_type_config['name']}"
+                oauth_scope=f"actingweb.{custom_type_config['name']}",
             )
 
         # Verify all registered
@@ -227,7 +248,9 @@ class TestTrustTypePermissions:
         assert mcp_type is not None
 
         # methods can be None (inherit default), a list, or a dict
-        assert "methods" in mcp_type.base_permissions or hasattr(mcp_type.base_permissions, "get")
+        assert "methods" in mcp_type.base_permissions or hasattr(
+            mcp_type.base_permissions, "get"
+        )
 
     def test_trust_type_permissions_structure(self, aw_app):
         """
@@ -248,14 +271,14 @@ class TestTrustTypePermissions:
                 "properties": {
                     "patterns": ["test_*"],
                     "operations": ["read"],
-                    "excluded_patterns": ["test_private"]
+                    "excluded_patterns": ["test_private"],
                 },
                 "methods": ["get_*"],
                 "actions": ["search"],
                 "tools": ["test_tool"],
                 "resources": ["test://*"],
-                "prompts": ["test_prompt"]
-            }
+                "prompts": ["test_prompt"],
+            },
         )
 
         registry = get_registry(config)
@@ -267,7 +290,9 @@ class TestTrustTypePermissions:
         perms = test_type.base_permissions
         assert "properties" in perms
         assert "methods" in perms
-        assert "actions" in perms or "tools" in perms  # Different versions may use different names
+        assert (
+            "actions" in perms or "tools" in perms
+        )  # Different versions may use different names
 
 
 class TestTrustTypeUsage:

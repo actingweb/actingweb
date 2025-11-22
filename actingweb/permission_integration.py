@@ -37,35 +37,47 @@ def with_permission_check(permission_type: PermissionType, operation: str = "acc
         permission_type: Type of permission to check
         operation: Operation being performed
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             # Extract context from handler
-            actor_id = getattr(self, 'actor_id', None) or getattr(self.actor, 'id', None)
+            actor_id = getattr(self, "actor_id", None) or getattr(
+                self.actor, "id", None
+            )
             peer_id = self._get_peer_id()
 
             if not actor_id or not peer_id:
-                logger.warning(f"Missing actor_id ({actor_id}) or peer_id ({peer_id}) for permission check")
+                logger.warning(
+                    f"Missing actor_id ({actor_id}) or peer_id ({peer_id}) for permission check"
+                )
                 return self._permission_denied_response()
 
             # Determine the target based on the permission type and handler context
             target = self._get_permission_target(permission_type, *args, **kwargs)
             if not target:
-                logger.warning(f"Could not determine permission target for {permission_type}")
+                logger.warning(
+                    f"Could not determine permission target for {permission_type}"
+                )
                 return self._permission_denied_response()
 
             # Check permission
             evaluator = get_permission_evaluator(self.config)
-            result = evaluator.evaluate_permission(actor_id, peer_id, permission_type, target, operation)
+            result = evaluator.evaluate_permission(
+                actor_id, peer_id, permission_type, target, operation
+            )
 
             if result != PermissionResult.ALLOWED:
-                logger.info(f"Permission denied: {actor_id} -> {peer_id} -> {permission_type.value}:{target}:{operation}")
+                logger.info(
+                    f"Permission denied: {actor_id} -> {peer_id} -> {permission_type.value}:{target}:{operation}"
+                )
                 return self._permission_denied_response()
 
             # Permission granted - execute the original handler
             return func(self, *args, **kwargs)
 
         return wrapper
+
     return decorator
 
 
@@ -88,12 +100,12 @@ class PermissionAwareHandlerMixin:
         # Try common sources for peer ID
 
         # 1. From OAuth/MCP token validation (if available)
-        if hasattr(self, 'validated_token_data'):
-            return self.validated_token_data.get('peer_id')  # type: ignore[attr-defined]
+        if hasattr(self, "validated_token_data"):
+            return self.validated_token_data.get("peer_id")  # type: ignore[attr-defined]
 
         # 2. From request headers
-        if hasattr(self.request, 'headers'):  # type: ignore[attr-defined]
-            peer_id = self.request.headers.get('X-Peer-ID')  # type: ignore[attr-defined]
+        if hasattr(self.request, "headers"):  # type: ignore[attr-defined]
+            peer_id = self.request.headers.get("X-Peer-ID")  # type: ignore[attr-defined]
             if peer_id:
                 return peer_id
 
@@ -104,7 +116,9 @@ class PermissionAwareHandlerMixin:
         logger.debug("Could not determine peer_id from request context")
         return None
 
-    def _get_permission_target(self, permission_type: PermissionType, *args, **kwargs) -> str | None:
+    def _get_permission_target(
+        self, permission_type: PermissionType, *args, **kwargs
+    ) -> str | None:
         """
         Determine the permission target based on permission type and handler context.
 
@@ -113,27 +127,27 @@ class PermissionAwareHandlerMixin:
         """
         if permission_type == PermissionType.PROPERTIES:
             # For property handlers, target is the property path
-            return args[0] if args else kwargs.get('property_path')
+            return args[0] if args else kwargs.get("property_path")
 
         elif permission_type == PermissionType.METHODS:
             # For method handlers, target is the method name
-            return args[0] if args else kwargs.get('method_name')
+            return args[0] if args else kwargs.get("method_name")
 
         elif permission_type == PermissionType.ACTIONS:
             # For action handlers, target is the action name
-            return args[0] if args else kwargs.get('action_name')
+            return args[0] if args else kwargs.get("action_name")
 
         elif permission_type == PermissionType.TOOLS:
             # For MCP tool handlers, target is the tool name
-            return args[0] if args else kwargs.get('tool_name')
+            return args[0] if args else kwargs.get("tool_name")
 
         elif permission_type == PermissionType.RESOURCES:
             # For MCP resource handlers, target is the resource path
-            return args[0] if args else kwargs.get('resource_path')
+            return args[0] if args else kwargs.get("resource_path")
 
         elif permission_type == PermissionType.PROMPTS:
             # For MCP prompt handlers, target is the prompt name
-            return args[0] if args else kwargs.get('prompt_name')
+            return args[0] if args else kwargs.get("prompt_name")
 
         return None
 
@@ -144,7 +158,7 @@ class PermissionAwareHandlerMixin:
         This method should be overridden by specific handler implementations
         to return an appropriate response format (JSON, HTTP status, etc.).
         """
-        if hasattr(self.response, 'set_status'):  # type: ignore[attr-defined]
+        if hasattr(self.response, "set_status"):  # type: ignore[attr-defined]
             self.response.set_status(403)  # type: ignore[attr-defined]
 
         return {"error": "Access denied"}
@@ -163,7 +177,9 @@ def register_permission_hooks(app, config: config_class.Config):
     """
     evaluator = get_permission_evaluator(config)
 
-    def check_property_permission(actor, operation: str, value: Any, path: list[str]) -> bool:
+    def check_property_permission(
+        actor, operation: str, value: Any, path: list[str]
+    ) -> bool:
         """Hook to check property access permissions."""
         peer_id = _extract_peer_from_context()
         if not peer_id:
@@ -175,12 +191,16 @@ def register_permission_hooks(app, config: config_class.Config):
         )
 
         if result != PermissionResult.ALLOWED:
-            logger.info(f"Property access denied: {actor.id} -> {peer_id} -> {property_path} ({operation})")
+            logger.info(
+                f"Property access denied: {actor.id} -> {peer_id} -> {property_path} ({operation})"
+            )
             return False
 
         return True
 
-    def check_method_permission(actor, method_name: str, params: dict[str, Any]) -> bool:
+    def check_method_permission(
+        actor, method_name: str, params: dict[str, Any]
+    ) -> bool:
         """Hook to check method call permissions."""
         peer_id = _extract_peer_from_context()
         if not peer_id:
@@ -189,12 +209,16 @@ def register_permission_hooks(app, config: config_class.Config):
         result = evaluator.evaluate_method_access(actor.id, peer_id, method_name)
 
         if result != PermissionResult.ALLOWED:
-            logger.info(f"Method access denied: {actor.id} -> {peer_id} -> {method_name}")
+            logger.info(
+                f"Method access denied: {actor.id} -> {peer_id} -> {method_name}"
+            )
             return False
 
         return True
 
-    def check_action_permission(actor, action_name: str, params: dict[str, Any]) -> bool:
+    def check_action_permission(
+        actor, action_name: str, params: dict[str, Any]
+    ) -> bool:
         """Hook to check action execution permissions."""
         peer_id = _extract_peer_from_context()
         if not peer_id:
@@ -203,7 +227,9 @@ def register_permission_hooks(app, config: config_class.Config):
         result = evaluator.evaluate_action_access(actor.id, peer_id, action_name)
 
         if result != PermissionResult.ALLOWED:
-            logger.info(f"Action access denied: {actor.id} -> {peer_id} -> {action_name}")
+            logger.info(
+                f"Action access denied: {actor.id} -> {peer_id} -> {action_name}"
+            )
             return False
 
         return True
@@ -222,7 +248,9 @@ def register_permission_hooks(app, config: config_class.Config):
 
         return True
 
-    def check_prompt_permission(actor, prompt_name: str, params: dict[str, Any]) -> bool:
+    def check_prompt_permission(
+        actor, prompt_name: str, params: dict[str, Any]
+    ) -> bool:
         """Hook to check MCP prompt access permissions."""
         peer_id = _extract_peer_from_context()
         if not peer_id:
@@ -231,7 +259,9 @@ def register_permission_hooks(app, config: config_class.Config):
         result = evaluator.evaluate_prompt_access(actor.id, peer_id, prompt_name)
 
         if result != PermissionResult.ALLOWED:
-            logger.info(f"Prompt access denied: {actor.id} -> {peer_id} -> {prompt_name}")
+            logger.info(
+                f"Prompt access denied: {actor.id} -> {peer_id} -> {prompt_name}"
+            )
             return False
 
         return True
@@ -240,20 +270,20 @@ def register_permission_hooks(app, config: config_class.Config):
     # Note: This assumes the ActingWeb app has a hook registration system
     # The exact API would depend on how hooks are implemented in ActingWeb
 
-    if hasattr(app, 'register_property_hook'):
-        app.register_property_hook('before_access', check_property_permission)
+    if hasattr(app, "register_property_hook"):
+        app.register_property_hook("before_access", check_property_permission)
 
-    if hasattr(app, 'register_method_hook'):
-        app.register_method_hook('before_call', check_method_permission)
+    if hasattr(app, "register_method_hook"):
+        app.register_method_hook("before_call", check_method_permission)
 
-    if hasattr(app, 'register_action_hook'):
-        app.register_action_hook('before_execute', check_action_permission)
+    if hasattr(app, "register_action_hook"):
+        app.register_action_hook("before_execute", check_action_permission)
 
-    if hasattr(app, 'register_tool_hook'):
-        app.register_tool_hook('before_use', check_tool_permission)
+    if hasattr(app, "register_tool_hook"):
+        app.register_tool_hook("before_use", check_tool_permission)
 
-    if hasattr(app, 'register_prompt_hook'):
-        app.register_prompt_hook('before_invoke', check_prompt_permission)
+    if hasattr(app, "register_prompt_hook"):
+        app.register_prompt_hook("before_invoke", check_prompt_permission)
 
 
 def _extract_peer_from_context() -> str | None:
@@ -283,8 +313,14 @@ class AccessControlConfig:
         self.custom_trust_types = []
         self._oauth2_trust_types = None  # OAuth2-specific trust type filtering
 
-    def add_trust_type(self, name: str, display_name: str, permissions: dict[str, Any],
-                      description: str = "", oauth_scope: str | None = None):
+    def add_trust_type(
+        self,
+        name: str,
+        display_name: str,
+        permissions: dict[str, Any],
+        description: str = "",
+        oauth_scope: str | None = None,
+    ):
         """
         Add a custom trust type with simplified permission specification.
 
@@ -317,7 +353,7 @@ class AccessControlConfig:
             display_name=display_name,
             description=description,
             base_permissions=base_permissions,
-            oauth_scope=oauth_scope
+            oauth_scope=oauth_scope,
         )
 
         self.custom_trust_types.append(trust_type)
@@ -326,7 +362,9 @@ class AccessControlConfig:
         registry = get_registry(self.config)
         registry.register_type(trust_type)
 
-    def _convert_simple_permissions(self, simple_perms: dict[str, Any]) -> dict[str, Any]:
+    def _convert_simple_permissions(
+        self, simple_perms: dict[str, Any]
+    ) -> dict[str, Any]:
         """Convert simplified permission format to full format."""
         base_permissions = {}
 
@@ -336,7 +374,7 @@ class AccessControlConfig:
                     # Simple list of patterns
                     base_permissions[category] = {
                         "patterns": rules,
-                        "operations": ["read", "write"]  # Default operations
+                        "operations": ["read", "write"],  # Default operations
                     }
                 else:
                     # More complex specification
@@ -345,9 +383,7 @@ class AccessControlConfig:
             elif category in ["methods", "actions", "tools", "prompts"]:
                 if isinstance(rules, list):
                     # Simple list of allowed items
-                    base_permissions[category] = {
-                        "allowed": rules
-                    }
+                    base_permissions[category] = {"allowed": rules}
                 else:
                     # More complex specification
                     base_permissions[category] = rules
@@ -357,7 +393,7 @@ class AccessControlConfig:
                     # Simple list of resource patterns
                     base_permissions[category] = {
                         "patterns": rules,
-                        "operations": ["read"]  # Default operations
+                        "operations": ["read"],  # Default operations
                     }
                 else:
                     # More complex specification
@@ -365,8 +401,11 @@ class AccessControlConfig:
 
         return base_permissions
 
-    def configure_oauth2_trust_types(self, allowed_trust_types: list[str] | None = None,
-                                   default_trust_type: str | None = None):
+    def configure_oauth2_trust_types(
+        self,
+        allowed_trust_types: list[str] | None = None,
+        default_trust_type: str | None = None,
+    ):
         """
         Configure which trust types are available during OAuth2 authorization flows.
 
@@ -390,16 +429,18 @@ class AccessControlConfig:
         """
         self._oauth2_trust_types = {
             "allowed": allowed_trust_types,  # None means all are allowed
-            "default": default_trust_type or "mcp_client"
+            "default": default_trust_type or "mcp_client",
         }
 
         # Store in config for access by OAuth2 handlers
-        if not hasattr(self.config, '_oauth2_trust_types'):
+        if not hasattr(self.config, "_oauth2_trust_types"):
             self.config._oauth2_trust_types = self._oauth2_trust_types  # type: ignore[attr-defined]
         else:
             self.config._oauth2_trust_types.update(self._oauth2_trust_types)  # type: ignore[attr-defined]
 
-        logger.info(f"OAuth2 trust types configured: allowed={allowed_trust_types}, default={default_trust_type}")
+        logger.info(
+            f"OAuth2 trust types configured: allowed={allowed_trust_types}, default={default_trust_type}"
+        )
 
     def get_oauth2_trust_types(self) -> dict[str, Any]:
         """

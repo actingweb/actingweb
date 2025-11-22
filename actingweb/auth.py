@@ -14,7 +14,6 @@ from actingweb.constants import TRUSTEE_CREATOR
 # included in the http request.
 
 
-
 def add_auth_response(appreq=None, auth_obj=None):
     """Called after authentication to set appropriate HTTP response based on auth result."""
     if not appreq or not auth_obj:
@@ -25,23 +24,23 @@ def add_auth_response(appreq=None, auth_obj=None):
         + ":"
         + auth_obj.response["text"]
     )
-    logging.debug(f"add_auth_response: auth_obj.redirect = {getattr(auth_obj, 'redirect', None)}")
+    logging.debug(
+        f"add_auth_response: auth_obj.redirect = {getattr(auth_obj, 'redirect', None)}"
+    )
     appreq.response.set_status(auth_obj.response["code"], auth_obj.response["text"])
     if auth_obj.response["code"] == 302:
         logging.debug(f"add_auth_response: Setting redirect to {auth_obj.redirect}")
         appreq.response.set_redirect(url=auth_obj.redirect)
     elif auth_obj.response["code"] == 401:
-        if hasattr(appreq, 'response') and appreq.response:
-            if hasattr(appreq.response, 'write'):
+        if hasattr(appreq, "response") and appreq.response:
+            if hasattr(appreq.response, "write"):
                 appreq.response.write("Authentication required")
             else:
                 appreq.response.body = "Authentication required"
     for h, v in list(auth_obj.response["headers"].items()):
-        if hasattr(appreq, 'response') and appreq.response:
+        if hasattr(appreq, "response") and appreq.response:
             appreq.response.headers[h] = v
     return True
-
-
 
 
 class Auth:
@@ -105,7 +104,6 @@ class Auth:
             return
         if self.type == "basic":
             self.realm = self.config.auth_realm
-
 
     def __check_basic_auth_creator(self, appreq):
         if self.type != "basic":
@@ -193,7 +191,9 @@ class Auth:
             if via_hint and not trust_record.get("established_via"):
                 modify_kwargs["established_via"] = via_hint
 
-            db_trust = trust.Trust(actor_id=self.actor.id, peerid=peer_id, config=self.config)
+            db_trust = trust.Trust(
+                actor_id=self.actor.id, peerid=peer_id, config=self.config
+            )
             db_trust.modify(**modify_kwargs)  # type: ignore[arg-type]
 
             trust_record["last_accessed"] = usage_time
@@ -209,7 +209,9 @@ class Auth:
         except DoesNotExist:
             logging.warning("Trust record no longer exists, skipping metadata update")
         except Exception as e:
-            logging.error(f"Unexpected error recording trust usage metadata: {e}", exc_info=True)
+            logging.error(
+                f"Unexpected error recording trust usage metadata: {e}", exc_info=True
+            )
 
     def check_token_auth(self, appreq, via_hint: str | None = None):
         """Validate bearer tokens and optionally record how the connection occurred."""
@@ -226,12 +228,22 @@ class Auth:
         if self._check_oauth2_token(token):
             return True
 
-        trustee = self.actor.store.trustee_root if self.actor and self.actor.store else None
+        trustee = (
+            self.actor.store.trustee_root if self.actor and self.actor.store else None
+        )
         # If trustee_root is set, creator name is 'trustee' and
         # bit strength of passphrase is > 80, use passphrase as
         # token
-        if trustee and self.actor and self.actor.creator and self.actor.creator.lower() == TRUSTEE_CREATOR:
-            if self.actor.passphrase and math.floor(len(self.actor.passphrase) * math.log(94, 2)) > 80:
+        if (
+            trustee
+            and self.actor
+            and self.actor.creator
+            and self.actor.creator.lower() == TRUSTEE_CREATOR
+        ):
+            if (
+                self.actor.passphrase
+                and math.floor(len(self.actor.passphrase) * math.log(94, 2)) > 80
+            ):
                 if token == self.actor.passphrase:
                     self.acl["relationship"] = TRUSTEE_CREATOR
                     self.acl["peerid"] = ""
@@ -245,7 +257,11 @@ class Auth:
                 logging.warning(
                     "Attempted trustee bearer token auth with <80 bit strength token."
                 )
-        tru = trust.Trust(actor_id=self.actor.id if self.actor else None, token=token, config=self.config)
+        tru = trust.Trust(
+            actor_id=self.actor.id if self.actor else None,
+            token=token,
+            config=self.config,
+        )
         new_trust = tru.get()
         if new_trust:
             logging.debug("Found trust with token: (" + str(new_trust) + ")")
@@ -270,6 +286,7 @@ class Auth:
         """Check if the Bearer token is a valid OAuth2 token and authenticate user."""
         try:
             from .oauth2 import create_oauth2_authenticator
+
             authenticator = create_oauth2_authenticator(self.config)
 
             if not authenticator.is_enabled():
@@ -290,7 +307,11 @@ class Auth:
             # Here we just validate that the token is valid and get the email
 
             # Check if this is the correct actor for this email (when actor_id is provided in URL)
-            if self.actor and self.actor.creator and self.actor.creator.lower() == email.lower():
+            if (
+                self.actor
+                and self.actor.creator
+                and self.actor.creator.lower() == email.lower()
+            ):
                 # This is the correct actor for this email
                 self.acl["relationship"] = "creator"
                 self.acl["peerid"] = ""
@@ -306,7 +327,9 @@ class Auth:
                 # 1. Wrong actor for this user
                 # 2. New user (actor creation flow handles this)
                 # 3. Factory endpoint (no specific actor yet)
-                logging.debug(f"OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}")
+                logging.debug(
+                    f"OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}"
+                )
 
                 # For factory endpoint or when no actor is loaded, we still consider auth successful
                 # The endpoint handler will use get_by_creator() to find/create the right actor
@@ -318,7 +341,9 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = token
-                    logging.debug(f"OAuth2 authentication successful for {email} (no specific actor)")
+                    logging.debug(
+                        f"OAuth2 authentication successful for {email} (no specific actor)"
+                    )
                     return True
 
                 return False
@@ -331,6 +356,7 @@ class Auth:
         """Check if we should redirect to OAuth2 for authentication."""
         try:
             from .oauth2 import create_oauth2_authenticator
+
             authenticator = create_oauth2_authenticator(self.config)
 
             if not authenticator.is_enabled():
@@ -342,7 +368,9 @@ class Auth:
 
             # Create redirect to OAuth2
             original_url = self._get_original_url(appreq, path)
-            auth_url = authenticator.create_authorization_url(redirect_after_auth=original_url)
+            auth_url = authenticator.create_authorization_url(
+                redirect_after_auth=original_url
+            )
 
             if auth_url:
                 self.authn_done = True
@@ -361,9 +389,9 @@ class Auth:
         """Get the original URL being accessed for redirect after auth."""
         try:
             # Try to construct the original URL
-            if hasattr(appreq, 'request') and hasattr(appreq.request, 'url'):
+            if hasattr(appreq, "request") and hasattr(appreq.request, "url"):
                 return str(appreq.request.url)
-            elif hasattr(appreq, 'request') and hasattr(appreq.request, 'uri'):
+            elif hasattr(appreq, "request") and hasattr(appreq.request, "uri"):
                 return str(appreq.request.uri)
             else:
                 # Fallback to constructing from config and path
@@ -374,7 +402,9 @@ class Auth:
 
     def check_authentication(self, appreq, path):
         """Checks authentication in appreq, redirecting back to path if oauth is done."""
-        logging.debug(f"Checking authentication for path: {path}, auth type: {self.type}")
+        logging.debug(
+            f"Checking authentication for path: {path}, auth type: {self.type}"
+        )
         logging.debug("Checking authentication, token auth...")
         via_hint = self._connection_hint_from_path(path)
         if self.check_token_auth(appreq, via_hint=via_hint):
@@ -383,11 +413,15 @@ class Auth:
         elif self.type == "basic":
             logging.debug("Auth type is 'basic', checking basic authentication...")
             if self.__check_basic_auth_creator(appreq=appreq):
-                logging.debug("Basic auth succeeded, response code: %s", self.response["code"])
+                logging.debug(
+                    "Basic auth succeeded, response code: %s", self.response["code"]
+                )
                 return
             else:
                 # Basic auth failed - mark as done and don't fall through to OAuth2
-                logging.debug("Basic auth failed, response code: %s", self.response["code"])
+                logging.debug(
+                    "Basic auth failed, response code: %s", self.response["code"]
+                )
                 self.authn_done = True
                 return
 
@@ -427,8 +461,12 @@ class Auth:
         access"""
         # For DELETE operations on trust relationships, always allow deletion regardless of approval status
         # This ensures that broken or partially approved relationships can still be cleaned up
-        if (len(self.acl["peerid"]) > 0 and approved and self.acl["approved"] is False and
-            not (path.lower() == "trust" and method.upper() == "DELETE")):
+        if (
+            len(self.acl["peerid"]) > 0
+            and approved
+            and self.acl["approved"] is False
+            and not (path.lower() == "trust" and method.upper() == "DELETE")
+        ):
             logging.debug(
                 "Rejected authorization because trust relationship is not approved."
             )
@@ -533,34 +571,34 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
     auth_obj = Auth(actor_id, auth_type="basic", config=config)
 
     result = {
-        'authenticated': False,
-        'actor': None,
-        'auth': auth_obj,
-        'response': {'code': 403, 'text': 'Forbidden', 'headers': {}},
-        'redirect': None
+        "authenticated": False,
+        "actor": None,
+        "auth": auth_obj,
+        "response": {"code": 403, "text": "Forbidden", "headers": {}},
+        "redirect": None,
     }
 
     if not auth_obj.actor:
-        result['response'] = {'code': 404, 'text': 'Actor not found', 'headers': {}}
+        result["response"] = {"code": 404, "text": "Actor not found", "headers": {}}
         return result
 
     # Check authentication without modifying the response object
     auth_obj.check_authentication(appreq=appreq, path="/custom")
 
     # Copy response details
-    result['response'] = {
-        'code': auth_obj.response['code'],
-        'text': auth_obj.response['text'],
-        'headers': auth_obj.response['headers'].copy()
+    result["response"] = {
+        "code": auth_obj.response["code"],
+        "text": auth_obj.response["text"],
+        "headers": auth_obj.response["headers"].copy(),
     }
 
     # Set redirect if needed
-    if hasattr(auth_obj, 'redirect') and auth_obj.redirect:
-        result['redirect'] = auth_obj.redirect
+    if hasattr(auth_obj, "redirect") and auth_obj.redirect:
+        result["redirect"] = auth_obj.redirect
 
     # Check if authentication was successful
-    if auth_obj.acl['authenticated'] and auth_obj.response['code'] == 200:
-        result['authenticated'] = True
-        result['actor'] = auth_obj.actor
+    if auth_obj.acl["authenticated"] and auth_obj.response["code"] == 200:
+        result["authenticated"] = True
+        result["actor"] = auth_obj.actor
 
     return result

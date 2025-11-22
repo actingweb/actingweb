@@ -53,7 +53,9 @@ class TestMcpPermissions(unittest.TestCase):
     @patch("actingweb.handlers.mcp.RuntimeContext")
     @patch("actingweb.permission_evaluator.get_permission_evaluator")
     @patch.object(MCPHandler, "authenticate_and_get_actor_cached")
-    def test_tools_list_filters_by_permission(self, mock_auth, mock_get_eval, mock_runtime_context):
+    def test_tools_list_filters_by_permission(
+        self, mock_auth, mock_get_eval, mock_runtime_context
+    ):
         # Auth returns our fake actor
         mock_auth.return_value = self.fake_actor
 
@@ -77,12 +79,9 @@ class TestMcpPermissions(unittest.TestCase):
         mock_get_eval.return_value = mock_eval
 
         # Call tools/list
-        resp = self.handler.post({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "tools/list",
-            "params": {}
-        })
+        resp = self.handler.post(
+            {"jsonrpc": "2.0", "id": "1", "method": "tools/list", "params": {}}
+        )
 
         self.assertEqual(resp.get("id"), "1")
         tools = resp.get("result", {}).get("tools", [])
@@ -93,7 +92,9 @@ class TestMcpPermissions(unittest.TestCase):
     @patch("actingweb.handlers.mcp.RuntimeContext")
     @patch("actingweb.permission_evaluator.get_permission_evaluator")
     @patch.object(MCPHandler, "authenticate_and_get_actor_cached")
-    def test_tools_call_respects_permission(self, mock_auth, mock_get_eval, mock_runtime_context):
+    def test_tools_call_respects_permission(
+        self, mock_auth, mock_get_eval, mock_runtime_context
+    ):
         mock_auth.return_value = self.fake_actor
 
         # Mock runtime context to return MCP context with peer_id
@@ -115,22 +116,26 @@ class TestMcpPermissions(unittest.TestCase):
         mock_get_eval.return_value = mock_eval
 
         # Allowed tool
-        ok = self.handler.post({
-            "jsonrpc": "2.0",
-            "id": "2",
-            "method": "tools/call",
-            "params": {"name": "search", "arguments": {"q": "hello"}}
-        })
+        ok = self.handler.post(
+            {
+                "jsonrpc": "2.0",
+                "id": "2",
+                "method": "tools/call",
+                "params": {"name": "search", "arguments": {"q": "hello"}},
+            }
+        )
         self.assertEqual(ok.get("id"), "2")
         self.assertIn("result", ok)
 
         # Denied tool
-        denied = self.handler.post({
-            "jsonrpc": "2.0",
-            "id": "3",
-            "method": "tools/call",
-            "params": {"name": "create_note", "arguments": {"title": "t"}}
-        })
+        denied = self.handler.post(
+            {
+                "jsonrpc": "2.0",
+                "id": "3",
+                "method": "tools/call",
+                "params": {"name": "create_note", "arguments": {"title": "t"}},
+            }
+        )
         self.assertEqual(denied.get("id"), "3")
         self.assertIn("error", denied)
         self.assertEqual(denied["error"].get("code"), -32003)
@@ -138,7 +143,9 @@ class TestMcpPermissions(unittest.TestCase):
     @patch("actingweb.handlers.mcp.RuntimeContext")
     @patch("actingweb.permission_evaluator.get_permission_evaluator")
     @patch.object(MCPHandler, "authenticate_and_get_actor_cached")
-    def test_prompts_list_and_get_respect_permission(self, mock_auth, mock_get_eval, mock_runtime_context):
+    def test_prompts_list_and_get_respect_permission(
+        self, mock_auth, mock_get_eval, mock_runtime_context
+    ):
         mock_auth.return_value = self.fake_actor
 
         # Mock runtime context to return MCP context with peer_id
@@ -160,34 +167,35 @@ class TestMcpPermissions(unittest.TestCase):
         mock_get_eval.return_value = mock_eval
 
         # List prompts should include only summarize
-        resp = self.handler.post({
-            "jsonrpc": "2.0",
-            "id": "10",
-            "method": "prompts/list",
-            "params": {}
-        })
+        resp = self.handler.post(
+            {"jsonrpc": "2.0", "id": "10", "method": "prompts/list", "params": {}}
+        )
         prompts = resp.get("result", {}).get("prompts", [])
         names = {p.get("name") for p in prompts}
         self.assertIn("summarize", names)
         self.assertNotIn("admin_action", names)
 
         # Get allowed prompt
-        ok = self.handler.post({
-            "jsonrpc": "2.0",
-            "id": "11",
-            "method": "prompts/get",
-            "params": {"name": "summarize", "arguments": {"text": "abc"}}
-        })
+        ok = self.handler.post(
+            {
+                "jsonrpc": "2.0",
+                "id": "11",
+                "method": "prompts/get",
+                "params": {"name": "summarize", "arguments": {"text": "abc"}},
+            }
+        )
         self.assertEqual(ok.get("id"), "11")
         self.assertIn("result", ok)
 
         # Get denied prompt
-        denied = self.handler.post({
-            "jsonrpc": "2.0",
-            "id": "12",
-            "method": "prompts/get",
-            "params": {"name": "admin_action"}
-        })
+        denied = self.handler.post(
+            {
+                "jsonrpc": "2.0",
+                "id": "12",
+                "method": "prompts/get",
+                "params": {"name": "admin_action"},
+            }
+        )
         self.assertIn("error", denied)
         self.assertEqual(denied["error"].get("code"), -32003)
 

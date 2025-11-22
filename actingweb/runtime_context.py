@@ -54,6 +54,7 @@ class MCPContext:
     Contains information about the current MCP client making the request,
     allowing tools to customize behavior based on client capabilities.
     """
+
     client_id: str  # OAuth2 client ID (e.g., "mcp_abc123")
     trust_relationship: Any  # Trust database record with client metadata
     peer_id: str  # Normalized peer identifier for permission checking
@@ -67,6 +68,7 @@ class OAuth2Context:
 
     Contains information about the current OAuth2 session for web or API access.
     """
+
     client_id: str  # OAuth2 client ID
     user_email: str  # Authenticated user email
     scopes: list[str]  # Granted OAuth2 scopes
@@ -80,6 +82,7 @@ class WebContext:
 
     Contains session and authentication information for web UI access.
     """
+
     session_id: str | None = None  # Session identifier
     user_agent: str | None = None  # Browser user agent
     ip_address: str | None = None  # Client IP address
@@ -117,7 +120,7 @@ class RuntimeContext:
         client_id: str,
         trust_relationship: Any,
         peer_id: str,
-        token_data: dict[str, Any] | None = None
+        token_data: dict[str, Any] | None = None,
     ) -> None:
         """
         Set MCP context for the current request.
@@ -133,7 +136,7 @@ class RuntimeContext:
             client_id=client_id,
             trust_relationship=trust_relationship,
             peer_id=peer_id,
-            token_data=token_data
+            token_data=token_data,
         )
         # MCP context set successfully (no logging needed for routine operation)
 
@@ -152,7 +155,7 @@ class RuntimeContext:
         client_id: str,
         user_email: str,
         scopes: list[str],
-        token_data: dict[str, Any] | None = None
+        token_data: dict[str, Any] | None = None,
     ) -> None:
         """
         Set OAuth2 context for the current request.
@@ -168,9 +171,11 @@ class RuntimeContext:
             client_id=client_id,
             user_email=user_email,
             scopes=scopes,
-            token_data=token_data
+            token_data=token_data,
         )
-        logger.debug(f"Set OAuth2 context for client {client_id} on actor {self.actor.id}")
+        logger.debug(
+            f"Set OAuth2 context for client {client_id} on actor {self.actor.id}"
+        )
 
     def get_oauth2_context(self) -> OAuth2Context | None:
         """
@@ -187,7 +192,7 @@ class RuntimeContext:
         session_id: str | None = None,
         user_agent: str | None = None,
         ip_address: str | None = None,
-        authenticated_user: str | None = None
+        authenticated_user: str | None = None,
     ) -> None:
         """
         Set web browser context for the current request.
@@ -203,9 +208,11 @@ class RuntimeContext:
             session_id=session_id,
             user_agent=user_agent,
             ip_address=ip_address,
-            authenticated_user=authenticated_user
+            authenticated_user=authenticated_user,
         )
-        logger.debug(f"Set web context for session {session_id} on actor {self.actor.id}")
+        logger.debug(
+            f"Set web context for session {session_id} on actor {self.actor.id}"
+        )
 
     def get_web_context(self) -> WebContext | None:
         """
@@ -262,7 +269,9 @@ class RuntimeContext:
             value: Context value
         """
         if key in ("mcp", "oauth2", "web"):
-            raise ValueError(f"Context key '{key}' is reserved, use specific setter methods")
+            raise ValueError(
+                f"Context key '{key}' is reserved, use specific setter methods"
+            )
 
         context_data = self._get_context_data()
         context_data[key] = value
@@ -309,7 +318,7 @@ def get_client_info_from_context(actor: Any) -> dict[str, str] | None:
                 "name": client_name,
                 "version": client_version or "",
                 "platform": client_platform or "",
-                "type": "mcp"
+                "type": "mcp",
             }
 
     # Try OAuth2 context
@@ -319,7 +328,7 @@ def get_client_info_from_context(actor: Any) -> dict[str, str] | None:
             "name": f"OAuth2 Client ({oauth2_context.client_id})",
             "version": "",
             "platform": "",
-            "type": "oauth2"
+            "type": "oauth2",
         }
 
     # Try web context
@@ -329,7 +338,7 @@ def get_client_info_from_context(actor: Any) -> dict[str, str] | None:
             "name": "Web Browser",
             "version": "",
             "platform": web_context.user_agent or "",
-            "type": "web"
+            "type": "web",
         }
 
     return None

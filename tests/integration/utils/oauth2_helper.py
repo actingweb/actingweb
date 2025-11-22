@@ -62,7 +62,9 @@ class OAuth2TestHelper:
             headers={"Content-Type": "application/json"},
         )
 
-        assert response.status_code == 201, f"Client registration failed: {response.text}"
+        assert response.status_code == 201, (
+            f"Client registration failed: {response.text}"
+        )
 
         client_data = response.json()
         self.client_id = client_data["client_id"]
@@ -109,7 +111,9 @@ class OAuth2TestHelper:
             # or client credentials were invalid
             try:
                 error_data = response.json()
-                error_msg = f"Token exchange failed: {error_data.get('error', response.text)}"
+                error_msg = (
+                    f"Token exchange failed: {error_data.get('error', response.text)}"
+                )
             except Exception:
                 error_msg = f"Token exchange failed with status {response.status_code}: {response.text}"
             raise AssertionError(error_msg)
@@ -169,7 +173,9 @@ class OAuth2TestHelper:
         return requests.delete(f"{self.base_url}{path}", headers=headers, **kwargs)
 
 
-def create_authenticated_client(base_url: str, client_name: str = "Test Client") -> OAuth2TestHelper:
+def create_authenticated_client(
+    base_url: str, client_name: str = "Test Client"
+) -> OAuth2TestHelper:
     """
     Convenience function to create a fully authenticated OAuth2 client.
 

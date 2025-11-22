@@ -30,9 +30,9 @@ class EmailVerificationHandler(BaseHandler):
 
     def __init__(
         self,
-        webobj: Optional['aw_web_request.AWWebObj'] = None,
-        config: Optional['config_class.Config'] = None,
-        hooks: Optional['HookRegistry'] = None
+        webobj: Optional["aw_web_request.AWWebObj"] = None,
+        config: Optional["config_class.Config"] = None,
+        hooks: Optional["HookRegistry"] = None,
     ) -> None:
         if webobj is None:
             raise RuntimeError("WebObj is required for EmailVerificationHandler")
@@ -83,7 +83,7 @@ class EmailVerificationHandler(BaseHandler):
                 "status": "already_verified",
                 "message": "Your email address has already been verified.",
                 "actor_id": actor_id,
-                "email": actor.store.email or actor.creator
+                "email": actor.store.email or actor.creator,
             }
             return {}
 
@@ -106,6 +106,7 @@ class EmailVerificationHandler(BaseHandler):
 
         # Check token expiry (24 hours)
         from ..constants import EMAIL_VERIFICATION_TOKEN_EXPIRY
+
         if int(time.time()) - int(token_created_at) > EMAIL_VERIFICATION_TOKEN_EXPIRY:
             logger.warning(f"Verification token expired for actor {actor_id}")
             return self.error_response(410, "Verification link has expired")
@@ -116,19 +117,22 @@ class EmailVerificationHandler(BaseHandler):
         actor.store.email_verification_created_at = None
         actor.store.email_verified_at = str(int(time.time()))
 
-        logger.info(f"Email verified successfully for actor {actor_id}: {actor.creator}")
+        logger.info(
+            f"Email verified successfully for actor {actor_id}: {actor.creator}"
+        )
 
         # Execute verification success lifecycle hook
         if self.hooks:
             try:
                 from ..interface.actor_interface import ActorInterface
+
                 registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(core_actor=actor, service_registry=registry)
+                actor_interface = ActorInterface(
+                    core_actor=actor, service_registry=registry
+                )
 
                 self.hooks.execute_lifecycle_hooks(
-                    "email_verified",
-                    actor_interface,
-                    email=actor.creator
+                    "email_verified", actor_interface, email=actor.creator
                 )
             except Exception as e:
                 logger.error(f"Error in email_verified lifecycle hook: {e}")
@@ -139,7 +143,7 @@ class EmailVerificationHandler(BaseHandler):
             "message": "Your email address has been verified successfully!",
             "actor_id": actor_id,
             "email": actor.creator,
-            "redirect_url": f"/{actor_id}/www"
+            "redirect_url": f"/{actor_id}/www",
         }
 
         return {}
@@ -177,6 +181,7 @@ class EmailVerificationHandler(BaseHandler):
 
         # Generate new verification token
         from ..constants import EMAIL_VERIFICATION_TOKEN_LENGTH
+
         token = secrets.token_urlsafe(EMAIL_VERIFICATION_TOKEN_LENGTH)
 
         # Store token
@@ -188,8 +193,11 @@ class EmailVerificationHandler(BaseHandler):
         if self.hooks:
             try:
                 from ..interface.actor_interface import ActorInterface
+
                 registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(core_actor=actor, service_registry=registry)
+                actor_interface = ActorInterface(
+                    core_actor=actor, service_registry=registry
+                )
 
                 verification_url = f"{self.config.proto}{self.config.fqdn}/{actor_id}/www/verify_email?token={token}"
 
@@ -198,7 +206,7 @@ class EmailVerificationHandler(BaseHandler):
                     actor_interface,
                     email=actor.creator,
                     verification_url=verification_url,
-                    token=token
+                    token=token,
                 )
             except Exception as e:
                 logger.error(f"Error in email_verification_required hook: {e}")
@@ -208,7 +216,7 @@ class EmailVerificationHandler(BaseHandler):
 
         return {
             "status": "success",
-            "message": "Verification email sent. Please check your inbox."
+            "message": "Verification email sent. Please check your inbox.",
         }
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
@@ -216,15 +224,11 @@ class EmailVerificationHandler(BaseHandler):
         self.response.set_status(status_code)
 
         # For user-facing errors, render template
-        if hasattr(self.response, 'template_values'):
+        if hasattr(self.response, "template_values"):
             self.response.template_values = {
                 "status": "error",
                 "error": message,
-                "status_code": status_code
+                "status_code": status_code,
             }
 
-        return {
-            "error": True,
-            "status_code": status_code,
-            "message": message
-        }
+        return {"error": True, "status_code": status_code, "message": message}

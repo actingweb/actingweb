@@ -2,6 +2,17 @@
 CHANGELOG
 =========
 
+v3.4.3: Nov 23, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- Fixed MCP authentication to include error="invalid_token" in WWW-Authenticate header per RFC 6750 to force OAuth2 clients to invalidate cached tokens
+- Fixed Flask and FastAPI integrations to properly propagate HTTP 401 status codes and WWW-Authenticate headers from MCP handler
+- Reduced excessive debug logging in MCP trust relationship lookup
+- Added conditional update check to prevent unnecessary trust relationship updates when client info hasn't changed
+
 v3.4.2: Nov 22, 2025
 -------------------
 

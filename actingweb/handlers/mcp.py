@@ -158,7 +158,9 @@ class MCPHandler(BaseHandler):
             if not actor:
                 # Set proper HTTP 401 response headers for framework-agnostic handling
                 base_url = f"{self.config.proto}{self.config.fqdn}"
-                www_auth = f'Bearer realm="ActingWeb MCP", authorization_uri="{base_url}/oauth/authorize"'
+                # Include error="invalid_token" to force OAuth2 clients to invalidate cached tokens
+                # Per RFC 6750 Section 3.1: https://tools.ietf.org/html/rfc6750#section-3.1
+                www_auth = f'Bearer realm="ActingWeb MCP", error="invalid_token", error_description="Authentication required", authorization_uri="{base_url}/oauth/authorize"'
 
                 # Set response headers for authentication challenge
                 self.response.headers["WWW-Authenticate"] = www_auth
@@ -1238,24 +1240,8 @@ class MCPHandler(BaseHandler):
             Trust relationship instance or None
         """
         try:
-            # Debug: List all existing trust relationships
-            all_trusts = actor.trust.relationships
-            logger.debug(
-                f"DEBUG: Found {len(all_trusts)} total trust relationships for actor {actor.id}"
-            )
-            for trust in all_trusts:
-                peer_id = getattr(trust, "peerid", "unknown")
-                established_via = getattr(trust, "established_via", "unknown")
-                relationship = getattr(trust, "relationship", "unknown")
-                logger.debug(
-                    f"DEBUG: Trust - peer_id: {peer_id}, established_via: {established_via}, relationship: {relationship}"
-                )
-
             # Prefer direct lookup by normalized email-derived peer_id if available
             user_email = token_data.get("email") or token_data.get("user_email")
-            logger.debug(
-                f"DEBUG: Looking up MCP trust for client_id: {client_id}, user_email: {user_email}"
-            )
             if user_email:
                 normalized_email = user_email.replace("@", "_at_").replace(".", "_dot_")
 
@@ -1265,20 +1251,14 @@ class MCPHandler(BaseHandler):
                     .replace(":", "_colon_")
                 )
                 peer_id_unique = f"oauth2:{normalized_email}:{normalized_client}"
-                logger.debug(
-                    f"DEBUG: Attempting unique peer_id lookup: {peer_id_unique}"
-                )
                 direct = actor.trust.get_relationship(peer_id_unique)
                 if direct:
-                    logger.debug(
-                        f"Found MCP trust via unique peer_id: {peer_id_unique}"
-                    )
+                    logger.debug(f"Found MCP trust for client {client_id}")
                     return direct
 
             trusts = actor.trust.relationships
 
             # Fallback: scan for established_via='oauth2' or 'oauth2_client' and matching trust_type if provided
-            desired_type = token_data.get("trust_type") or "mcp_client"
             for trust in trusts:
                 via = getattr(trust, "established_via", None)
                 rel = getattr(trust, "relationship", None)
@@ -1288,28 +1268,16 @@ class MCPHandler(BaseHandler):
                     # Check if this trust is for the specific client_id
                     peer_id_str = str(getattr(trust, "peerid", ""))
                     if client_id in peer_id_str:
-                        logger.debug(
-                            f"Found OAuth2 trust for client {client_id}: peer={trust.peerid}, via={via}, rel={rel}"
-                        )
+                        logger.debug(f"Found MCP trust for client {client_id}")
                         return trust
-                    else:
-                        logger.debug(
-                            f"OAuth2 trust for different client, skipping: peer={trust.peerid}, client_id={client_id}"
-                        )
 
                 # Handle oauth2_client established trusts (client credentials flow)
                 elif via == "oauth2_client":
                     # Check if this trust is for the specific client_id
                     peer_id_str = str(getattr(trust, "peerid", ""))
                     if client_id in peer_id_str:
-                        logger.debug(
-                            f"Found OAuth2 client trust for client {client_id}: peer={trust.peerid}, via={via}, rel={rel}"
-                        )
+                        logger.debug(f"Found MCP trust for client {client_id}")
                         return trust
-                    else:
-                        logger.debug(
-                            f"OAuth2 client trust for different client, skipping: peer={trust.peerid}, client_id={client_id}"
-                        )
 
                 # Fallback: If established_via is None but this looks like an OAuth2 trust
                 # (peer_id starts with 'oauth2:' or 'oauth2_client:'), assume it should be valid
@@ -1332,16 +1300,9 @@ class MCPHandler(BaseHandler):
                             f"Consider updating this trust relationship to include established_via='{trust_type}'"
                         )
                         return trust
-                    else:
-                        logger.debug(
-                            f"OAuth2 trust (no established_via) for different client, skipping: peer={trust.peerid}, client_id={client_id}"
-                        )
 
             logger.warning(
                 f"No trust found for MCP client {client_id}; permissions will be empty"
-            )
-            logger.debug(
-                f"DEBUG: Trust lookup failed - no matching trust found with established_via='oauth2' or 'oauth2_client' and desired_type: {desired_type}"
             )
             return None
 
@@ -1560,6 +1521,26 @@ class MCPHandler(BaseHandler):
                         f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
                     )
 
+            # Check if client info has actually changed before updating
+            trust_rel = mcp_context.trust_relationship
+            existing_name = (
+                getattr(trust_rel, "client_name", None) if trust_rel else None
+            )
+            existing_version = (
+                getattr(trust_rel, "client_version", None) if trust_rel else None
+            )
+            existing_platform = (
+                getattr(trust_rel, "client_platform", None) if trust_rel else None
+            )
+
+            # Skip update if client info hasn't changed
+            if (
+                existing_name == client_name
+                and existing_version == client_version
+                and existing_platform == client_platform
+            ):
+                return
+
             # Update the trust relationship with client metadata and connection timestamp
             from datetime import datetime
 
@@ -1763,16 +1744,18 @@ class MCPHandler(BaseHandler):
         """Create an error response."""
         if status_code == 401:
             # Add WWW-Authenticate header for ActingWeb OAuth2 server
+            # Include error="invalid_token" to force OAuth2 clients to invalidate cached tokens
+            # Per RFC 6750 Section 3.1: https://tools.ietf.org/html/rfc6750#section-3.1
             try:
                 base_url = f"{self.config.proto}{self.config.fqdn}"
-                www_auth = f'Bearer realm="ActingWeb MCP", authorization_uri="{base_url}/oauth/authorize"'
+                www_auth = f'Bearer realm="ActingWeb MCP", error="invalid_token", error_description="Authentication required", authorization_uri="{base_url}/oauth/authorize"'
                 if hasattr(self, "response") and self.response:
                     self.response.headers["WWW-Authenticate"] = www_auth
             except Exception as e:
                 logger.error(f"Error adding WWW-Authenticate header: {e}")
                 if hasattr(self, "response") and self.response:
                     self.response.headers["WWW-Authenticate"] = (
-                        'Bearer realm="ActingWeb MCP"'
+                        'Bearer realm="ActingWeb MCP", error="invalid_token"'
                     )
 
         return {"error": True, "status_code": status_code, "message": message}

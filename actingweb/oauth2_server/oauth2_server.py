@@ -859,6 +859,19 @@ class ActingWebOAuth2Server:
                         f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
                     )
 
+            # Check if client info has actually changed before updating
+            existing_name = getattr(target_trust, "client_name", None)
+            existing_version = getattr(target_trust, "client_version", None)
+            existing_platform = getattr(target_trust, "client_platform", None)
+
+            # Skip update if client info hasn't changed
+            if (
+                existing_name == client_name
+                and existing_version == client_version
+                and existing_platform == client_platform
+            ):
+                return
+
             # Update the trust relationship
             from .. import actor as actor_module
 

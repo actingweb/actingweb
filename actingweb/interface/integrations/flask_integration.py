@@ -1091,10 +1091,28 @@ class FlaskIntegration:
         else:
             return Response(status=405)
 
-        # Create JSON response
+        # Create JSON response - check if handler set a different status code (e.g., 401 for auth)
         from flask import jsonify
 
-        return jsonify(result)
+        status_code = 200
+        headers = {}
+
+        # Check if the handler set a custom status code in the response object
+        if hasattr(webobj, 'response') and hasattr(webobj.response, 'status_code'):
+            status_code = webobj.response.status_code
+
+        # Check if the handler set custom headers (e.g., WWW-Authenticate for OAuth2)
+        if hasattr(webobj, 'response') and hasattr(webobj.response, 'headers'):
+            headers = dict(webobj.response.headers)
+
+        json_response = jsonify(result)
+        json_response.status_code = status_code
+
+        # Add any custom headers from the handler
+        for header_name, header_value in headers.items():
+            json_response.headers[header_name] = header_value
+
+        return json_response
 
     def _check_authentication_and_redirect(
         self,

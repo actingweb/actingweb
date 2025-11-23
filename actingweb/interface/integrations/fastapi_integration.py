@@ -1710,8 +1710,19 @@ class FastAPIIntegration:
         else:
             raise HTTPException(status_code=405, detail="Method not allowed")
 
-        # Create JSON response
-        return JSONResponse(content=result, status_code=200)
+        # Create JSON response - check if handler set a different status code (e.g., 401 for auth)
+        status_code = 200
+        headers = {}
+
+        # Check if the handler set a custom status code in the response object
+        if hasattr(webobj, 'response') and hasattr(webobj.response, 'status_code'):
+            status_code = webobj.response.status_code
+
+        # Check if the handler set custom headers (e.g., WWW-Authenticate for OAuth2)
+        if hasattr(webobj, 'response') and hasattr(webobj.response, 'headers'):
+            headers = dict(webobj.response.headers)
+
+        return JSONResponse(content=result, status_code=status_code, headers=headers)
 
     async def _handle_oauth2_discovery_endpoint(
         self, request: Request, endpoint: str

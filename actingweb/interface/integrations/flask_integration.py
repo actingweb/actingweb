@@ -1122,11 +1122,11 @@ class FlaskIntegration:
         headers = {}
 
         # Check if the handler set a custom status code in the response object
-        if hasattr(webobj, 'response') and hasattr(webobj.response, 'status_code'):
+        if hasattr(webobj, "response") and hasattr(webobj.response, "status_code"):
             status_code = webobj.response.status_code
 
         # Check if the handler set custom headers (e.g., WWW-Authenticate for OAuth2)
-        if hasattr(webobj, 'response') and hasattr(webobj.response, 'headers'):
+        if hasattr(webobj, "response") and hasattr(webobj.response, "headers"):
             headers = dict(webobj.response.headers)
 
         json_response = jsonify(result)

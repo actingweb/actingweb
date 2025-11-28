@@ -48,10 +48,14 @@ class EmailVerificationHandler(BaseHandler):
 
     def _wants_json(self) -> bool:
         """Check if client prefers JSON response based on Accept header."""
+        if self.request.headers is None:
+            return False
         accept = self.request.headers.get("Accept", "")
         return "application/json" in accept
 
-    def _json_response(self, data: dict[str, Any], status_code: int = 200) -> dict[str, Any]:
+    def _json_response(
+        self, data: dict[str, Any], status_code: int = 200
+    ) -> dict[str, Any]:
         """Return JSON response for API clients."""
         if self.response:
             self.response.write(json.dumps(data))
@@ -98,12 +102,14 @@ class EmailVerificationHandler(BaseHandler):
         if actor.store and actor.store.email_verified == "true":
             logger.info(f"Email already verified for actor {actor_id}")
             if self._wants_json():
-                return self._json_response({
-                    "success": True,
-                    "status": "already_verified",
-                    "message": "Your email address has already been verified.",
-                    "email": actor.store.email or actor.creator,
-                })
+                return self._json_response(
+                    {
+                        "success": True,
+                        "status": "already_verified",
+                        "message": "Your email address has already been verified.",
+                        "email": actor.store.email or actor.creator,
+                    }
+                )
             # Show success page anyway
             self.response.template_values = {
                 "status": "already_verified",
@@ -165,12 +171,14 @@ class EmailVerificationHandler(BaseHandler):
 
         # Return response
         if self._wants_json():
-            return self._json_response({
-                "success": True,
-                "message": "Your email address has been verified successfully!",
-                "email": actor.creator,
-                "redirect_url": f"/{actor_id}/www",
-            })
+            return self._json_response(
+                {
+                    "success": True,
+                    "message": "Your email address has been verified successfully!",
+                    "email": actor.creator,
+                    "redirect_url": f"/{actor_id}/www",
+                }
+            )
 
         # Show success page
         self.response.template_values = {
@@ -250,10 +258,12 @@ class EmailVerificationHandler(BaseHandler):
         logger.info(f"Resent verification email for actor {actor_id}")
 
         if self._wants_json():
-            return self._json_response({
-                "success": True,
-                "message": "Verification email sent. Please check your inbox.",
-            })
+            return self._json_response(
+                {
+                    "success": True,
+                    "message": "Verification email sent. Please check your inbox.",
+                }
+            )
 
         return {
             "status": "success",
@@ -264,11 +274,14 @@ class EmailVerificationHandler(BaseHandler):
         """Create error response with template rendering or JSON."""
         # For JSON clients, return JSON error
         if self._wants_json():
-            return self._json_response({
-                "success": False,
-                "error": message.lower().replace(" ", "_"),
-                "message": message,
-            }, status_code)
+            return self._json_response(
+                {
+                    "success": False,
+                    "error": message.lower().replace(" ", "_"),
+                    "message": message,
+                },
+                status_code,
+            )
 
         self.response.set_status(status_code)
 

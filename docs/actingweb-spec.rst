@@ -1,5 +1,5 @@
 =====================================
-ActingWeb Specification - version 1.1
+ActingWeb Specification - version 1.2
 =====================================
 
 Introduction
@@ -395,6 +395,39 @@ listproperties
 trustpermissions
   The trust endpoint supports per‑relationship permission management (enhanced trust API and ``/permissions``).
 
+Response Conventions
+-----------------------------
+
+**Empty Collections (SPA-Friendly Behavior)**
+
+When an endpoint returns a collection of items (such as trust relationships, subscriptions,
+properties, or list items), the following convention applies:
+
+- If the collection exists but is empty, the endpoint MUST return ``200 OK`` with an empty
+  array ``[]`` or an object containing an empty array.
+- A ``404 Not Found`` response MUST only be used when a specific individual resource does not
+  exist (e.g., a specific property name, a specific trust relationship by peer ID, or a
+  specific list item by index).
+
+This convention enables Single Page Applications (SPAs) and API clients to distinguish between
+"no items found" (empty collection, 200 OK) and "resource does not exist" (404 Not Found),
+simplifying client-side state management and error handling.
+
+**Examples:**
+
+- ``GET /actor/trust`` with no trust relationships → ``200 OK`` with ``[]``
+- ``GET /actor/trust/friend/nonexistent-peer`` → ``404 Not Found``
+- ``GET /actor/properties`` with no properties → ``200 OK`` with ``{}``
+- ``GET /actor/properties/nonexistent`` → ``404 Not Found``
+- ``GET /actor/properties/mylist`` (empty list) → ``200 OK`` with ``[]``
+- ``GET /actor/properties/mylist/99`` (index out of range) → ``404 Not Found``
+
+.. note::
+
+   This convention was introduced in ActingWeb Specification version 1.2. Implementations
+   based on version 1.1 or earlier may return ``404 Not Found`` for empty collections.
+   Clients SHOULD handle both behaviors for backward compatibility with older implementations.
+
 The Actor
 ==========
 
@@ -754,9 +787,10 @@ When a GET request targets an attribute, the returned representation is
 the value of that specific attribute only using text/plain as content
 type: GET /app/78hjh76yug/properties/firstname
 
-A GET for an empty /properties (i.e. no attribute/value pairs set) or a
-GET for a non-set attribute should result in a 404 Not found from the
-actor. If the attribute is not accessible without a trust relationship,
+A GET for an empty /properties (i.e. no attribute/value pairs set) MUST return
+a 200 OK with an empty JSON object ``{}``. A GET for a non-set attribute MUST
+result in a 404 Not Found from the actor.
+If the attribute is not accessible without a trust relationship,
 a 401 Unauthorised MUST be returned. If the request's current trust
 relationship is not sufficient, a 403 Forbidden MUST be returned.
 
@@ -868,7 +902,8 @@ is out of range, a 404 Not Found MUST be returned::
 
   {"id": "1", "content": "Remember to call", "created": "2025-01-15T10:30:00Z"}
 
-If the list property does not exist or is empty, a 404 Not Found SHOULD be
+If the list property does not exist, a 404 Not Found MUST be returned. If the
+list property exists but is empty, a 200 OK with an empty array ``[]`` MUST be
 returned. Authorization requirements are the same as for regular properties.
 
 **List Property POST**
@@ -1336,8 +1371,9 @@ The 'creator' user and 'admin' relationship MUST allow the retrieval of
 trust relationships through a GET to /trust and to
 /trust/'relationship\_type'. The content is application/json. A request
 on a relationship type MAY also be supported and filter on a specific
-relationship, but give the same output. If no relationships exist, a 404
-Not found MUST be returned.
+relationship, but give the same output. If no relationships exist, a 200 OK
+with an empty array ``[]`` MUST be returned. A 404 Not Found MUST only be
+returned when a specific trust relationship (by peer ID) does not exist.
 
 ::
 

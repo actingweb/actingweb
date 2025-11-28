@@ -287,12 +287,15 @@ class PropertiesHandler(base_handler.BaseHandler):
 
     def listall(self, myself, check):
         properties = myself.get_properties()
-        if not properties or len(properties) == 0:
-            self.response.set_status(404, "No properties")
-            return
-
         # Check if metadata is requested via query parameter
         include_metadata = self.request.get("metadata") == "true"
+
+        # Return empty object with 200 OK when no properties exist (SPA-friendly, spec v1.2)
+        if not properties or len(properties) == 0:
+            out = json.dumps({})
+            self.response.write(out)
+            self.response.headers["Content-Type"] = "application/json"
+            return
 
         pair = {}
         for name, value in list(properties.items()):
@@ -316,17 +319,17 @@ class PropertiesHandler(base_handler.BaseHandler):
                         result[key] = transformed
                 pair = result
 
+        # After hook processing, if pair is empty, return empty object (200 OK)
         if not pair:
-            self.response.set_status(404)
+            out = json.dumps({})
+            self.response.write(out)
+            self.response.headers["Content-Type"] = "application/json"
             return
 
         # Add list property metadata if requested
         if include_metadata:
             list_names = set()
-            if (
-                hasattr(myself, "property_lists")
-                and myself.property_lists is not None
-            ):
+            if hasattr(myself, "property_lists") and myself.property_lists is not None:
                 list_names = set(myself.property_lists.list_all() or [])
 
                 # Add metadata for list properties
@@ -1072,7 +1075,9 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
             and myself.property_lists.exists(name)
         ):
             if self.response:
-                self.response.set_status(404, "Property not found or not a list property")
+                self.response.set_status(
+                    404, "Property not found or not a list property"
+                )
             return
 
         # Get metadata
@@ -1112,7 +1117,9 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
             and myself.property_lists.exists(name)
         ):
             if self.response:
-                self.response.set_status(404, "Property not found or not a list property")
+                self.response.set_status(
+                    404, "Property not found or not a list property"
+                )
             return
 
         # Parse request body

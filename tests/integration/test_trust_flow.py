@@ -297,8 +297,10 @@ class TestTrustActorFlow:
             f"{self.actor1_url}/trust?peerid={self.actor2_id}",
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
-        # Should return 200 or 404 if search not implemented
-        assert response.status_code in [200, 404]
+        # Should return 200 OK with array (spec v1.2)
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
 
     def test_014_update_trust_wrong_password(self, http_client):
         """
@@ -617,12 +619,13 @@ class TestTrustActorFlow:
         )
         assert response.status_code == 204
 
-        # Verify deletion via proxy
+        # Verify deletion via proxy - returns 200 with empty object (SPA-friendly, spec v1.2)
         response = requests.get(
             f"{self.actor1_url}/devtest/proxy/properties",
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
-        assert response.status_code == 404
+        assert response.status_code == 200
+        assert response.json() == {}
 
     def test_033_delete_actors(self, http_client):
         """

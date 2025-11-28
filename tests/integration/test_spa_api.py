@@ -42,7 +42,7 @@ class TestPropertiesMetadataAPI:
         response = requests.put(
             f"{self.actor_url}/properties/test_prop",
             json={"value": "test_value"},
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code in [200, 201, 204]
 
@@ -50,7 +50,7 @@ class TestPropertiesMetadataAPI:
         """Get properties without metadata parameter."""
         response = requests.get(
             f"{self.actor_url}/properties",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -61,7 +61,7 @@ class TestPropertiesMetadataAPI:
         """Get properties with metadata=true parameter."""
         response = requests.get(
             f"{self.actor_url}/properties?metadata=true",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         assert response.status_code == 200
         data = response.json()
@@ -73,7 +73,7 @@ class TestPropertiesMetadataAPI:
         if self.actor_url:
             response = requests.delete(
                 self.actor_url,
-                auth=(self.creator, self.passphrase),
+                auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
             )
             assert response.status_code in [200, 204]
 
@@ -113,7 +113,11 @@ class TestMetaTrustTypesAPI:
         if response.status_code == 200:
             data = response.json()
             # Should have trust_types and default_trust_type
-            assert "trust_types" in data or "default_trust_type" in data or isinstance(data, dict)
+            assert (
+                "trust_types" in data
+                or "default_trust_type" in data
+                or isinstance(data, dict)
+            )
 
     def test_003_get_meta_actingweb_trust_types(self, http_client):
         """Get trust types from legacy /meta/actingweb/trust_types endpoint."""
@@ -126,7 +130,7 @@ class TestMetaTrustTypesAPI:
         if self.actor_url:
             response = requests.delete(
                 self.actor_url,
-                auth=(self.creator, self.passphrase),
+                auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
             )
             assert response.status_code in [200, 204]
 
@@ -178,10 +182,13 @@ class TestTrustWithOAuth2Data:
         """Get trust relationships when none exist."""
         response = requests.get(
             f"{self.actor_url}/trust",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
-        # Should return 404 when no trusts exist
-        assert response.status_code in [200, 404]
+        # Should return 200 OK with empty array when no trusts exist (spec v1.2)
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 0
 
     def test_004_create_trust_relationship(self, http_client):
         """Create a trust relationship."""
@@ -191,7 +198,7 @@ class TestTrustWithOAuth2Data:
                 "url": self.peer_url,
                 "relationship": "friend",
             },
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         # Trust creation may succeed or timeout if peer unreachable
         assert response.status_code in [201, 408]
@@ -200,38 +207,45 @@ class TestTrustWithOAuth2Data:
         """Get trust relationships and verify data structure."""
         response = requests.get(
             f"{self.actor_url}/trust",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
-        # May be 200 with data or 404 if no trusts
-        assert response.status_code in [200, 404]
+        # Always returns 200 OK with array (empty or with data) per spec v1.2
+        assert response.status_code == 200
 
-        if response.status_code == 200:
-            data = response.json()
-            # Should be a list of trust relationships
-            assert isinstance(data, list) or isinstance(data, dict)
+        data = response.json()
+        # Should be a list of trust relationships (may be empty)
+        assert isinstance(data, list)
 
-            # If list, check first item has expected fields
-            if isinstance(data, list) and len(data) > 0:
-                trust = data[0]
-                # Standard trust fields
-                assert "peerid" in trust or "relationship" in trust
-                # OAuth2 client fields may be present
-                # These are optional - only present if established via OAuth2
+        # If list has items, check first item has expected fields
+        if len(data) > 0:
+            trust = data[0]
+            # Standard trust fields
+            assert "peerid" in trust or "relationship" in trust
+            # OAuth2 client fields may be present
+            # These are optional - only present if established via OAuth2
 
-    def test_006_get_trust_by_relationship(self, http_client):
-        """Get trust relationships filtered by relationship type."""
+    def test_006_get_trust_by_type(self, http_client):
+        """Get trust relationships filtered by type query parameter.
+
+        Note: Uses ?type= instead of ?relationship= because FastAPI has a routing
+        conflict when a query param name matches a path param name in another route.
+        The handler supports both 'type' and 'relationship' query params.
+        """
         response = requests.get(
-            f"{self.actor_url}/trust?relationship=friend",
-            auth=(self.creator, self.passphrase),
+            f"{self.actor_url}/trust?type=friend",
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 404]
+        # Should return 200 OK with array (empty or with data) per spec v1.2
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
 
     def test_098_cleanup_peer_actor(self, http_client):
         """Delete peer actor."""
         if self.peer_url:
             response = requests.delete(
                 self.peer_url,
-                auth=(self.peer_creator, self.peer_passphrase),
+                auth=(self.peer_creator, self.peer_passphrase),  # type: ignore[arg-type]
             )
             assert response.status_code in [200, 204]
 
@@ -240,7 +254,7 @@ class TestTrustWithOAuth2Data:
         if self.actor_url:
             response = requests.delete(
                 self.actor_url,
-                auth=(self.creator, self.passphrase),
+                auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
             )
             assert response.status_code in [200, 204]
 
@@ -274,7 +288,7 @@ class TestPropertyMetadataEndpoint:
         """Get metadata for property that doesn't exist."""
         response = requests.get(
             f"{self.actor_url}/properties/nonexistent/metadata",
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
         # Should return 404 for non-existent property
         assert response.status_code in [404, 403, 401]
@@ -287,7 +301,7 @@ class TestPropertyMetadataEndpoint:
                 "description": "Test description",
                 "explanation": "Test explanation",
             },
-            auth=(self.creator, self.passphrase),
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
             headers={"Content-Type": "application/json"},
         )
         # May succeed, fail with 404 (property doesn't exist), or 400
@@ -298,6 +312,6 @@ class TestPropertyMetadataEndpoint:
         if self.actor_url:
             response = requests.delete(
                 self.actor_url,
-                auth=(self.creator, self.passphrase),
+                auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
             )
             assert response.status_code in [200, 204]

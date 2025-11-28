@@ -24,7 +24,7 @@ class TestOAuth2CallbackSPAMode(unittest.TestCase):
         state_data = {
             "actor_id": "test_actor",
             "spa_mode": True,
-            "redirect_uri": "/dashboard"
+            "redirect_uri": "/dashboard",
         }
         state_json = json.dumps(state_data)
 
@@ -74,7 +74,7 @@ class TestOAuth2CallbackSPAMode(unittest.TestCase):
             "actor_id": "test_actor",
             "spa_mode": True,
             "client_type": "chatgpt",
-            "trust_type": "mcp_client"
+            "trust_type": "mcp_client",
         }
         state_json = json.dumps(state_data)
 
@@ -194,26 +194,23 @@ class TestConfigTrustTypes(unittest.TestCase):
         """Verify Config can be configured with trust types."""
         config = Config(database="dynamodb", devtest=True)
 
-        # Set trust types
-        config.trust_types = {
-            "mcp_client": {
-                "name": "mcp_client",
-                "relationship": "friend"
-            }
+        # Set trust types (dynamic attributes)
+        config.trust_types = {  # type: ignore[attr-defined]
+            "mcp_client": {"name": "mcp_client", "relationship": "friend"}
         }
-        config.default_trust_type = "mcp_client"
+        config.default_trust_type = "mcp_client"  # type: ignore[attr-defined]
 
         # Verify they're stored
-        self.assertEqual(config.default_trust_type, "mcp_client")
-        self.assertIn("mcp_client", config.trust_types)
+        self.assertEqual(config.default_trust_type, "mcp_client")  # type: ignore[attr-defined]
+        self.assertIn("mcp_client", config.trust_types)  # type: ignore[attr-defined]
 
     def test_config_has_trust_type_registry_attribute(self):
         """Verify Config can have trust_type_registry attribute."""
         config = Config(database="dynamodb", devtest=True)
 
-        # Should be able to set trust_type_registry
-        config.trust_type_registry = None  # type: ignore
-        self.assertIsNone(config.trust_type_registry)
+        # Should be able to set trust_type_registry (dynamic attribute)
+        config.trust_type_registry = None  # type: ignore[attr-defined]
+        self.assertIsNone(config.trust_type_registry)  # type: ignore[attr-defined]
 
 
 class TestTrustTypeDataclass(unittest.TestCase):
@@ -227,7 +224,7 @@ class TestTrustTypeDataclass(unittest.TestCase):
             name="test_client",
             display_name="Test Client",
             description="A test client",
-            base_permissions={"read": True, "write": False}
+            base_permissions={"read": True, "write": False},
         )
 
         result = trust_type.to_dict()
@@ -244,7 +241,7 @@ class TestTrustTypeDataclass(unittest.TestCase):
             "name": "test_client",
             "display_name": "Test Client",
             "description": "A test client",
-            "base_permissions": {"read": True}
+            "base_permissions": {"read": True},
         }
 
         trust_type = TrustType.from_dict(data)
@@ -257,10 +254,7 @@ class TestTrustTypeDataclass(unittest.TestCase):
         from actingweb.trust_type_registry import TrustType
 
         valid = TrustType(
-            name="test",
-            display_name="Test",
-            description="Desc",
-            base_permissions={}
+            name="test", display_name="Test", description="Desc", base_permissions={}
         )
         self.assertTrue(valid.validate())
 
@@ -268,7 +262,7 @@ class TestTrustTypeDataclass(unittest.TestCase):
             name="",  # Empty name
             display_name="Test",
             description="Desc",
-            base_permissions={}
+            base_permissions={},
         )
         self.assertFalse(invalid.validate())
 

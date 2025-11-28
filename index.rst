@@ -115,7 +115,6 @@ Deployment
    :caption: Deployment
 
    docs/deployment
-   docs/routing-overview
 
 API Reference
 -------------

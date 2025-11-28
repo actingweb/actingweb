@@ -12,7 +12,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -689,9 +689,7 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/properties")
         @self.fastapi_app.put("/{actor_id}/properties")
         @self.fastapi_app.delete("/{actor_id}/properties")
-        async def app_properties_root(
-            actor_id: str, request: Request
-        ) -> Response:  # pyright: ignore[reportUnusedFunction]
+        async def app_properties_root(actor_id: str, request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             # Check authentication and redirect to Google OAuth2 if needed
             auth_redirect = await self._check_auth_or_redirect(request)
             if auth_redirect:
@@ -728,27 +726,45 @@ class FastAPIIntegration:
                 request, actor_id, "properties", name=name
             )
 
-        # Actor trust
-        @self.fastapi_app.get("/{actor_id}/trust")
-        @self.fastapi_app.post("/{actor_id}/trust")
-        @self.fastapi_app.put("/{actor_id}/trust")
-        @self.fastapi_app.delete("/{actor_id}/trust")
-        @self.fastapi_app.get("/{actor_id}/trust/{relationship}")
-        @self.fastapi_app.post("/{actor_id}/trust/{relationship}")
-        @self.fastapi_app.put("/{actor_id}/trust/{relationship}")
-        @self.fastapi_app.delete("/{actor_id}/trust/{relationship}")
+        # Actor trust - path-based endpoints (more specific routes first)
         @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.post("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}")
-        async def app_trust(  # pyright: ignore[reportUnusedFunction]
+        async def app_trust_peer(  # pyright: ignore[reportUnusedFunction]
             actor_id: str,
             request: Request,
-            relationship: str | None = None,
-            peerid: str | None = None,
+            relationship: str,
+            peerid: str,
         ) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "trust", relationship=relationship, peerid=peerid
+            )
+
+        @self.fastapi_app.get("/{actor_id}/trust/{relationship}")
+        @self.fastapi_app.post("/{actor_id}/trust/{relationship}")
+        @self.fastapi_app.put("/{actor_id}/trust/{relationship}")
+        @self.fastapi_app.delete("/{actor_id}/trust/{relationship}")
+        async def app_trust_relationship(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str,
+            request: Request,
+            relationship: str,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "trust", relationship=relationship, peerid=None
+            )
+
+        # Actor trust - root endpoint (least specific, defined last)
+        @self.fastapi_app.get("/{actor_id}/trust")
+        @self.fastapi_app.post("/{actor_id}/trust")
+        @self.fastapi_app.put("/{actor_id}/trust")
+        @self.fastapi_app.delete("/{actor_id}/trust")
+        async def app_trust_root(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str,
+            request: Request,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "trust", relationship=None, peerid=None
             )
 
         # Trust permission management endpoints
@@ -1739,11 +1755,11 @@ class FastAPIIntegration:
         headers = {}
 
         # Check if the handler set a custom status code in the response object
-        if hasattr(webobj, 'response') and hasattr(webobj.response, 'status_code'):
+        if hasattr(webobj, "response") and hasattr(webobj.response, "status_code"):
             status_code = webobj.response.status_code
 
         # Check if the handler set custom headers (e.g., WWW-Authenticate for OAuth2)
-        if hasattr(webobj, 'response') and hasattr(webobj.response, 'headers'):
+        if hasattr(webobj, "response") and hasattr(webobj.response, "headers"):
             headers = dict(webobj.response.headers)
 
         return JSONResponse(content=result, status_code=status_code, headers=headers)

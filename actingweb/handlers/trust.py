@@ -65,10 +65,10 @@ class TrustHandler(base_handler.BaseHandler):
         pairs = myself.get_trust_relationships(
             relationship=relationship, peerid=peerid, trust_type=peer_type
         )
-        # Return empty array with 200 OK when no relationships exist (better for web UIs)
+        # Return empty array with 200 OK when no relationships exist (SPA-friendly, spec v1.2)
         if not pairs:
             pairs = []
-        out = json.dumps({"trustrelationships": pairs})
+        out = json.dumps(pairs)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(200, "Ok")
@@ -818,5 +818,3 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             logging.error(f"Error deleting permissions for {actor_id}:{peerid}: {e}")
             if self.response:
                 self.response.set_status(500, "Internal server error")
-
-

@@ -30,9 +30,13 @@ def _decode_state_with_extras(state: str) -> dict[str, Any]:
     if not state or not state.strip().startswith("{"):
         return {}
     try:
-        return json.loads(state)
+        result = json.loads(state)
+        if isinstance(result, dict):
+            return result
+        return {}
     except (json.JSONDecodeError, TypeError):
         return {}
+
 
 logger = logging.getLogger(__name__)
 

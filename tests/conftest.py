@@ -22,5 +22,6 @@ def pytest_configure(config):
 
     # For unit tests that don't need actual DynamoDB, point to localhost
     # Integration tests will override this with their docker host
+    # Port 8001 matches docker-compose.test.yml which maps host:8001 -> container:8000
     if "AWS_DB_HOST" not in os.environ:
-        os.environ["AWS_DB_HOST"] = "http://localhost:8000"
+        os.environ["AWS_DB_HOST"] = "http://localhost:8001"

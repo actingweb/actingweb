@@ -222,6 +222,10 @@ class Trust:
         else:
             self.handle = None
         self.trust = {}
+        # Initialize attributes before any early returns to avoid AttributeError
+        self.actor_id = actor_id
+        self.peerid = peerid
+        self.token = token
         if not actor_id or len(actor_id) == 0:
             logging.debug("No actorid set in initialisation of trust")
             return
@@ -233,9 +237,6 @@ class Trust:
         if not token and (not peerid or len(peerid) == 0):
             logging.debug("No peerid set in initialisation of trust")
             return
-        self.actor_id = actor_id
-        self.peerid = peerid
-        self.token = token
         self.get()
 
 
@@ -265,14 +266,13 @@ class Trusts:
     def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         """Properties must always be initialised with an actor_id"""
         self.config = config
+        # Initialize attributes before any early returns to avoid AttributeError
+        self.actor_id = actor_id
+        self.trusts = None
+        self.list = None
         if not actor_id:
-            self.list = None
             logging.debug("No actor_id in initialisation of trusts")
             return
         if self.config:
             self.list = self.config.DbTrust.DbTrustList()
-        else:
-            self.list = None
-        self.actor_id = actor_id
-        self.trusts = None
         self.fetch()

@@ -689,6 +689,30 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/properties")
         @self.fastapi_app.put("/{actor_id}/properties")
         @self.fastapi_app.delete("/{actor_id}/properties")
+        async def app_properties_root(
+            actor_id: str, request: Request
+        ) -> Response:  # pyright: ignore[reportUnusedFunction]
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
+            return await self._handle_actor_request(
+                request, actor_id, "properties", name=""
+            )
+
+        # Property metadata endpoint (must come before catch-all {name:path})
+        @self.fastapi_app.get("/{actor_id}/properties/{name}/metadata")
+        @self.fastapi_app.put("/{actor_id}/properties/{name}/metadata")
+        async def app_property_metadata(
+            actor_id: str, request: Request, name: str
+        ) -> Response:  # pyright: ignore[reportUnusedFunction]
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
+            return await self._handle_actor_request(
+                request, actor_id, "properties", name=name, metadata=True
+            )
+
         @self.fastapi_app.get("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.post("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.put("/{actor_id}/properties/{name:path}")
@@ -1947,6 +1971,12 @@ class FastAPIIntegration:
             ),
             "services": lambda: self._create_services_handler(webobj, config),
         }
+
+        # Special handling for properties metadata endpoint
+        if endpoint == "properties" and kwargs.get("metadata"):
+            return properties.PropertyMetadataHandler(
+                webobj, config, hooks=self.aw_app.hooks
+            )
 
         # Special handling for trust endpoint
         if endpoint == "trust":

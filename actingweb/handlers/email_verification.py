@@ -3,8 +3,12 @@ Email verification handler for ActingWeb.
 
 Handles email verification for OAuth2 actors where the email address
 could not be verified by the OAuth provider.
+
+Supports both HTML template responses and JSON API responses based on
+the Accept header (application/json for API clients).
 """
 
+import json
 import logging
 import secrets
 import time
@@ -26,6 +30,8 @@ class EmailVerificationHandler(BaseHandler):
 
     This endpoint verifies email addresses for actors created via OAuth2
     when the OAuth provider could not verify the email.
+
+    Supports JSON API responses when Accept: application/json header is present.
     """
 
     def __init__(
@@ -39,6 +45,19 @@ class EmailVerificationHandler(BaseHandler):
         if config is None:
             raise RuntimeError("Config is required for EmailVerificationHandler")
         super().__init__(webobj, config, hooks)
+
+    def _wants_json(self) -> bool:
+        """Check if client prefers JSON response based on Accept header."""
+        accept = self.request.headers.get("Accept", "")
+        return "application/json" in accept
+
+    def _json_response(self, data: dict[str, Any], status_code: int = 200) -> dict[str, Any]:
+        """Return JSON response for API clients."""
+        if self.response:
+            self.response.write(json.dumps(data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(status_code)
+        return data
 
     def get(self) -> dict[str, Any]:
         """
@@ -78,6 +97,13 @@ class EmailVerificationHandler(BaseHandler):
         # Check if already verified
         if actor.store and actor.store.email_verified == "true":
             logger.info(f"Email already verified for actor {actor_id}")
+            if self._wants_json():
+                return self._json_response({
+                    "success": True,
+                    "status": "already_verified",
+                    "message": "Your email address has already been verified.",
+                    "email": actor.store.email or actor.creator,
+                })
             # Show success page anyway
             self.response.template_values = {
                 "status": "already_verified",
@@ -136,6 +162,15 @@ class EmailVerificationHandler(BaseHandler):
                 )
             except Exception as e:
                 logger.error(f"Error in email_verified lifecycle hook: {e}")
+
+        # Return response
+        if self._wants_json():
+            return self._json_response({
+                "success": True,
+                "message": "Your email address has been verified successfully!",
+                "email": actor.creator,
+                "redirect_url": f"/{actor_id}/www",
+            })
 
         # Show success page
         self.response.template_values = {
@@ -214,13 +249,27 @@ class EmailVerificationHandler(BaseHandler):
 
         logger.info(f"Resent verification email for actor {actor_id}")
 
+        if self._wants_json():
+            return self._json_response({
+                "success": True,
+                "message": "Verification email sent. Please check your inbox.",
+            })
+
         return {
             "status": "success",
             "message": "Verification email sent. Please check your inbox.",
         }
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
-        """Create error response with template rendering."""
+        """Create error response with template rendering or JSON."""
+        # For JSON clients, return JSON error
+        if self._wants_json():
+            return self._json_response({
+                "success": False,
+                "error": message.lower().replace(" ", "_"),
+                "message": message,
+            }, status_code)
+
         self.response.set_status(status_code)
 
         # For user-facing errors, render template

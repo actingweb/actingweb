@@ -2,6 +2,23 @@
 CHANGELOG
 =========
 
+v3.5: Nov 28, 2025
+------------------
+
+DOCS
+~~~~
+
+- Added ``listproperties`` option tag to ActingWeb specification for list property support
+- Added comprehensive List Properties section to ``docs/actingweb-spec.rst`` documenting ordered collections
+- Documented list property CRUD operations (GET/POST/PUT/DELETE) for items and full lists
+- Documented list property metadata endpoint (GET/PUT ``/properties/{name}/metadata``)
+- Updated GET ``/properties?metadata=true`` documentation to reference listproperties option tag
+
+FIXED
+~~~~~
+
+- Fixed unit test configuration to use correct DynamoDB port (8001) matching docker-compose.test.yml
+
 v3.4.3: Nov 23, 2025
 -------------------
 

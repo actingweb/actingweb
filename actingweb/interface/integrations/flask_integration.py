@@ -205,6 +205,30 @@ class FlaskIntegration:
         @self.flask_app.route(
             "/<actor_id>/properties", methods=["GET", "POST", "DELETE", "PUT"]
         )
+        def app_properties_root(
+            actor_id: str,
+        ) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            # Align with FastAPI: protect properties with OAuth when enabled
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
+            return self._handle_actor_request(actor_id, "properties", name="")
+
+        # Property metadata endpoint (must come before catch-all path:name)
+        @self.flask_app.route(
+            "/<actor_id>/properties/<name>/metadata",
+            methods=["GET", "PUT"],
+        )
+        def app_property_metadata(
+            actor_id: str, name: str
+        ) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
+            return self._handle_actor_request(
+                actor_id, "properties", name=name, metadata=True
+            )
+
         @self.flask_app.route(
             "/<actor_id>/properties/<path:name>",
             methods=["GET", "POST", "DELETE", "PUT"],
@@ -1377,6 +1401,12 @@ class FlaskIntegration:
             ),
             "services": lambda: self._create_services_handler(webobj, config),
         }
+
+        # Special handling for properties metadata endpoint
+        if endpoint == "properties" and kwargs.get("metadata"):
+            return properties.PropertyMetadataHandler(
+                webobj, config, hooks=self.aw_app.hooks
+            )
 
         # Special handling for trust endpoint
         if endpoint == "trust":

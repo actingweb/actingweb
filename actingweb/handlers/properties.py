@@ -290,6 +290,10 @@ class PropertiesHandler(base_handler.BaseHandler):
         if not properties or len(properties) == 0:
             self.response.set_status(404, "No properties")
             return
+
+        # Check if metadata is requested via query parameter
+        include_metadata = self.request.get("metadata") == "true"
+
         pair = {}
         for name, value in list(properties.items()):
             try:
@@ -297,6 +301,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 pair[name] = js
             except ValueError:
                 pair[name] = value
+
         # Execute property hooks for all properties if available
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
@@ -310,9 +315,41 @@ class PropertiesHandler(base_handler.BaseHandler):
                     if transformed is not None:
                         result[key] = transformed
                 pair = result
+
         if not pair:
             self.response.set_status(404)
             return
+
+        # Add list property metadata if requested
+        if include_metadata:
+            list_names = set()
+            if (
+                hasattr(myself, "property_lists")
+                and myself.property_lists is not None
+            ):
+                list_names = set(myself.property_lists.list_all() or [])
+
+                # Add metadata for list properties
+                for list_name in list_names:
+                    list_prop = getattr(myself.property_lists, list_name)
+                    pair[list_name] = {
+                        "is_list": True,
+                        "item_count": len(list_prop),
+                        "description": list_prop.get_description(),
+                        "explanation": list_prop.get_explanation(),
+                    }
+
+            # Wrap non-list properties with is_list: false
+            for name in list(pair.keys()):
+                if name not in list_names:
+                    current_value = pair[name]
+                    if isinstance(current_value, dict) and "is_list" in current_value:
+                        continue  # Already wrapped
+                    pair[name] = {
+                        "value": current_value,
+                        "is_list": False,
+                    }
+
         out = json.dumps(pair)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
@@ -944,3 +981,166 @@ class PropertiesHandler(base_handler.BaseHandler):
             target="properties", subtarget=name, resource=resource, blob=""
         )
         self.response.set_status(204)
+
+
+class PropertyMetadataHandler(base_handler.BaseHandler):
+    """Handler for list property metadata operations.
+
+    Handles PUT /{actor_id}/properties/{name}/metadata
+    for updating list property description and explanation fields.
+    """
+
+    def _check_property_permission(
+        self, actor_id: str, auth_obj, property_path: str, operation: str
+    ) -> bool:
+        """
+        Check property permission using the unified access control system.
+
+        Reuses the same permission logic as PropertiesHandler.
+        """
+        # Get peer ID from auth object (if authenticated via trust relationship)
+        peer_id = (
+            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
+        )
+
+        if not peer_id:
+            # No peer relationship - fall back to legacy authorization
+            legacy_subpath = property_path.split("/")[0] if property_path else ""
+            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+            return auth_obj.check_authorisation(
+                path="properties",
+                subpath=legacy_subpath,
+                method=method_map.get(operation, "GET"),
+            )
+
+        # Use permission evaluator for peer-based access
+        try:
+            evaluator = get_permission_evaluator(self.config)
+            result = evaluator.evaluate_property_access(
+                actor_id, peer_id, property_path, operation
+            )
+
+            if result == PermissionResult.ALLOWED:
+                return True
+            elif result == PermissionResult.DENIED:
+                logging.info(
+                    f"Property metadata access denied: {actor_id} -> {peer_id} -> {property_path} ({operation})"
+                )
+                return False
+            else:  # NOT_FOUND
+                # Fall back to legacy for backward compatibility
+                legacy_subpath = property_path.split("/")[0] if property_path else ""
+                method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+                return auth_obj.check_authorisation(
+                    path="properties",
+                    subpath=legacy_subpath,
+                    method=method_map.get(operation, "GET"),
+                )
+
+        except Exception as e:
+            logging.error(
+                f"Error in permission evaluation for metadata {actor_id}:{peer_id}:{property_path}: {e}"
+            )
+            # Fall back to legacy authorization on errors
+            legacy_subpath = property_path.split("/")[0] if property_path else ""
+            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+            return auth_obj.check_authorisation(
+                path="properties",
+                subpath=legacy_subpath,
+                method=method_map.get(operation, "GET"),
+            )
+
+    def get(self, actor_id: str, name: str):
+        """Get list property metadata (description, explanation)."""
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+
+        # Check read permission
+        if not self._check_property_permission(actor_id, check, name, "read"):
+            if self.response:
+                self.response.set_status(403)
+            return
+
+        # Verify this is a list property
+        if not (
+            myself
+            and hasattr(myself, "property_lists")
+            and myself.property_lists is not None
+            and myself.property_lists.exists(name)
+        ):
+            if self.response:
+                self.response.set_status(404, "Property not found or not a list property")
+            return
+
+        # Get metadata
+        list_prop = getattr(myself.property_lists, name)
+        metadata = {
+            "name": name,
+            "is_list": True,
+            "item_count": len(list_prop),
+            "description": list_prop.get_description(),
+            "explanation": list_prop.get_explanation(),
+        }
+
+        if self.response:
+            self.response.write(json.dumps(metadata))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+
+    def put(self, actor_id: str, name: str):
+        """Update list property metadata (description, explanation)."""
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+
+        # Check write permission
+        if not self._check_property_permission(actor_id, check, name, "write"):
+            if self.response:
+                self.response.set_status(403)
+            return
+
+        # Verify this is a list property
+        if not (
+            myself
+            and hasattr(myself, "property_lists")
+            and myself.property_lists is not None
+            and myself.property_lists.exists(name)
+        ):
+            if self.response:
+                self.response.set_status(404, "Property not found or not a list property")
+            return
+
+        # Parse request body
+        try:
+            body = self.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "ignore")
+            params = json.loads(body or "{}")
+        except (TypeError, ValueError, KeyError):
+            if self.response:
+                self.response.set_status(400, "Invalid JSON body")
+            return
+
+        # Validate that at least one field is provided
+        if "description" not in params and "explanation" not in params:
+            if self.response:
+                self.response.set_status(
+                    400, "Request must include 'description' and/or 'explanation'"
+                )
+            return
+
+        # Update metadata
+        list_prop = getattr(myself.property_lists, name)
+
+        if "description" in params:
+            list_prop.set_description(str(params["description"]))
+        if "explanation" in params:
+            list_prop.set_explanation(str(params["explanation"]))
+
+        if self.response:
+            self.response.set_status(204)

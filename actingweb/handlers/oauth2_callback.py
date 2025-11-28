@@ -4,8 +4,12 @@ OAuth2 callback handler for ActingWeb.
 This handler processes OAuth2 callbacks from various providers after user authentication,
 exchanges the authorization code for an access token, and sets up the user session.
 Uses the consolidated oauth2 module for provider-agnostic OAuth2 handling.
+
+Supports SPA (Single Page Application) mode when spa_mode=true is included in the
+OAuth state parameter. In SPA mode, returns JSON with tokens instead of redirecting.
 """
 
+import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
@@ -19,6 +23,16 @@ if TYPE_CHECKING:
 from .. import config as config_class
 from ..oauth2 import create_oauth2_authenticator, create_oauth2_trust_relationship
 from ..oauth_state import decode_state, validate_expected_email
+
+
+def _decode_state_with_extras(state: str) -> dict[str, Any]:
+    """Decode state JSON and return full dict including extra fields like spa_mode."""
+    if not state or not state.strip().startswith("{"):
+        return {}
+    try:
+        return json.loads(state)
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +116,13 @@ class OAuth2CallbackHandler(BaseHandler):
         _, redirect_url, actor_id, trust_type, _expected_email, user_agent = (
             decode_state(state)
         )
+
+        # Extract extra fields including spa_mode
+        state_extras = _decode_state_with_extras(state)
+        spa_mode = state_extras.get("spa_mode", False)
+
         logger.debug(
-            f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}'"
+            f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}', spa_mode: {spa_mode}"
         )
 
         # Critical debug: Check if trust_type was parsed correctly
@@ -452,6 +471,8 @@ class OAuth2CallbackHandler(BaseHandler):
             return self.error_response(403, "Authentication rejected")
 
         # Set up successful response
+        final_redirect = f"/{actor_instance.id}/www"
+
         response_data = {
             "status": "success",
             "message": "Authentication successful",
@@ -459,14 +480,43 @@ class OAuth2CallbackHandler(BaseHandler):
             "email": identifier,  # identifier (may be email or provider ID)
             "access_token": access_token,
             "expires_in": expires_in,
+            "redirect_url": final_redirect,
         }
+
+        # SPA mode: Return JSON with tokens instead of redirecting
+        if spa_mode:
+            logger.debug(f"SPA mode enabled - returning JSON response for {identifier}")
+            response_data["success"] = True
+            response_data["token_type"] = "Bearer"
+            if refresh_token:
+                response_data["refresh_token"] = refresh_token
+
+            if self.response:
+                self.response.write(json.dumps(response_data))
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.set_status(200)
+
+            # Execute OAuth completed lifecycle hook
+            if self.hooks:
+                try:
+                    self.hooks.execute_lifecycle_hooks(
+                        "oauth_completed",
+                        actor_instance,
+                        email=identifier,
+                        access_token=access_token,
+                        redirect_url=response_data["redirect_url"],
+                    )
+                except Exception as e:
+                    logger.error(f"Error executing oauth_completed hook: {e}")
+
+            logger.debug(
+                f"OAuth2 SPA authentication completed successfully for {identifier} -> {actor_instance.id}"
+            )
+            return response_data
 
         # For interactive web authentication, redirect to the actor's www page
         # For API clients, they would use the Bearer token directly
 
-        # For interactive authentication, always redirect to actor's www page
-        # This avoids authentication loops with the original URL
-        final_redirect = f"/{actor_instance.id}/www"
         logger.debug(f"Redirecting to actor www page: {final_redirect}")
 
         # Log the original URL for reference but don't use it
@@ -501,7 +551,6 @@ class OAuth2CallbackHandler(BaseHandler):
         self.response.set_redirect(final_redirect)
 
         # Also include the information in the response data for completeness
-        response_data["redirect_url"] = final_redirect
         response_data["redirect_performed"] = True
 
         # Execute OAuth completed lifecycle hook

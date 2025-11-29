@@ -125,9 +125,50 @@ class OAuth2CallbackHandler(BaseHandler):
         state_extras = _decode_state_with_extras(state)
         spa_mode = state_extras.get("spa_mode", False)
 
+        # For SPA mode, use redirect_url from state_extras (JSON format)
+        # The legacy decode_state() doesn't parse JSON state properly
+        spa_redirect_url = state_extras.get("redirect_url", "") if spa_mode else ""
+
         logger.debug(
-            f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}', spa_mode: {spa_mode}"
+            f"Parsed state - redirect_url: '{redirect_url}', spa_redirect_url: '{spa_redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}', spa_mode: {spa_mode}"
         )
+
+        # For SPA mode, check if this is a browser navigation vs fetch request
+        # Browser navigations need to redirect to SPA callback with code/state
+        # Fetch requests (Accept: application/json) get JSON response with tokens
+        if spa_mode and spa_redirect_url:
+            accept_header = ""
+            if hasattr(self.request, "headers") and self.request.headers:
+                accept_header = self.request.headers.get("Accept", "")
+                if not accept_header:
+                    accept_header = self.request.headers.get("accept", "")
+
+            # If not a JSON fetch request, redirect to SPA callback URL
+            if "application/json" not in accept_header:
+                # Preserve code and state in redirect so SPA can call back
+                from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+                parsed = urlparse(spa_redirect_url)
+                existing_params = parse_qs(parsed.query)
+                # Flatten the lists
+                params = {k: v[0] if len(v) == 1 else v for k, v in existing_params.items()}
+                params["code"] = code
+                params["state"] = state
+
+                new_query = urlencode(params)
+                spa_callback_url = urlunparse((
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    new_query,
+                    parsed.fragment
+                ))
+
+                logger.debug(f"SPA mode browser redirect to: {spa_callback_url}")
+                self.response.set_status(302, "Found")
+                self.response.set_redirect(spa_callback_url)
+                return {"redirect_required": True, "redirect_url": spa_callback_url}
 
         # Critical debug: Check if trust_type was parsed correctly
         if trust_type:
@@ -475,7 +516,16 @@ class OAuth2CallbackHandler(BaseHandler):
             return self.error_response(403, "Authentication rejected")
 
         # Set up successful response
-        final_redirect = f"/{actor_instance.id}/www"
+        # Use return_path from state for SPA mode (defaults to /app), /www for traditional mode
+        if spa_mode:
+            return_path = state_extras.get("return_path", "/app")
+            # Support {actor_id} placeholder in return_path
+            if "{actor_id}" in return_path:
+                final_redirect = return_path.replace("{actor_id}", actor_instance.id)
+            else:
+                final_redirect = f"/{actor_instance.id}{return_path}"
+        else:
+            final_redirect = f"/{actor_instance.id}/www"
 
         response_data = {
             "status": "success",
@@ -490,10 +540,46 @@ class OAuth2CallbackHandler(BaseHandler):
         # SPA mode: Return JSON with tokens instead of redirecting
         if spa_mode:
             logger.debug(f"SPA mode enabled - returning JSON response for {identifier}")
+
+            # Generate ActingWeb SPA tokens instead of returning OAuth provider tokens
+            # This allows the session manager to validate these tokens later
+            from ..oauth_session import get_oauth2_session_manager
+
+            session_manager = get_oauth2_session_manager(self.config)
+
+            # Generate ActingWeb access token and store it
+            spa_access_token = self.config.new_token()
+            actor_id_str = actor_instance.id or ""
+            session_manager.store_access_token(
+                spa_access_token, actor_id_str, identifier
+            )
+
+            # Generate refresh token for SPA
+            spa_refresh_token = session_manager.create_refresh_token(
+                actor_id_str, identifier
+            )
+
+            # Update response with SPA tokens (not OAuth provider tokens)
+            response_data["access_token"] = spa_access_token
             response_data["success"] = True
             response_data["token_type"] = "Bearer"
-            if refresh_token:
-                response_data["refresh_token"] = refresh_token
+            response_data["refresh_token"] = spa_refresh_token
+            response_data["expires_at"] = int(time.time()) + 3600  # 1 hour
+
+            # Set HttpOnly cookie for refresh token (hybrid mode)
+            token_delivery = state_extras.get("token_delivery", "json")
+            if token_delivery == "hybrid" and self.response:
+                self.response.set_cookie(
+                    "refresh_token",
+                    spa_refresh_token,
+                    max_age=86400 * 14,  # 2 weeks
+                    path="/oauth/spa/token",
+                    secure=True,
+                    httponly=True,
+                    samesite="Strict",
+                )
+                # Don't include refresh token in JSON for hybrid mode
+                del response_data["refresh_token"]
 
             if self.response:
                 self.response.write(json.dumps(response_data))
@@ -529,25 +615,34 @@ class OAuth2CallbackHandler(BaseHandler):
                 f"Original URL was: {redirect_url} (redirecting to www page instead)"
             )
 
-        # Set session cookie so user stays authenticated after redirect
-        # The cookie should match the token stored in the actor (oauth_token)
-        stored_token = (
-            actor_instance.store.oauth_token if actor_instance.store else access_token
+        # Generate ActingWeb session token for /www mode (same approach as SPA)
+        # This avoids validating Google tokens on every request
+        from ..oauth_session import get_oauth2_session_manager
+
+        session_manager = get_oauth2_session_manager(self.config)
+
+        # Generate ActingWeb access token and store it
+        www_access_token = self.config.new_token()
+        actor_id_str = actor_instance.id or ""
+        session_manager.store_access_token(
+            www_access_token, actor_id_str, identifier
         )
-        # Set a longer cookie expiry (2 weeks like ActingWeb default) since OAuth tokens are usually valid for 1 hour
-        # but we want the session to persist longer than that
-        cookie_max_age = 1209600  # 2 weeks, matching ActingWeb's default
+
+        # Set session cookie with ActingWeb token (not Google token)
+        cookie_max_age = 3600  # 1 hour - matches token TTL in session manager
 
         self.response.set_cookie(
             "oauth_token",
-            str(stored_token),
+            www_access_token,
             max_age=cookie_max_age,
             path="/",
             secure=True,
+            httponly=True,  # Protect from XSS
+            samesite="Lax",
         )
 
         logger.debug(
-            f"Set oauth_token cookie with token length {len(str(stored_token))} and max_age {cookie_max_age}"
+            f"Set oauth_token cookie with ActingWeb token for actor {actor_id_str}"
         )
 
         # Perform the redirect for interactive authentication

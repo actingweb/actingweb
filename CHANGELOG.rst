@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.5: Nov 28, 2025
+v3.5: Nov 29, 2025
 ------------------
 
 **ActingWeb Specification version 1.2**
@@ -63,6 +63,30 @@ ADDED
 - JSON API responses in email verification handler (based on ``Accept: application/json`` header)
 - ``GET /{actor_id}/meta/trusttypes`` endpoint for trust type enumeration
 - ``GET/PUT /{actor_id}/properties/{name}/metadata`` endpoint for list property metadata
+- Factory JSON API: ``GET /?format=json`` or ``Accept: application/json`` returns OAuth configuration for SPAs
+- New test suites for SPA API endpoints (``tests/test_spa_api_endpoints.py``, ``tests/integration/test_spa_api.py``)
+
+CHANGED
+~~~~~~~
+
+**Trust Type Configuration Clarification**
+
+Trust types are now correctly scoped to MCP client authorization flows only:
+
+- Trust types are **no longer** exposed in user login endpoints (``GET /?format=json``, ``/oauth/spa/*``)
+- Library no longer hardcodes default trust types (e.g., ``mcp_client``)
+- Applications must configure trust types for MCP OAuth2 flows via ``AccessControlConfig.configure_oauth2_trust_types()``
+- ``/oauth/authorize`` (MCP authorization) shows trust types from registry; ``/oauth/spa/authorize`` (user login) does not
+
+This change clarifies the distinction between:
+
+1. **User Login** (ActingWeb as OAuth client to Google/GitHub): No trust relationship created, no trust_type needed
+2. **MCP Authorization** (ActingWeb as OAuth server for MCP clients): Trust relationship created with specified trust_type
+
+**Security Enhancement**
+
+- Added explicit validation in OAuth2 callback to prevent actor spoofing (validates OAuth email matches actor creator)
+- MCP OAuth2 flows derive actor_id from authenticated email, not user input
 
 FIXED
 ~~~~~

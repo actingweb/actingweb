@@ -1,14 +1,22 @@
 """
-OAuth2 endpoints handler for ActingWeb.
+OAuth2 endpoints handler for ActingWeb (MCP OAuth2 Server Role).
 
-This handler provides standard OAuth2 endpoints for ActingWeb's OAuth2 authorization server:
-- /oauth/register - Dynamic client registration (RFC 7591) for MCP clients
-- /oauth/authorize - OAuth2 authorization endpoint (email form → Google → MCP client)
-- /oauth/token - OAuth2 token endpoint (issues ActingWeb tokens)
-- /oauth/callback - OAuth2 callback from Google (completes MCP flow)
+IMPORTANT: ActingWeb has TWO OAuth2 roles:
 
-ActingWeb acts as an OAuth2 authorization server for MCP clients while
-proxying user authentication to Google OAuth2.
+1. OAuth2 SERVER (this handler) - MCP clients authenticate TO ActingWeb
+   - /oauth/register - Dynamic client registration (RFC 7591) for MCP clients
+   - /oauth/authorize - Authorization endpoint (MCP client → user consent → ActingWeb)
+   - /oauth/token - Token endpoint (issues ActingWeb tokens to MCP clients)
+   - /oauth/logout - Logout endpoint
+
+2. OAuth2 CLIENT (see oauth2_spa.py) - Users authenticate VIA Google/GitHub
+   - /oauth/spa/authorize - Initiate login with external provider
+   - /oauth/spa/token - Refresh external provider tokens
+   - /oauth/callback - Receive callback from Google/GitHub
+
+This handler implements role #1: ActingWeb as OAuth2 authorization server for
+MCP clients (ChatGPT, Claude, Cursor). User authentication is proxied to
+Google/GitHub, but the final tokens issued are ActingWeb tokens.
 """
 
 import json
@@ -475,17 +483,18 @@ class OAuth2EndpointsHandler(BaseHandler):
             requested_scope = form_data.get("scope", "")
             client_id = form_data.get("client_id", "")
 
-            # Initialize oauth2_config to avoid unbound variable error
+            # Get OAuth2 trust type configuration from app (if configured)
+            # The application decides which trust types are available for MCP OAuth2
             oauth2_config = getattr(self.config, "_oauth2_trust_types", None)
 
             if oauth2_config is None:
-                logger.info(
-                    "No OAuth2 trust type configuration found - using default behavior"
+                logger.debug(
+                    "No OAuth2 trust type configuration - will use all registry types"
                 )
-                # Use default behavior - show all trust types
-                oauth2_config = {"allowed": None, "default": "mcp_client"}
+                # No filtering - show all trust types from registry
+                oauth2_config = {"allowed": None, "default": None}
 
-            # Get trust types from registry with graceful fallback
+            # Get trust types from the registry (configured by the application)
             trust_types = []
             try:
                 from actingweb.trust_type_registry import get_registry
@@ -493,32 +502,11 @@ class OAuth2EndpointsHandler(BaseHandler):
                 registry = get_registry(self.config)
                 trust_types = registry.list_types()
             except RuntimeError:
-                logger.debug(
-                    "Trust type registry not initialized - using default trust types"
+                logger.warning(
+                    "Trust type registry not initialized - no trust types available. "
+                    "Application must configure trust types for MCP OAuth2."
                 )
-                # Fallback to default trust types for OAuth2
-                trust_types = [
-                    type(
-                        "TrustType",
-                        (),
-                        {
-                            "name": "mcp_client",
-                            "display_name": "AI Assistant (MCP Client)",
-                            "description": "AI assistants with controlled tool access",
-                            "oauth_scope": "actingweb.mcp_client",
-                        },
-                    )(),
-                    type(
-                        "TrustType",
-                        (),
-                        {
-                            "name": "web_user",
-                            "display_name": "Web User",
-                            "description": "Standard web application user",
-                            "oauth_scope": "actingweb.web_user",
-                        },
-                    )(),
-                ]
+                trust_types = []
             except Exception as e:
                 logger.warning(f"Error accessing trust type registry: {e}")
                 trust_types = []
@@ -600,31 +588,29 @@ class OAuth2EndpointsHandler(BaseHandler):
                 else:
                     logger.debug(f"Trust type {trust_type.name} excluded")
 
-            # If no trust types available, provide at least one fallback
+            # Log available trust types (no hardcoded fallbacks - app must configure)
             logger.debug(
                 f"Final available_trust_types count: {len(available_trust_types)}"
             )
             if not available_trust_types:
                 logger.warning(
-                    "No trust types available after filtering - using fallback"
+                    "No trust types available for MCP OAuth2. "
+                    "Application must register trust types in the trust type registry."
                 )
-                available_trust_types = [
-                    {
-                        "name": "mcp_client",
-                        "display_name": "AI Assistant (MCP Client)",
-                        "description": "AI assistants with controlled tool access",
-                        "oauth_scope": "actingweb.mcp_client",
-                    }
-                ]
+                # Don't provide hardcoded fallbacks - app must configure trust types
 
-            # Determine default trust type from developer configuration
-            default_trust_type = "mcp_client"  # Fallback default
+            # Determine default trust type from app configuration (no hardcoded default)
+            default_trust_type = None
             if oauth2_config:
                 configured_default = oauth2_config.get("default")
                 if configured_default and any(
                     tt["name"] == configured_default for tt in available_trust_types
                 ):
                     default_trust_type = configured_default
+
+            # If no default configured but trust types available, use first one
+            if default_trust_type is None and available_trust_types:
+                default_trust_type = available_trust_types[0]["name"]
 
             # Generate OAuth provider URLs (like factory handler does)
             oauth_enabled = False
@@ -667,7 +653,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                         if google_auth.is_enabled():
                             # Pass encrypted state and trust_type as separate parameters
                             auth_url = google_auth.create_authorization_url(
-                                state=encrypted_state, trust_type=default_trust_type
+                                state=encrypted_state,
+                                trust_type=default_trust_type or "",
                             )
                             oauth_providers.append(
                                 {
@@ -685,7 +672,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                         github_auth = create_github_authenticator(self.config)
                         if github_auth.is_enabled():
                             auth_url = github_auth.create_authorization_url(
-                                state=encrypted_state, trust_type=default_trust_type
+                                state=encrypted_state,
+                                trust_type=default_trust_type or "",
                             )
                             oauth_providers.append(
                                 {

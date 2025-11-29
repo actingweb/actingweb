@@ -22,6 +22,17 @@ ActingWeb supports **TWO distinct OAuth2 flows**. This document covers the **Goo
 
 ## Overview
 
+> **Important: Token Architecture**
+>
+> ActingWeb generates its own session tokens after validating OAuth provider tokens.
+> The Google/GitHub token is validated once during callback, then ActingWeb creates
+> its own token stored in the session manager. This provides:
+> - Fast validation (no network calls to Google/GitHub on each request)
+> - Security (OAuth tokens never exposed to frontend)
+> - Reliability (no dependency on OAuth provider availability)
+>
+> See the SPA Authentication Guide for details on token architecture.
+
 The ActingWeb library now supports Google/GitHub OAuth2 login flows where:
 
 1. **User clicks "Login with Google/GitHub"** on the factory page
@@ -211,7 +222,11 @@ config.oauth2_provider = "google"  # or "github"
    ↓
    Create actor with email (or lookup existing)
    ↓
-   Store OAuth tokens in actor properties
+   Generate ActingWeb session token (not Google token)
+   ↓
+   Store in session manager for fast validation
+   ↓
+   Set HttpOnly cookie with ActingWeb token
    ↓
    Redirect to /{actor_id}/www
 ```
@@ -255,7 +270,11 @@ config.oauth2_provider = "google"  # or "github"
    ↓
    Create actor with provided email
    ↓
-   Store OAuth tokens in actor properties
+   Generate ActingWeb session token
+   ↓
+   Store in session manager for fast validation
+   ↓
+   Set HttpOnly cookie with ActingWeb token
    ↓
    Redirect to /{actor_id}/www
 ```

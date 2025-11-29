@@ -69,6 +69,8 @@ class AWResponse:
         max_age: int = 1209600,
         path: str = "/",
         secure: bool = True,
+        httponly: bool = False,
+        samesite: str = "Lax",
     ) -> None:
         self.cookies.append(
             {
@@ -77,6 +79,8 @@ class AWResponse:
                 "max_age": max_age,
                 "path": path,
                 "secure": secure,
+                "httponly": httponly,
+                "samesite": samesite,
             }
         )
 

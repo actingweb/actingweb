@@ -45,6 +45,32 @@ class OAuth2EmailHandler(BaseHandler):
             webobj = aw_web_request.AWWebObj()
         super().__init__(webobj, config, hooks)
 
+    def _wants_json(self) -> bool:
+        """Check if client prefers JSON response."""
+        if self.request.headers:
+            accept = self.request.headers.get("Accept", "")
+            if "application/json" in accept:
+                return True
+        if self.request.get("format") == "json":
+            return True
+        return False
+
+    def _set_cors_headers(self) -> None:
+        """Set CORS headers for SPA access."""
+        if self.response:
+            if self.request.headers:
+                origin = self.request.headers.get("Origin", "*")
+                self.response.headers["Access-Control-Allow-Origin"] = origin
+            else:
+                self.response.headers["Access-Control-Allow-Origin"] = "*"
+            self.response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, OPTIONS"
+            )
+            self.response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, Accept"
+            )
+            self.response.headers["Access-Control-Allow-Credentials"] = "true"
+
     def get(self) -> dict[str, Any]:
         """
         Handle GET request to /oauth/email - show email input form.
@@ -52,7 +78,8 @@ class OAuth2EmailHandler(BaseHandler):
         Expected parameters:
         - session: Session ID from OAuth2 callback
 
-        Sets template_values for app to render email input form.
+        For SPAs (Accept: application/json), returns JSON with form data.
+        For browsers, sets template_values for app to render email input form.
         """
         session_id = self.request.get("session") or ""
 
@@ -73,8 +100,28 @@ class OAuth2EmailHandler(BaseHandler):
         # Extract provider info for display
         provider = session.get("provider", "OAuth provider")
         provider_display = provider.title()
+        verified_emails = session.get("verified_emails", [])
 
-        # Set template values for app to render email form
+        # Check if JSON response is requested (SPA mode)
+        if self._wants_json():
+            self._set_cors_headers()
+            response_data = {
+                "action": "email_required",
+                "session_id": session_id,
+                "form_action": "/oauth/email",
+                "form_method": "POST",
+                "provider": provider,
+                "provider_display": provider_display,
+                "message": f"Your {provider_display} account does not have a public email. Please enter your email address to continue.",
+                "verified_emails": verified_emails,
+                "has_verified_emails": bool(verified_emails),
+            }
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+            return response_data
+
+        # Set template values for app to render email form (browser mode)
         self.response.template_values = {
             "session_id": session_id,
             "action": "/oauth/email",
@@ -83,6 +130,8 @@ class OAuth2EmailHandler(BaseHandler):
             "provider_display": provider_display,
             "message": f"Your {provider_display} account does not have a public email. Please enter your email address to continue.",
             "error": None,
+            "verified_emails": verified_emails,
+            "show_dropdown": bool(verified_emails),
         }
 
         return {}  # Template will be rendered by app
@@ -264,14 +313,37 @@ class OAuth2EmailHandler(BaseHandler):
 
             logger.debug(f"Set oauth_token cookie for actor {actor_instance.id}")
 
-        # Redirect to actor's www page
         redirect_url = f"/{actor_instance.id}/www"
-        self.response.set_status(302, "Found")
-        self.response.set_redirect(redirect_url)
 
         logger.info(
             f"Completed OAuth email flow for {email} -> actor {actor_instance.id}"
         )
+
+        # For SPA clients, return JSON instead of redirecting
+        if self._wants_json():
+            self._set_cors_headers()
+            response_data = {
+                "success": True,
+                "status": "success",
+                "message": "Actor created successfully",
+                "actor_id": actor_instance.id,
+                "email": email,
+                "redirect_url": redirect_url,
+                "email_requires_verification": email_requires_verification,
+            }
+            # Include token if available
+            if actor_instance.store and actor_instance.store.oauth_token:
+                response_data["access_token"] = actor_instance.store.oauth_token
+                response_data["token_type"] = "Bearer"
+
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+            return response_data
+
+        # For browser clients, redirect to actor's www page
+        self.response.set_status(302, "Found")
+        self.response.set_redirect(redirect_url)
 
         return {
             "status": "success",

@@ -1,8 +1,13 @@
 """
-OAuth2 session management for postponed actor creation.
+OAuth2 session management for postponed actor creation and SPA token management.
 
 This module provides temporary storage for OAuth2 tokens when email cannot be extracted
 from the OAuth provider, allowing apps to prompt users for email before creating actors.
+
+It also provides token management for SPAs including:
+- Access token storage and validation
+- Refresh token storage with rotation support
+- Token revocation
 
 Sessions are stored in the database using ActingWeb's attribute bucket system for
 persistence across multiple containers in distributed deployments.
@@ -21,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 # Session TTL - 10 minutes
 _SESSION_TTL = 600
+
+# Token TTLs
+_ACCESS_TOKEN_TTL = 3600  # 1 hour
+_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks
+
+# Bucket names for token storage
+_ACCESS_TOKEN_BUCKET = "spa_access_tokens"
+_REFRESH_TOKEN_BUCKET = "spa_refresh_tokens"
 
 
 class OAuth2SessionManager:
@@ -43,6 +56,7 @@ class OAuth2SessionManager:
         state: str = "",
         provider: str = "google",
         verified_emails: list[str] | None = None,
+        pkce_verifier: str | None = None,
     ) -> str:
         """
         Store OAuth2 session data temporarily in database.
@@ -53,6 +67,7 @@ class OAuth2SessionManager:
             state: OAuth state parameter
             provider: OAuth provider name (google, github, etc)
             verified_emails: List of verified emails from provider (if available)
+            pkce_verifier: PKCE code verifier for server-managed PKCE (SPA flows)
 
         Returns:
             Session ID for retrieving the data later
@@ -74,6 +89,11 @@ class OAuth2SessionManager:
         if verified_emails:
             session_data["verified_emails"] = verified_emails
             logger.debug(f"Stored {len(verified_emails)} verified emails in session")
+
+        # Store PKCE verifier if provided (for SPA server-managed PKCE)
+        if pkce_verifier:
+            session_data["pkce_verifier"] = pkce_verifier
+            logger.debug("Stored PKCE verifier in session")
 
         # Store in attribute bucket for persistence across containers
         bucket = attribute.Attributes(
@@ -249,6 +269,349 @@ class OAuth2SessionManager:
             logger.debug(f"Cleared {len(expired)} expired OAuth sessions")
 
         return len(expired)
+
+    # ========================================================================
+    # SPA Token Management Methods
+    # ========================================================================
+
+    def store_access_token(
+        self, token: str, actor_id: str, identifier: str, ttl: int | None = None
+    ) -> None:
+        """
+        Store an access token for SPA use.
+
+        Args:
+            token: The access token
+            actor_id: Associated actor ID
+            identifier: User identifier (email or provider ID)
+            ttl: Time to live in seconds (default: 1 hour)
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        token_data = {
+            "actor_id": actor_id,
+            "identifier": identifier,
+            "created_at": int(time.time()),
+            "expires_at": int(time.time()) + (ttl or _ACCESS_TOKEN_TTL),
+        }
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_ACCESS_TOKEN_BUCKET,
+            config=self.config,
+        )
+        bucket.set_attr(name=token, data=token_data)
+
+        logger.debug(f"Stored access token for actor {actor_id}")
+
+    def validate_access_token(self, token: str) -> dict[str, Any] | None:
+        """
+        Validate an access token and return associated data.
+
+        Args:
+            token: The access token to validate
+
+        Returns:
+            Token data dict or None if invalid/expired
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        if not token:
+            return None
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_ACCESS_TOKEN_BUCKET,
+            config=self.config,
+        )
+        token_attr = bucket.get_attr(name=token)
+
+        if not token_attr or "data" not in token_attr:
+            return None
+
+        token_data = token_attr["data"]
+        expires_at = token_data.get("expires_at", 0)
+
+        if int(time.time()) > expires_at:
+            # Token expired, clean it up
+            bucket.delete_attr(name=token)
+            return None
+
+        from typing import cast
+
+        return cast(dict[str, Any], token_data)
+
+    def revoke_access_token(self, token: str) -> bool:
+        """
+        Revoke an access token.
+
+        Args:
+            token: The access token to revoke
+
+        Returns:
+            True if token was found and revoked
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        if not token:
+            return False
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_ACCESS_TOKEN_BUCKET,
+            config=self.config,
+        )
+
+        try:
+            bucket.delete_attr(name=token)
+            logger.debug(f"Revoked access token {token[:20]}...")
+            return True
+        except Exception as e:
+            logger.warning(f"Error revoking access token: {e}")
+            return False
+
+    def create_refresh_token(
+        self, actor_id: str, identifier: str | None = None, ttl: int | None = None
+    ) -> str:
+        """
+        Create a new refresh token for an actor.
+
+        Args:
+            actor_id: The actor ID
+            identifier: User identifier (email or provider ID)
+            ttl: Time to live in seconds (default: 2 weeks)
+
+        Returns:
+            The new refresh token
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        refresh_token = secrets.token_urlsafe(48)
+
+        token_data = {
+            "actor_id": actor_id,
+            "identifier": identifier or "",
+            "created_at": int(time.time()),
+            "expires_at": int(time.time()) + (ttl or _REFRESH_TOKEN_TTL),
+            "used": False,
+        }
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
+        )
+        bucket.set_attr(name=refresh_token, data=token_data)
+
+        logger.debug(f"Created refresh token for actor {actor_id}")
+        return refresh_token
+
+    def validate_refresh_token(self, token: str) -> dict[str, Any] | None:
+        """
+        Validate a refresh token and return associated data.
+
+        Args:
+            token: The refresh token to validate
+
+        Returns:
+            Token data dict or None if invalid/expired
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        if not token:
+            return None
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
+        )
+        token_attr = bucket.get_attr(name=token)
+
+        if not token_attr or "data" not in token_attr:
+            return None
+
+        token_data = token_attr["data"]
+        expires_at = token_data.get("expires_at", 0)
+
+        if int(time.time()) > expires_at:
+            # Token expired, clean it up
+            bucket.delete_attr(name=token)
+            return None
+
+        from typing import cast
+
+        return cast(dict[str, Any], token_data)
+
+    def mark_refresh_token_used(self, token: str) -> bool:
+        """
+        Mark a refresh token as used (for rotation).
+
+        This is part of refresh token rotation - each refresh token
+        can only be used once. If a used token is presented again,
+        it indicates potential token theft.
+
+        Args:
+            token: The refresh token to mark as used
+
+        Returns:
+            True if token was found and marked
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        if not token:
+            return False
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
+        )
+        token_attr = bucket.get_attr(name=token)
+
+        if not token_attr or "data" not in token_attr:
+            return False
+
+        token_data = token_attr["data"]
+        token_data["used"] = True
+        token_data["used_at"] = int(time.time())
+
+        bucket.set_attr(name=token, data=token_data)
+        logger.debug(f"Marked refresh token as used: {token[:20]}...")
+        return True
+
+    def revoke_refresh_token(self, token: str) -> bool:
+        """
+        Revoke a refresh token.
+
+        Args:
+            token: The refresh token to revoke
+
+        Returns:
+            True if token was found and revoked
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        if not token:
+            return False
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
+        )
+
+        try:
+            bucket.delete_attr(name=token)
+            logger.debug(f"Revoked refresh token {token[:20]}...")
+            return True
+        except Exception as e:
+            logger.warning(f"Error revoking refresh token: {e}")
+            return False
+
+    def revoke_all_tokens(self, actor_id: str) -> int:
+        """
+        Revoke all tokens for an actor (security measure).
+
+        This should be called when potential token theft is detected
+        (e.g., refresh token reuse).
+
+        Args:
+            actor_id: The actor ID to revoke tokens for
+
+        Returns:
+            Number of tokens revoked
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        revoked = 0
+
+        # Revoke access tokens
+        access_bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_ACCESS_TOKEN_BUCKET,
+            config=self.config,
+        )
+        access_tokens = access_bucket.get_bucket()
+        if access_tokens:
+            for token, token_attr in access_tokens.items():
+                if token_attr and "data" in token_attr:
+                    if token_attr["data"].get("actor_id") == actor_id:
+                        access_bucket.delete_attr(name=token)
+                        revoked += 1
+
+        # Revoke refresh tokens
+        refresh_bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
+        )
+        refresh_tokens = refresh_bucket.get_bucket()
+        if refresh_tokens:
+            for token, token_attr in refresh_tokens.items():
+                if token_attr and "data" in token_attr:
+                    if token_attr["data"].get("actor_id") == actor_id:
+                        refresh_bucket.delete_attr(name=token)
+                        revoked += 1
+
+        if revoked:
+            logger.warning(f"Revoked {revoked} tokens for actor {actor_id}")
+
+        return revoked
+
+    def cleanup_expired_tokens(self) -> int:
+        """
+        Clean up expired access and refresh tokens.
+
+        Returns:
+            Number of tokens cleaned up
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        current_time = int(time.time())
+        cleaned = 0
+
+        # Clean access tokens
+        access_bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_ACCESS_TOKEN_BUCKET,
+            config=self.config,
+        )
+        access_tokens = access_bucket.get_bucket()
+        if access_tokens:
+            for token, token_attr in list(access_tokens.items()):
+                if token_attr and "data" in token_attr:
+                    if current_time > token_attr["data"].get("expires_at", 0):
+                        access_bucket.delete_attr(name=token)
+                        cleaned += 1
+
+        # Clean refresh tokens
+        refresh_bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
+        )
+        refresh_tokens = refresh_bucket.get_bucket()
+        if refresh_tokens:
+            for token, token_attr in list(refresh_tokens.items()):
+                if token_attr and "data" in token_attr:
+                    if current_time > token_attr["data"].get("expires_at", 0):
+                        refresh_bucket.delete_attr(name=token)
+                        cleaned += 1
+
+        if cleaned:
+            logger.debug(f"Cleaned up {cleaned} expired tokens")
+
+        return cleaned
 
 
 def get_oauth2_session_manager(config: "config_class.Config") -> OAuth2SessionManager:

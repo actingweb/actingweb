@@ -124,6 +124,49 @@ class FlaskIntegration:
         def oauth2_logout() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_endpoint("logout")
 
+        # Unified OAuth endpoints (JSON API, accessible at /oauth/*)
+        @self.flask_app.route("/oauth/config", methods=["GET", "OPTIONS"])
+        def oauth2_config() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("config")
+
+        @self.flask_app.route("/oauth/revoke", methods=["POST", "OPTIONS"])
+        def oauth2_revoke() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("revoke")
+
+        @self.flask_app.route("/oauth/session", methods=["GET", "OPTIONS"])
+        def oauth2_session() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("session")
+
+        # SPA-specific OAuth endpoints (different purpose than MCP OAuth2)
+        @self.flask_app.route("/oauth/spa/authorize", methods=["POST", "OPTIONS"])
+        def oauth2_spa_authorize() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("authorize")
+
+        @self.flask_app.route("/oauth/spa/token", methods=["POST", "OPTIONS"])
+        def oauth2_spa_token() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("token")
+
+        # Backward compatibility routes (redirect to unified endpoints)
+        @self.flask_app.route("/oauth/spa/config", methods=["GET", "OPTIONS"])
+        def oauth2_spa_config_compat() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("config")
+
+        @self.flask_app.route("/oauth/spa/callback", methods=["GET", "OPTIONS"])
+        def oauth2_spa_callback() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("callback")
+
+        @self.flask_app.route("/oauth/spa/revoke", methods=["POST", "OPTIONS"])
+        def oauth2_spa_revoke_compat() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("revoke")
+
+        @self.flask_app.route("/oauth/spa/session", methods=["GET", "OPTIONS"])
+        def oauth2_spa_session_compat() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("session")
+
+        @self.flask_app.route("/oauth/spa/logout", methods=["POST", "OPTIONS"])
+        def oauth2_spa_logout() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_spa_endpoint("logout")
+
         # Bot endpoint
         @self.flask_app.route("/bot", methods=["POST"])
         def app_bot() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
@@ -1040,6 +1083,58 @@ class FlaskIntegration:
         json_response.headers["Access-Control-Allow-Headers"] = (
             "Authorization, Content-Type, mcp-protocol-version"
         )
+        json_response.headers["Access-Control-Max-Age"] = "86400"
+
+        return json_response
+
+    def _handle_oauth2_spa_endpoint(
+        self, endpoint: str
+    ) -> Response | WerkzeugResponse | str:
+        """Handle SPA OAuth2 endpoints (config, authorize, token, revoke, session, logout)."""
+        req_data = self._normalize_request()
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_spa import OAuth2SPAHandler
+
+        handler = OAuth2SPAHandler(
+            webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
+        )
+
+        if request.method == "POST":
+            result = handler.post(endpoint)
+        elif request.method == "OPTIONS":
+            result = handler.options(endpoint)
+        else:
+            result = handler.get(endpoint)
+
+        # SPA endpoints always return JSON
+        from flask import jsonify
+
+        json_response = jsonify(result)
+
+        # Use the status code from the handler if set
+        if hasattr(webobj.response, "status_code") and webobj.response.status_code:
+            json_response.status_code = webobj.response.status_code
+
+        # Copy cookies from handler response
+        if hasattr(webobj.response, "cookies"):
+            for cookie in webobj.response.cookies:
+                json_response.set_cookie(**cookie)
+
+        # Add CORS headers for SPA endpoints
+        origin = req_data["headers"].get("Origin", "*")
+        json_response.headers["Access-Control-Allow-Origin"] = origin
+        json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        json_response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Accept"
+        )
+        json_response.headers["Access-Control-Allow-Credentials"] = "true"
         json_response.headers["Access-Control-Max-Age"] = "86400"
 
         return json_response

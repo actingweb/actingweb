@@ -12,7 +12,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -323,7 +323,23 @@ async def check_authentication_and_redirect(
     oauth_cookie = request.cookies.get("oauth_token")
     if oauth_cookie:
         logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
-        # Validate the OAuth cookie token
+
+        # First, check if this is an ActingWeb session token (SPA or /www)
+        try:
+            from ...oauth_session import get_oauth2_session_manager
+
+            session_manager = get_oauth2_session_manager(config)
+            token_data = session_manager.validate_access_token(oauth_cookie)
+            if token_data:
+                actor_id = token_data.get("actor_id")
+                logging.debug(
+                    f"ActingWeb session token validation successful for actor {actor_id}"
+                )
+                return None  # Valid ActingWeb token
+        except Exception as e:
+            logging.debug(f"ActingWeb token validation failed: {e}")
+
+        # Fall back to validating as OAuth provider token (legacy support)
         try:
             from ...oauth2 import create_oauth2_authenticator
 
@@ -599,6 +615,69 @@ class FastAPIIntegration:
 
             # MCP client logout without web UI redirect
             return await self._handle_oauth2_endpoint(request, "logout")
+
+        # Unified OAuth endpoints (JSON API, accessible at /oauth/*)
+        @self.fastapi_app.get("/oauth/config")
+        @self.fastapi_app.options("/oauth/config")
+        async def oauth2_config(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Get OAuth configuration."""
+            return await self._handle_oauth2_spa_endpoint(request, "config")
+
+        @self.fastapi_app.post("/oauth/revoke")
+        @self.fastapi_app.options("/oauth/revoke")
+        async def oauth2_revoke(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Revoke access and/or refresh tokens."""
+            return await self._handle_oauth2_spa_endpoint(request, "revoke")
+
+        @self.fastapi_app.get("/oauth/session")
+        @self.fastapi_app.options("/oauth/session")
+        async def oauth2_session(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Check session status."""
+            return await self._handle_oauth2_spa_endpoint(request, "session")
+
+        # SPA-specific OAuth endpoints (different purpose than MCP OAuth2)
+        @self.fastapi_app.post("/oauth/spa/authorize")
+        @self.fastapi_app.options("/oauth/spa/authorize")
+        async def oauth2_spa_authorize(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Initiate external OAuth flow (ActingWeb as OAuth client)."""
+            return await self._handle_oauth2_spa_endpoint(request, "authorize")
+
+        @self.fastapi_app.post("/oauth/spa/token")
+        @self.fastapi_app.options("/oauth/spa/token")
+        async def oauth2_spa_token(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Token refresh with rotation for external provider tokens."""
+            return await self._handle_oauth2_spa_endpoint(request, "token")
+
+        # Backward compatibility routes
+        @self.fastapi_app.get("/oauth/spa/config")
+        @self.fastapi_app.options("/oauth/spa/config")
+        async def oauth2_spa_config_compat(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Get OAuth configuration (deprecated, use /oauth/config)."""
+            return await self._handle_oauth2_spa_endpoint(request, "config")
+
+        @self.fastapi_app.get("/oauth/spa/callback")
+        @self.fastapi_app.options("/oauth/spa/callback")
+        async def oauth2_spa_callback(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Deprecated: Use /oauth/callback instead."""
+            return await self._handle_oauth2_spa_endpoint(request, "callback")
+
+        @self.fastapi_app.post("/oauth/spa/revoke")
+        @self.fastapi_app.options("/oauth/spa/revoke")
+        async def oauth2_spa_revoke_compat(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Revoke tokens (deprecated, use /oauth/revoke)."""
+            return await self._handle_oauth2_spa_endpoint(request, "revoke")
+
+        @self.fastapi_app.get("/oauth/spa/session")
+        @self.fastapi_app.options("/oauth/spa/session")
+        async def oauth2_spa_session_compat(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Check session (deprecated, use /oauth/session)."""
+            return await self._handle_oauth2_spa_endpoint(request, "session")
+
+        @self.fastapi_app.post("/oauth/spa/logout")
+        @self.fastapi_app.options("/oauth/spa/logout")
+        async def oauth2_spa_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Logout (deprecated, use /oauth/logout with Accept: application/json)."""
+            return await self._handle_oauth2_spa_endpoint(request, "logout")
 
         # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
 
@@ -1061,7 +1140,7 @@ class FastAPIIntegration:
             cookies=req_data["cookies"],
         )
 
-        # Check if user is already authenticated with Google OAuth2 and redirect to their actor
+        # Check if user is already authenticated and redirect to their actor
         oauth_cookie = request.cookies.get("oauth_token")
         self.logger.debug(
             f"Factory request: method={request.method}, has_oauth_cookie={bool(oauth_cookie)}"
@@ -1070,7 +1149,26 @@ class FastAPIIntegration:
             self.logger.debug(
                 f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})"
             )
-            # User has OAuth session - try to find their actor and redirect
+
+            # First, check if this is an ActingWeb session token
+            try:
+                from ...oauth_session import get_oauth2_session_manager
+
+                session_manager = get_oauth2_session_manager(self.aw_app.get_config())
+                token_data = session_manager.validate_access_token(oauth_cookie)
+                if token_data:
+                    actor_id = token_data.get("actor_id")
+                    if actor_id:
+                        # Valid ActingWeb token - redirect to actor's www page
+                        redirect_url = f"/{actor_id}/www"
+                        self.logger.debug(
+                            f"ActingWeb token valid - redirecting to {redirect_url}"
+                        )
+                        return RedirectResponse(url=redirect_url, status_code=302)
+            except Exception as e:
+                self.logger.debug(f"ActingWeb token validation failed: {e}")
+
+            # Fall back to Google/GitHub OAuth token validation (legacy support)
             try:
                 from ...oauth2 import create_oauth2_authenticator
 
@@ -1692,6 +1790,69 @@ class FastAPIIntegration:
         return JSONResponse(
             content=result, headers=cors_headers, status_code=status_code
         )
+
+    async def _handle_oauth2_spa_endpoint(
+        self, request: Request, endpoint: str
+    ) -> Response:
+        """Handle SPA OAuth2 endpoints (config, authorize, token, revoke, session, logout)."""
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_spa import OAuth2SPAHandler
+
+        handler = OAuth2SPAHandler(
+            webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
+        )
+
+        # Run the synchronous handler in a thread pool
+        loop = asyncio.get_running_loop()
+        if request.method == "POST":
+            result = await loop.run_in_executor(self.executor, handler.post, endpoint)
+        elif request.method == "OPTIONS":
+            result = await loop.run_in_executor(
+                self.executor, handler.options, endpoint
+            )
+        else:
+            result = await loop.run_in_executor(self.executor, handler.get, endpoint)
+
+        # SPA endpoints always return JSON
+        from fastapi.responses import JSONResponse
+
+        # Get origin for CORS
+        origin = req_data["headers"].get("origin", "*")
+
+        # Add CORS headers for SPA endpoints
+        cors_headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "86400",
+        }
+
+        # Use status code from handler if set
+        status_code = (
+            webobj.response.status_code
+            if hasattr(webobj.response, "status_code") and webobj.response.status_code
+            else 200
+        )
+
+        response = JSONResponse(
+            content=result, headers=cors_headers, status_code=status_code
+        )
+
+        # Copy cookies from handler response
+        if hasattr(webobj.response, "cookies"):
+            for cookie_data in webobj.response.cookies:
+                response.set_cookie(**cookie_data)
+
+        return response
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""

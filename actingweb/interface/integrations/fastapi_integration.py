@@ -673,6 +673,11 @@ class FastAPIIntegration:
             """Check session (deprecated, use /oauth/session)."""
             return await self._handle_oauth2_spa_endpoint(request, "session")
 
+        @self.fastapi_app.get("/oauth/spa/session/{session_id}")
+        async def oauth2_spa_session_retrieve(request: Request, session_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Retrieve pending SPA session data after OAuth callback."""
+            return await self._handle_spa_session_retrieve(request, session_id)
+
         @self.fastapi_app.post("/oauth/spa/logout")
         @self.fastapi_app.options("/oauth/spa/logout")
         async def oauth2_spa_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
@@ -1875,6 +1880,82 @@ class FastAPIIntegration:
                 )
 
         return response
+
+    async def _handle_spa_session_retrieve(
+        self, request: Request, session_id: str
+    ) -> Response:
+        """
+        Handle retrieval of pending SPA session data after OAuth callback.
+
+        The OAuth callback handler processes the authorization code and stores
+        the resulting tokens in a pending session. The SPA then retrieves this
+        data using the session_id passed in the redirect URL.
+        """
+        from fastapi.responses import JSONResponse
+
+        from ...oauth_session import get_oauth2_session_manager
+
+        # Get origin for CORS
+        req_data = await self._normalize_request(request)
+        origin = req_data["headers"].get("origin", "*")
+
+        cors_headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+            "Access-Control-Allow-Credentials": "true",
+        }
+
+        try:
+            session_manager = get_oauth2_session_manager(self.aw_app.get_config())
+
+            # Look up the pending session
+            # The session was stored with pending_session_id as part of token_data
+            session_data = session_manager.get_session(session_id)
+
+            if not session_data:
+                return JSONResponse(
+                    content={"error": True, "message": "Session not found or expired"},
+                    status_code=404,
+                    headers=cors_headers,
+                )
+
+            # Extract the token data that was stored
+            token_data = session_data.get("token_data", {})
+
+            if not token_data or "access_token" not in token_data:
+                return JSONResponse(
+                    content={"error": True, "message": "Invalid session data"},
+                    status_code=400,
+                    headers=cors_headers,
+                )
+
+            # Pending session will expire naturally (short TTL)
+            # This is one-time use by design - second retrieval will fail after expiry
+
+            # Return the session data
+            response_data = {
+                "success": True,
+                "access_token": token_data.get("access_token"),
+                "actor_id": token_data.get("actor_id"),
+                "email": token_data.get("email"),
+                "expires_at": token_data.get("expires_at"),
+                "redirect_url": token_data.get("redirect_url"),
+            }
+
+            return JSONResponse(
+                content=response_data,
+                status_code=200,
+                headers=cors_headers,
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error retrieving SPA session: {e}")
+            return JSONResponse(
+                content={"error": True, "message": "Failed to retrieve session"},
+                status_code=500,
+                headers=cors_headers,
+            )
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""

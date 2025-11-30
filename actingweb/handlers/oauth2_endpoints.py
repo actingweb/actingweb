@@ -468,10 +468,12 @@ class OAuth2EndpointsHandler(BaseHandler):
         Returns:
             Form response or None if template values were set
         """
-        # For OAuth2 authorization forms, always try to render HTML template if UI is enabled
+        # For OAuth2 authorization forms, always try to render HTML template if UI or MCP is enabled
         # The form is meant for human interaction, so default to HTML unless explicitly requesting JSON
+        # Note: MCP OAuth2 flow needs the form even when config.ui is False (web UI disabled)
+        ui_or_mcp_enabled = self.config.ui or getattr(self.config, "mcp", False)
         is_browser_request = (
-            self.config.ui
+            ui_or_mcp_enabled
             and self.request
             and self.request.headers
             and self.request.headers.get("Accept", "").find("application/json") == -1

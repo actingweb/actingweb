@@ -99,6 +99,50 @@ class MetaHandler(base_handler.BaseHandler):
                 self.response.write(out)
                 self.response.headers["Content-Type"] = "application/json"
             return
+        elif path == "trusttypes":
+            # Trust types endpoint - returns available trust types (unauthenticated)
+            try:
+                from ..trust_type_registry import get_registry
+
+                registry = get_registry(self.config)
+                trust_types = registry.list_types()
+                trust_types_dict: dict[str, dict[str, str]] = {}
+                default_type = None
+
+                if trust_types:
+                    for trust_type in trust_types:
+                        trust_types_dict[trust_type.name] = {
+                            "display_name": trust_type.display_name,
+                            "description": getattr(trust_type, "description", ""),
+                        }
+                    default_type = trust_types[0].name if trust_types else None
+
+                # Fall back to config.trust_types if registry is empty
+                if not trust_types_dict and hasattr(self.config, "trust_types"):
+                    config_types = getattr(self.config, "trust_types", {})
+                    if config_types:
+                        for name, type_data in config_types.items():
+                            trust_types_dict[name] = {
+                                "display_name": type_data.get(
+                                    "display_name", type_data.get("name", name)
+                                ),
+                                "description": type_data.get("description", ""),
+                            }
+                        default_type = getattr(self.config, "default_trust_type", None)
+
+                result = {
+                    "trust_types": trust_types_dict,
+                    "default_trust_type": default_type,
+                }
+                out = json.dumps(result)
+            except Exception as e:
+                logging.error(f"Error retrieving trust types: {e}")
+                out = json.dumps({"trust_types": {}, "default_trust_type": None})
+
+            if self.response:
+                self.response.write(out)
+                self.response.headers["Content-Type"] = "application/json"
+            return
         else:
             if self.response:
                 self.response.set_status(404)

@@ -128,6 +128,8 @@ class OAuth2Authenticator:
         email_hint: str = "",
         trust_type: str = "",
         user_agent: str = "",
+        code_challenge: str = "",
+        code_challenge_method: str = "",
     ) -> str:
         """
         Create OAuth2 authorization URL using oauthlib with trust type selection.
@@ -138,6 +140,8 @@ class OAuth2Authenticator:
             email_hint: Email to hint which account to use for authentication
             trust_type: Trust relationship type to establish (e.g., 'mcp_client', 'web_user')
             user_agent: User-Agent header for client identification and MCP coordination
+            code_challenge: PKCE code challenge for SPA OAuth flows
+            code_challenge_method: PKCE challenge method (typically "S256")
 
         Returns:
             OAuth2 authorization URL
@@ -174,6 +178,11 @@ class OAuth2Authenticator:
         # Add email hint for Google OAuth2
         if email_hint and self.provider.name == "google":
             extra_params["login_hint"] = email_hint
+
+        # Add PKCE parameters if provided (for SPA OAuth flows)
+        if code_challenge and code_challenge_method:
+            extra_params["code_challenge"] = code_challenge
+            extra_params["code_challenge_method"] = code_challenge_method
 
         # Use oauthlib to generate the authorization URL
         authorization_url = self.client.prepare_request_uri(
@@ -215,7 +224,7 @@ class OAuth2Authenticator:
         return False
 
     def exchange_code_for_token(
-        self, code: str, state: str = ""
+        self, code: str, state: str = "", code_verifier: str | None = None
     ) -> dict[str, Any] | None:  # pylint: disable=unused-argument
         """
         Exchange authorization code for access token using oauthlib.
@@ -223,6 +232,7 @@ class OAuth2Authenticator:
         Args:
             code: Authorization code from OAuth2 provider
             state: State parameter from callback
+            code_verifier: PKCE code verifier (required if PKCE was used in authorization)
 
         Returns:
             Token response from OAuth2 provider or None if failed
@@ -231,12 +241,17 @@ class OAuth2Authenticator:
             return None
 
         # Prepare token request using oauthlib
-        token_request_body = self.client.prepare_request_body(
-            code=code,
-            redirect_uri=self.provider.redirect_uri,
-            client_id=self.provider.client_id,
-            client_secret=self.provider.client_secret,
-        )
+        # Include code_verifier if PKCE was used
+        prepare_kwargs: dict[str, Any] = {
+            "code": code,
+            "redirect_uri": self.provider.redirect_uri,
+            "client_id": self.provider.client_id,
+            "client_secret": self.provider.client_secret,
+        }
+        if code_verifier:
+            prepare_kwargs["code_verifier"] = code_verifier
+
+        token_request_body = self.client.prepare_request_body(**prepare_kwargs)
 
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",

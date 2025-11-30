@@ -141,6 +141,7 @@ Templates should be placed in a ``templates/`` directory in your application roo
     │   ├── aw-actor-www-trust-new.html
     │   ├── aw-actor-www-init.html
     │   ├── aw-oauth-authorization-form.html
+    │   ├── aw-oauth-email.html
     │   ├── aw-root-factory.html
     │   ├── aw-root-created.html
     │   └── aw-root-failed.html
@@ -232,7 +233,7 @@ Available Templates
     - ``id``: Actor ID
 
 **aw-oauth-authorization-form.html**
-    OAuth2 authorization form template
+    OAuth2 authorization form template (for MCP client authorization)
 
     Available variables:
     - ``client_name``: Name of the OAuth2 client
@@ -242,13 +243,77 @@ Available Templates
     - ``form_action``: Authorization form submission URL
     - ``email_hint``: Pre-filled email for authorization
 
+**aw-oauth-email.html**
+    Email input form for OAuth login when provider doesn't provide email.
+
+    This template is shown when an OAuth provider (like GitHub with private email)
+    doesn't return the user's email address. The user must enter their email
+    to complete account creation.
+
+    See :doc:`oauth-login-flow` for details on the email fallback flow.
+
+    Available variables:
+    - ``session_id``: Session token for completing the OAuth flow
+    - ``action``: Form action URL (``/oauth/email``)
+    - ``method``: Form method (``POST``)
+    - ``provider``: OAuth provider name (``google``, ``github``, etc.)
+    - ``provider_display``: Provider display name (``Google``, ``GitHub``)
+    - ``message``: User-friendly explanation of why email is needed
+    - ``error``: Error message if email validation failed (optional)
+
+    Example:
+
+    .. code-block:: html
+
+        <h1>Email Required</h1>
+        <p>{{ message }}</p>
+
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+
+        <form action="{{ action }}" method="{{ method }}">
+            <input type="hidden" name="session" value="{{ session_id }}" />
+            <label>
+                Email Address:
+                <input type="email" name="email" required />
+            </label>
+            <button type="submit">Continue</button>
+        </form>
+
+    **Note:** If this template is not provided, a basic fallback HTML form is used.
+
 **aw-root-factory.html**
-    Root actor creation form template
+    Root actor creation form template with OAuth login support.
+
+    See :doc:`oauth-login-flow` for the complete OAuth login implementation guide.
 
     Available variables:
     - ``form_action``: Form submission URL
     - ``form_method``: HTTP method for form
     - ``error``: Error message if creation failed
+    - ``oauth_enabled``: Boolean - True if OAuth is configured
+    - ``oauth_providers``: List of OAuth providers with ``name``, ``display_name``, and ``url``
+    - ``oauth_urls``: Dictionary mapping provider names to OAuth authorization URLs
+
+    OAuth login example:
+
+    .. code-block:: html
+
+        {% if oauth_enabled %}
+            <h2>Login with OAuth</h2>
+            {% for provider in oauth_providers %}
+                <a href="{{ provider.url }}" class="oauth-button">
+                    Login with {{ provider.display_name }}
+                </a>
+            {% endfor %}
+        {% endif %}
+
+        <h2>Or create account with email</h2>
+        <form action="{{ form_action }}" method="{{ form_method }}">
+            <input type="email" name="creator" required />
+            <button type="submit">Create Account</button>
+        </form>
 
 **aw-root-created.html**
     Actor creation success template
@@ -592,3 +657,12 @@ This template demonstrates:
 - Conditional actions based on property protection
 - Modern UI patterns with cards and badges
 - Proper navigation using provided URL variables
+
+Related Documentation
+---------------------
+
+For more information on building web applications with ActingWeb:
+
+- :doc:`oauth-login-flow` - Complete guide to implementing OAuth login with templates
+- :doc:`authentication-system` - Full authentication system documentation
+- :doc:`spa-authentication` - SPA-specific OAuth2 with JSON APIs (no templates)

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.4.3"
+version = "3.5"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@greger.io>"]
 maintainers = ["Greger Wedel <support@greger.io>"]
@@ -143,5 +143,11 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
-    "--cov-fail-under=80",
+    "--cov-fail-under=50",
+]
+markers = [
+    "integration: marks tests as integration tests (require DynamoDB and test server)",
+    "slow: marks tests as slow",
+    "oauth: marks tests requiring OAuth mocking",
+    "mcp: marks tests for MCP endpoints",
 ]

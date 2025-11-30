@@ -507,12 +507,14 @@ class TestBasicActorFlow:
         )
         assert response.status_code == 204
 
-        # Verify all deleted
+        # Verify all deleted - should return 200 OK with empty object (spec v1.2)
         response = requests.get(
             f"{self.actor_url}/properties",
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code == 404
+        assert response.status_code == 200
+        data = response.json()
+        assert data == {}
 
     def test_032_delete_actor(self, http_client):
         """

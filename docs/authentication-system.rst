@@ -55,9 +55,17 @@ For interactive web users, ActingWeb uses session cookies:
 
 **Cookie Configuration:**
     - Name: ``oauth_token``
-    - Max Age: 2 weeks (1209600 seconds)
+    - Max Age: 1 hour (3600 seconds) - matches ActingWeb token TTL
     - Secure: HTTPS only
+    - HttpOnly: Yes (protected from JavaScript access)
+    - SameSite: Lax
     - Path: ``/`` (site-wide)
+
+.. note::
+
+   As of ActingWeb 3.x, session cookies contain ActingWeb-generated tokens,
+   not OAuth provider tokens. The cookie TTL matches the token TTL (1 hour).
+   For longer sessions, use the refresh token mechanism (see SPA Authentication Guide).
 
 Bearer Token Authentication
 ---------------------------
@@ -263,6 +271,27 @@ Actor Lookup/Creation
 ---------------------
 
 ActingWeb looks up or creates an actor based on the user's email address or unique identifier.
+
+ActingWeb Token Generation
+--------------------------
+
+After successful OAuth validation, ActingWeb generates its own session tokens rather than
+using the OAuth provider tokens directly. This provides several benefits:
+
+- **Performance**: Token validation is a fast database lookup, no network calls to OAuth provider
+- **Reliability**: No dependency on OAuth provider availability after initial authentication
+- **Security**: OAuth provider tokens never exposed to frontend JavaScript
+- **Control**: Custom token expiry (1 hour access, 2 weeks refresh) and rotation policies
+
+The OAuth provider token is validated once during the callback, then ActingWeb generates
+and stores its own token in the session manager. All subsequent authentication uses
+ActingWeb tokens exclusively.
+
+.. code-block:: text
+
+   OAuth Provider Token → Validate once → Generate ActingWeb Token → Store in Session Manager
+                                                    ↓
+                                          Return to client (SPA: JSON, /www: Cookie)
 
 OAuth Login Flow with Postponed Actor Creation
 -----------------------------------------------

@@ -323,7 +323,23 @@ async def check_authentication_and_redirect(
     oauth_cookie = request.cookies.get("oauth_token")
     if oauth_cookie:
         logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
-        # Validate the OAuth cookie token
+
+        # First, check if this is an ActingWeb session token (SPA or /www)
+        try:
+            from ...oauth_session import get_oauth2_session_manager
+
+            session_manager = get_oauth2_session_manager(config)
+            token_data = session_manager.validate_access_token(oauth_cookie)
+            if token_data:
+                actor_id = token_data.get("actor_id")
+                logging.debug(
+                    f"ActingWeb session token validation successful for actor {actor_id}"
+                )
+                return None  # Valid ActingWeb token
+        except Exception as e:
+            logging.debug(f"ActingWeb token validation failed: {e}")
+
+        # Fall back to validating as OAuth provider token (legacy support)
         try:
             from ...oauth2 import create_oauth2_authenticator
 
@@ -600,6 +616,74 @@ class FastAPIIntegration:
             # MCP client logout without web UI redirect
             return await self._handle_oauth2_endpoint(request, "logout")
 
+        # Unified OAuth endpoints (JSON API, accessible at /oauth/*)
+        @self.fastapi_app.get("/oauth/config")
+        @self.fastapi_app.options("/oauth/config")
+        async def oauth2_config(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Get OAuth configuration."""
+            return await self._handle_oauth2_spa_endpoint(request, "config")
+
+        @self.fastapi_app.post("/oauth/revoke")
+        @self.fastapi_app.options("/oauth/revoke")
+        async def oauth2_revoke(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Revoke access and/or refresh tokens."""
+            return await self._handle_oauth2_spa_endpoint(request, "revoke")
+
+        @self.fastapi_app.get("/oauth/session")
+        @self.fastapi_app.options("/oauth/session")
+        async def oauth2_session(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Check session status."""
+            return await self._handle_oauth2_spa_endpoint(request, "session")
+
+        # SPA-specific OAuth endpoints (different purpose than MCP OAuth2)
+        @self.fastapi_app.post("/oauth/spa/authorize")
+        @self.fastapi_app.options("/oauth/spa/authorize")
+        async def oauth2_spa_authorize(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Initiate external OAuth flow (ActingWeb as OAuth client)."""
+            return await self._handle_oauth2_spa_endpoint(request, "authorize")
+
+        @self.fastapi_app.post("/oauth/spa/token")
+        @self.fastapi_app.options("/oauth/spa/token")
+        async def oauth2_spa_token(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Token refresh with rotation for external provider tokens."""
+            return await self._handle_oauth2_spa_endpoint(request, "token")
+
+        # Backward compatibility routes
+        @self.fastapi_app.get("/oauth/spa/config")
+        @self.fastapi_app.options("/oauth/spa/config")
+        async def oauth2_spa_config_compat(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Get OAuth configuration (deprecated, use /oauth/config)."""
+            return await self._handle_oauth2_spa_endpoint(request, "config")
+
+        @self.fastapi_app.get("/oauth/spa/callback")
+        @self.fastapi_app.options("/oauth/spa/callback")
+        async def oauth2_spa_callback(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Deprecated: Use /oauth/callback instead."""
+            return await self._handle_oauth2_spa_endpoint(request, "callback")
+
+        @self.fastapi_app.post("/oauth/spa/revoke")
+        @self.fastapi_app.options("/oauth/spa/revoke")
+        async def oauth2_spa_revoke_compat(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Revoke tokens (deprecated, use /oauth/revoke)."""
+            return await self._handle_oauth2_spa_endpoint(request, "revoke")
+
+        @self.fastapi_app.get("/oauth/spa/session")
+        @self.fastapi_app.options("/oauth/spa/session")
+        async def oauth2_spa_session_compat(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Check session (deprecated, use /oauth/session)."""
+            return await self._handle_oauth2_spa_endpoint(request, "session")
+
+        @self.fastapi_app.get("/oauth/spa/session/{session_id}")
+        async def oauth2_spa_session_retrieve(request: Request, session_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Retrieve pending SPA session data after OAuth callback."""
+            return await self._handle_spa_session_retrieve(request, session_id)
+
+        @self.fastapi_app.post("/oauth/spa/logout")
+        @self.fastapi_app.options("/oauth/spa/logout")
+        async def oauth2_spa_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Logout (deprecated, use /oauth/logout with Accept: application/json)."""
+            return await self._handle_oauth2_spa_endpoint(request, "logout")
+
         # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
 
         # Bot endpoint
@@ -689,6 +773,41 @@ class FastAPIIntegration:
         @self.fastapi_app.post("/{actor_id}/properties")
         @self.fastapi_app.put("/{actor_id}/properties")
         @self.fastapi_app.delete("/{actor_id}/properties")
+        async def app_properties_root(actor_id: str, request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            # Check authentication and redirect to Google OAuth2 if needed
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
+            return await self._handle_actor_request(
+                request, actor_id, "properties", name=""
+            )
+
+        # Property metadata endpoint (must come before catch-all {name:path})
+        @self.fastapi_app.get("/{actor_id}/properties/{name}/metadata")
+        @self.fastapi_app.put("/{actor_id}/properties/{name}/metadata")
+        async def app_property_metadata(
+            actor_id: str, request: Request, name: str
+        ) -> Response:  # pyright: ignore[reportUnusedFunction]
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
+            return await self._handle_actor_request(
+                request, actor_id, "properties", name=name, metadata=True
+            )
+
+        # Property list items endpoint (must come before catch-all {name:path})
+        @self.fastapi_app.get("/{actor_id}/properties/{name}/items")
+        @self.fastapi_app.post("/{actor_id}/properties/{name}/items")
+        async def app_property_items(
+            actor_id: str, request: Request, name: str
+        ) -> Response:  # pyright: ignore[reportUnusedFunction]
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
+            return await self._handle_actor_request(
+                request, actor_id, "properties", name=name, items=True
+            )
+
         @self.fastapi_app.get("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.post("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.put("/{actor_id}/properties/{name:path}")
@@ -704,27 +823,45 @@ class FastAPIIntegration:
                 request, actor_id, "properties", name=name
             )
 
-        # Actor trust
-        @self.fastapi_app.get("/{actor_id}/trust")
-        @self.fastapi_app.post("/{actor_id}/trust")
-        @self.fastapi_app.put("/{actor_id}/trust")
-        @self.fastapi_app.delete("/{actor_id}/trust")
-        @self.fastapi_app.get("/{actor_id}/trust/{relationship}")
-        @self.fastapi_app.post("/{actor_id}/trust/{relationship}")
-        @self.fastapi_app.put("/{actor_id}/trust/{relationship}")
-        @self.fastapi_app.delete("/{actor_id}/trust/{relationship}")
+        # Actor trust - path-based endpoints (more specific routes first)
         @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.post("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.delete("/{actor_id}/trust/{relationship}/{peerid}")
-        async def app_trust(  # pyright: ignore[reportUnusedFunction]
+        async def app_trust_peer(  # pyright: ignore[reportUnusedFunction]
             actor_id: str,
             request: Request,
-            relationship: str | None = None,
-            peerid: str | None = None,
+            relationship: str,
+            peerid: str,
         ) -> Response:
             return await self._handle_actor_request(
                 request, actor_id, "trust", relationship=relationship, peerid=peerid
+            )
+
+        @self.fastapi_app.get("/{actor_id}/trust/{relationship}")
+        @self.fastapi_app.post("/{actor_id}/trust/{relationship}")
+        @self.fastapi_app.put("/{actor_id}/trust/{relationship}")
+        @self.fastapi_app.delete("/{actor_id}/trust/{relationship}")
+        async def app_trust_relationship(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str,
+            request: Request,
+            relationship: str,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "trust", relationship=relationship, peerid=None
+            )
+
+        # Actor trust - root endpoint (least specific, defined last)
+        @self.fastapi_app.get("/{actor_id}/trust")
+        @self.fastapi_app.post("/{actor_id}/trust")
+        @self.fastapi_app.put("/{actor_id}/trust")
+        @self.fastapi_app.delete("/{actor_id}/trust")
+        async def app_trust_root(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str,
+            request: Request,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "trust", relationship=None, peerid=None
             )
 
         # Trust permission management endpoints
@@ -1021,7 +1158,7 @@ class FastAPIIntegration:
             cookies=req_data["cookies"],
         )
 
-        # Check if user is already authenticated with Google OAuth2 and redirect to their actor
+        # Check if user is already authenticated and redirect to their actor
         oauth_cookie = request.cookies.get("oauth_token")
         self.logger.debug(
             f"Factory request: method={request.method}, has_oauth_cookie={bool(oauth_cookie)}"
@@ -1030,7 +1167,26 @@ class FastAPIIntegration:
             self.logger.debug(
                 f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})"
             )
-            # User has OAuth session - try to find their actor and redirect
+
+            # First, check if this is an ActingWeb session token
+            try:
+                from ...oauth_session import get_oauth2_session_manager
+
+                session_manager = get_oauth2_session_manager(self.aw_app.get_config())
+                token_data = session_manager.validate_access_token(oauth_cookie)
+                if token_data:
+                    actor_id = token_data.get("actor_id")
+                    if actor_id:
+                        # Valid ActingWeb token - redirect to actor's www page
+                        redirect_url = f"/{actor_id}/www"
+                        self.logger.debug(
+                            f"ActingWeb token valid - redirecting to {redirect_url}"
+                        )
+                        return RedirectResponse(url=redirect_url, status_code=302)
+            except Exception as e:
+                self.logger.debug(f"ActingWeb token validation failed: {e}")
+
+            # Fall back to Google/GitHub OAuth token validation (legacy support)
             try:
                 from ...oauth2 import create_oauth2_authenticator
 
@@ -1653,6 +1809,154 @@ class FastAPIIntegration:
             content=result, headers=cors_headers, status_code=status_code
         )
 
+    async def _handle_oauth2_spa_endpoint(
+        self, request: Request, endpoint: str
+    ) -> Response:
+        """Handle SPA OAuth2 endpoints (config, authorize, token, revoke, session, logout)."""
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_spa import OAuth2SPAHandler
+
+        handler = OAuth2SPAHandler(
+            webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
+        )
+
+        # Run the synchronous handler in a thread pool
+        loop = asyncio.get_running_loop()
+        if request.method == "POST":
+            result = await loop.run_in_executor(self.executor, handler.post, endpoint)
+        elif request.method == "OPTIONS":
+            result = await loop.run_in_executor(
+                self.executor, handler.options, endpoint
+            )
+        else:
+            result = await loop.run_in_executor(self.executor, handler.get, endpoint)
+
+        # SPA endpoints always return JSON
+        from fastapi.responses import JSONResponse
+
+        # Get origin for CORS
+        origin = req_data["headers"].get("origin", "*")
+
+        # Add CORS headers for SPA endpoints
+        cors_headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "86400",
+        }
+
+        # Use status code from handler if set
+        status_code = (
+            webobj.response.status_code
+            if hasattr(webobj.response, "status_code") and webobj.response.status_code
+            else 200
+        )
+
+        response = JSONResponse(
+            content=result, headers=cors_headers, status_code=status_code
+        )
+
+        # Copy cookies from handler response
+        if hasattr(webobj.response, "cookies"):
+            for cookie_data in webobj.response.cookies:
+                # FastAPI uses 'key' instead of 'name' for cookie name
+                response.set_cookie(
+                    key=cookie_data["name"],
+                    value=cookie_data["value"],
+                    max_age=cookie_data.get("max_age"),
+                    secure=cookie_data.get("secure", False),
+                    httponly=cookie_data.get("httponly", False),
+                    path=cookie_data.get("path", "/"),
+                    samesite=cookie_data.get("samesite", "lax"),
+                )
+
+        return response
+
+    async def _handle_spa_session_retrieve(
+        self, request: Request, session_id: str
+    ) -> Response:
+        """
+        Handle retrieval of pending SPA session data after OAuth callback.
+
+        The OAuth callback handler processes the authorization code and stores
+        the resulting tokens in a pending session. The SPA then retrieves this
+        data using the session_id passed in the redirect URL.
+        """
+        from fastapi.responses import JSONResponse
+
+        from ...oauth_session import get_oauth2_session_manager
+
+        # Get origin for CORS
+        req_data = await self._normalize_request(request)
+        origin = req_data["headers"].get("origin", "*")
+
+        cors_headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+            "Access-Control-Allow-Credentials": "true",
+        }
+
+        try:
+            session_manager = get_oauth2_session_manager(self.aw_app.get_config())
+
+            # Look up the pending session
+            # The session was stored with pending_session_id as part of token_data
+            session_data = session_manager.get_session(session_id)
+
+            if not session_data:
+                return JSONResponse(
+                    content={"error": True, "message": "Session not found or expired"},
+                    status_code=404,
+                    headers=cors_headers,
+                )
+
+            # Extract the token data that was stored
+            token_data = session_data.get("token_data", {})
+
+            if not token_data or "access_token" not in token_data:
+                return JSONResponse(
+                    content={"error": True, "message": "Invalid session data"},
+                    status_code=400,
+                    headers=cors_headers,
+                )
+
+            # Pending session will expire naturally (short TTL)
+            # This is one-time use by design - second retrieval will fail after expiry
+
+            # Return the session data
+            response_data = {
+                "success": True,
+                "access_token": token_data.get("access_token"),
+                "actor_id": token_data.get("actor_id"),
+                "email": token_data.get("email"),
+                "expires_at": token_data.get("expires_at"),
+                "redirect_url": token_data.get("redirect_url"),
+            }
+
+            return JSONResponse(
+                content=response_data,
+                status_code=200,
+                headers=cors_headers,
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error retrieving SPA session: {e}")
+            return JSONResponse(
+                content={"error": True, "message": "Failed to retrieve session"},
+                status_code=500,
+                headers=cors_headers,
+            )
+
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""
         req_data = await self._normalize_request(request)
@@ -1715,11 +2019,11 @@ class FastAPIIntegration:
         headers = {}
 
         # Check if the handler set a custom status code in the response object
-        if hasattr(webobj, 'response') and hasattr(webobj.response, 'status_code'):
+        if hasattr(webobj, "response") and hasattr(webobj.response, "status_code"):
             status_code = webobj.response.status_code
 
         # Check if the handler set custom headers (e.g., WWW-Authenticate for OAuth2)
-        if hasattr(webobj, 'response') and hasattr(webobj.response, 'headers'):
+        if hasattr(webobj, "response") and hasattr(webobj.response, "headers"):
             headers = dict(webobj.response.headers)
 
         return JSONResponse(content=result, status_code=status_code, headers=headers)
@@ -1947,6 +2251,18 @@ class FastAPIIntegration:
             ),
             "services": lambda: self._create_services_handler(webobj, config),
         }
+
+        # Special handling for properties metadata endpoint
+        if endpoint == "properties" and kwargs.get("metadata"):
+            return properties.PropertyMetadataHandler(
+                webobj, config, hooks=self.aw_app.hooks
+            )
+
+        # Special handling for properties items endpoint
+        if endpoint == "properties" and kwargs.get("items"):
+            return properties.PropertyListItemsHandler(
+                webobj, config, hooks=self.aw_app.hooks
+            )
 
         # Special handling for trust endpoint
         if endpoint == "trust":

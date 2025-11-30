@@ -2,6 +2,115 @@
 CHANGELOG
 =========
 
+v3.5: Nov 30, 2025
+------------------
+
+**ActingWeb Specification version 1.2**
+
+This release implements ActingWeb Specification version 1.2 with SPA-friendly API behavior.
+
+FIXED
+~~~~~
+
+- **SECURITY**: Fixed SPA PKCE code challenge not being sent to OAuth providers - PKCE parameters are now properly forwarded to authorization URLs
+- **SECURITY**: Fixed trust-based permissions bypass - handlers were using ``getattr()`` on dict instead of ``.get()`` for peer ID lookup, causing permission evaluator to be bypassed
+- Fixed FastAPI cookie setting using ``key`` parameter instead of ``name`` (FastAPI/Starlette API difference)
+- Fixed SPA refresh token cookie not being stored by browser (changed ``path="/"`` and ``samesite="Lax"``)
+- Fixed refresh token reuse false positives on rapid page refresh with 2-second grace period
+- Fixed ``oauth_state.decode_state()`` to handle JSON null values for optional trust_type field
+- Removed sensitive token values from debug log messages (security improvement)
+- Fixed pytest marker registration for integration tests (added ``integration`` marker)
+
+CHANGED
+~~~~~~~
+
+- SPA OAuth2 authorize endpoint only includes ``trust_type`` in state when provided (distinguishes user login from MCP client auth)
+
+BREAKING CHANGES
+~~~~~~~~~~~~~~~~
+
+**Empty Collection Response Behavior (Spec v1.2)**
+
+The following endpoints now return ``200 OK`` with empty arrays/objects instead of ``404 Not Found``
+when collections are empty. This is a **breaking change** for clients that rely on ``404`` to detect
+empty collections:
+
+- ``GET /trust`` - Returns ``200 OK`` with ``[]`` when no trust relationships exist (was ``404``)
+- ``GET /trust?relationship=<type>`` - Returns ``200 OK`` with ``[]`` when no matches (was ``404``)
+- ``GET /properties`` - Returns ``200 OK`` with ``{}`` when no properties exist (was ``404``)
+- ``GET /subscriptions`` - Returns ``200 OK`` with ``{"id": ..., "data": []}`` when no subscriptions (was ``404``)
+
+**Migration Guide:**
+
+Before (v1.1):
+
+.. code-block:: python
+
+    response = requests.get(f"{actor_url}/trust", auth=auth)
+    if response.status_code == 404:
+        trusts = []  # No trusts
+    else:
+        trusts = response.json()
+
+After (v1.2):
+
+.. code-block:: python
+
+    response = requests.get(f"{actor_url}/trust", auth=auth)
+    trusts = response.json()  # Always returns array (may be empty)
+
+**Note:** Individual resource lookups still return ``404 Not Found`` when the specific resource
+does not exist (e.g., ``GET /properties/nonexistent``, ``GET /trust/friend/nonexistent-peer``).
+
+DOCS
+~~~~
+
+- **Spec v1.2**: Added "Response Conventions" section documenting SPA-friendly empty collection behavior
+- **Spec v1.2**: Updated ``/properties``, ``/trust``, and list properties sections with new 200 OK behavior
+- Added ``listproperties`` option tag to ActingWeb specification for list property support
+- Added comprehensive List Properties section to ``docs/actingweb-spec.rst`` documenting ordered collections
+- Documented list property CRUD operations (GET/POST/PUT/DELETE) for items and full lists
+- Documented list property metadata endpoint (GET/PUT ``/properties/{name}/metadata``)
+- Updated GET ``/properties?metadata=true`` documentation to reference listproperties option tag
+
+ADDED
+~~~~~
+
+- SPA mode support in OAuth2 callback handler (``spa_mode=true`` in state parameter returns JSON instead of redirect)
+- JSON API responses in email verification handler (based on ``Accept: application/json`` header)
+- ``GET /{actor_id}/meta/trusttypes`` endpoint for trust type enumeration
+- ``GET/PUT /{actor_id}/properties/{name}/metadata`` endpoint for list property metadata
+- Factory JSON API: ``GET /?format=json`` or ``Accept: application/json`` returns OAuth configuration for SPAs
+- New test suites for SPA API endpoints (``tests/test_spa_api_endpoints.py``, ``tests/integration/test_spa_api.py``)
+
+CHANGED
+~~~~~~~
+
+**Trust Type Configuration Clarification**
+
+Trust types are now correctly scoped to MCP client authorization flows only:
+
+- Trust types are **no longer** exposed in user login endpoints (``GET /?format=json``, ``/oauth/spa/*``)
+- Library no longer hardcodes default trust types (e.g., ``mcp_client``)
+- Applications must configure trust types for MCP OAuth2 flows via ``AccessControlConfig.configure_oauth2_trust_types()``
+- ``/oauth/authorize`` (MCP authorization) shows trust types from registry; ``/oauth/spa/authorize`` (user login) does not
+
+This change clarifies the distinction between:
+
+1. **User Login** (ActingWeb as OAuth client to Google/GitHub): No trust relationship created, no trust_type needed
+2. **MCP Authorization** (ActingWeb as OAuth server for MCP clients): Trust relationship created with specified trust_type
+
+**Security Enhancement**
+
+- Added explicit validation in OAuth2 callback to prevent actor spoofing (validates OAuth email matches actor creator)
+- MCP OAuth2 flows derive actor_id from authenticated email, not user input
+
+FIXED
+~~~~~
+
+- Fixed unit test configuration to use correct DynamoDB port (8001) matching docker-compose.test.yml
+- Fixed Trust class attribute initialization to prevent AttributeError on early returns
+
 v3.4.3: Nov 23, 2025
 -------------------
 

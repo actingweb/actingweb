@@ -172,12 +172,13 @@ class TestAttributesFlow:
         )
         assert response.status_code == 204
 
-        # Verify all deleted
+        # Verify all deleted - returns 200 with empty object (SPA-friendly, spec v1.2)
         response = requests.get(
             f"{self.actor_url}/properties",
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code == 404
+        assert response.status_code == 200
+        assert response.json() == {}
 
         # Create new properties
         response = requests.post(

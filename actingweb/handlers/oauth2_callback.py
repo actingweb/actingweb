@@ -4,8 +4,12 @@ OAuth2 callback handler for ActingWeb.
 This handler processes OAuth2 callbacks from various providers after user authentication,
 exchanges the authorization code for an access token, and sets up the user session.
 Uses the consolidated oauth2 module for provider-agnostic OAuth2 handling.
+
+Supports SPA (Single Page Application) mode when spa_mode=true is included in the
+OAuth state parameter. In SPA mode, returns JSON with tokens instead of redirecting.
 """
 
+import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
@@ -19,6 +23,20 @@ if TYPE_CHECKING:
 from .. import config as config_class
 from ..oauth2 import create_oauth2_authenticator, create_oauth2_trust_relationship
 from ..oauth_state import decode_state, validate_expected_email
+
+
+def _decode_state_with_extras(state: str) -> dict[str, Any]:
+    """Decode state JSON and return full dict including extra fields like spa_mode."""
+    if not state or not state.strip().startswith("{"):
+        return {}
+    try:
+        result = json.loads(state)
+        if isinstance(result, dict):
+            return result
+        return {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
 
 logger = logging.getLogger(__name__)
 
@@ -102,9 +120,38 @@ class OAuth2CallbackHandler(BaseHandler):
         _, redirect_url, actor_id, trust_type, _expected_email, user_agent = (
             decode_state(state)
         )
+
+        # Extract extra fields including spa_mode
+        state_extras = _decode_state_with_extras(state)
+        spa_mode = state_extras.get("spa_mode", False)
+
+        # For SPA mode, use redirect_url from state_extras (JSON format)
+        # The legacy decode_state() doesn't parse JSON state properly
+        spa_redirect_url = state_extras.get("redirect_url", "") if spa_mode else ""
+
         logger.debug(
-            f"Parsed state - redirect_url: '{redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}'"
+            f"Parsed state - redirect_url: '{redirect_url}', spa_redirect_url: '{spa_redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}', spa_mode: {spa_mode}"
         )
+
+        # For SPA mode, check if this is a browser navigation vs fetch request
+        # Browser navigations need to redirect to SPA callback with code/state
+        # Fetch requests (Accept: application/json) get JSON response with tokens
+        if spa_mode and spa_redirect_url:
+            accept_header = ""
+            if hasattr(self.request, "headers") and self.request.headers:
+                accept_header = self.request.headers.get("Accept", "")
+                if not accept_header:
+                    accept_header = self.request.headers.get("accept", "")
+
+            # If not a JSON fetch request, this is the browser redirect from OAuth provider
+            # We need to process the OAuth flow NOW (code is single-use) and pass
+            # a session token to the SPA instead of the raw code
+            if "application/json" not in accept_header:
+                # Process the OAuth flow and create a pending session
+                result = self._process_spa_oauth_and_create_session(
+                    code, state, state_extras, spa_redirect_url
+                )
+                return result
 
         # Critical debug: Check if trust_type was parsed correctly
         if trust_type:
@@ -452,6 +499,17 @@ class OAuth2CallbackHandler(BaseHandler):
             return self.error_response(403, "Authentication rejected")
 
         # Set up successful response
+        # Use return_path from state for SPA mode (defaults to /app), /www for traditional mode
+        if spa_mode:
+            return_path = state_extras.get("return_path", "/app")
+            # Support {actor_id} placeholder in return_path
+            if "{actor_id}" in return_path:
+                final_redirect = return_path.replace("{actor_id}", actor_instance.id)
+            else:
+                final_redirect = f"/{actor_instance.id}{return_path}"
+        else:
+            final_redirect = f"/{actor_instance.id}/www"
+
         response_data = {
             "status": "success",
             "message": "Authentication successful",
@@ -459,14 +517,79 @@ class OAuth2CallbackHandler(BaseHandler):
             "email": identifier,  # identifier (may be email or provider ID)
             "access_token": access_token,
             "expires_in": expires_in,
+            "redirect_url": final_redirect,
         }
+
+        # SPA mode: Return JSON with tokens instead of redirecting
+        if spa_mode:
+            logger.debug(f"SPA mode enabled - returning JSON response for {identifier}")
+
+            # Generate ActingWeb SPA tokens instead of returning OAuth provider tokens
+            # This allows the session manager to validate these tokens later
+            from ..oauth_session import get_oauth2_session_manager
+
+            session_manager = get_oauth2_session_manager(self.config)
+
+            # Generate ActingWeb access token and store it
+            spa_access_token = self.config.new_token()
+            actor_id_str = actor_instance.id or ""
+            session_manager.store_access_token(
+                spa_access_token, actor_id_str, identifier
+            )
+
+            # Generate refresh token for SPA
+            spa_refresh_token = session_manager.create_refresh_token(
+                actor_id_str, identifier
+            )
+
+            # Update response with SPA tokens (not OAuth provider tokens)
+            response_data["access_token"] = spa_access_token
+            response_data["success"] = True
+            response_data["token_type"] = "Bearer"
+            response_data["refresh_token"] = spa_refresh_token
+            response_data["expires_at"] = int(time.time()) + 3600  # 1 hour
+
+            # Set HttpOnly cookie for refresh token (hybrid mode)
+            token_delivery = state_extras.get("token_delivery", "json")
+            if token_delivery == "hybrid" and self.response:
+                self.response.set_cookie(
+                    "refresh_token",
+                    spa_refresh_token,
+                    max_age=86400 * 14,  # 2 weeks
+                    path="/oauth/spa/token",
+                    secure=True,
+                    httponly=True,
+                    samesite="Strict",
+                )
+                # Don't include refresh token in JSON for hybrid mode
+                del response_data["refresh_token"]
+
+            if self.response:
+                self.response.write(json.dumps(response_data))
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.set_status(200)
+
+            # Execute OAuth completed lifecycle hook
+            if self.hooks:
+                try:
+                    self.hooks.execute_lifecycle_hooks(
+                        "oauth_completed",
+                        actor_instance,
+                        email=identifier,
+                        access_token=access_token,
+                        redirect_url=response_data["redirect_url"],
+                    )
+                except Exception as e:
+                    logger.error(f"Error executing oauth_completed hook: {e}")
+
+            logger.debug(
+                f"OAuth2 SPA authentication completed successfully for {identifier} -> {actor_instance.id}"
+            )
+            return response_data
 
         # For interactive web authentication, redirect to the actor's www page
         # For API clients, they would use the Bearer token directly
 
-        # For interactive authentication, always redirect to actor's www page
-        # This avoids authentication loops with the original URL
-        final_redirect = f"/{actor_instance.id}/www"
         logger.debug(f"Redirecting to actor www page: {final_redirect}")
 
         # Log the original URL for reference but don't use it
@@ -475,25 +598,34 @@ class OAuth2CallbackHandler(BaseHandler):
                 f"Original URL was: {redirect_url} (redirecting to www page instead)"
             )
 
-        # Set session cookie so user stays authenticated after redirect
-        # The cookie should match the token stored in the actor (oauth_token)
-        stored_token = (
-            actor_instance.store.oauth_token if actor_instance.store else access_token
+        # Generate ActingWeb session token for /www mode (same approach as SPA)
+        # This avoids validating Google tokens on every request
+        from ..oauth_session import get_oauth2_session_manager
+
+        session_manager = get_oauth2_session_manager(self.config)
+
+        # Generate ActingWeb access token and store it
+        www_access_token = self.config.new_token()
+        actor_id_str = actor_instance.id or ""
+        session_manager.store_access_token(
+            www_access_token, actor_id_str, identifier
         )
-        # Set a longer cookie expiry (2 weeks like ActingWeb default) since OAuth tokens are usually valid for 1 hour
-        # but we want the session to persist longer than that
-        cookie_max_age = 1209600  # 2 weeks, matching ActingWeb's default
+
+        # Set session cookie with ActingWeb token (not Google token)
+        cookie_max_age = 3600  # 1 hour - matches token TTL in session manager
 
         self.response.set_cookie(
             "oauth_token",
-            str(stored_token),
+            www_access_token,
             max_age=cookie_max_age,
             path="/",
             secure=True,
+            httponly=True,  # Protect from XSS
+            samesite="Lax",
         )
 
         logger.debug(
-            f"Set oauth_token cookie with token length {len(str(stored_token))} and max_age {cookie_max_age}"
+            f"Set oauth_token cookie with ActingWeb token for actor {actor_id_str}"
         )
 
         # Perform the redirect for interactive authentication
@@ -501,7 +633,6 @@ class OAuth2CallbackHandler(BaseHandler):
         self.response.set_redirect(final_redirect)
 
         # Also include the information in the response data for completeness
-        response_data["redirect_url"] = final_redirect
         response_data["redirect_performed"] = True
 
         # Execute OAuth completed lifecycle hook
@@ -565,3 +696,219 @@ class OAuth2CallbackHandler(BaseHandler):
             }
 
         return {"error": True, "status_code": status_code, "message": message}
+
+    def _process_spa_oauth_and_create_session(
+        self,
+        code: str,
+        state: str,
+        state_extras: dict[str, Any],
+        spa_redirect_url: str,
+    ) -> dict[str, Any]:
+        """
+        Process OAuth flow for SPA mode browser navigation.
+
+        Since OAuth authorization codes are single-use, we must exchange the code
+        immediately when the browser redirects from the OAuth provider. We then
+        store the result in a pending session and redirect to the SPA with a
+        session token instead of the raw code.
+
+        Args:
+            code: OAuth authorization code
+            state: Original state parameter
+            state_extras: Parsed state extras (spa_mode, redirect_url, etc.)
+            spa_redirect_url: SPA callback URL to redirect to
+
+        Returns:
+            Response dict with redirect info
+        """
+        from urllib.parse import urlencode, urlparse, urlunparse
+
+        from ..oauth_session import get_oauth2_session_manager
+
+        # Ensure authenticator is available
+        if not self.authenticator:
+            logger.error("SPA OAuth: Authenticator not configured")
+            parsed = urlparse(spa_redirect_url)
+            params = {"error": "server_error", "error_description": "OAuth not configured"}
+            spa_error_url = urlunparse((
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode(params),
+                parsed.fragment
+            ))
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(spa_error_url)
+            return {"redirect_required": True, "redirect_url": spa_error_url}
+
+        session_manager = get_oauth2_session_manager(self.config)
+
+        # Retrieve PKCE code verifier if server-managed PKCE was used
+        code_verifier = None
+        pkce_session_id = state_extras.get("pkce_session_id")
+        if pkce_session_id:
+            pkce_session = session_manager.get_session(pkce_session_id)
+            if pkce_session:
+                code_verifier = pkce_session.get("pkce_verifier")
+                logger.debug(f"Retrieved PKCE code verifier from session {pkce_session_id[:8]}...")
+                # PKCE session will expire naturally (short TTL)
+            else:
+                logger.warning(f"PKCE session {pkce_session_id[:8]}... not found or expired")
+
+        # Exchange code for tokens NOW (single-use code)
+        token_data = self.authenticator.exchange_code_for_token(code, state, code_verifier=code_verifier)
+        if not token_data or "access_token" not in token_data:
+            logger.error("SPA OAuth: Failed to exchange authorization code")
+            # Redirect to SPA with error
+            parsed = urlparse(spa_redirect_url)
+            params = {"error": "token_exchange_failed", "error_description": "Failed to exchange authorization code"}
+            spa_error_url = urlunparse((
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode(params),
+                parsed.fragment
+            ))
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(spa_error_url)
+            return {"redirect_required": True, "redirect_url": spa_error_url}
+
+        access_token = token_data["access_token"]
+        refresh_token = token_data.get("refresh_token")
+        expires_in = token_data.get("expires_in", 3600)
+
+        # Validate token and get user info
+        user_info = self.authenticator.validate_token_and_get_user_info(access_token)
+        if not user_info:
+            logger.error("SPA OAuth: Failed to validate token")
+            parsed = urlparse(spa_redirect_url)
+            params = {"error": "validation_failed", "error_description": "Token validation failed"}
+            spa_error_url = urlunparse((
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode(params),
+                parsed.fragment
+            ))
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(spa_error_url)
+            return {"redirect_required": True, "redirect_url": spa_error_url}
+
+        # Determine if email is required based on config
+        require_email = bool(
+            self.config and getattr(self.config, "force_email_prop_as_creator", False)
+        )
+
+        # Extract identifier
+        identifier = self.authenticator.get_email_from_user_info(
+            user_info, access_token, require_email=require_email
+        )
+
+        if not identifier:
+            logger.error("SPA OAuth: Failed to extract identifier")
+            parsed = urlparse(spa_redirect_url)
+            params = {"error": "identifier_failed", "error_description": "Could not extract user identifier"}
+            spa_error_url = urlunparse((
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode(params),
+                parsed.fragment
+            ))
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(spa_error_url)
+            return {"redirect_required": True, "redirect_url": spa_error_url}
+
+        # Lookup or create actor
+        actor_instance = self.authenticator.lookup_or_create_actor_by_identifier(
+            identifier, user_info=user_info
+        )
+        if not actor_instance:
+            logger.error("SPA OAuth: Failed to create actor")
+            parsed = urlparse(spa_redirect_url)
+            params = {"error": "actor_failed", "error_description": "Failed to create user account"}
+            spa_error_url = urlunparse((
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode(params),
+                parsed.fragment
+            ))
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(spa_error_url)
+            return {"redirect_required": True, "redirect_url": spa_error_url}
+
+        # Store OAuth tokens in actor properties
+        if actor_instance.store:
+            actor_instance.store.oauth_token = access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + expires_in) if expires_in else None
+            )
+            if refresh_token:
+                actor_instance.store.oauth_refresh_token = refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+
+        # Generate SPA session tokens (session_manager already initialized at start of method)
+        spa_access_token = self.config.new_token()
+        actor_id_str = actor_instance.id or ""
+        session_manager.store_access_token(spa_access_token, actor_id_str, identifier)
+
+        spa_refresh_token = session_manager.create_refresh_token(actor_id_str, identifier)
+
+        # Build return path
+        return_path = state_extras.get("return_path", "/app")
+        if "{actor_id}" in return_path:
+            final_redirect = return_path.replace("{actor_id}", actor_id_str)
+        else:
+            final_redirect = f"/{actor_id_str}{return_path}"
+
+        # Store pending session data for SPA to retrieve
+        # The SPA will call back to get this data using the session token
+        pending_session_id = session_manager.store_session(
+            token_data={
+                "access_token": spa_access_token,
+                "refresh_token": spa_refresh_token,
+                "actor_id": actor_id_str,
+                "email": identifier,
+                "expires_at": int(time.time()) + 3600,
+                "redirect_url": final_redirect,
+            },
+            user_info=user_info,
+            state=state,
+            provider=getattr(self.config, "oauth2_provider", "google"),
+        )
+
+        # Set HttpOnly cookie for refresh token (hybrid mode)
+        token_delivery = state_extras.get("token_delivery", "json")
+        if token_delivery == "hybrid" and self.response:
+            self.response.set_cookie(
+                "refresh_token",
+                spa_refresh_token,
+                max_age=86400 * 14,  # 2 weeks
+                path="/oauth/spa/token",
+                secure=True,
+                httponly=True,
+                samesite="Strict",
+            )
+
+        # Redirect to SPA callback with session token
+        parsed = urlparse(spa_redirect_url)
+        params = {"session": pending_session_id}
+        spa_callback_url = urlunparse((
+            parsed.scheme or "",
+            parsed.netloc or "",
+            parsed.path,
+            parsed.params,
+            urlencode(params),
+            parsed.fragment
+        ))
+
+        logger.debug(f"SPA OAuth completed, redirecting to: {spa_callback_url}")
+        self.response.set_status(302, "Found")
+        self.response.set_redirect(spa_callback_url)
+        return {"redirect_required": True, "redirect_url": spa_callback_url}

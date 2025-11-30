@@ -409,13 +409,18 @@ class AccessControlConfig:
         """
         Configure which trust types are available during OAuth2 authorization flows.
 
-        This allows 3rd party developers to control which trust relationship types
-        users can select during OAuth2 authentication.
+        This allows applications to control which trust relationship types
+        users can select during MCP OAuth2 authentication.
+
+        IMPORTANT: The application is responsible for configuring trust types.
+        If not configured, all trust types from the registry will be available,
+        with the first one as default.
 
         Args:
             allowed_trust_types: List of trust type names to allow in OAuth2 flows.
                                 If None, all registered trust types are available.
-            default_trust_type: Default trust type to pre-select in OAuth2 forms
+            default_trust_type: Default trust type to pre-select in OAuth2 forms.
+                               If None, the first allowed trust type will be used.
 
         Example:
             # Only allow specific trust types for OAuth2
@@ -424,12 +429,12 @@ class AccessControlConfig:
                 default_trust_type="mcp_client"
             )
 
-            # Allow all trust types (default behavior)
+            # Allow all trust types from registry (default behavior)
             access_control.configure_oauth2_trust_types()
         """
         self._oauth2_trust_types = {
             "allowed": allowed_trust_types,  # None means all are allowed
-            "default": default_trust_type or "mcp_client",
+            "default": default_trust_type,  # None means use first available
         }
 
         # Store in config for access by OAuth2 handlers
@@ -447,6 +452,7 @@ class AccessControlConfig:
         Get the configured OAuth2 trust type settings.
 
         Returns:
-            Dict with 'allowed' and 'default' trust type configuration
+            Dict with 'allowed' and 'default' trust type configuration.
+            If not configured, returns None values (no hardcoded defaults).
         """
-        return self._oauth2_trust_types or {"allowed": None, "default": "mcp_client"}
+        return self._oauth2_trust_types or {"allowed": None, "default": None}

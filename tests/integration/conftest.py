@@ -17,6 +17,14 @@ import time
 import pytest
 import requests
 
+
+def pytest_collection_modifyitems(items):
+    """Auto-mark all tests in this directory with 'integration' marker."""
+    for item in items:
+        # Check if test is in the integration directory
+        if "integration" in str(item.fspath):
+            item.add_marker(pytest.mark.integration)
+
 # Test configuration
 # Use AWS_DB_HOST from environment if set (for CI), otherwise use local default
 TEST_DYNAMODB_HOST = os.environ.get("AWS_DB_HOST", "http://localhost:8001")

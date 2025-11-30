@@ -36,9 +36,18 @@
   "ruff.enable": true,
 
   // Testing
+  // Both unit tests and integration tests are discoverable.
+  // Integration tests require DynamoDB running (docker-compose -f docker-compose.test.yml up -d)
+  //
+  // Running tests:
+  // - Individual tests: Click the play button next to any test
+  // - Unit tests only: poetry run pytest tests/ -m "not integration" --no-cov
+  // - Integration tests only: poetry run pytest tests/ -m integration --no-cov
+  // - All tests (may have ordering issues): Run All Tests button
   "python.testing.pytestEnabled": true,
   "python.testing.unittestEnabled": false,
   "python.testing.pytestArgs": [
-    "tests"
+    "tests",
+    "--no-cov"
   ]
 }

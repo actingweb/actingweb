@@ -22,10 +22,9 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         subscriptions = myself.get_subscriptions(
             peerid=peerid, target=target, subtarget=subtarget, resource=resource
         )
+        # Return empty data array with 200 OK when no subscriptions exist (SPA-friendly, spec v1.2)
         if not subscriptions:
-            if self.response:
-                self.response.set_status(404, "Not found")
-            return
+            subscriptions = []
         data = {
             "id": myself.id,
             "data": subscriptions,
@@ -128,10 +127,9 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         subscriptions = myself.get_subscriptions(
             peerid=peerid, target=target, subtarget=subtarget, resource=resource
         )
+        # Return empty data array with 200 OK when no subscriptions exist (SPA-friendly, spec v1.2)
         if not subscriptions:
-            if self.response:
-                self.response.set_status(404, "Not found")
-            return
+            subscriptions = []
         data = {
             "id": myself.id,
             "peerid": peerid,

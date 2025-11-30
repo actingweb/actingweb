@@ -65,10 +65,9 @@ class TrustHandler(base_handler.BaseHandler):
         pairs = myself.get_trust_relationships(
             relationship=relationship, peerid=peerid, trust_type=peer_type
         )
-        if not pairs or len(pairs) == 0:
-            if self.response:
-                self.response.set_status(404, "Not found")
-            return
+        # Return empty array with 200 OK when no relationships exist (SPA-friendly, spec v1.2)
+        if not pairs:
+            pairs = []
         out = json.dumps(pairs)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"

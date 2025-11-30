@@ -47,13 +47,15 @@ def decode_state(state: str) -> tuple[str, str, str, str, str, str]:
     if state.strip().startswith("{"):
         try:
             data = json.loads(state)
+            # Use `or ""` to handle None values from JSON null
+            # (dict.get returns None if key exists with null value, not the default)
             return (
-                str(data.get("csrf", "")),
-                str(data.get("redirect", "")),
-                str(data.get("actor_id", "")),
-                str(data.get("trust_type", "")),
-                str(data.get("expected_email", "")),
-                str(data.get("user_agent", "")),
+                str(data.get("csrf") or ""),
+                str(data.get("redirect") or ""),
+                str(data.get("actor_id") or ""),
+                str(data.get("trust_type") or ""),
+                str(data.get("expected_email") or ""),
+                str(data.get("user_agent") or ""),
             )
         except (json.JSONDecodeError, TypeError):
             pass

@@ -1,5 +1,5 @@
 =====================================
-ActingWeb Specification - version 1.1
+ActingWeb Specification - version 1.2
 =====================================
 
 Introduction
@@ -388,8 +388,45 @@ proxy
 nestedproperties
   Support for deeper, nested JSON structures in ``/properties`` (beyond basic attribute/value pairs).
 
+listproperties
+  Support for list properties under ``/properties``, allowing ordered collections of items with
+  individual item CRUD operations and list-level metadata (description, explanation).
+
 trustpermissions
   The trust endpoint supports per‑relationship permission management (enhanced trust API and ``/permissions``).
+
+Response Conventions
+-----------------------------
+
+**Empty Collections (SPA-Friendly Behavior)**
+
+When an endpoint returns a collection of items (such as trust relationships, subscriptions,
+properties, or list items), the following convention applies:
+
+- If the collection exists but is empty, the endpoint MUST return ``200 OK`` with an empty
+  array ``[]`` or an object containing an empty array.
+- A ``404 Not Found`` response MUST only be used when a specific individual resource does not
+  exist (e.g., a specific property name, a specific trust relationship by peer ID, or a
+  specific list item by index).
+
+This convention enables Single Page Applications (SPAs) and API clients to distinguish between
+"no items found" (empty collection, 200 OK) and "resource does not exist" (404 Not Found),
+simplifying client-side state management and error handling.
+
+**Examples:**
+
+- ``GET /actor/trust`` with no trust relationships → ``200 OK`` with ``[]``
+- ``GET /actor/trust/friend/nonexistent-peer`` → ``404 Not Found``
+- ``GET /actor/properties`` with no properties → ``200 OK`` with ``{}``
+- ``GET /actor/properties/nonexistent`` → ``404 Not Found``
+- ``GET /actor/properties/mylist`` (empty list) → ``200 OK`` with ``[]``
+- ``GET /actor/properties/mylist/99`` (index out of range) → ``404 Not Found``
+
+.. note::
+
+   This convention was introduced in ActingWeb Specification version 1.2. Implementations
+   based on version 1.1 or earlier may return ``404 Not Found`` for empty collections.
+   Clients SHOULD handle both behaviors for backward compatibility with older implementations.
 
 The Actor
 ==========
@@ -665,6 +702,18 @@ These are the paths available:
 |                             |              |                                                                                                                                                                                                                                                                                                                          |
 |                             |              | Note that elements (both OPTIONAL and MUST), but empty, MAY be left out or returned as empty elements.                                                                                                                                                                                                                   |
 +-----------------------------+--------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| /meta/trusttypes            | OPTIONAL     | Returns a 200 OK with an application/json body listing available trust relationship types and the default type. Useful for SPA clients to present trust type options during OAuth2 authorization. Example:                                                                                                               |
+|                             |              |                                                                                                                                                                                                                                                                                                                          |
+|                             |              | ::                                                                                                                                                                                                                                                                                                                       |
+|                             |              |                                                                                                                                                                                                                                                                                                                          |
+|                             |              |   {                                                                                                                                                                                                                                                                                                                      |
+|                             |              |     "trust_types": {                                                                                                                                                                                                                                                                                                     |
+|                             |              |       "friend": {"description": "Standard access"},                                                                                                                                                                                                                                                                      |
+|                             |              |       "admin": {"description": "Full administrative access"}                                                                                                                                                                                                                                                             |
+|                             |              |     },                                                                                                                                                                                                                                                                                                                   |
+|                             |              |     "default_trust_type": "friend"                                                                                                                                                                                                                                                                                       |
+|                             |              |   }                                                                                                                                                                                                                                                                                                                      |
++-----------------------------+--------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | /meta/                      | --           | All other meta paths are reserved for future use.                                                                                                                                                                                                                                                                        |
 +-----------------------------+--------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
@@ -738,11 +787,32 @@ When a GET request targets an attribute, the returned representation is
 the value of that specific attribute only using text/plain as content
 type: GET /app/78hjh76yug/properties/firstname
 
-A GET for an empty /properties (i.e. no attribute/value pairs set) or a
-GET for a non-set attribute should result in a 404 Not found from the
-actor. If the attribute is not accessible without a trust relationship,
+A GET for an empty /properties (i.e. no attribute/value pairs set) MUST return
+a 200 OK with an empty JSON object ``{}``. A GET for a non-set attribute MUST
+result in a 404 Not Found from the actor.
+If the attribute is not accessible without a trust relationship,
 a 401 Unauthorised MUST be returned. If the request's current trust
 relationship is not sufficient, a 403 Forbidden MUST be returned.
+
+If the actor supports list properties (see *listproperties* option tag), a GET
+request to /properties MAY include a query parameter ``metadata=true`` to return
+an enhanced response that includes metadata for list properties. When
+metadata=true, the response SHOULD include ``description``, ``explanation``, and
+``item_count`` fields for each list property, in addition to the items::
+
+  GET /app/78hjh76yug/properties?metadata=true
+
+  {
+    "properties": {"name": "Alice", "age": "30"},
+    "list_properties": {
+      "notes": {
+        "description": "Personal notes",
+        "explanation": "Store notes and reminders",
+        "item_count": 1,
+        "items": [{"id": "1", "content": "Remember to call"}]
+      }
+    }
+  }
 
 **PUT**
 
@@ -788,6 +858,134 @@ Any non-supported attribute names MUST result in a 400 Bad Request. If
 any of the attributes are not writable without a trust relationship, a
 401 Unauthorised MUST be returned. If the request's current trust
 relationship is not sufficient, a 403 Forbidden MUST be returned.
+
+**List Properties (OPTIONAL)**
+
+In addition to simple attribute/value pairs, actors MAY support list properties
+for storing ordered collections of items. List properties are useful when an
+actor needs to maintain sequences of related data, such as notes, messages,
+or history entries. Support for list properties SHOULD be announced using the
+*listproperties* option tag in ``/meta/actingweb/supported``.
+
+A list property differs from a regular property in that it contains an ordered
+sequence of items rather than a single value. Each item in a list property
+MAY be a simple value or a JSON object. Items are accessed by their zero-based
+index position within the list.
+
+The following table shows the relationship between a list property, its items,
+and the URIs where items are accessed:
+
++--------------------+---------------------+----------------------------------------------------------------+
+| **List Property**  | **Item Index**      | **URI to item**                                                |
++--------------------+---------------------+----------------------------------------------------------------+
+| **notes**          | 0                   | http://www.actingweb.org/app/78hjh76yug/properties/notes/0     |
++--------------------+---------------------+----------------------------------------------------------------+
+| **notes**          | 1                   | http://www.actingweb.org/app/78hjh76yug/properties/notes/1     |
++--------------------+---------------------+----------------------------------------------------------------+
+
+**List Property GET**
+
+A GET request to a list property MUST return the complete list of items as a
+JSON array. The response MUST be a 200 OK with content type application/json::
+
+  GET /app/78hjh76yug/properties/notes
+
+  [
+    {"id": "1", "content": "Remember to call", "created": "2025-01-15T10:30:00Z"},
+    {"id": "2", "content": "Buy groceries", "created": "2025-01-15T14:00:00Z"}
+  ]
+
+A GET request to a specific item index MUST return that item only. If the index
+is out of range, a 404 Not Found MUST be returned::
+
+  GET /app/78hjh76yug/properties/notes/0
+
+  {"id": "1", "content": "Remember to call", "created": "2025-01-15T10:30:00Z"}
+
+If the list property does not exist, a 404 Not Found MUST be returned. If the
+list property exists but is empty, a 200 OK with an empty array ``[]`` MUST be
+returned. Authorization requirements are the same as for regular properties.
+
+**List Property POST**
+
+A POST request to a list property appends a new item to the end of the list.
+The request body MUST contain the item to be added. A successful append MUST
+return 201 Created. The response MAY include a Location header pointing to the
+newly created item::
+
+  POST /app/78hjh76yug/properties/notes
+  Content-Type: application/json
+
+  {"id": "3", "content": "New note", "created": "2025-01-16T09:00:00Z"}
+
+  Response: 201 Created
+  Location: /app/78hjh76yug/properties/notes/2
+
+**List Property PUT**
+
+A PUT request to a specific item index replaces that item with the new value.
+If the index does not exist, the actor MAY create it (if the index equals the
+current list length) or MUST return 404 Not Found (if the index is beyond the
+list length)::
+
+  PUT /app/78hjh76yug/properties/notes/0
+  Content-Type: application/json
+
+  {"id": "1", "content": "Updated note content", "created": "2025-01-15T10:30:00Z"}
+
+  Response: 201 Created
+
+**List Property DELETE**
+
+A DELETE request to a list property MUST delete the entire list and all its
+items. A successful deletion MUST return 204 No Content::
+
+  DELETE /app/78hjh76yug/properties/notes
+
+  Response: 204 No Content
+
+A DELETE request to a specific item index removes that item from the list.
+Subsequent items MUST be re-indexed to maintain a contiguous sequence::
+
+  DELETE /app/78hjh76yug/properties/notes/1
+
+  Response: 204 No Content
+
+If the item index does not exist, a 404 Not Found MUST be returned.
+
+**List Property Metadata**
+
+Actors MAY support a ``/properties/{name}/metadata`` endpoint to manage
+descriptive metadata about a list property. This endpoint is useful for clients
+that need to display or configure list property information.
+
+GET ``/properties/{name}/metadata`` returns the metadata for a list property::
+
+  GET /app/78hjh76yug/properties/notes/metadata
+
+  {
+    "name": "notes",
+    "description": "Personal notes and reminders",
+    "explanation": "Use this to store important notes",
+    "item_count": 2
+  }
+
+PUT ``/properties/{name}/metadata`` updates the metadata. Only the ``description``
+and ``explanation`` fields are writable; other fields such as ``name`` and
+``item_count`` are read-only::
+
+  PUT /app/78hjh76yug/properties/notes/metadata
+  Content-Type: application/json
+
+  {
+    "description": "Updated description",
+    "explanation": "Updated explanation"
+  }
+
+  Response: 204 No Content
+
+The metadata endpoint requires the same authorization as the property itself.
+A 404 Not Found MUST be returned if the list property does not exist.
 
 /actions (OPTIONAL)
 -----------------------------
@@ -1173,8 +1371,9 @@ The 'creator' user and 'admin' relationship MUST allow the retrieval of
 trust relationships through a GET to /trust and to
 /trust/'relationship\_type'. The content is application/json. A request
 on a relationship type MAY also be supported and filter on a specific
-relationship, but give the same output. If no relationships exist, a 404
-Not found MUST be returned.
+relationship, but give the same output. If no relationships exist, a 200 OK
+with an empty array ``[]`` MUST be returned. A 404 Not Found MUST only be
+returned when a specific trust relationship (by peer ID) does not exist.
 
 ::
 
@@ -1464,6 +1663,30 @@ versioning/migration of actors.
     "id": "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
     "approved": true
   }
+
+**OAuth2 Client Metadata**
+
+When a trust relationship is established via OAuth2 authentication (such as
+MCP clients connecting to an actor), additional metadata about the OAuth2
+client MAY be included in the trust relationship response. These fields are
+OPTIONAL and only present when the trust was established via OAuth2::
+
+  {
+    "peerid": "chatgpt_client_abc123",
+    "relationship": "mcp_client",
+    "client_name": "ChatGPT",
+    "client_version": "1.0",
+    "client_platform": "OpenAI",
+    "oauth_client_id": "abc123-xyz789",
+    "established_via": "oauth2_interactive",
+    "peer_identifier": "user@example.com",
+    "created_at": "2024-01-15T10:30:00Z",
+    "last_accessed": "2024-01-16T14:22:00Z",
+    "last_connected_via": "oauth"
+  }
+
+This allows SPA clients to display meaningful information about connected
+OAuth2 clients without needing a separate endpoint.
 
 **Verification and Approval**
 

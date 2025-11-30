@@ -63,8 +63,8 @@ def mcp_tool(
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        func._mcp_type = "tool"
-        func._mcp_metadata = {
+        setattr(func, "_mcp_type", "tool")  # noqa: B010
+        setattr(func, "_mcp_metadata", {  # noqa: B010
             "name": name,
             "description": description,
             "input_schema": input_schema,
@@ -73,7 +73,7 @@ def mcp_tool(
             "title": title,
             "output_schema": output_schema,
             "annotations": annotations,
-        }
+        })
         return func
 
     return decorator
@@ -102,13 +102,13 @@ def mcp_resource(
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        func._mcp_type = "resource"
-        func._mcp_metadata = {
+        setattr(func, "_mcp_type", "resource")  # noqa: B010
+        setattr(func, "_mcp_metadata", {  # noqa: B010
             "uri_template": uri_template,
             "name": name,
             "description": description,
             "mime_type": mime_type,
-        }
+        })
         return func
 
     return decorator
@@ -141,12 +141,12 @@ def mcp_prompt(
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        func._mcp_type = "prompt"
-        func._mcp_metadata = {
+        setattr(func, "_mcp_type", "prompt")  # noqa: B010
+        setattr(func, "_mcp_metadata", {  # noqa: B010
             "name": name,
             "description": description,
             "arguments": arguments or [],
-        }
+        })
         return func
 
     return decorator
@@ -155,7 +155,9 @@ def mcp_prompt(
 def get_mcp_metadata(func: Callable[..., Any]) -> dict[str, Any] | None:
     """Get MCP metadata from a decorated function."""
     if hasattr(func, "_mcp_type") and hasattr(func, "_mcp_metadata"):
-        return {"type": func._mcp_type, **func._mcp_metadata}
+        mcp_type = getattr(func, "_mcp_type")  # noqa: B009
+        mcp_metadata = getattr(func, "_mcp_metadata")  # noqa: B009
+        return {"type": mcp_type, **mcp_metadata}
     return None
 
 

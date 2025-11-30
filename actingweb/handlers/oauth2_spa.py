@@ -394,15 +394,17 @@ class OAuth2SPAHandler(BaseHandler):
                 )
 
         # Build state with SPA-specific fields
-        state_data = {
+        # Only include trust_type if provided (for MCP client auth, not user login)
+        state_data: dict[str, Any] = {
             "spa_mode": True,
-            "trust_type": trust_type,
             "redirect_url": redirect_uri,
             "return_path": return_path,  # Final redirect path after auth
             "token_delivery": token_delivery,
             "pkce_mode": pkce_mode,
             "timestamp": int(time.time()),
         }
+        if trust_type:
+            state_data["trust_type"] = trust_type
 
         # Store PKCE verifier if server-managed
         if code_verifier:
@@ -530,18 +532,30 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(401, "Invalid refresh token data")
 
         # Check if token was already used (replay attack detection)
+        # Allow a 2-second grace period for race conditions (e.g., multiple tabs refreshing)
         if token_data.get("used"):
-            logger.warning(
-                f"Refresh token reuse detected for actor {actor_id} - potential token theft"
-            )
-            # Revoke all tokens for this actor
-            session_manager.revoke_all_tokens(actor_id)
-            return self._json_error(
-                401, "Refresh token already used - all tokens revoked for security"
-            )
+            used_at = token_data.get("used_at", 0)
+            grace_period = 2  # seconds
+            if int(time.time()) - used_at > grace_period:
+                logger.warning(
+                    f"Refresh token reuse detected for actor {actor_id} - potential token theft"
+                )
+                # Revoke all tokens for this actor
+                session_manager.revoke_all_tokens(actor_id)
+                return self._json_error(
+                    401, "Refresh token already used - all tokens revoked for security"
+                )
+            else:
+                # Within grace period - issue new tokens (don't treat as theft)
+                # This handles rapid page refreshes where access token is lost from memory
+                logger.debug(
+                    f"Refresh token reuse within grace period for actor {actor_id} - issuing new tokens"
+                )
+                # Continue to issue new tokens below (don't mark as used again, already marked)
 
-        # Mark current refresh token as used
-        session_manager.mark_refresh_token_used(refresh_token)
+        else:
+            # Mark current refresh token as used (only if not already used)
+            session_manager.mark_refresh_token_used(refresh_token)
 
         # Generate new tokens (rotation)
         new_access_token = self._generate_actingweb_token(actor_id, identifier or "")
@@ -872,10 +886,10 @@ class OAuth2SPAHandler(BaseHandler):
                 "refresh_token",
                 refresh_token,
                 max_age=86400 * 14,  # 2 weeks
-                path="/oauth/spa/token",  # Restrict to token endpoint
+                path="/",  # Use root path so browser stores it properly
                 secure=True,
                 httponly=httponly,
-                samesite="Strict",
+                samesite="Lax",  # Lax allows the cookie on same-site navigations
             )
 
     def _clear_token_cookies(self) -> None:

@@ -608,7 +608,7 @@ class ActingWebOAuth2Server:
         """
         try:
             if token:
-                logger.info(f"Processing logout with token: {token[:20]}...")
+                logger.info("Processing logout with token")
                 # Validate and revoke the specific token
                 try:
                     token_validation = self.token_manager.validate_access_token(token)
@@ -629,9 +629,7 @@ class ActingWebOAuth2Server:
                                 f"Token revocation failed for client {client_id} - revoke_token returned False"
                             )
                     else:
-                        logger.warning(
-                            f"Logout attempted with invalid or expired token: {token[:20]}..."
-                        )
+                        logger.warning("Logout attempted with invalid or expired token")
                 except Exception as revoke_error:
                     logger.error(
                         f"Token revocation failed with exception: {revoke_error}"

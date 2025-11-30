@@ -1850,7 +1850,16 @@ class FastAPIIntegration:
         # Copy cookies from handler response
         if hasattr(webobj.response, "cookies"):
             for cookie_data in webobj.response.cookies:
-                response.set_cookie(**cookie_data)
+                # FastAPI uses 'key' instead of 'name' for cookie name
+                response.set_cookie(
+                    key=cookie_data["name"],
+                    value=cookie_data["value"],
+                    max_age=cookie_data.get("max_age"),
+                    secure=cookie_data.get("secure", False),
+                    httponly=cookie_data.get("httponly", False),
+                    path=cookie_data.get("path", "/"),
+                    samesite=cookie_data.get("samesite", "lax"),
+                )
 
         return response
 

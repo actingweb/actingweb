@@ -2,6 +2,23 @@
 CHANGELOG
 =========
 
+v3.5.1: Nov 30, 2025
+--------------------
+
+FIXED
+~~~~~
+
+- Fixed FastAPI cookie setting using ``key`` parameter instead of ``name`` (FastAPI/Starlette API difference)
+- Fixed SPA refresh token cookie not being stored by browser (changed ``path="/"`` and ``samesite="Lax"``)
+- Fixed refresh token reuse false positives on rapid page refresh with 2-second grace period
+- Fixed ``oauth_state.decode_state()`` to handle JSON null values for optional trust_type field
+- Removed sensitive token values from debug log messages (security improvement)
+
+CHANGED
+~~~~~~~
+
+- SPA OAuth2 authorize endpoint only includes ``trust_type`` in state when provided (distinguishes user login from MCP client auth)
+
 v3.5: Nov 29, 2025
 ------------------
 

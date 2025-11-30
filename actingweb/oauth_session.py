@@ -367,7 +367,7 @@ class OAuth2SessionManager:
 
         try:
             bucket.delete_attr(name=token)
-            logger.debug(f"Revoked access token {token[:20]}...")
+            logger.debug("Revoked access token")
             return True
         except Exception as e:
             logger.warning(f"Error revoking access token: {e}")
@@ -483,7 +483,7 @@ class OAuth2SessionManager:
         token_data["used_at"] = int(time.time())
 
         bucket.set_attr(name=token, data=token_data)
-        logger.debug(f"Marked refresh token as used: {token[:20]}...")
+        logger.debug("Marked refresh token as used")
         return True
 
     def revoke_refresh_token(self, token: str) -> bool:
@@ -510,7 +510,7 @@ class OAuth2SessionManager:
 
         try:
             bucket.delete_attr(name=token)
-            logger.debug(f"Revoked refresh token {token[:20]}...")
+            logger.debug("Revoked refresh token")
             return True
         except Exception as e:
             logger.warning(f"Error revoking refresh token: {e}")

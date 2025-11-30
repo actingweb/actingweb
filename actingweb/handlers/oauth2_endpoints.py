@@ -814,7 +814,7 @@ class OAuth2EndpointsHandler(BaseHandler):
 
             if auth_header and auth_header.startswith("Bearer "):
                 token = auth_header[7:]  # Remove "Bearer " prefix
-                logger.debug(f"Found token in Authorization header: {token[:20]}...")
+                logger.debug("Found token in Authorization header")
             else:
                 # Try to get token from cookies (for web sessions)
                 token = (
@@ -823,12 +823,9 @@ class OAuth2EndpointsHandler(BaseHandler):
                     else None
                 )
                 if token:
-                    logger.debug(f"Found token in cookies: {token[:20]}...")
+                    logger.debug("Found token in cookies")
                 else:
                     logger.debug("No token found in cookies or Authorization header")
-                    logger.debug(
-                        f"Available cookies: {list(self.request.cookies.keys()) if self.request.cookies else []}"
-                    )
 
             # Handle Google OAuth2 token logout (web UI authentication)
             try:

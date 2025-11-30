@@ -2,29 +2,29 @@
 CHANGELOG
 =========
 
-v3.5.1: Nov 30, 2025
---------------------
-
-FIXED
-~~~~~
-
-- Fixed FastAPI cookie setting using ``key`` parameter instead of ``name`` (FastAPI/Starlette API difference)
-- Fixed SPA refresh token cookie not being stored by browser (changed ``path="/"`` and ``samesite="Lax"``)
-- Fixed refresh token reuse false positives on rapid page refresh with 2-second grace period
-- Fixed ``oauth_state.decode_state()`` to handle JSON null values for optional trust_type field
-- Removed sensitive token values from debug log messages (security improvement)
-
-CHANGED
-~~~~~~~
-
-- SPA OAuth2 authorize endpoint only includes ``trust_type`` in state when provided (distinguishes user login from MCP client auth)
-
-v3.5: Nov 29, 2025
+v3.5: Nov 30, 2025
 ------------------
 
 **ActingWeb Specification version 1.2**
 
 This release implements ActingWeb Specification version 1.2 with SPA-friendly API behavior.
+
+FIXED
+~~~~~
+
+- **SECURITY**: Fixed SPA PKCE code challenge not being sent to OAuth providers - PKCE parameters are now properly forwarded to authorization URLs
+- **SECURITY**: Fixed trust-based permissions bypass - handlers were using ``getattr()`` on dict instead of ``.get()`` for peer ID lookup, causing permission evaluator to be bypassed
+- Fixed FastAPI cookie setting using ``key`` parameter instead of ``name`` (FastAPI/Starlette API difference)
+- Fixed SPA refresh token cookie not being stored by browser (changed ``path="/"`` and ``samesite="Lax"``)
+- Fixed refresh token reuse false positives on rapid page refresh with 2-second grace period
+- Fixed ``oauth_state.decode_state()`` to handle JSON null values for optional trust_type field
+- Removed sensitive token values from debug log messages (security improvement)
+- Fixed pytest marker registration for integration tests (added ``integration`` marker)
+
+CHANGED
+~~~~~~~
+
+- SPA OAuth2 authorize endpoint only includes ``trust_type`` in state when provided (distinguishes user login from MCP client auth)
 
 BREAKING CHANGES
 ~~~~~~~~~~~~~~~~

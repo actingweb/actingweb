@@ -569,6 +569,7 @@ class OAuth2SPAHandler(BaseHandler):
         response_data: dict[str, Any] = {
             "success": True,
             "actor_id": actor_id,
+            "email": identifier,  # Include email/identifier for frontend
             "expires_in": expires_in,
             "expires_at": int(time.time()) + expires_in,
         }

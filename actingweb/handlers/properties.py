@@ -1148,3 +1148,243 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
 
         if self.response:
             self.response.set_status(204)
+
+
+class PropertyListItemsHandler(base_handler.BaseHandler):
+    """Handler for list property items operations.
+
+    Handles GET/POST /{actor_id}/properties/{name}/items
+    for reading all items and adding/updating/deleting items in list properties.
+    """
+
+    def _check_property_permission(
+        self, actor_id: str, auth_obj, property_path: str, operation: str
+    ) -> bool:
+        """
+        Check property permission using the unified access control system.
+
+        Reuses the same permission logic as PropertiesHandler.
+        """
+        # Get peer ID from auth object (if authenticated via trust relationship)
+        # Note: auth_obj.acl is a dict, not an object, so we use .get()
+        peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
+
+        if not peer_id:
+            # No peer relationship - fall back to legacy authorization
+            legacy_subpath = property_path.split("/")[0] if property_path else ""
+            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+            return auth_obj.check_authorisation(
+                path="properties",
+                subpath=legacy_subpath,
+                method=method_map.get(operation, "GET"),
+            )
+
+        # Use permission evaluator for peer-based access
+        try:
+            evaluator = get_permission_evaluator(self.config)
+            result = evaluator.evaluate_property_access(
+                actor_id, peer_id, property_path, operation
+            )
+
+            if result == PermissionResult.ALLOWED:
+                return True
+            elif result == PermissionResult.DENIED:
+                logging.info(
+                    f"Property items access denied: {actor_id} -> {peer_id} -> {property_path} ({operation})"
+                )
+                return False
+            else:  # NOT_FOUND
+                # Fall back to legacy for backward compatibility
+                legacy_subpath = property_path.split("/")[0] if property_path else ""
+                method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+                return auth_obj.check_authorisation(
+                    path="properties",
+                    subpath=legacy_subpath,
+                    method=method_map.get(operation, "GET"),
+                )
+
+        except Exception as e:
+            logging.error(
+                f"Error in permission evaluation for items {actor_id}:{peer_id}:{property_path}: {e}"
+            )
+            # Fall back to legacy authorization on errors
+            legacy_subpath = property_path.split("/")[0] if property_path else ""
+            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
+            return auth_obj.check_authorisation(
+                path="properties",
+                subpath=legacy_subpath,
+                method=method_map.get(operation, "GET"),
+            )
+
+    def get(self, actor_id: str, name: str):
+        """Get all items from a list property."""
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+
+        # Check read permission
+        if not self._check_property_permission(actor_id, check, name, "read"):
+            if self.response:
+                self.response.set_status(403)
+            return
+
+        # Verify this is a list property
+        if not (
+            myself
+            and hasattr(myself, "property_lists")
+            and myself.property_lists is not None
+            and myself.property_lists.exists(name)
+        ):
+            if self.response:
+                self.response.set_status(
+                    404, "Property not found or not a list property"
+                )
+            return
+
+        # Get all items
+        list_prop = getattr(myself.property_lists, name)
+        items = list_prop.to_list()
+
+        if self.response:
+            self.response.write(json.dumps(items))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+
+    def post(self, actor_id: str, name: str):
+        """Add, update, or delete items in a list property.
+
+        Expects JSON body with:
+        - action: "add", "update", or "delete"
+        - item_value: The value to add or update to (for add/update)
+        - item_index: The index to update or delete (for update/delete)
+        """
+        auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
+        if not auth_result.success:
+            return
+        myself = auth_result.actor
+        check = auth_result.auth_obj
+
+        # Check write permission
+        if not self._check_property_permission(actor_id, check, name, "write"):
+            if self.response:
+                self.response.set_status(403)
+            return
+
+        # Verify this is a list property
+        if not (
+            myself
+            and hasattr(myself, "property_lists")
+            and myself.property_lists is not None
+            and myself.property_lists.exists(name)
+        ):
+            if self.response:
+                self.response.set_status(
+                    404, "Property not found or not a list property"
+                )
+            return
+
+        # Parse request body
+        try:
+            body = self.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "ignore")
+            params = json.loads(body or "{}")
+        except (TypeError, ValueError, KeyError):
+            if self.response:
+                self.response.set_status(400, "Invalid JSON body")
+            return
+
+        action = params.get("action")
+        if not action:
+            if self.response:
+                self.response.set_status(400, "Missing 'action' parameter")
+            return
+
+        list_prop = getattr(myself.property_lists, name)
+
+        try:
+            if action == "add":
+                # Add new item
+                item_value = params.get("item_value")
+                if item_value is None:
+                    if self.response:
+                        self.response.set_status(400, "Missing 'item_value' parameter")
+                    return
+
+                list_prop.append(item_value)
+
+                if self.response:
+                    self.response.write(
+                        json.dumps({"success": True, "index": len(list_prop) - 1})
+                    )
+                    self.response.headers["Content-Type"] = "application/json"
+                    self.response.set_status(201)
+
+            elif action == "update":
+                # Update existing item
+                item_index = params.get("item_index")
+                item_value = params.get("item_value")
+
+                if item_index is None:
+                    if self.response:
+                        self.response.set_status(400, "Missing 'item_index' parameter")
+                    return
+                if item_value is None:
+                    if self.response:
+                        self.response.set_status(400, "Missing 'item_value' parameter")
+                    return
+
+                try:
+                    index = int(item_index)
+                except ValueError:
+                    if self.response:
+                        self.response.set_status(400, "Invalid 'item_index' value")
+                    return
+
+                if index < 0 or index >= len(list_prop):
+                    if self.response:
+                        self.response.set_status(400, f"Index {index} out of range")
+                    return
+
+                list_prop[index] = item_value
+
+                if self.response:
+                    self.response.set_status(204)
+
+            elif action == "delete":
+                # Delete item
+                item_index = params.get("item_index")
+
+                if item_index is None:
+                    if self.response:
+                        self.response.set_status(400, "Missing 'item_index' parameter")
+                    return
+
+                try:
+                    index = int(item_index)
+                except ValueError:
+                    if self.response:
+                        self.response.set_status(400, "Invalid 'item_index' value")
+                    return
+
+                if index < 0 or index >= len(list_prop):
+                    if self.response:
+                        self.response.set_status(400, f"Index {index} out of range")
+                    return
+
+                del list_prop[index]
+
+                if self.response:
+                    self.response.set_status(204)
+
+            else:
+                if self.response:
+                    self.response.set_status(400, f"Unknown action: {action}")
+                return
+
+        except Exception as e:
+            logging.error(f"Error in list item operation '{action}' for '{name}': {e}")
+            if self.response:
+                self.response.set_status(500, f"Error processing list item: {str(e)}")

@@ -1,4 +1,4 @@
-name: Integration Tests
+name: Tests
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [ master, main, develop ]
 
 jobs:
-  integration-tests:
+  tests:
     runs-on: ubuntu-latest
 
     services:
@@ -57,12 +57,12 @@ jobs:
           echo "DynamoDB failed to start within 60 seconds"
           exit 1
 
-      - name: Run integration tests
+      - name: Run all tests
         run: |
-          poetry run pytest tests/integration/ \
+          poetry run pytest tests/ \
             -v \
             --tb=short \
-            --junitxml=test-results/integration-tests.xml \
+            --junitxml=test-results/tests.xml \
             --cov=actingweb \
             --cov-report=xml \
             --cov-report=html
@@ -97,3 +97,39 @@ jobs:
         uses: py-cov-action/python-coverage-comment-action@v3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  type-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.7.0
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction --with dev --extras "all"
+
+      - name: Run pyright type checking
+        run: poetry run pyright actingweb
+
+      - name: Run ruff linting
+        run: poetry run ruff check actingweb tests

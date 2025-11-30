@@ -790,6 +790,19 @@ class FastAPIIntegration:
                 request, actor_id, "properties", name=name, metadata=True
             )
 
+        # Property list items endpoint (must come before catch-all {name:path})
+        @self.fastapi_app.get("/{actor_id}/properties/{name}/items")
+        @self.fastapi_app.post("/{actor_id}/properties/{name}/items")
+        async def app_property_items(
+            actor_id: str, request: Request, name: str
+        ) -> Response:  # pyright: ignore[reportUnusedFunction]
+            auth_redirect = await self._check_auth_or_redirect(request)
+            if auth_redirect:
+                return auth_redirect
+            return await self._handle_actor_request(
+                request, actor_id, "properties", name=name, items=True
+            )
+
         @self.fastapi_app.get("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.post("/{actor_id}/properties/{name:path}")
         @self.fastapi_app.put("/{actor_id}/properties/{name:path}")
@@ -2161,6 +2174,12 @@ class FastAPIIntegration:
         # Special handling for properties metadata endpoint
         if endpoint == "properties" and kwargs.get("metadata"):
             return properties.PropertyMetadataHandler(
+                webobj, config, hooks=self.aw_app.hooks
+            )
+
+        # Special handling for properties items endpoint
+        if endpoint == "properties" and kwargs.get("items"):
+            return properties.PropertyListItemsHandler(
                 webobj, config, hooks=self.aw_app.hooks
             )
 

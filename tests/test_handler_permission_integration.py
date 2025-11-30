@@ -38,16 +38,16 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
     def _create_mock_auth_with_peer(self, actor_id: str, peer_id: str):
         """Create mock auth object with peer relationship."""
         auth_obj = Mock()
-        auth_obj.acl = Mock()
-        auth_obj.acl.peerid = peer_id
+        # acl is a dict in Auth class, not an object
+        auth_obj.acl = {"peerid": peer_id, "authenticated": True}
         auth_obj.check_authorisation = Mock(return_value=True)  # Legacy fallback
         return auth_obj
 
     def _create_mock_auth_without_peer(self, actor_id: str):
         """Create mock auth object without peer relationship (basic/oauth auth)."""
         auth_obj = Mock()
-        auth_obj.acl = Mock()
-        auth_obj.acl.peerid = ""  # No peer relationship
+        # acl is a dict in Auth class, not an object
+        auth_obj.acl = {"peerid": "", "authenticated": True}  # No peer relationship
         auth_obj.check_authorisation = Mock(return_value=True)  # Legacy auth
         return auth_obj
 

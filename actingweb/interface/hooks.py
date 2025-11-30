@@ -512,7 +512,7 @@ def property_hook(
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
-        func._operations = operations or ["get", "put", "post", "delete"]
+        setattr(func, "_operations", operations or ["get", "put", "post", "delete"])  # noqa: B010
         _hook_registry.register_property_hook(property_name, func)
         return func
 

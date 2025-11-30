@@ -427,6 +427,8 @@ class OAuth2SPAHandler(BaseHandler):
             auth_url = authenticator.create_authorization_url(
                 state=state_json,
                 trust_type=trust_type or "",  # Convert None to "" for type safety
+                code_challenge=code_challenge or "",
+                code_challenge_method="S256" if code_challenge else "",
             )
         except Exception as e:
             logger.error(f"Failed to create authorization URL: {e}")

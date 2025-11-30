@@ -128,6 +128,8 @@ class OAuth2Authenticator:
         email_hint: str = "",
         trust_type: str = "",
         user_agent: str = "",
+        code_challenge: str = "",
+        code_challenge_method: str = "",
     ) -> str:
         """
         Create OAuth2 authorization URL using oauthlib with trust type selection.
@@ -138,6 +140,8 @@ class OAuth2Authenticator:
             email_hint: Email to hint which account to use for authentication
             trust_type: Trust relationship type to establish (e.g., 'mcp_client', 'web_user')
             user_agent: User-Agent header for client identification and MCP coordination
+            code_challenge: PKCE code challenge for SPA OAuth flows
+            code_challenge_method: PKCE challenge method (typically "S256")
 
         Returns:
             OAuth2 authorization URL
@@ -174,6 +178,11 @@ class OAuth2Authenticator:
         # Add email hint for Google OAuth2
         if email_hint and self.provider.name == "google":
             extra_params["login_hint"] = email_hint
+
+        # Add PKCE parameters if provided (for SPA OAuth flows)
+        if code_challenge and code_challenge_method:
+            extra_params["code_challenge"] = code_challenge
+            extra_params["code_challenge_method"] = code_challenge_method
 
         # Use oauthlib to generate the authorization URL
         authorization_url = self.client.prepare_request_uri(

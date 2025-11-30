@@ -66,9 +66,8 @@ class PropertiesHandler(base_handler.BaseHandler):
             True if access is allowed, False otherwise
         """
         # Get peer ID from auth object (if authenticated via trust relationship)
-        peer_id = (
-            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
-        )
+        # Note: auth_obj.acl is a dict, not an object, so we use .get()
+        peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
 
         if not peer_id:
             # No peer relationship - fall back to legacy authorization for basic/oauth auth
@@ -119,9 +118,8 @@ class PropertiesHandler(base_handler.BaseHandler):
 
     def _create_auth_context(self, auth_obj, operation: str = "read") -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
-        peer_id = (
-            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
-        )
+        # Note: auth_obj.acl is a dict, not an object, so we use .get()
+        peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
         return {"peer_id": peer_id, "config": self.config, "operation": operation}
 
     def get(self, actor_id, name):
@@ -1002,9 +1000,8 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         Reuses the same permission logic as PropertiesHandler.
         """
         # Get peer ID from auth object (if authenticated via trust relationship)
-        peer_id = (
-            getattr(auth_obj.acl, "peerid", "") if hasattr(auth_obj, "acl") else ""
-        )
+        # Note: auth_obj.acl is a dict, not an object, so we use .get()
+        peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
 
         if not peer_id:
             # No peer relationship - fall back to legacy authorization

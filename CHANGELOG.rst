@@ -2,6 +2,20 @@
 CHANGELOG
 =========
 
+v3.5.1: Dec 1, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- **CRITICAL**: Fixed OAuth2 actor creation not triggering lifecycle hooks - ``config._hooks`` was never set, causing ``actor_created`` and other lifecycle hooks to be silently ignored during OAuth-based actor creation
+- Added comprehensive regression tests for OAuth2 lifecycle hook integration
+
+CHANGED
+~~~~~~~
+
+- ActingWebApp now automatically attaches HookRegistry to Config object's ``_hooks`` attribute in ``get_config()``
+
 v3.5: Nov 30, 2025
 ------------------
 

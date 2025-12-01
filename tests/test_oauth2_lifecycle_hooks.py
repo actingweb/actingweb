@@ -108,6 +108,15 @@ class TestOAuth2LifecycleHooks:
         assert hasattr(config, "_hooks"), "Config must have _hooks for OAuth2"
         assert config._hooks is not None, "Config._hooks must not be None"
 
+        # Verify authenticator's config has hooks accessible
+        hooks_from_authenticator = getattr(authenticator.config, "_hooks", None)
+        assert (
+            hooks_from_authenticator is not None
+        ), "OAuth2Authenticator.config should have _hooks"
+        assert (
+            hooks_from_authenticator == app.hooks
+        ), "Authenticator should see the same hooks"
+
         # Note: We can't easily test actual actor creation in unit tests
         # without mocking the database, but we've verified the critical
         # part: config._hooks is accessible to OAuth2 code

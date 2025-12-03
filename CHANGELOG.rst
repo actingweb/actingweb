@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.5.3: Dec 3, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- **SECURITY**: MCP client deletion now immediately revokes all access and refresh tokens - prevents deleted clients from continuing to access resources using cached tokens
+
 v3.5.2: Dec 3, 2025
 -------------------
 

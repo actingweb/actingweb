@@ -205,7 +205,13 @@ class MCPClientRegistry:
 
     def delete_client(self, client_id: str) -> bool:
         """
-        Delete an OAuth2 client.
+        Delete an OAuth2 client and revoke all its tokens.
+
+        This method performs a complete cleanup:
+        1. Revokes all access and refresh tokens for the client
+        2. Deletes the client from actor's bucket
+        3. Deletes the client from global index
+        4. Deletes the corresponding trust relationship
 
         Args:
             client_id: Client identifier to delete
@@ -224,6 +230,12 @@ class MCPClientRegistry:
             if not actor_id:
                 logger.error(f"No actor_id found for client {client_id}")
                 return False
+
+            # Revoke all tokens for this client to terminate access immediately
+            from .token_manager import get_actingweb_token_manager
+            token_manager = get_actingweb_token_manager(self.config)
+            revoked_count = token_manager.revoke_client_tokens(actor_id, client_id)
+            logger.info(f"Revoked {revoked_count} tokens for client {client_id}")
 
             # Delete from actor's bucket
             bucket = attribute.Attributes(

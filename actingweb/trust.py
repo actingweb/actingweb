@@ -73,8 +73,59 @@ class Trust:
         """Delete the trust relationship"""
         if not self.handle:
             return False
+
+        # If this is an OAuth2 client trust, delete the client (which will revoke tokens)
+        if self.config and self._is_oauth2_client_trust():
+            client_id = self._extract_client_id_from_peerid()
+            if client_id:
+                try:
+                    from .oauth2_server.client_registry import get_mcp_client_registry
+                    registry = get_mcp_client_registry(self.config)
+                    # Delete the client, which will revoke all tokens and clean up
+                    registry.delete_client(client_id)
+                    logging.info(f"Deleted OAuth2 client {client_id} as part of trust deletion")
+                except Exception as e:
+                    logging.error(f"Error deleting OAuth2 client during trust deletion: {e}")
+                    # Continue with trust deletion even if client deletion fails
+
         self.trust = {}
         return self.handle.delete()
+
+    def _is_oauth2_client_trust(self) -> bool:
+        """Check if this trust relationship is for an OAuth2 client."""
+        if not self.trust or not isinstance(self.trust, dict):
+            return False
+
+        peerid = self.trust.get("peerid", "")
+        established_via = self.trust.get("established_via", "")
+        trust_type = self.trust.get("type", "")
+
+        # Check if this is an OAuth2 client trust based on peer_id format or metadata
+        return (
+            str(peerid).startswith("oauth2_client:") or
+            established_via == "oauth2_client" or
+            trust_type in ("oauth2_client", "mcp_client")
+        )
+
+    def _extract_client_id_from_peerid(self) -> str | None:
+        """Extract client_id from peer_id format: oauth2_client:email:client_id"""
+        if not self.trust or not isinstance(self.trust, dict):
+            return None
+
+        peerid = self.trust.get("peerid", "")
+        if not peerid or not isinstance(peerid, str):
+            return None
+
+        # Format: oauth2_client:email:client_id
+        # Client ID is the last component
+        if peerid.startswith("oauth2_client:"):
+            parts = peerid.split(":")
+            if len(parts) >= 3:
+                client_id = parts[-1]  # Last part is the client_id
+                if client_id.startswith("mcp_"):
+                    return client_id
+
+        return None
 
     def modify(
         self,

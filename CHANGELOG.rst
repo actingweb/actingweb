@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.5.5: Dec 3, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- Fixed Flask and FastAPI integrations not propagating handler headers (e.g., WWW-Authenticate) to OAuth2 endpoint responses
+
 v3.5.4: Dec 3, 2025
 -------------------
 

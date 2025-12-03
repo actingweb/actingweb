@@ -376,6 +376,14 @@ class OAuth2EndpointsHandler(BaseHandler):
                 # Map to appropriate HTTP status codes
                 if error in ["invalid_client"]:
                     status = 401
+                    # RFC 6749 Section 5.2: MUST include WWW-Authenticate for 401
+                    base_url = f"{self.config.proto}{self.config.fqdn}"
+                    self.response.headers["WWW-Authenticate"] = (
+                        f'Basic realm="ActingWeb OAuth2", '
+                        f'error="invalid_client", '
+                        f'error_description="Invalid client credentials", '
+                        f'authorization_uri="{base_url}/oauth/authorize"'
+                    )
                 elif error in [
                     "invalid_request",
                     "invalid_grant",

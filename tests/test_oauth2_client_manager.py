@@ -517,6 +517,237 @@ class TestOAuth2AccessTokenGeneration:
             actor.delete()
 
 
+class TestOAuth2ClientTokenRevocation:
+    """Test token revocation when deleting OAuth2 clients."""
+
+    def test_delete_client_revokes_access_token(self, aw_app):
+        """
+        Test that deleting a client revokes its access tokens.
+
+        SECURITY: Ensures deleted clients cannot continue using cached tokens.
+
+        Spec: actingweb/oauth2_server/client_registry.py:206-269
+        Spec: actingweb/oauth2_server/token_manager.py:973-1034
+        """
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+
+            # Create client
+            created = client_manager.create_client(
+                client_name="Test Client", trust_type="mcp_client"
+            )
+            client_id = created["client_id"]
+
+            # Generate access token
+            token_response = client_manager.generate_access_token(
+                client_id, scope="mcp"
+            )
+            assert token_response is not None
+            access_token = token_response["access_token"]
+
+            # Verify token is valid before deletion
+            from actingweb.oauth2_server.token_manager import (
+                get_actingweb_token_manager,
+            )
+
+            token_manager = get_actingweb_token_manager(config)
+            token_validation = token_manager.validate_access_token(access_token)
+            assert token_validation is not None
+            assert token_validation[0] == actor.id  # actor_id
+            assert token_validation[1] == client_id  # client_id
+
+            # Delete client (should revoke tokens)
+            success = client_manager.delete_client(client_id)
+            assert success
+
+            # Verify token is now invalid
+            token_validation_after = token_manager.validate_access_token(access_token)
+            assert token_validation_after is None  # Token should be revoked
+
+        finally:
+            actor.delete()
+
+    def test_delete_client_revokes_multiple_tokens(self, aw_app):
+        """
+        Test that deleting a client revokes all its tokens.
+
+        A client may have multiple access tokens and refresh tokens.
+
+        Spec: actingweb/oauth2_server/token_manager.py:973-1034
+        """
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+
+            # Create client
+            created = client_manager.create_client(
+                client_name="Test Client", trust_type="mcp_client"
+            )
+            client_id = created["client_id"]
+
+            # Generate multiple access tokens for the same client
+            tokens = []
+            for _ in range(3):
+                token_response = client_manager.generate_access_token(
+                    client_id, scope="mcp"
+                )
+                assert token_response is not None
+                tokens.append(token_response["access_token"])
+
+            # Verify all tokens are valid before deletion
+            from actingweb.oauth2_server.token_manager import (
+                get_actingweb_token_manager,
+            )
+
+            token_manager = get_actingweb_token_manager(config)
+            for token in tokens:
+                validation = token_manager.validate_access_token(token)
+                assert validation is not None
+                assert validation[1] == client_id
+
+            # Delete client (should revoke all tokens)
+            success = client_manager.delete_client(client_id)
+            assert success
+
+            # Verify all tokens are now invalid
+            for token in tokens:
+                validation_after = token_manager.validate_access_token(token)
+                assert validation_after is None  # All tokens should be revoked
+
+        finally:
+            actor.delete()
+
+    def test_delete_client_preserves_other_client_tokens(self, aw_app):
+        """
+        Test that deleting one client doesn't affect another client's tokens.
+
+        SECURITY: Ensure token revocation is scoped to the deleted client only.
+
+        Spec: actingweb/oauth2_server/token_manager.py:1002,1018 - client_id filtering
+        """
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+
+            # Create two clients
+            client1 = client_manager.create_client(
+                client_name="Client 1", trust_type="mcp_client"
+            )
+            client2 = client_manager.create_client(
+                client_name="Client 2", trust_type="mcp_client"
+            )
+
+            # Generate tokens for both clients
+            token1_response = client_manager.generate_access_token(
+                client1["client_id"], scope="mcp"
+            )
+            token2_response = client_manager.generate_access_token(
+                client2["client_id"], scope="mcp"
+            )
+            assert token1_response is not None
+            assert token2_response is not None
+
+            token1 = token1_response["access_token"]
+            token2 = token2_response["access_token"]
+
+            # Verify both tokens are valid
+            from actingweb.oauth2_server.token_manager import (
+                get_actingweb_token_manager,
+            )
+
+            token_manager = get_actingweb_token_manager(config)
+            assert token_manager.validate_access_token(token1) is not None
+            assert token_manager.validate_access_token(token2) is not None
+
+            # Delete client1
+            success = client_manager.delete_client(client1["client_id"])
+            assert success
+
+            # Verify token1 is revoked but token2 is still valid
+            assert token_manager.validate_access_token(token1) is None
+            assert token_manager.validate_access_token(token2) is not None  # Still valid!
+
+        finally:
+            actor.delete()
+
+    def test_delete_client_with_no_tokens_succeeds(self, aw_app):
+        """
+        Test that deleting a client with no tokens still works.
+
+        Edge case: Client created but never used.
+
+        Spec: actingweb/oauth2_server/token_manager.py:1029 - handles zero tokens
+        """
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+
+            # Create client but don't generate any tokens
+            created = client_manager.create_client(
+                client_name="Unused Client", trust_type="mcp_client"
+            )
+            client_id = created["client_id"]
+
+            # Delete client (no tokens to revoke)
+            success = client_manager.delete_client(client_id)
+            assert success  # Should succeed even with no tokens
+
+            # Verify client is deleted
+            assert client_manager.get_client(client_id) is None
+
+        finally:
+            actor.delete()
+
+    def test_revoke_client_tokens_method_directly(self, aw_app):
+        """
+        Test the revoke_client_tokens method directly.
+
+        This tests the low-level token revocation mechanism.
+
+        Spec: actingweb/oauth2_server/token_manager.py:973-1034
+        """
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+
+            # Create client and generate tokens
+            created = client_manager.create_client(
+                client_name="Test Client", trust_type="mcp_client"
+            )
+            client_id = created["client_id"]
+
+            # Generate 2 access tokens
+            for _ in range(2):
+                client_manager.generate_access_token(client_id, scope="mcp")
+
+            # Directly call revoke_client_tokens
+            from actingweb.oauth2_server.token_manager import (
+                get_actingweb_token_manager,
+            )
+
+            token_manager = get_actingweb_token_manager(config)
+            revoked_count = token_manager.revoke_client_tokens(
+                actor.id, client_id  # type: ignore[arg-type]
+            )
+
+            # Should have revoked 2 access tokens
+            assert revoked_count >= 2  # At least 2 (may have more with test artifacts)
+
+        finally:
+            actor.delete()
+
+
 class TestOAuth2ClientManagerRealisticScenarios:
     """Test realistic actingweb_mcp usage scenarios."""
 
@@ -564,5 +795,53 @@ class TestOAuth2ClientManagerRealisticScenarios:
             assert "ChatGPT" not in remaining_names
             assert "Claude" in remaining_names
             assert "Cursor" in remaining_names
+        finally:
+            actor.delete()
+
+    def test_disconnect_with_active_tokens_workflow(self, aw_app):
+        """
+        Test realistic workflow: user disconnects assistant with active tokens.
+
+        SECURITY: Simulates user revoking access to an actively-used assistant.
+
+        Spec: Token revocation should be immediate (v3.5.3)
+        """
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+
+            # User connects ChatGPT
+            chatgpt = client_manager.create_client(
+                client_name="ChatGPT", trust_type="mcp_client"
+            )
+
+            # ChatGPT is actively using the connection (has tokens)
+            token_response = client_manager.generate_access_token(
+                chatgpt["client_id"], scope="mcp"
+            )
+            assert token_response is not None
+            active_token = token_response["access_token"]
+
+            # Verify token works
+            from actingweb.oauth2_server.token_manager import (
+                get_actingweb_token_manager,
+            )
+
+            token_manager = get_actingweb_token_manager(config)
+            assert token_manager.validate_access_token(active_token) is not None
+
+            # User decides to disconnect ChatGPT
+            success = client_manager.delete_client(chatgpt["client_id"])
+            assert success
+
+            # SECURITY: Token should be immediately invalid
+            assert token_manager.validate_access_token(active_token) is None
+
+            # ChatGPT should no longer appear in connected assistants
+            remaining_clients = client_manager.list_clients()
+            assert len(remaining_clients) == 0
+
         finally:
             actor.delete()

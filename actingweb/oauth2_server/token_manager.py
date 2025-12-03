@@ -970,6 +970,69 @@ class ActingWebTokenManager:
             logger.error(f"Error creating access token for client credentials: {e}")
             return None
 
+    def revoke_client_tokens(self, actor_id: str, client_id: str) -> int:
+        """
+        Revoke all tokens (access and refresh) associated with a specific client.
+
+        This ensures that when a client is deleted, all its tokens are immediately
+        invalidated and cannot be used for further access.
+
+        Args:
+            actor_id: The actor the client belongs to
+            client_id: The client identifier whose tokens should be revoked
+
+        Returns:
+            Number of tokens revoked (access + refresh tokens)
+        """
+        revoked_count = 0
+
+        try:
+            from .. import attribute
+
+            # Revoke all access tokens for this client
+            tokens_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.tokens_bucket, config=self.config
+            )
+            access_tokens_data = tokens_bucket.get_bucket()
+
+            if access_tokens_data:
+                for token_name, token_attr in access_tokens_data.items():
+                    if token_attr and "data" in token_attr:
+                        token_data = token_attr["data"]
+                        if isinstance(token_data, dict) and token_data.get("client_id") == client_id:
+                            # Revoke this access token
+                            self._remove_access_token(token_name)
+                            revoked_count += 1
+                            logger.debug(f"Revoked access token {token_name} for client {client_id}")
+
+            # Revoke all refresh tokens for this client
+            refresh_bucket = attribute.Attributes(
+                actor_id=actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+            )
+            refresh_tokens_data = refresh_bucket.get_bucket()
+
+            if refresh_tokens_data:
+                for token_name, token_attr in refresh_tokens_data.items():
+                    if token_attr and "data" in token_attr:
+                        token_data = token_attr["data"]
+                        if isinstance(token_data, dict) and token_data.get("client_id") == client_id:
+                            # Revoke this refresh token
+                            self._remove_refresh_token(token_name)
+                            revoked_count += 1
+                            logger.debug(f"Revoked refresh token {token_name} for client {client_id}")
+
+            if revoked_count > 0:
+                logger.info(
+                    f"Revoked {revoked_count} tokens for client {client_id} in actor {actor_id}"
+                )
+            else:
+                logger.debug(f"No tokens found to revoke for client {client_id}")
+
+        except Exception as e:
+            logger.error(f"Error revoking tokens for client {client_id}: {e}")
+
+        return revoked_count
+
 
 # Global token manager
 _token_manager: ActingWebTokenManager | None = None

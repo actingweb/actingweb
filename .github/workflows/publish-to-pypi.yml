@@ -3,6 +3,8 @@ name: Publish to PyPI
 on:
   push:
     branches: [master]
+  pull_request:
+    branches: [master, main, develop]
 
 jobs:
   integration-tests:
@@ -92,6 +94,7 @@ jobs:
 
   publish:
     needs: integration-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
 
     permissions:

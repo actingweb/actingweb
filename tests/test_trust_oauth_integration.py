@@ -321,6 +321,83 @@ class TestTrustDeletionOnClientDeletion:
         finally:
             actor.delete()
 
+    def test_deleting_trust_deletes_client_and_revokes_tokens(self, aw_app):
+        """
+        Test that deleting a trust relationship also deletes the OAuth2 client and revokes tokens.
+
+        This is the reverse flow: when user deletes trust from the UI or API,
+        the client should be cleaned up and all tokens should be revoked.
+
+        Spec: actingweb/trust.py:72-128 - Trust deletion with client cleanup
+        """
+        from actingweb.oauth2_server.token_manager import get_actingweb_token_manager
+
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+            token_manager = get_actingweb_token_manager(config)
+
+            # Create client
+            client_data = client_manager.create_client(
+                client_name="Test Client", trust_type="mcp_client"
+            )
+            client_id = client_data["client_id"]
+
+            # Create a token for the client
+            token_response = token_manager.create_access_token(
+                actor_id=actor.id,  # type: ignore[arg-type]
+                client_id=client_id,
+                scope="mcp",
+                trust_type="mcp_client",
+                grant_type="client_credentials"
+            )
+            assert token_response is not None
+            access_token = token_response["access_token"]
+
+            # Verify token is valid before deletion
+            token_validation = token_manager.validate_access_token(access_token)
+            assert token_validation is not None
+
+            # Find the trust relationship
+            matching_trust = None
+            for trust in actor.trust.relationships:
+                if client_id in trust.peerid:
+                    matching_trust = trust
+                    break
+            assert matching_trust is not None
+            peer_id = matching_trust.peerid
+
+            # Verify client exists
+            clients_before = client_manager.list_clients()
+            assert len(clients_before) == 1
+
+            # Delete trust relationship (should also delete client and revoke tokens)
+            success = actor.trust.delete_relationship(peer_id)
+            assert success
+
+            # Reload actor to get fresh data
+            actor_reload = ActorInterface.get_by_id(actor.id, config)  # type: ignore[arg-type]
+
+            # Verify trust is deleted
+            matching_trust_after = None
+            for trust in actor_reload.trust.relationships:  # type: ignore[arg-type]
+                if client_id in trust.peerid:
+                    matching_trust_after = trust
+                    break
+            assert matching_trust_after is None
+
+            # Verify client is deleted
+            clients_after = client_manager.list_clients()
+            assert len(clients_after) == 0
+
+            # Verify token is revoked
+            token_validation_after = token_manager.validate_access_token(access_token)
+            assert token_validation_after is None, "Token should be revoked after trust deletion"
+        finally:
+            actor.delete()
+
 
 class TestPermissionChecksWithOAuth:
     """Test that permission checks work correctly with OAuth context."""

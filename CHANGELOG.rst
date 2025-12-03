@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.5.4: Dec 3, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- **SECURITY**: Trust relationship deletion now properly deletes the associated OAuth2 client and revokes all tokens - prevents deleted MCP clients from being reused after trust relationship is removed
+
 v3.5.3: Dec 3, 2025
 -------------------
 

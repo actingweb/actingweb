@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.5.2: Dec 3, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- **SECURITY**: Fixed missing WWW-Authenticate header for 401 responses in OAuth2 token endpoint - RFC 6749 Section 5.2 requires WWW-Authenticate header for invalid_client errors
+
 v3.5.1: Dec 1, 2025
 -------------------
 

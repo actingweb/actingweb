@@ -199,7 +199,7 @@ OAuth2 clients and tokens are stored in ActingWeb's property system:
     - Trust type and grant permissions
     - Creation and modification timestamps
 
-**Token Storage** (``oauth2:token:<token>``)  
+**Token Storage** (``oauth2:token:<token>``)
     - Token metadata and expiration
     - Actor and client associations
     - Scope and permission information
@@ -207,6 +207,54 @@ OAuth2 clients and tokens are stored in ActingWeb's property system:
 **Client Indexes** (``oauth2:actor_clients:<actor_id>``)
     - Efficient actor-to-clients mapping
     - Supports client listing operations
+
+System Actor Pattern
+--------------------
+
+The OAuth2 subsystem uses a special "system actor" (``_actingweb_oauth2``) to store global indexes
+that enable O(1) lookups across all actors. This pattern is essential for OAuth2 operations where
+the user's actor_id is not known at request time.
+
+**Why a system actor is needed:**
+
+When an MCP client connects to ``/oauth/register``, the user hasn't authenticated yet—there's no
+way to know which actor the client will eventually be associated with. The system actor provides
+a central location to store client registrations and lookup indexes.
+
+**Index Buckets in the System Actor:**
+
+.. code-block:: text
+
+    OAUTH2_SYSTEM_ACTOR (_actingweb_oauth2)
+    ├── mcp_clients_index        # client_id -> actor_id (O(1) client lookup)
+    ├── auth_code_index          # auth_code -> actor_id (O(1) code exchange)
+    ├── access_token_index       # access_token -> actor_id (O(1) token validation)
+    └── refresh_token_index      # refresh_token -> actor_id (O(1) token refresh)
+
+**Storage Split:**
+
+- **System actor**: Client registrations, global indexes
+- **User's actor**: Access tokens, refresh tokens, trust relationships
+
+This split exists because:
+
+1. Client registration happens BEFORE user authentication
+2. Tokens are issued AFTER user authenticates and authorizes
+3. The global indexes allow O(1) lookups without scanning all actors
+
+**Example Flow:**
+
+1. MCP client calls ``/oauth/register`` → Client stored under system actor + global index created
+2. User authenticates via OAuth2 provider (Google/GitHub)
+3. User authorizes the MCP client → Tokens stored under user's actor
+4. MCP client uses token on ``/mcp`` endpoint → Global index provides O(1) token-to-actor lookup
+
+**Important for Contributors:**
+
+When calling ``delete_client()``, the ``actor_id`` parameter should be the user's actor (where
+tokens are stored), not the system actor (where the client is registered). The client registry
+handles this by accepting an optional ``actor_id`` parameter that takes precedence over the
+``actor_id`` stored in client_data.
 
 Error Handling
 --------------

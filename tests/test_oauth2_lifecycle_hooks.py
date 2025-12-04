@@ -189,7 +189,7 @@ class TestOAuth2LifecycleHooks:
 
     def test_config_without_hooks_returns_none(self, test_config):
         """
-        Test that a config created without ActingWebApp has no _hooks.
+        Test that a config created without ActingWebApp has _hooks=None.
 
         This tests the backward compatibility case where code creates
         Config directly instead of using ActingWebApp.
@@ -197,12 +197,10 @@ class TestOAuth2LifecycleHooks:
         # Create config directly (old style)
         config = test_config
 
-        # Should not have _hooks by default
-        assert not hasattr(config, "_hooks"), "Direct Config shouldn't have _hooks"
-
+        # Config now initializes _hooks to None for type safety
         # OAuth2 code uses getattr with None default, so this is safe
         hooks = getattr(config, "_hooks", None)
-        assert hooks is None, "getattr should return None for missing _hooks"
+        assert hooks is None, "Direct Config should have _hooks=None"
 
 
 class TestOAuth2HookIntegration:

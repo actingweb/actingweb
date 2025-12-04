@@ -71,9 +71,11 @@ class MCPClientRegistry:
         }
 
         # Store client in actor properties
+        logger.debug(f"register_client: storing client_id={client_id} for actor_id={actor_id}")
         self._store_client(actor_id, client_id, client_data)
 
         # Update global index
+        logger.debug(f"register_client: updating global index client_id={client_id} -> actor_id={actor_id}")
         self._update_global_index(client_id, actor_id)
 
         # Create corresponding trust relationship for this OAuth2 client
@@ -203,7 +205,7 @@ class MCPClientRegistry:
             logger.error(f"Error listing clients for actor {actor_id}: {e}")
             return []
 
-    def delete_client(self, client_id: str) -> bool:
+    def delete_client(self, client_id: str, actor_id: str | None = None) -> bool:
         """
         Delete an OAuth2 client and revoke all its tokens.
 
@@ -215,18 +217,27 @@ class MCPClientRegistry:
 
         Args:
             client_id: Client identifier to delete
+            actor_id: Optional actor ID where tokens are stored. If provided, this
+                      takes precedence over the actor_id in client_data. This is
+                      important when called from Trust.delete() which has the
+                      authoritative actor_id for the trust relationship.
 
         Returns:
             True if deletion was successful, False otherwise
         """
         try:
-            # First find the client to get the actor_id
+            # First find the client to get metadata (and actor_id if not provided)
             client_data = self._load_client(client_id)
             if not client_data:
                 logger.warning(f"Client {client_id} not found for deletion")
                 return False
 
-            actor_id = client_data.get("actor_id")
+            # Use provided actor_id if available, otherwise fall back to client_data
+            # The provided actor_id takes precedence because it comes from the
+            # trust relationship which is the authoritative source for token storage
+            client_data_actor_id = client_data.get("actor_id")
+            if not actor_id:
+                actor_id = client_data_actor_id
             if not actor_id:
                 logger.error(f"No actor_id found for client {client_id}")
                 return False
@@ -347,9 +358,11 @@ class MCPClientRegistry:
             # Get the actor ID for this client
             actor_id_attr = global_bucket.get_attr(name=client_id)
             if not actor_id_attr or "data" not in actor_id_attr:
+                logger.debug(f"_load_from_global_index: client_id={client_id} not found in global index")
                 return None
 
             actor_id = actor_id_attr["data"]
+            logger.debug(f"_load_from_global_index: client_id={client_id} -> actor_id={actor_id} from global index")
             if not actor_id:
                 return None
 
@@ -362,6 +375,7 @@ class MCPClientRegistry:
                 return None
 
             client_data: dict[str, Any] = client_attr["data"]
+            logger.debug(f"_load_from_global_index: loaded client_data for {client_id}, client_data.actor_id={client_data.get('actor_id')}")
 
             return client_data
 

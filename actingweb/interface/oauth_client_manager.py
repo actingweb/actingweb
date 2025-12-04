@@ -168,7 +168,9 @@ class OAuth2ClientManager:
                 )
                 return False
 
-            success = self._registry.delete_client(client_id)
+            # Pass actor_id explicitly for consistency and to ensure token
+            # revocation happens in the correct actor context
+            success = self._registry.delete_client(client_id, actor_id=self.actor_id)
 
             if success:
                 logger.info(f"OAuth2 client {client_id} deleted successfully")

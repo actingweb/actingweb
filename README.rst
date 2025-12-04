@@ -249,6 +249,15 @@ Building and installing
     # Upload to production server:
     poetry publish --username=__token__ --password=<your-pypi-token>
 
+Version Bumping
+^^^^^^^^^^^^^^^
+
+When releasing a new version, update the version string in **three files**:
+
+1. ``pyproject.toml`` - ``version = "X.Y.Z"``
+2. ``actingweb/__init__.py`` - ``__version__ = "X.Y.Z"``
+3. ``CHANGELOG.rst`` - Add new version entry at the top
+
 Development
 -----------
 

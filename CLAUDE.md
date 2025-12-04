@@ -66,6 +66,14 @@ poetry publish --repository pypitest
 poetry publish
 ```
 
+### Version Bumping
+
+When releasing a new version, update the version string in **three files**:
+
+1. `pyproject.toml` - `version = "X.Y.Z"`
+2. `actingweb/__init__.py` - `__version__ = "X.Y.Z"`
+3. `CHANGELOG.rst` - Add new version entry at the top
+
 ### Development Environment
 ```bash
 # Install dependencies and create virtual environment

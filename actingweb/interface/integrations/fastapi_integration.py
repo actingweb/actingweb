@@ -1799,6 +1799,12 @@ class FastAPIIntegration:
             "Access-Control-Max-Age": "86400",
         }
 
+        # Merge handler headers (e.g., WWW-Authenticate) with CORS headers
+        response_headers = dict(cors_headers)
+        if hasattr(webobj.response, "headers"):
+            for key, value in webobj.response.headers.items():
+                response_headers[key] = value
+
         # Use status code from handler if set (e.g., 201 for client registration)
         status_code = (
             webobj.response.status_code
@@ -1806,7 +1812,7 @@ class FastAPIIntegration:
             else 200
         )
         return JSONResponse(
-            content=result, headers=cors_headers, status_code=status_code
+            content=result, headers=response_headers, status_code=status_code
         )
 
     async def _handle_oauth2_spa_endpoint(

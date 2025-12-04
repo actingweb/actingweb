@@ -1077,6 +1077,11 @@ class FlaskIntegration:
         if hasattr(webobj.response, "status_code") and webobj.response.status_code:
             json_response.status_code = webobj.response.status_code
 
+        # Merge handler headers (e.g., WWW-Authenticate) with response
+        if hasattr(webobj.response, "headers"):
+            for key, value in webobj.response.headers.items():
+                json_response.headers[key] = value
+
         # Add CORS headers for OAuth2 endpoints
         json_response.headers["Access-Control-Allow-Origin"] = "*"
         json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"

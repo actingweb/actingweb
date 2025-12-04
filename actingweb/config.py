@@ -3,14 +3,22 @@ import importlib
 import logging
 import os
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from actingweb.interface.hooks import HookRegistry
 
 
 class Config:
+    # Optional hook registry, set by ActingWebApp.get_config()
+    _hooks: Optional["HookRegistry"]
+
     def __init__(self, **kwargs: Any) -> None:
         #########
         # Basic settings for this app
         #########
+        # Hook registry (set by ActingWebApp.get_config(), None by default)
+        self._hooks = None
         # Values that can be changed as part of instantiating config
         # The host and domain, i.e. FQDN, of the URL
         self.fqdn = "demo.actingweb.io"

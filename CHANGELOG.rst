@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.5.6: Dec 4, 2025
+-------------------
+
+FIXED
+~~~~~
+
+- **SECURITY**: Fixed token revocation searching wrong actor bucket during trust deletion - tokens were stored in user's actor but revocation looked in system actor (``_actingweb_oauth2``), leaving tokens valid after trust deletion
+
 v3.5.5: Dec 3, 2025
 -------------------
 

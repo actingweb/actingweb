@@ -74,15 +74,17 @@ class Trust:
         if not self.handle:
             return False
 
-        # If this is an OAuth2 client trust, delete the client (which will revoke tokens)
+        # If this is an OAuth2 client trust, delete the client (which also revokes tokens)
         if self.config and self._is_oauth2_client_trust():
             client_id = self._extract_client_id_from_peerid()
             if client_id:
                 try:
+                    # Delete the client registration and revoke tokens
+                    # Pass the trust's actor_id to ensure tokens are revoked in the correct actor
+                    # (the client registry lookup might return a different actor_id)
                     from .oauth2_server.client_registry import get_mcp_client_registry
                     registry = get_mcp_client_registry(self.config)
-                    # Delete the client, which will revoke all tokens and clean up
-                    registry.delete_client(client_id)
+                    registry.delete_client(client_id, actor_id=self.actor_id)
                     logging.info(f"Deleted OAuth2 client {client_id} as part of trust deletion")
                 except Exception as e:
                     logging.error(f"Error deleting OAuth2 client during trust deletion: {e}")

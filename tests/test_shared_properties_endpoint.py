@@ -1,8 +1,7 @@
 """Tests for /trust/{rel}/{peer}/shared_properties endpoint."""
 
 import json
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from actingweb.handlers.trust import TrustSharedPropertiesHandler
 from actingweb.permission_evaluator import PermissionResult

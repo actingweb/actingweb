@@ -1,8 +1,7 @@
 """Tests for subscription permission filtering in callbacks."""
 
 import json
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from actingweb.actor import Actor
 from actingweb.permission_evaluator import PermissionResult

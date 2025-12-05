@@ -865,6 +865,7 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
         property_names = list(all_properties.keys()) if all_properties else []
 
         # Also check property lists (distributed storage)
+        actor_interface = None
         try:
             from actingweb.interface.actor_interface import ActorInterface
             actor_interface = ActorInterface(myself, self.config)
@@ -889,7 +890,7 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                 # Get item count if it's a property list
                 item_count = 0
                 try:
-                    if hasattr(actor_interface, 'property_lists'):
+                    if actor_interface and hasattr(actor_interface, 'property_lists'):
                         prop_list = getattr(actor_interface.property_lists, prop_name, None)
                         if prop_list and hasattr(prop_list, '__len__'):
                             item_count = len(prop_list)

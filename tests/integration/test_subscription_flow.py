@@ -171,6 +171,100 @@ class TestSubscriptionActorFlow:
         )
         assert response.status_code in [200, 204]
 
+    def test_005a_grant_permissions_actor2(self, http_client):
+        """
+        Grant actor2 permissions to subscribe to actor1's properties.
+        This is required for subscription permission filtering.
+        """
+        response = requests.put(
+            f"{self.actor1_url}/trust/friend/{self.actor2_id}/permissions",
+            json={
+                "properties": {
+                    "patterns": ["properties", "properties/*", "meta"],
+                    "operations": ["read", "write", "subscribe"],
+                }
+            },
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
+        )
+        # 404 means trust doesn't exist yet - this test will be skipped if trust fails
+        if response.status_code == 404:
+            pytest.skip("Trust relationship not established (earlier test failed)")
+        assert response.status_code in [200, 201, 204]
+
+    def test_005b_grant_permissions_actor3(self, http_client):
+        """
+        Grant actor3 permissions to subscribe to actor1's properties.
+        This is required for subscription permission filtering.
+        """
+        response = requests.put(
+            f"{self.actor1_url}/trust/friend/{self.actor3_id}/permissions",
+            json={
+                "properties": {
+                    "patterns": ["properties", "properties/data2"],
+                    "operations": ["read", "write", "subscribe"],
+                }
+            },
+            auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
+        )
+        # 404 means trust doesn't exist yet - this test will be skipped if trust fails
+        if response.status_code == 404:
+            pytest.skip("Trust relationship not established (earlier test failed)")
+        assert response.status_code in [200, 201, 204]
+
+    def test_005c_test_subscription_without_permission(self, http_client):
+        """
+        Try to create subscription to a property without permission - should fail.
+        This tests that subscription permission filtering is working.
+        """
+        response = requests.post(
+            f"{self.actor2_url}/subscriptions",
+            json={
+                "peerid": self.actor1_id,
+                "target": "secret",  # Not granted permission (doesn't match any pattern)
+                "subtarget": "",
+                "granularity": "high",
+            },
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
+        )
+        # Should be denied due to lack of permission (403 or 408 timeout)
+        assert response.status_code in [403, 408]
+
+    def test_005d_test_subscription_to_excluded_subtarget(self, http_client):
+        """
+        Try to subscribe to a subtarget that doesn't match granted patterns.
+        Actor2 has permission for 'properties/*' but not 'secrets/*'.
+        """
+        response = requests.post(
+            f"{self.actor2_url}/subscriptions",
+            json={
+                "peerid": self.actor1_id,
+                "target": "secrets",  # Not in granted patterns
+                "subtarget": "private",
+                "granularity": "high",
+            },
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
+        )
+        # Should be denied - no permission for 'secrets' target
+        assert response.status_code in [403, 408]
+
+    def test_005e_test_subscription_by_actor3_to_non_granted_property(self, http_client):
+        """
+        Test that actor3 cannot subscribe to properties/test (not in granted patterns).
+        Actor3 was only granted permission for 'properties' and 'properties/data2'.
+        """
+        response = requests.post(
+            f"{self.actor3_url}/subscriptions",
+            json={
+                "peerid": self.actor1_id,
+                "target": "properties",
+                "subtarget": "test",  # Not in actor3's granted patterns
+                "granularity": "high",
+            },
+            auth=(self.creator3, self.passphrase3),  # type: ignore[arg-type]
+        )
+        # Should be denied - actor3 doesn't have permission for properties/test
+        assert response.status_code in [403, 408]
+
     def test_006_create_subscription_no_auth(self, http_client):
         """
         Try to create subscription without authentication - should fail.

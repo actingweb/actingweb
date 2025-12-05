@@ -319,6 +319,22 @@ class FlaskIntegration:
                 permissions=True,
             )
 
+        # Trust shared properties endpoint
+        @self.flask_app.route(
+            "/<actor_id>/trust/<relationship>/<peerid>/shared_properties",
+            methods=["GET"],
+        )
+        def app_trust_shared_properties(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str, relationship: str, peerid: str
+        ) -> Response | WerkzeugResponse | str:
+            return self._handle_actor_request(
+                actor_id,
+                "trust",
+                relationship=relationship,
+                peerid=peerid,
+                shared_properties=True,
+            )
+
         # Actor subscriptions
         @self.flask_app.route(
             "/<actor_id>/subscriptions", methods=["GET", "POST", "DELETE", "PUT"]
@@ -1512,6 +1528,12 @@ class FlaskIntegration:
         if endpoint == "trust":
             relationship = kwargs.get("relationship")
             peerid = kwargs.get("peerid")
+
+            # Check for shared_properties endpoint
+            if kwargs.get("shared_properties"):
+                return trust.TrustSharedPropertiesHandler(
+                    webobj, config, hooks=self.aw_app.hooks
+                )
 
             # Check for permissions endpoint
             if kwargs.get("permissions"):

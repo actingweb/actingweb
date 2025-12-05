@@ -2,6 +2,7 @@ import json
 import logging
 
 from actingweb.handlers import base_handler
+from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
 
 class SubscriptionRootHandler(base_handler.BaseHandler):
@@ -187,13 +188,28 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden. Wrong peer id in request")
             return
-        # We need to validate that this peer has GET rights on what it wants to subscribe to
-        if not auth_result.auth_obj.check_authorisation(
-            path=target, subpath=subtarget or "", method="GET", peerid=peerid
-        ):
-            if self.response:
-                self.response.set_status(403)
-            return
+        # Use unified permission evaluator for subscription authorization
+        evaluator = get_permission_evaluator(self.config)
+        if evaluator:
+            property_path = f"{target}/{subtarget}" if subtarget else target
+            result = evaluator.evaluate_property_access(
+                actor_id, peerid, property_path, operation="subscribe"
+            )
+            if result != PermissionResult.ALLOWED:
+                logging.info(
+                    f"Subscription denied for peer {peerid} to {property_path}: {result}"
+                )
+                if self.response:
+                    self.response.set_status(403, "Permission denied for subscription")
+                return
+        else:
+            # Fall back to legacy authorization if permission system not initialized
+            if not auth_result.auth_obj.check_authorisation(
+                path=target, subpath=subtarget or "", method="GET", peerid=peerid
+            ):
+                if self.response:
+                    self.response.set_status(403)
+                return
         new_sub = myself.create_subscription(
             peerid=auth_result.auth_obj.acl["peerid"],
             target=target,

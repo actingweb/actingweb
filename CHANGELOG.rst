@@ -2,6 +2,24 @@
 CHANGELOG
 =========
 
+v3.6.0: Dec 5, 2025
+-------------------
+
+ADDED
+~~~~~
+
+- **SECURITY**: Subscription callbacks now respect property permissions - only properties the peer has ``read`` permission on are included in callbacks (fail-closed design)
+- **SECURITY**: Subscription creation now requires ``subscribe`` permission on target property path using unified permission evaluator
+- **NEW ENDPOINT**: Added ``/trust/{relationship}/{peerid}/shared_properties`` endpoint for discovering properties available for subscription
+- **BREAKING**: Subscription permission filtering is fail-closed - if permission evaluation fails, no data is sent to subscribers
+
+CHANGED
+~~~~~~~
+
+- Subscription handlers now use unified permission evaluator (``evaluate_property_access``) instead of legacy ``check_authorisation``
+- Permission changes made after subscription creation now affect subsequent callbacks (dynamic permission enforcement)
+- Actor ``callback_subscription`` method now filters property subscription data based on peer permissions before sending
+
 v3.5.6: Dec 4, 2025
 -------------------
 

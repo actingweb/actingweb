@@ -3,6 +3,7 @@ import logging
 
 from actingweb import auth
 from actingweb.handlers import base_handler
+from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
 # Import permission system with fallback
 try:
@@ -818,3 +819,101 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             logging.error(f"Error deleting permissions for {actor_id}:{peerid}: {e}")
             if self.response:
                 self.response.set_status(500, "Internal server error")
+
+
+class TrustSharedPropertiesHandler(base_handler.BaseHandler):
+    """Handler for /{actor_id}/trust/{relationship}/{peerid}/shared_properties
+
+    Returns properties the authenticated peer is permitted to subscribe to.
+    Requires an active trust relationship with the requesting peer.
+    """
+
+    def get(self, actor_id: str, relationship: str, peerid: str):
+        """Get properties available for subscription by this peer."""
+        # Authenticate the request
+        auth_result = self.authenticate_actor(
+            actor_id, "trust", subpath=f"{relationship}/{peerid}/shared_properties"
+        )
+        if not auth_result.success or not auth_result.actor:
+            return
+
+        myself = auth_result.actor
+
+        # Verify the requesting peer matches the authenticated peer
+        authenticated_peerid = auth_result.auth_obj.acl.get("peerid") if auth_result.auth_obj else None
+        if peerid != authenticated_peerid:
+            if self.response:
+                self.response.set_status(403, "Can only query own shared properties")
+            return
+
+        # Verify trust relationship exists and is active
+        trust_rel = myself.get_trust_relationship(peerid)
+        if not trust_rel:
+            if self.response:
+                self.response.set_status(404, "Trust relationship not found")
+            return
+
+        # Get permission evaluator
+        evaluator = get_permission_evaluator(self.config) if PERMISSION_SYSTEM_AVAILABLE else None
+        if not evaluator:
+            if self.response:
+                self.response.set_status(503, "Permission system not available")
+            return
+
+        # Get all properties to check
+        all_properties = myself.get_properties()
+        property_names = list(all_properties.keys()) if all_properties else []
+
+        # Also check property lists (distributed storage)
+        try:
+            from actingweb.interface.actor_interface import ActorInterface
+            actor_interface = ActorInterface(myself, self.config)
+            if hasattr(actor_interface, 'property_lists'):
+                list_names = actor_interface.property_lists.list_all()
+                property_names.extend(list_names)
+        except Exception as e:
+            logging.debug(f"Could not get property lists: {e}")
+
+        # Remove duplicates
+        property_names = list(set(property_names))
+
+        # Filter by peer's permissions
+        shared = []
+        excluded = []
+
+        for prop_name in property_names:
+            result = evaluator.evaluate_property_access(
+                actor_id, peerid, prop_name, operation="subscribe"
+            )
+            if result == PermissionResult.ALLOWED:
+                # Get item count if it's a property list
+                item_count = 0
+                try:
+                    if hasattr(actor_interface, 'property_lists'):
+                        prop_list = getattr(actor_interface.property_lists, prop_name, None)
+                        if prop_list and hasattr(prop_list, '__len__'):
+                            item_count = len(prop_list)
+                except Exception as e:
+                    logging.debug(f"Could not get item count for property list {prop_name}: {e}")
+
+                shared.append({
+                    "name": prop_name,
+                    "display_name": prop_name.replace("_", " ").title(),
+                    "item_count": item_count,
+                    "operations": ["read", "subscribe"],
+                })
+            else:
+                excluded.append(prop_name)
+
+        response_data = {
+            "actor_id": actor_id,
+            "peer_id": peerid,
+            "relationship": relationship,
+            "shared_properties": shared,
+            "excluded_properties": excluded,
+        }
+
+        if self.response:
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)

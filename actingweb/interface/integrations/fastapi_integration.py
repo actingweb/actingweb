@@ -824,6 +824,59 @@ class FastAPIIntegration:
             )
 
         # Actor trust - path-based endpoints (more specific routes first)
+        # Shared properties endpoint (most specific, must be before general trust peer routes)
+        @self.fastapi_app.get(
+            "/{actor_id}/trust/{relationship}/{peerid}/shared_properties",
+            summary="Get shared properties available for subscription",
+            description=(
+                "Returns properties that the authenticated peer has permission to subscribe to. "
+                "Requires an active trust relationship. Response includes property names, "
+                "display names, item counts (for property lists), and permitted operations. "
+                "Authentication: Bearer token (OAuth2) or ActingWeb trust secret."
+            ),
+            tags=["Trust"],
+            responses={
+                200: {
+                    "description": "List of shared and excluded properties",
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "actor_id": "actor-123",
+                                "peer_id": "peer-456",
+                                "relationship": "mcp_client",
+                                "shared_properties": [
+                                    {
+                                        "name": "memory_personal",
+                                        "display_name": "Memory Personal",
+                                        "item_count": 42,
+                                        "operations": ["read", "subscribe"]
+                                    }
+                                ],
+                                "excluded_properties": ["memory_private"]
+                            }
+                        }
+                    }
+                },
+                403: {"description": "Permission denied or wrong peer"},
+                404: {"description": "Trust relationship not found"},
+                503: {"description": "Permission system not available"}
+            }
+        )
+        async def app_trust_shared_properties(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str,
+            relationship: str,
+            peerid: str,
+            request: Request,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request,
+                actor_id,
+                "trust",
+                relationship=relationship,
+                peerid=peerid,
+                shared_properties=True,
+            )
+
         @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.post("/{actor_id}/trust/{relationship}/{peerid}")
         @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}")
@@ -2296,8 +2349,16 @@ class FastAPIIntegration:
                 f"Trust handler selection - path_parts: {path_parts}, len: {len(path_parts)}"
             )
 
+            # Check for shared_properties endpoint
+            if kwargs.get("shared_properties"):
+                self.logger.debug(
+                    "Selecting TrustSharedPropertiesHandler for shared properties"
+                )
+                return trust.TrustSharedPropertiesHandler(
+                    webobj, config, hooks=self.aw_app.hooks
+                )
             # Check for permissions endpoint
-            if kwargs.get("permissions"):
+            elif kwargs.get("permissions"):
                 self.logger.debug(
                     "Selecting TrustPermissionHandler for permission management"
                 )

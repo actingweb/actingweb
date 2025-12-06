@@ -440,9 +440,57 @@ class TrustPeerHandler(base_handler.BaseHandler):
         else:
             if not auth_result.authorize("POST", "trust", "<type>/<id>"):
                 return
-        if myself.modify_trust_and_notify(
+
+        # Update the trust relationship
+        trust_updated = myself.modify_trust_and_notify(
             relationship=relationship, peerid=peerid, peer_approved=peer_approved
-        ):
+        )
+
+        # Trigger trust_approved lifecycle hook when receiving peer approval notification
+        # This is the critical step where Actor A (who initiated the trust) learns that
+        # Actor B has approved, and can now create subscriptions
+        logging.info(
+            f"📬 POST notification received: peer_approved={peer_approved}, "
+            f"has_hooks={self.hooks is not None}"
+        )
+        if peer_approved is True and self.hooks:
+            try:
+                # Get the trust relationship data to check if both sides approved
+                relationships = myself.get_trust_relationships(
+                    relationship=relationship, peerid=peerid
+                )
+                if relationships:
+                    trust_data = relationships[0]
+                    # Only trigger hook if BOTH sides have approved
+                    if trust_data.get("approved") and trust_data.get("peer_approved"):
+                        logging.info(
+                            f"🎉 Trust fully approved via POST notification: {actor_id} <-> {peerid}, "
+                            f"triggering trust_approved hook"
+                        )
+                        from actingweb.interface.actor_interface import ActorInterface
+
+                        actor_interface = ActorInterface(myself, self.config)
+                        self.hooks.execute_lifecycle_hooks(
+                            "trust_approved",
+                            actor=actor_interface,
+                            peer_id=peerid,
+                            relationship=relationship,
+                            trust_data=trust_data,
+                        )
+                        logging.info(
+                            f"✅ trust_approved hook triggered via POST for {actor_id} <-> {peerid}"
+                        )
+                    else:
+                        logging.debug(
+                            f"Trust not yet fully approved after POST: approved={trust_data.get('approved')}, "
+                            f"peer_approved={trust_data.get('peer_approved')}"
+                        )
+            except Exception as e:
+                logging.error(
+                    f"❌ Error triggering trust_approved hook in POST handler: {e}"
+                )
+
+        if trust_updated:
             self.response.set_status(204, "Ok")
         else:
             self.response.set_status(500, "Not modified")
@@ -840,7 +888,9 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
         myself = auth_result.actor
 
         # Verify the requesting peer matches the authenticated peer
-        authenticated_peerid = auth_result.auth_obj.acl.get("peerid") if auth_result.auth_obj else None
+        authenticated_peerid = (
+            auth_result.auth_obj.acl.get("peerid") if auth_result.auth_obj else None
+        )
         if peerid != authenticated_peerid:
             if self.response:
                 self.response.set_status(403, "Can only query own shared properties")
@@ -854,7 +904,11 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
             return
 
         # Get permission evaluator
-        evaluator = get_permission_evaluator(self.config) if PERMISSION_SYSTEM_AVAILABLE else None
+        evaluator = (
+            get_permission_evaluator(self.config)
+            if PERMISSION_SYSTEM_AVAILABLE
+            else None
+        )
         if not evaluator:
             if self.response:
                 self.response.set_status(503, "Permission system not available")
@@ -868,8 +922,9 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
         actor_interface = None
         try:
             from actingweb.interface.actor_interface import ActorInterface
+
             actor_interface = ActorInterface(myself, self.config)
-            if hasattr(actor_interface, 'property_lists'):
+            if hasattr(actor_interface, "property_lists"):
                 list_names = actor_interface.property_lists.list_all()
                 property_names.extend(list_names)
         except Exception as e:
@@ -890,19 +945,25 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                 # Get item count if it's a property list
                 item_count = 0
                 try:
-                    if actor_interface and hasattr(actor_interface, 'property_lists'):
-                        prop_list = getattr(actor_interface.property_lists, prop_name, None)
-                        if prop_list and hasattr(prop_list, '__len__'):
+                    if actor_interface and hasattr(actor_interface, "property_lists"):
+                        prop_list = getattr(
+                            actor_interface.property_lists, prop_name, None
+                        )
+                        if prop_list and hasattr(prop_list, "__len__"):
                             item_count = len(prop_list)
                 except Exception as e:
-                    logging.debug(f"Could not get item count for property list {prop_name}: {e}")
+                    logging.debug(
+                        f"Could not get item count for property list {prop_name}: {e}"
+                    )
 
-                shared.append({
-                    "name": prop_name,
-                    "display_name": prop_name.replace("_", " ").title(),
-                    "item_count": item_count,
-                    "operations": ["read", "subscribe"],
-                })
+                shared.append(
+                    {
+                        "name": prop_name,
+                        "display_name": prop_name.replace("_", " ").title(),
+                        "item_count": item_count,
+                        "operations": ["read", "subscribe"],
+                    }
+                )
             else:
                 excluded.append(prop_name)
 

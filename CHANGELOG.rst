@@ -2,8 +2,13 @@
 CHANGELOG
 =========
 
-v3.6.0: Dec 5, 2025
+v3.6.0: Dec 7, 2025
 -------------------
+
+FIXED
+~~~~~~~
+
+- Trust ``trust_approved`` lifecycle hook now triggers when receiving POST approval notification from peer (moved from PUT handler to POST handler)
 
 ADDED
 ~~~~~

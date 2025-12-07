@@ -693,8 +693,29 @@ class Actor:
         if not relationships:
             return False
         this_trust = relationships[0]
+
+        # IMPORTANT: Save approval to database BEFORE notifying peer
+        # This prevents race condition where peer tries to subscribe back
+        # before our approval is saved
+        dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
+        result = dbtrust.modify(
+            baseuri=baseuri,
+            secret=secret,
+            desc=desc,
+            approved=approved,
+            verified=verified,
+            verification_token=verification_token,
+            peer_approved=peer_approved,
+            client_name=client_name,
+            client_version=client_version,
+            client_platform=client_platform,
+            oauth_client_id=oauth_client_id,
+            last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
+        )
+
+        # Now that approval is saved, notify peer so their auto-subscribe will succeed
         headers = {}
-        # If we change approval status, send the changed status to our peer
         if approved is True and this_trust["approved"] is False:
             params = {
                 "approved": True,
@@ -727,22 +748,7 @@ class Actor:
             except Exception:
                 logging.debug("Not able to notify peer at url(" + requrl + ")")
                 self.last_response_code = 500
-        dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
-        return dbtrust.modify(
-            baseuri=baseuri,
-            secret=secret,
-            desc=desc,
-            approved=approved,
-            verified=verified,
-            verification_token=verification_token,
-            peer_approved=peer_approved,
-            client_name=client_name,
-            client_version=client_version,
-            client_platform=client_platform,
-            oauth_client_id=oauth_client_id,
-            last_accessed=last_accessed,
-            last_connected_via=last_connected_via,
-        )
+        return result
 
     def create_reciprocal_trust(
         self,

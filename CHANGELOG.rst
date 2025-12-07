@@ -9,6 +9,7 @@ FIXED
 ~~~~~~~
 
 - Trust ``trust_approved`` lifecycle hook now triggers when receiving POST approval notification from peer (moved from PUT handler to POST handler)
+- Fixed race condition in trust approval flow where trust relationship must be saved to database before notifying the peer.
 
 ADDED
 ~~~~~

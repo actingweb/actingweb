@@ -45,13 +45,21 @@ class SubscriptionInfo:
 
     @property
     def is_callback(self) -> bool:
-        """Whether this is a callback subscription (from another actor)."""
+        """Whether this subscription receives callbacks (we subscribed to another actor).
+
+        When callback=True, we are the subscriber and will receive callbacks from the peer.
+        When callback=False, we are the publisher and will send callbacks to the peer.
+        """
         return self._data.get("callback", False)
 
     @property
     def is_outbound(self) -> bool:
-        """Whether this is an outbound subscription (to another actor)."""
-        return not self.is_callback
+        """Whether this is an outbound subscription (we subscribed to another actor).
+
+        Outbound subscriptions are ones we initiated - we subscribed TO another actor.
+        These have callback=True because we receive callbacks from them.
+        """
+        return self.is_callback
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -97,13 +105,19 @@ class SubscriptionManager:
 
     @property
     def outbound_subscriptions(self) -> list[SubscriptionInfo]:
-        """Get subscriptions to other actors."""
+        """Get subscriptions to other actors (we subscribed to them).
+
+        These are subscriptions we initiated - callback=True means we receive callbacks.
+        """
         return [sub for sub in self.all_subscriptions if sub.is_outbound]
 
     @property
     def inbound_subscriptions(self) -> list[SubscriptionInfo]:
-        """Get subscriptions from other actors."""
-        return [sub for sub in self.all_subscriptions if sub.is_callback]
+        """Get subscriptions from other actors (they subscribed to us).
+
+        These are subscriptions others created - callback=False means we send callbacks.
+        """
+        return [sub for sub in self.all_subscriptions if not sub.is_callback]
 
     def get_subscriptions_to_peer(self, peer_id: str) -> list[SubscriptionInfo]:
         """Get all subscriptions to a specific peer."""
@@ -202,16 +216,24 @@ class SubscriptionManager:
     def has_subscribers_for(
         self, target: str, subtarget: str = "", resource: str = ""
     ) -> bool:
-        """Check if there are any subscribers for the given target."""
+        """Check if there are any subscribers for the given target.
+
+        Subscribers are peers who subscribed to us - their subscription records
+        have callback=False (we send callbacks to them).
+        """
         subscriptions = self.get_subscriptions_for_target(target, subtarget, resource)
-        return len([sub for sub in subscriptions if sub.is_callback]) > 0
+        return len([sub for sub in subscriptions if not sub.is_callback]) > 0
 
     def get_subscribers_for(
         self, target: str, subtarget: str = "", resource: str = ""
     ) -> list[str]:
-        """Get list of peer IDs subscribed to the given target."""
+        """Get list of peer IDs subscribed to the given target.
+
+        Returns peers who subscribed to us - their subscription records
+        have callback=False (we send callbacks to them).
+        """
         subscriptions = self.get_subscriptions_for_target(target, subtarget, resource)
-        return [sub.peer_id for sub in subscriptions if sub.is_callback]
+        return [sub.peer_id for sub in subscriptions if not sub.is_callback]
 
     def cleanup_peer_subscriptions(self, peer_id: str) -> bool:
         """Remove all subscriptions related to a specific peer."""

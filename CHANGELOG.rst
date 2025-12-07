@@ -14,6 +14,7 @@ FIXED
 ADDED
 ~~~~~
 
+- **ACL Rules for Custom Trust Types**: ``add_trust_type()`` now accepts an ``acl_rules`` parameter to specify HTTP endpoint access permissions. This enables custom trust types (like ``subscriber``) to access ActingWeb REST endpoints like ``/subscriptions/<id>`` for creating subscriptions. Each rule is a tuple of ``(path, methods, access)``.
 - **SECURITY**: Subscription callbacks now respect property permissions - only properties the peer has ``read`` permission on are included in callbacks (fail-closed design)
 - **SECURITY**: Subscription creation now requires ``subscribe`` permission on target property path using unified permission evaluator
 - **NEW ENDPOINT**: Added ``/trust/{relationship}/{peerid}/shared_properties`` endpoint for discovering properties available for subscription

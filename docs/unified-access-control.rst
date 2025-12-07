@@ -100,6 +100,120 @@ Permissions are defined using flexible structures that support both explicit lis
        }
    }
 
+ACL Rules (HTTP Endpoint Access)
+--------------------------------
+
+In addition to high-level permissions (properties, methods, tools, etc.), trust types can specify
+**ACL rules** that control access to HTTP endpoints. This is essential for enabling trust types
+to interact with ActingWeb REST endpoints like ``/subscriptions``, ``/trust``, and custom paths.
+
+**Why ACL Rules?**
+
+The ActingWeb framework has two separate access control layers:
+
+1. **High-Level Permissions** - Control access to data and operations (properties, methods, tools)
+2. **ACL Rules** - Control access to HTTP REST endpoints
+
+By default, only built-in trust types like ``friend``, ``owner``, and ``creator`` have ACL rules
+defined. Custom trust types need to explicitly specify ACL rules to access endpoints like
+``/subscriptions/<id>`` for creating subscriptions.
+
+**ACL Rule Format:**
+
+Each rule is a tuple of ``(path, methods, access)`` where:
+
+* ``path`` - HTTP path pattern (e.g., ``subscriptions/<id>``, ``properties``)
+* ``methods`` - HTTP methods (``GET``, ``POST``, ``PUT``, ``DELETE``, or ``""`` for all methods)
+* ``access`` - ``a`` for allow, ``r`` for reject
+
+.. code-block:: python
+
+   acl_rules = [
+       ("subscriptions/<id>", "POST", "a"),  # Allow creating subscriptions
+       ("properties", "GET", "a"),           # Allow reading properties
+       ("properties", "PUT", "a"),           # Allow updating properties
+       ("callbacks", "", "a"),               # Allow all methods on callbacks
+   ]
+
+**Common ACL Paths:**
+
+* ``subscriptions/<id>`` - Creating/managing subscriptions (POST to create)
+* ``properties`` - Property access (GET/PUT)
+* ``trust/<type>/<id>`` - Trust relationship management
+* ``callbacks`` - Receiving subscription callbacks
+
+Built-in Trust Type Definitions
+-------------------------------
+
+For reference, here is how the built-in ``friend`` trust type is defined internally.
+You can use the same pattern for custom trust types:
+
+.. code-block:: python
+
+   # The built-in "friend" trust type (for reference)
+   # This is how ActingWeb defines it internally
+   access_control.add_trust_type(
+       name="friend",
+       display_name="Friend",
+       description="Standard trusted relationship with access to most resources",
+       permissions={
+           "properties": {
+               "patterns": ["*"],
+               "operations": ["read", "write"],
+               "excluded_patterns": ["private/*", "security/*", "_internal/*"]
+           },
+           "methods": {
+               "allowed": ["*"],
+               "denied": ["delete_*", "admin_*", "system_*"]
+           },
+           "actions": {
+               "allowed": ["*"],
+               "denied": ["delete_*", "admin_*", "system_*"]
+           },
+           "tools": {
+               "allowed": ["*"],
+               "denied": ["admin_*", "system_*"]
+           },
+           "resources": {
+               "patterns": ["*"],
+               "operations": ["read", "write"],
+               "excluded_patterns": ["private/*", "security/*"]
+           }
+       },
+       oauth_scope="actingweb.friend"
+       # Note: friend uses default ACL rules from config.access,
+       # which already includes entries like ("friend", "subscriptions/<id>", "", "a")
+   )
+
+**Example: Custom Subscriber Trust Type with ACL Rules**
+
+For actor-to-actor subscription scenarios, you need to specify ACL rules:
+
+.. code-block:: python
+
+   # Custom trust type for actors subscribing to each other's data
+   access_control.add_trust_type(
+       name="subscriber",
+       display_name="Subscriber",
+       description="Trust type for actors subscribing to each other's properties",
+       permissions={
+           "properties": {
+               "patterns": ["memory_*", "public/*"],
+               "operations": ["read"]
+           },
+           "methods": {
+               "allowed": ["get_*", "list_*"],
+               "denied": ["delete_*", "admin_*"]
+           }
+       },
+       # ACL rules enable HTTP endpoint access
+       acl_rules=[
+           ("subscriptions/<id>", "POST", "a"),  # Create subscriptions
+           ("properties", "GET", "a"),           # Read properties
+           ("callbacks", "", "a"),               # Receive callbacks (all methods)
+       ]
+   )
+
 Architecture
 ============
 

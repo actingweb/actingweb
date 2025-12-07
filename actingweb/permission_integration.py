@@ -320,6 +320,7 @@ class AccessControlConfig:
         permissions: dict[str, Any],
         description: str = "",
         oauth_scope: str | None = None,
+        acl_rules: list[tuple[str, str, str]] | None = None,
     ):
         """
         Add a custom trust type with simplified permission specification.
@@ -327,11 +328,18 @@ class AccessControlConfig:
         Args:
             name: Unique trust type identifier
             display_name: Human-readable name
-            permissions: Simplified permissions dict
+            permissions: Simplified permissions dict for high-level access control
+                        (properties, methods, tools, resources, prompts)
             description: Optional description
             oauth_scope: Optional OAuth2 scope mapping
+            acl_rules: Optional list of HTTP endpoint ACL rules. Each rule is a tuple
+                      of (path, methods, access) where:
+                      - path: HTTP path pattern (e.g., "subscriptions/<id>", "properties")
+                      - methods: HTTP methods ("GET", "POST", "PUT", "DELETE", or "" for all)
+                      - access: "a" for allow, "r" for reject
 
         Example:
+            # Basic trust type with high-level permissions only
             config.add_trust_type(
                 name="api_client",
                 display_name="API Client",
@@ -341,6 +349,19 @@ class AccessControlConfig:
                     "tools": []  # No tools allowed
                 },
                 oauth_scope="myapp.api_client"
+            )
+
+            # Trust type with ACL rules for HTTP endpoint access
+            config.add_trust_type(
+                name="subscriber",
+                display_name="Subscriber",
+                permissions={
+                    "properties": {"patterns": ["memory_*"], "operations": ["read"]},
+                },
+                acl_rules=[
+                    ("subscriptions/<id>", "POST", "a"),  # Allow creating subscriptions
+                    ("properties", "GET", "a"),          # Allow reading properties
+                ],
             )
         """
         from .trust_type_registry import TrustType, get_registry
@@ -354,6 +375,7 @@ class AccessControlConfig:
             description=description,
             base_permissions=base_permissions,
             oauth_scope=oauth_scope,
+            acl_rules=acl_rules,
         )
 
         self.custom_trust_types.append(trust_type)
@@ -361,6 +383,36 @@ class AccessControlConfig:
         # Register immediately
         registry = get_registry(self.config)
         registry.register_type(trust_type)
+
+        # Add ACL rules to config.access if provided
+        if acl_rules:
+            self._add_acl_rules_to_config(name, acl_rules)
+
+    def _add_acl_rules_to_config(
+        self, trust_type_name: str, acl_rules: list[tuple[str, str, str]]
+    ) -> None:
+        """
+        Add ACL rules for a trust type to config.access.
+
+        This method inserts ACL rules at the beginning of config.access to ensure
+        they are evaluated before more general rules. Each rule is converted to
+        the format: (role, path, methods, access).
+
+        Args:
+            trust_type_name: The name of the trust type (used as the role)
+            acl_rules: List of (path, methods, access) tuples
+        """
+        for path, methods, access in acl_rules:
+            # ACL format: (role, path, methods, access)
+            acl_entry = (trust_type_name, path, methods, access)
+
+            # Check if rule already exists to avoid duplicates
+            if acl_entry not in self.config.access:
+                # Insert at beginning for priority (custom rules should override defaults)
+                self.config.access.insert(0, acl_entry)
+                logger.debug(
+                    f"Added ACL rule for trust type '{trust_type_name}': {acl_entry}"
+                )
 
     def _convert_simple_permissions(
         self, simple_perms: dict[str, Any]

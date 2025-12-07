@@ -328,6 +328,8 @@ class PermissionEvaluator:
             logger.debug(f"No trust relationship found for {actor_id}:{peer_id}")
             return None
 
+        logger.debug(f"Found trust type '{trust_type_name}' for {actor_id}:{peer_id}")
+
         # Get base permissions from trust type
         trust_type = self.trust_type_registry.get_type(trust_type_name)
         if not trust_type:
@@ -335,6 +337,7 @@ class PermissionEvaluator:
             return None
 
         base_permissions = trust_type.base_permissions
+        logger.debug(f"Base permissions for '{trust_type_name}': {base_permissions}")
 
         # If we have permission overrides, merge them
         if permission_override:
@@ -411,16 +414,20 @@ class PermissionEvaluator:
 
         3. Mixed format (combines both approaches)
         """
+        logger.debug(f"Evaluating rules: target='{target}', operation='{operation}', rules={permission_rules}")
+
         # Check explicit denied patterns first (highest priority)
         if "denied" in permission_rules:
             denied_patterns = permission_rules["denied"]
             if self._matches_any_pattern(target, denied_patterns):
+                logger.debug(f"Target '{target}' matched denied pattern")
                 return PermissionResult.DENIED
 
         # Check allowed patterns
         if "allowed" in permission_rules:
             allowed_patterns = permission_rules["allowed"]
             if self._matches_any_pattern(target, allowed_patterns):
+                logger.debug(f"Target '{target}' matched allowed pattern")
                 return PermissionResult.ALLOWED
 
         # Check pattern-based permissions with operations
@@ -428,8 +435,11 @@ class PermissionEvaluator:
             patterns = permission_rules["patterns"]
             operations = permission_rules["operations"]
 
+            logger.debug(f"Pattern-based check: patterns={patterns}, operations={operations}")
+
             # Check if operation is allowed
             if operation not in operations:
+                logger.debug(f"Operation '{operation}' not in allowed operations {operations}")
                 return PermissionResult.DENIED
 
             # Check if target matches allowed patterns
@@ -437,10 +447,15 @@ class PermissionEvaluator:
                 # Check excluded patterns
                 excluded = permission_rules.get("excluded_patterns", [])
                 if excluded and self._matches_any_pattern(target, excluded):
+                    logger.debug(f"Target '{target}' matched excluded pattern")
                     return PermissionResult.DENIED
+                logger.debug(f"Target '{target}' matched pattern, operation '{operation}' allowed")
                 return PermissionResult.ALLOWED
+            else:
+                logger.debug(f"Target '{target}' did not match any patterns {patterns}")
 
         # No matching rule found
+        logger.debug(f"No matching rule found for target='{target}', operation='{operation}'")
         return PermissionResult.NOT_FOUND
 
     def _matches_any_pattern(self, target: str, patterns: list[str]) -> bool:

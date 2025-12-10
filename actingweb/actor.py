@@ -1044,6 +1044,17 @@ class Actor:
                         )
                         if sub_obj:
                             sub_obj.delete()
+            # Delete associated trust permissions before deleting the trust
+            try:
+                from .trust_permissions import TrustPermissionStore
+
+                if self.config is not None and self.id is not None:
+                    permission_store = TrustPermissionStore(self.config)
+                    permission_store.delete_permissions(self.id, rel["peerid"])
+            except Exception as e:
+                logging.warning(
+                    f"Failed to delete trust permissions for {rel['peerid']}: {e}"
+                )
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )

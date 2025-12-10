@@ -94,6 +94,125 @@ poetry run black .
 poetry run mypy actingweb
 ```
 
+### Testing
+
+The project has two types of tests:
+- **Unit tests** (`tests/test_*.py`): Run without external dependencies
+- **Integration tests** (`tests/integration/`): Require DynamoDB (local or Docker)
+
+#### Running Unit Tests
+
+Unit tests that don't require DynamoDB can be run directly:
+
+```bash
+# Run all unit tests (excludes integration tests)
+poetry run pytest tests/ -v --ignore=tests/integration
+
+# Run specific test files
+poetry run pytest tests/test_actor.py tests/test_config.py -v
+```
+
+#### Running Integration Tests with DynamoDB
+
+Integration tests require a local DynamoDB instance. The project uses Docker Compose to manage this.
+
+**Prerequisites:**
+- Docker and Docker Compose installed
+- Port 8001 available for DynamoDB
+
+**Option 1: Use Makefile (recommended)**
+
+```bash
+# Run all integration tests (starts/stops DynamoDB automatically)
+make test-integration
+
+# Run integration tests excluding slow tests
+make test-integration-fast
+```
+
+**Option 2: Manual Docker Management**
+
+```bash
+# Start DynamoDB in background
+docker-compose -f docker-compose.test.yml up -d
+
+# Wait a few seconds for DynamoDB to be ready
+sleep 2
+
+# Run integration tests
+poetry run pytest tests/integration/ -v --tb=short
+
+# Stop DynamoDB when done
+docker-compose -f docker-compose.test.yml down -v
+```
+
+**Option 3: Keep DynamoDB Running**
+
+For faster iteration during development:
+
+```bash
+# Start DynamoDB (keep running)
+docker-compose -f docker-compose.test.yml up -d
+
+# Run tests multiple times without restart
+poetry run pytest tests/integration/ -v
+
+# When completely done, stop DynamoDB
+docker-compose -f docker-compose.test.yml down -v
+```
+
+#### Integration Test Fixtures
+
+The integration tests use pytest fixtures defined in `tests/integration/conftest.py`:
+
+- **`docker_services`**: Starts DynamoDB via Docker Compose (session-scoped)
+- **`test_app`**: Starts a FastAPI test server on port 5555 (session-scoped)
+- **`peer_app`**: Starts a second test server on port 5556 for peer testing (session-scoped)
+- **`www_test_app`**: Test server without OAuth for www template testing on port 5557
+- **`actor_factory`**: Creates test actors with automatic cleanup
+- **`http_client`**: HTTP client with base URL configured
+- **`oauth2_client`**: Authenticated OAuth2 client for testing protected endpoints
+- **`trust_helper`**: Helper for establishing trust relationships
+
+**Example usage:**
+
+```python
+def test_actor_creation(actor_factory):
+    actor = actor_factory.create("test@example.com")
+    assert actor["id"] is not None
+    # Actor is automatically cleaned up after test
+
+def test_trust_relationship(actor_factory, trust_helper):
+    actor1 = actor_factory.create("user1@example.com")
+    actor2 = actor_factory.create("user2@example.com")
+    trust = trust_helper.establish(actor1, actor2, "friend")
+    assert trust["secret"] is not None
+```
+
+#### Environment Variables for Testing
+
+The integration tests configure these automatically, but for manual testing:
+
+```bash
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_DB_HOST=http://localhost:8001
+export AWS_DB_PREFIX=test
+```
+
+#### Running All Tests
+
+```bash
+# Run everything (requires DynamoDB)
+make test-integration
+
+# Or manually:
+docker-compose -f docker-compose.test.yml up -d
+sleep 2
+poetry run pytest tests/ -v --tb=short
+docker-compose -f docker-compose.test.yml down -v
+```
+
 ### Git Hooks
 
 The repository includes a pre-commit hook that automatically regenerates `docs/requirements.txt` when `pyproject.toml` is modified. This ensures ReadTheDocs can build documentation with the correct dependencies.
@@ -263,6 +382,20 @@ Add comprehensive checks to your CI pipeline:
 ```
 
 This ensures type safety is maintained across all contributions and prevents type-related runtime errors.
+
+## Async AwProxy Methods
+
+`AwProxy` provides async versions of resource methods using `httpx` for non-blocking operations in FastAPI routes:
+
+- `get_resource_async()`, `create_resource_async()`, `change_resource_async()`, `delete_resource_async()`
+
+```python
+# In a FastAPI route - use async AwProxy for non-blocking HTTP to peers
+from actingweb.aw_proxy import AwProxy
+
+proxy = AwProxy(peer_target={"id": actor_id, "peerid": peerid}, config=config)
+result = await proxy.get_resource_async(path="trust/friend/permissions")
+```
 
 ## Singleton Initialization
 

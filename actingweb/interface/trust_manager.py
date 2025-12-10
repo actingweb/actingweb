@@ -210,47 +210,22 @@ class TrustManager:
         return bool(result)
 
     def delete_relationship(self, peer_id: str) -> bool:
-        """Delete a trust relationship and associated permissions."""
-        # Delete associated trust permissions first
-        try:
-            from ..trust_permissions import TrustPermissionStore
+        """Delete a trust relationship.
 
-            config = self._core_actor.config
-            actor_id = self._core_actor.id
-            if config is not None and actor_id is not None:
-                permission_store = TrustPermissionStore(config)
-                # Delete permissions we have for this peer
-                permission_store.delete_permissions(actor_id, peer_id)
-                # Note: The peer's permissions for us are deleted when they delete their trust
-        except Exception as e:
-            import logging
-
-            logging.warning(f"Failed to delete trust permissions for {peer_id}: {e}")
-
-        # Delete the trust relationship
+        Note: Associated permissions are automatically deleted by the core
+        delete_reciprocal_trust method.
+        """
         result = self._core_actor.delete_reciprocal_trust(
             peerid=peer_id, delete_peer=True
         )
         return bool(result)
 
     def delete_all_relationships(self) -> bool:
-        """Delete all trust relationships and associated permissions."""
-        # Delete associated trust permissions for all relationships first
-        try:
-            from ..trust_permissions import TrustPermissionStore
+        """Delete all trust relationships.
 
-            config = self._core_actor.config
-            actor_id = self._core_actor.id
-            if config is not None and actor_id is not None:
-                permission_store = TrustPermissionStore(config)
-                for rel in self.relationships:
-                    permission_store.delete_permissions(actor_id, rel.peerid)
-        except Exception as e:
-            import logging
-
-            logging.warning(f"Failed to delete trust permissions: {e}")
-
-        # Delete all trust relationships
+        Note: Associated permissions are automatically deleted by the core
+        delete_reciprocal_trust method for each relationship.
+        """
         result = self._core_actor.delete_reciprocal_trust(delete_peer=True)
         return bool(result)
 

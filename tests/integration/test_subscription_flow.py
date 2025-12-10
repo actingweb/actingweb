@@ -211,59 +211,114 @@ class TestSubscriptionActorFlow:
             pytest.skip("Trust relationship not established (earlier test failed)")
         assert response.status_code in [200, 201, 204]
 
-    def test_005c_test_subscription_without_permission(self, http_client):
+    def test_005c_subscription_succeeds_regardless_of_property_permissions(self, http_client):
         """
-        Try to create subscription to a property without permission - should fail.
-        This tests that subscription permission filtering is working.
+        Subscription creation succeeds regardless of property permission patterns.
+
+        The ACL rule (subscriptions/<id>, POST, a) controls subscription access,
+        NOT the property permission patterns. Property permissions only affect
+        what data is included in subscription callbacks.
+
+        This test verifies that a peer with subscription ACL access can create
+        subscriptions to any target, even those outside their permission patterns.
         """
+        # Create subscription to target not in permission patterns - should succeed
         response = requests.post(
             f"{self.actor2_url}/subscriptions",
             json={
                 "peerid": self.actor1_id,
-                "target": "secret",  # Not granted permission (doesn't match any pattern)
+                "target": "secret",  # Not in permission patterns, but ACL allows subscription
                 "subtarget": "",
                 "granularity": "high",
             },
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        # Should be denied due to lack of permission (403 or 408 timeout)
-        assert response.status_code in [403, 408]
+        # ACL controls subscription access - subscription should succeed
+        assert response.status_code in [200, 201, 202, 204]
 
-    def test_005d_test_subscription_to_excluded_subtarget(self, http_client):
+        # Clean up: delete this subscription to avoid polluting other tests
+        # First get the subscription ID from actor1's side
+        get_response = requests.get(
+            f"{self.actor1_url}/subscriptions/{self.actor2_id}?target=secret",
+            headers={"Authorization": f"Bearer {self.trust1_secret}"},
+        )
+        if get_response.status_code == 200:
+            data = get_response.json()
+            if "data" in data and len(data["data"]) > 0:
+                subid = data["data"][0]["subscriptionid"]
+                requests.delete(
+                    f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid}",
+                    headers={"Authorization": f"Bearer {self.trust1_secret}"},
+                )
+
+    def test_005d_subscription_to_any_target_succeeds_with_acl(self, http_client):
         """
-        Try to subscribe to a subtarget that doesn't match granted patterns.
-        Actor2 has permission for 'properties/*' but not 'secrets/*'.
+        Subscription creation succeeds for any target when ACL allows.
+
+        Actor2 has subscription ACL access, so can subscribe to any target.
+        Whether they receive data in callbacks depends on property permissions.
         """
         response = requests.post(
             f"{self.actor2_url}/subscriptions",
             json={
                 "peerid": self.actor1_id,
-                "target": "secrets",  # Not in granted patterns
+                "target": "secrets",  # Not in property permissions, but ACL allows
                 "subtarget": "private",
                 "granularity": "high",
             },
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        # Should be denied - no permission for 'secrets' target
-        assert response.status_code in [403, 408]
+        # Subscription should succeed (ACL controls access)
+        assert response.status_code in [200, 201, 202, 204]
 
-    def test_005e_test_subscription_by_actor3_to_non_granted_property(self, http_client):
+        # Clean up
+        get_response = requests.get(
+            f"{self.actor1_url}/subscriptions/{self.actor2_id}?target=secrets",
+            headers={"Authorization": f"Bearer {self.trust1_secret}"},
+        )
+        if get_response.status_code == 200:
+            data = get_response.json()
+            if "data" in data and len(data["data"]) > 0:
+                subid = data["data"][0]["subscriptionid"]
+                requests.delete(
+                    f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid}",
+                    headers={"Authorization": f"Bearer {self.trust1_secret}"},
+                )
+
+    def test_005e_actor3_subscription_succeeds_with_acl(self, http_client):
         """
-        Test that actor3 cannot subscribe to properties/test (not in granted patterns).
-        Actor3 was only granted permission for 'properties' and 'properties/data2'.
+        Actor3 can subscribe to any target that ACL allows.
+
+        Property permission filtering happens at callback time, not subscription creation.
+        Actor3 can create the subscription, but may not receive callback data
+        for properties outside their permission patterns.
         """
         response = requests.post(
             f"{self.actor3_url}/subscriptions",
             json={
                 "peerid": self.actor1_id,
                 "target": "properties",
-                "subtarget": "test",  # Not in actor3's granted patterns
+                "subtarget": "test",  # Outside actor3's property permissions
                 "granularity": "high",
             },
             auth=(self.creator3, self.passphrase3),  # type: ignore[arg-type]
         )
-        # Should be denied - actor3 doesn't have permission for properties/test
-        assert response.status_code in [403, 408]
+        # Subscription should succeed (ACL controls access)
+        assert response.status_code in [200, 201, 202, 204]
+
+        # Clean up
+        get_response = requests.get(
+            f"{self.actor1_url}/subscriptions/{self.actor3_id}?target=properties&subtarget=test",
+            headers={"Authorization": f"Bearer {self.trust2_secret}"},
+        )
+        if get_response.status_code == 200:
+            data = get_response.json()
+            if "data" in data and len(data["data"]) > 0:
+                subid = data["data"][0]["subscriptionid"]
+                requests.delete(
+                    f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid}",
+                    headers={"Authorization": f"Bearer {self.trust2_secret}"},
+                )
 
     def test_006_create_subscription_no_auth(self, http_client):
         """

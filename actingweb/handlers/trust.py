@@ -654,6 +654,22 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(404, "Not found")
             return
+
+        # Trigger trust_deleted lifecycle hook BEFORE deleting
+        if self.hooks:
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+
+                actor_interface = ActorInterface(myself, self.config)
+                self.hooks.execute_lifecycle_hooks(
+                    "trust_deleted",
+                    actor=actor_interface,
+                    peer_id=peerid,
+                )
+                logging.debug(f"trust_deleted hook triggered for {actor_id} <-> {peerid}")
+            except Exception as e:
+                logging.error(f"Error triggering trust_deleted hook: {e}")
+
         if is_peer:
             deleted = myself.delete_reciprocal_trust(peerid=peerid, delete_peer=False)
         else:

@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.6.0: Dec 10, 2025
+v3.6.0: Dec 11, 2025
 --------------------
 
 FIXED
@@ -11,6 +11,7 @@ FIXED
 - Trust ``trust_approved`` lifecycle hook now triggers when receiving POST approval notification from peer (moved from PUT handler to POST handler)
 - Fixed race condition in trust approval flow where trust relationship must be saved to database before notifying the peer.
 - Fixed missing deletion of permissions for trust relationship when deleting it.
+- Fixed missing ``trust_deleted`` lifecycle hook trigger in trust DELETE handler.
 
 ADDED
 ~~~~~

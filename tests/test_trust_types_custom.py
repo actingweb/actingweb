@@ -423,7 +423,6 @@ class TestTrustTypeACLRules:
         Spec: actingweb/permission_integration.py - acl_rules is optional
         """
         config = aw_app.get_config()
-        original_access_len = len(config.access)
 
         from actingweb.permission_integration import AccessControlConfig
 

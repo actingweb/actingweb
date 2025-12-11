@@ -295,6 +295,180 @@ class TestTrustTypePermissions:
         )  # Different versions may use different names
 
 
+class TestTrustTypeACLRules:
+    """Test ACL rules for custom trust types."""
+
+    def test_register_trust_type_with_acl_rules(self, aw_app):
+        """
+        Test registering a custom trust type with ACL rules.
+
+        ACL rules allow custom trust types to access HTTP endpoints
+        like /subscriptions/<id> for actor-to-actor subscriptions.
+
+        Spec: actingweb/permission_integration.py - add_trust_type with acl_rules
+        """
+        config = aw_app.get_config()
+
+        from actingweb.permission_integration import AccessControlConfig
+
+        # Register custom trust type with ACL rules
+        access_control = AccessControlConfig(config)
+        access_control.add_trust_type(
+            name="subscriber_test",
+            display_name="Test Subscriber",
+            description="Test trust type for actor-to-actor subscriptions",
+            permissions={
+                "properties": {
+                    "patterns": ["memory_*"],
+                    "operations": ["read"],
+                },
+            },
+            acl_rules=[
+                ("subscriptions/<id>", "POST", "a"),  # Allow creating subscriptions
+                ("properties", "GET", "a"),  # Allow reading properties
+                ("callbacks", "", "a"),  # Allow all methods on callbacks
+            ],
+        )
+
+        # Verify registration
+        registry = get_registry(config)
+        subscriber_type = registry.get_type("subscriber_test")
+
+        assert subscriber_type is not None
+        assert subscriber_type.name == "subscriber_test"
+        assert subscriber_type.acl_rules is not None
+        assert len(subscriber_type.acl_rules) == 3
+
+        # Verify ACL rules are stored correctly
+        assert ("subscriptions/<id>", "POST", "a") in subscriber_type.acl_rules
+        assert ("properties", "GET", "a") in subscriber_type.acl_rules
+        assert ("callbacks", "", "a") in subscriber_type.acl_rules
+
+    def test_acl_rules_added_to_config_access(self, aw_app):
+        """
+        Test that ACL rules are added to config.access.
+
+        When a trust type with acl_rules is registered, the rules should
+        be inserted into config.access for authorization checks.
+
+        Spec: actingweb/permission_integration.py - _add_acl_rules_to_config
+        """
+        config = aw_app.get_config()
+        original_access_len = len(config.access)
+
+        from actingweb.permission_integration import AccessControlConfig
+
+        access_control = AccessControlConfig(config)
+        access_control.add_trust_type(
+            name="acl_test_type",
+            display_name="ACL Test Type",
+            permissions={"properties": ["public/*"]},
+            acl_rules=[
+                ("subscriptions/<id>", "POST", "a"),
+                ("properties", "GET", "a"),
+            ],
+        )
+
+        # Verify ACL rules were added to config.access
+        assert len(config.access) > original_access_len
+
+        # Check specific rules exist in config.access
+        # Format is (role, path, methods, access)
+        acl_entries = config.access
+        assert ("acl_test_type", "subscriptions/<id>", "POST", "a") in acl_entries
+        assert ("acl_test_type", "properties", "GET", "a") in acl_entries
+
+    def test_acl_rules_no_duplicates(self, aw_app):
+        """
+        Test that duplicate ACL rules are not added.
+
+        Spec: actingweb/permission_integration.py - _add_acl_rules_to_config
+        """
+        config = aw_app.get_config()
+
+        from actingweb.permission_integration import AccessControlConfig
+
+        access_control = AccessControlConfig(config)
+
+        # Register first time
+        access_control.add_trust_type(
+            name="dup_test_type",
+            display_name="Duplicate Test",
+            permissions={"properties": ["public/*"]},
+            acl_rules=[("subscriptions/<id>", "POST", "a")],
+        )
+
+        count_after_first = config.access.count(
+            ("dup_test_type", "subscriptions/<id>", "POST", "a")
+        )
+        assert count_after_first == 1
+
+        # Register again with same ACL rule (should not add duplicate)
+        access_control._add_acl_rules_to_config(
+            "dup_test_type", [("subscriptions/<id>", "POST", "a")]
+        )
+
+        count_after_second = config.access.count(
+            ("dup_test_type", "subscriptions/<id>", "POST", "a")
+        )
+        assert count_after_second == 1  # Still only one entry
+
+    def test_trust_type_without_acl_rules(self, aw_app):
+        """
+        Test that trust types without ACL rules work correctly.
+
+        Not all trust types need ACL rules - only those that need
+        HTTP endpoint access beyond what's already in default ACL.
+
+        Spec: actingweb/permission_integration.py - acl_rules is optional
+        """
+        config = aw_app.get_config()
+
+        from actingweb.permission_integration import AccessControlConfig
+
+        access_control = AccessControlConfig(config)
+        access_control.add_trust_type(
+            name="no_acl_type",
+            display_name="No ACL Type",
+            permissions={"properties": ["public/*"]},
+            # No acl_rules parameter
+        )
+
+        # Verify no new ACL rules were added
+        # (only the default types may have been added if not already present)
+        registry = get_registry(config)
+        no_acl_type = registry.get_type("no_acl_type")
+        assert no_acl_type is not None
+        assert no_acl_type.acl_rules is None
+
+    def test_acl_rules_priority(self, aw_app):
+        """
+        Test that custom ACL rules are inserted at the beginning.
+
+        Custom rules should take priority over default rules, so they
+        are inserted at index 0.
+
+        Spec: actingweb/permission_integration.py - insert at beginning
+        """
+        config = aw_app.get_config()
+
+        from actingweb.permission_integration import AccessControlConfig
+
+        access_control = AccessControlConfig(config)
+        access_control.add_trust_type(
+            name="priority_test",
+            display_name="Priority Test",
+            permissions={"properties": ["public/*"]},
+            acl_rules=[("custom/path", "GET", "a")],
+        )
+
+        # The custom rule should be near the beginning of config.access
+        custom_rule = ("priority_test", "custom/path", "GET", "a")
+        idx = config.access.index(custom_rule)
+        # Should be in the first few entries (before default rules)
+        assert idx < 5, f"Custom ACL rule should be near beginning, found at index {idx}"
+
+
 class TestTrustTypeUsage:
     """Test using trust types with trust relationships."""
 

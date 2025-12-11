@@ -2,6 +2,42 @@
 CHANGELOG
 =========
 
+v3.6.0: Dec 11, 2025
+--------------------
+
+FIXED
+~~~~~~~
+
+- Trust ``trust_approved`` lifecycle hook now triggers when receiving POST approval notification from peer (moved from PUT handler to POST handler)
+- Fixed race condition in trust approval flow where trust relationship must be saved to database before notifying the peer.
+- Fixed missing deletion of permissions for trust relationship when deleting it.
+- Fixed missing ``trust_deleted`` lifecycle hook trigger in trust DELETE handler.
+
+ADDED
+~~~~~
+
+- **ACL Rules for Custom Trust Types**: ``add_trust_type()`` now accepts an ``acl_rules`` parameter to specify HTTP endpoint access permissions. This enables custom trust types (like ``subscriber``) to access ActingWeb REST endpoints like ``/subscriptions/<id>`` for creating subscriptions. Each rule is a tuple of ``(path, methods, access)``.
+- **SECURITY**: Subscription callbacks now respect property permissions - only properties the peer has ``read`` permission on are included in callbacks (fail-closed design)
+- **NEW ENDPOINT**: Added ``/trust/{relationship}/{peerid}/shared_properties`` endpoint for discovering properties available for subscription
+- **BREAKING**: Subscription permission filtering is fail-closed - if permission evaluation fails, no data is sent to subscribers
+
+**Note on Subscription Access Control**: Subscription creation is controlled by ACL rules (e.g., ``("subscriptions/<id>", "POST", "a")``), NOT by property permission patterns. Any peer with the subscription ACL can create subscriptions to any target. Property permissions only affect what data is included in subscription callbacks.
+- **Async HTTP Methods**: Added async versions of ``AwProxy`` methods using ``httpx`` for non-blocking operations in async frameworks like FastAPI:
+
+  - ``AwProxy.get_resource_async()`` - Async peer resource retrieval
+  - ``AwProxy.create_resource_async()`` - Async peer resource creation
+  - ``AwProxy.change_resource_async()`` - Async peer resource update
+  - ``AwProxy.delete_resource_async()`` - Async peer resource deletion
+
+- **Dependencies**: Added ``httpx`` as a new dependency for async HTTP client operations
+
+CHANGED
+~~~~~~~
+
+- Subscription handlers now use unified permission evaluator (``evaluate_property_access``) instead of legacy ``check_authorisation``
+- Permission changes made after subscription creation now affect subsequent callbacks (dynamic permission enforcement)
+- Actor ``callback_subscription`` method now filters property subscription data based on peer permissions before sending
+
 v3.5.6: Dec 4, 2025
 -------------------
 

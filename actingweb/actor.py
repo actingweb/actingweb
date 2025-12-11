@@ -10,6 +10,7 @@ from actingweb import attribute, peertrustee, property, subscription, trust
 from actingweb.constants import (
     DEFAULT_CREATOR,
 )
+from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
 
 class ActorError(Exception):
@@ -692,8 +693,29 @@ class Actor:
         if not relationships:
             return False
         this_trust = relationships[0]
+
+        # IMPORTANT: Save approval to database BEFORE notifying peer
+        # This prevents race condition where peer tries to subscribe back
+        # before our approval is saved
+        dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
+        result = dbtrust.modify(
+            baseuri=baseuri,
+            secret=secret,
+            desc=desc,
+            approved=approved,
+            verified=verified,
+            verification_token=verification_token,
+            peer_approved=peer_approved,
+            client_name=client_name,
+            client_version=client_version,
+            client_platform=client_platform,
+            oauth_client_id=oauth_client_id,
+            last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
+        )
+
+        # Now that approval is saved, notify peer so their auto-subscribe will succeed
         headers = {}
-        # If we change approval status, send the changed status to our peer
         if approved is True and this_trust["approved"] is False:
             params = {
                 "approved": True,
@@ -726,22 +748,7 @@ class Actor:
             except Exception:
                 logging.debug("Not able to notify peer at url(" + requrl + ")")
                 self.last_response_code = 500
-        dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
-        return dbtrust.modify(
-            baseuri=baseuri,
-            secret=secret,
-            desc=desc,
-            approved=approved,
-            verified=verified,
-            verification_token=verification_token,
-            peer_approved=peer_approved,
-            client_name=client_name,
-            client_version=client_version,
-            client_platform=client_platform,
-            oauth_client_id=oauth_client_id,
-            last_accessed=last_accessed,
-            last_connected_via=last_connected_via,
-        )
+        return result
 
     def create_reciprocal_trust(
         self,
@@ -1037,6 +1044,17 @@ class Actor:
                         )
                         if sub_obj:
                             sub_obj.delete()
+            # Delete associated trust permissions before deleting the trust
+            try:
+                from .trust_permissions import TrustPermissionStore
+
+                if self.config is not None and self.id is not None:
+                    permission_store = TrustPermissionStore(self.config)
+                    permission_store.delete_permissions(self.id, rel["peerid"])
+            except Exception as e:
+                logging.warning(
+                    f"Failed to delete trust permissions for {rel['peerid']}: {e}"
+                )
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )
@@ -1268,6 +1286,18 @@ class Actor:
         trust_rel = self.get_trust_relationship(peerid)
         if not trust_rel:
             return
+
+        # Filter blob based on peer permissions for property subscriptions
+        if sub.get("target") == "properties":
+            filtered_blob = self._filter_subscription_data_by_permissions(
+                peerid=peerid,
+                blob=blob,
+                subtarget=sub.get("subtarget"),
+            )
+            if filtered_blob is None:
+                return  # Nothing to send after filtering
+            blob = filtered_blob
+
         params = {
             "id": self.id,
             "subscriptionid": sub["subscriptionid"],
@@ -1337,6 +1367,61 @@ class Actor:
                 logging.warning("About to clear diff without having subobj set")
             else:
                 sub_obj.clear_diff(diff["sequence"])
+
+    def _filter_subscription_data_by_permissions(
+        self, peerid: str, blob: str | bytes, subtarget: str | None = None
+    ) -> str | None:
+        """Filter subscription data based on peer's property permissions.
+
+        Returns filtered blob as JSON string, or None if nothing passes the filter.
+        Implements fail-closed: errors result in no data sent.
+        """
+        try:
+            if not self.config or not self.id:
+                logging.warning("Missing config or actor ID for subscription filtering")
+                return None  # Fail-closed
+
+            evaluator = get_permission_evaluator(self.config)
+            if not evaluator:
+                logging.warning(
+                    f"Permission evaluator not available for subscription filtering to {peerid}"
+                )
+                return None  # Fail-closed
+
+            # Parse blob with explicit encoding handling for bytes
+            if isinstance(blob, bytes):
+                data = json.loads(blob.decode('utf-8'))
+            elif isinstance(blob, str):
+                data = json.loads(blob)
+            else:
+                data = blob
+
+            if not isinstance(data, dict):
+                logging.debug(f"Cannot filter non-dict subscription data: {type(data)}")
+                return blob if isinstance(blob, str) else json.dumps(blob)
+
+            filtered_data = {}
+            for property_name, value in data.items():
+                # Build full property path for permission check
+                property_path = f"{subtarget}/{property_name}" if subtarget else property_name
+                result = evaluator.evaluate_property_access(
+                    self.id, peerid, property_path, operation="read"
+                )
+                if result == PermissionResult.ALLOWED:
+                    filtered_data[property_name] = value
+                else:
+                    logging.debug(
+                        f"Filtered property {property_path} from subscription callback to {peerid}"
+                    )
+
+            if not filtered_data:
+                logging.debug(f"No permitted properties in callback to {peerid}, skipping")
+                return None
+
+            return json.dumps(filtered_data)
+        except Exception as e:
+            logging.error(f"Permission filtering failed for subscription callback: {e}")
+            return None  # Fail-closed: don't send data on error
 
     def register_diffs(self, target=None, subtarget=None, resource=None, blob=None):
         """Registers a blob diff against all subscriptions with the correct target, subtarget, and resource.

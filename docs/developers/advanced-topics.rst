@@ -90,6 +90,41 @@ For custom routes outside the standard ActingWeb handler system, use ``check_and
 
 See the full documentation in :doc:`../authentication-system` under "Custom Route Authentication".
 
+Async Peer Communication
+------------------------
+
+``AwProxy`` provides async methods for non-blocking HTTP calls to peer actors in FastAPI routes:
+
+.. code-block:: python
+
+   from actingweb.aw_proxy import AwProxy
+
+   @fastapi_app.get("/{actor_id}/custom/peer-data")
+   async def get_peer_data(actor_id: str, peer_id: str):
+       config = app.get_config()
+       proxy = AwProxy(
+           peer_target={"id": actor_id, "peerid": peer_id},
+           config=config
+       )
+
+       if not proxy.trust:
+           raise HTTPException(status_code=404, detail="No trust relationship")
+
+       # Non-blocking call to peer
+       result = await proxy.get_resource_async(path="properties/public")
+
+       if proxy.last_response_code != 200:
+           raise HTTPException(status_code=502, detail="Failed to reach peer")
+
+       return result
+
+**Available async methods:**
+
+- ``get_resource_async(path, params)`` - GET request
+- ``create_resource_async(path, params)`` - POST request
+- ``change_resource_async(path, params)`` - PUT request
+- ``delete_resource_async(path)`` - DELETE request
+
 Migration
 ---------
 

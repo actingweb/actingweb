@@ -32,6 +32,19 @@ class TrustType:
 
     Note: 'name' corresponds to the 'relationship' field in the database for
     backward compatibility with existing ActingWeb protocol.
+
+    ACL Rules:
+        The acl_rules field allows defining HTTP endpoint access for this trust type.
+        Each rule is a tuple of (path, methods, access) where:
+        - path: The HTTP path pattern (e.g., "subscriptions/<id>", "properties")
+        - methods: HTTP methods allowed ("GET", "POST", "PUT", "DELETE", or "" for all)
+        - access: "a" for allow, "r" for reject
+
+        Example:
+            acl_rules=[
+                ("subscriptions/<id>", "POST", "a"),  # Allow creating subscriptions
+                ("properties", "GET", "a"),           # Allow reading properties
+            ]
     """
 
     name: str  # Unique identifier (e.g., "viewer", "mcp_client") - stored as 'relationship'
@@ -41,6 +54,7 @@ class TrustType:
     allow_user_override: bool = True  # Whether users can modify permissions
     oauth_scope: str | None = None  # OAuth2 scope mapping
     created_by: str = "system"  # Who created this relationship type
+    acl_rules: list[tuple[str, str, str]] | None = None  # HTTP endpoint ACL rules
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
@@ -147,10 +161,12 @@ class TrustTypeRegistry:
 
         try:
             prop_name = f"trust_type:{trust_type.name}"
-            setattr(sys_actor.property, prop_name, json.dumps(trust_type.to_dict()))
+            trust_type_json = json.dumps(trust_type.to_dict())
+            setattr(sys_actor.property, prop_name, trust_type_json)
             # Update cache
             self._cache[trust_type.name] = trust_type
             logger.info(f"Registered trust type: {trust_type.name}")
+            logger.debug(f"Trust type '{trust_type.name}' stored with permissions: {trust_type.base_permissions}")
             return True
         except Exception as e:
             logger.error(f"Error registering trust type {trust_type.name}: {e}")
@@ -159,6 +175,7 @@ class TrustTypeRegistry:
     def get_type(self, name: str) -> TrustType | None:
         """Get a trust type by name (from system actor properties)."""
         if self._cache_valid and name in self._cache:
+            logger.debug(f"Returning cached trust type '{name}'")
             return self._cache[name]
 
         sys_actor = self._get_system_actor()
@@ -169,9 +186,11 @@ class TrustTypeRegistry:
             prop_name = f"trust_type:{name}"
             raw = getattr(sys_actor.property, prop_name, None)
             if not raw:
+                logger.debug(f"Trust type '{name}' not found in system actor properties")
                 return None
             trust_type_data = json.loads(raw)
             trust_type = TrustType.from_dict(trust_type_data)
+            logger.debug(f"Loaded trust type '{name}' from DB: base_permissions={trust_type.base_permissions}")
             self._cache[name] = trust_type
             return trust_type
         except Exception as e:

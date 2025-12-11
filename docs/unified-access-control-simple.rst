@@ -163,6 +163,54 @@ Use the advanced format for fine-grained control:
        oauth_scope="myapp.enterprise"
    )
 
+ACL Rules (HTTP Endpoint Access)
+--------------------------------
+
+If your trust type needs to interact with ActingWeb REST endpoints like ``/subscriptions``
+or ``/callbacks``, you must specify ACL rules. Without these rules, the trust type won't
+be able to create subscriptions or receive callbacks.
+
+**Example: Actor-to-Actor Subscription Trust Type**
+
+.. code-block:: python
+
+   access_control.add_trust_type(
+       name="subscriber",
+       display_name="Subscriber",
+       description="Trust type for actors subscribing to each other's data",
+       permissions={
+           "properties": {
+               "patterns": ["memory_*", "public/*"],
+               "operations": ["read"]
+           },
+       },
+       # ACL rules allow HTTP endpoint access
+       acl_rules=[
+           ("subscriptions/<id>", "POST", "a"),  # Can create subscriptions
+           ("properties", "GET", "a"),           # Can read properties
+           ("callbacks", "", "a"),               # Can receive callbacks (all methods)
+       ]
+   )
+
+**ACL Rule Format**: Each rule is ``(path, methods, access)``:
+
+* ``path`` - HTTP path (e.g., ``subscriptions/<id>``, ``properties``)
+* ``methods`` - HTTP methods (``GET``, ``POST``, etc., or ``""`` for all)
+* ``access`` - ``a`` for allow, ``r`` for reject
+
+**Common ACL Rules**:
+
+.. code-block:: python
+
+   # Allow creating subscriptions (actor-to-actor data sharing)
+   ("subscriptions/<id>", "POST", "a")
+
+   # Allow reading properties
+   ("properties", "GET", "a")
+
+   # Allow receiving subscription callbacks
+   ("callbacks", "", "a")
+
 Permission Patterns
 ===================
 

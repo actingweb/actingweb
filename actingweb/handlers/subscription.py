@@ -187,13 +187,9 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden. Wrong peer id in request")
             return
-        # We need to validate that this peer has GET rights on what it wants to subscribe to
-        if not auth_result.auth_obj.check_authorisation(
-            path=target, subpath=subtarget or "", method="GET", peerid=peerid
-        ):
-            if self.response:
-                self.response.set_status(403)
-            return
+        # Subscription authorization is handled by ACL rules (e.g., ("subscriptions/<id>", "POST", "a"))
+        # The ACL check happens in authenticate_actor/authorize above
+        # Property-level filtering happens at callback time based on permission patterns
         new_sub = myself.create_subscription(
             peerid=auth_result.auth_obj.acl["peerid"],
             target=target,

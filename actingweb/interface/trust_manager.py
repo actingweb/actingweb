@@ -210,14 +210,22 @@ class TrustManager:
         return bool(result)
 
     def delete_relationship(self, peer_id: str) -> bool:
-        """Delete a trust relationship."""
+        """Delete a trust relationship.
+
+        Note: Associated permissions are automatically deleted by the core
+        delete_reciprocal_trust method.
+        """
         result = self._core_actor.delete_reciprocal_trust(
             peerid=peer_id, delete_peer=True
         )
         return bool(result)
 
     def delete_all_relationships(self) -> bool:
-        """Delete all trust relationships."""
+        """Delete all trust relationships.
+
+        Note: Associated permissions are automatically deleted by the core
+        delete_reciprocal_trust method for each relationship.
+        """
         result = self._core_actor.delete_reciprocal_trust(delete_peer=True)
         return bool(result)
 

@@ -5,6 +5,11 @@ CHANGELOG
 v3.6.1: TBD, 2025
 --------------------
 
+FIXED
+~~~~~
+
+- Add trigger of oauth_success hook in SPA oauth2 login
+
 ADDED
 ~~~~~
 

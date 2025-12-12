@@ -486,6 +486,7 @@ class OAuth2CallbackHandler(BaseHandler):
                     email=identifier,  # Pass identifier (may be email or provider ID)
                     access_token=access_token,
                     token_data=token_data,
+                    user_info=user_info,  # Pass full user info for displayname etc.
                 )
                 oauth_valid = bool(result) if result is not None else True
             except Exception as e:

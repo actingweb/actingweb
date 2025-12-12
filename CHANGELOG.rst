@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.6.1: Dec 12, 2025
+v3.6.1: TBD, 2025
 --------------------
 
 ADDED
@@ -17,6 +17,7 @@ ADDED
 
 - **OAuth2 Token Heuristic**: Added ``Auth._looks_like_oauth2_token()`` method to quickly identify trust secrets vs OAuth2 tokens, avoiding unnecessary network calls to OAuth providers for obvious non-OAuth tokens
 - **List Property Subscriptions**: List property item operations (add, update, delete) now trigger subscription notifications with structured diff payloads including action type and index
+- oauth_success hook now gets full oauth user info
 
 CHANGED
 ~~~~~~~

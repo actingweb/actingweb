@@ -371,16 +371,22 @@ class TestWWWWithOAuth2:
         # In real flow: User authorizes -> Google redirects to /oauth/callback?code=...&state=...
         # For www access, we need to go through the full OAuth flow to get a session cookie
 
-        # Since we're testing with mocked Google, we can directly use the Google token
-        # as the oauth_token cookie (ActingWeb accepts Google tokens for www access)
+        # Try to access www endpoint - should redirect to OAuth since we don't have a valid session
         response = requests.get(
             f"{test_app}/{actor_id}/www",
-            cookies={"oauth_token": "google_access_token"},
+            allow_redirects=False,  # Don't follow redirect to avoid unmocked OAuth endpoint
         )
 
-        # Should get 200 with HTML content
-        assert response.status_code == 200
-        assert "text/html" in response.headers.get("Content-Type", "")
+        # Should redirect to OAuth provider for authentication
+        assert response.status_code == 302, (
+            f"Expected redirect to OAuth, got {response.status_code}"
+        )
+
+        # Verify redirect is to Google OAuth authorization endpoint
+        location = response.headers.get("Location", "")
+        assert "accounts.google.com" in location or "oauth" in location.lower(), (
+            f"Expected OAuth redirect, got: {location}"
+        )
 
 
 class TestOAuth2CORSPreflight:

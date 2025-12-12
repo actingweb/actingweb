@@ -4,10 +4,13 @@ Simplified trust relationship management for ActingWeb actors.
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from ..actor import Actor as CoreActor
 from ..trust import canonical_connection_method
+
+if TYPE_CHECKING:
+    from .hooks import HookRegistry
 
 
 class TrustRelationship:
@@ -148,8 +151,35 @@ class TrustManager:
         actor.trust.approve_relationship(peer_id="peer123")
     """
 
-    def __init__(self, core_actor: CoreActor):
+    def __init__(self, core_actor: CoreActor, hooks: Optional["HookRegistry"] = None):
         self._core_actor = core_actor
+        self._hooks = hooks
+
+    def _execute_lifecycle_hook(
+        self,
+        event: str,
+        peer_id: str = "",
+        relationship: str = "",
+        trust_data: dict[str, Any] | None = None,
+    ) -> None:
+        """Execute a lifecycle hook."""
+        if not self._hooks:
+            return
+
+        try:
+            from .actor_interface import ActorInterface
+
+            actor_interface = ActorInterface(self._core_actor, hooks=self._hooks)
+            self._hooks.execute_lifecycle_hooks(
+                event,
+                actor=actor_interface,
+                peer_id=peer_id,
+                relationship=relationship,
+                trust_data=trust_data or {},
+            )
+            logging.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
+        except Exception as e:
+            logging.error(f"Error executing lifecycle hook '{event}': {e}")
 
     @property
     def relationships(self) -> list[TrustRelationship]:
@@ -199,7 +229,7 @@ class TrustManager:
         return None
 
     def approve_relationship(self, peer_id: str) -> bool:
-        """Approve a trust relationship."""
+        """Approve a trust relationship with lifecycle hook execution."""
         relationship = self.get_relationship(peer_id)
         if not relationship:
             return False
@@ -207,14 +237,37 @@ class TrustManager:
         result = self._core_actor.modify_trust_and_notify(
             peerid=peer_id, relationship=relationship.relationship, approved=True
         )
+
+        if result:
+            # Get updated trust data and trigger lifecycle hook
+            updated_trust = self.get_relationship(peer_id)
+            if updated_trust and updated_trust.approved and updated_trust.peer_approved:
+                self._execute_lifecycle_hook(
+                    "trust_approved",
+                    peer_id=peer_id,
+                    relationship=relationship.relationship,
+                    trust_data=updated_trust.to_dict(),
+                )
+
         return bool(result)
 
     def delete_relationship(self, peer_id: str) -> bool:
-        """Delete a trust relationship.
+        """Delete a trust relationship with lifecycle hook execution.
 
         Note: Associated permissions are automatically deleted by the core
         delete_reciprocal_trust method.
         """
+        # Get relationship data before deletion for the hook
+        relationship = self.get_relationship(peer_id)
+
+        # Execute lifecycle hook BEFORE deletion
+        if relationship:
+            self._execute_lifecycle_hook(
+                "trust_deleted",
+                peer_id=peer_id,
+                relationship=relationship.relationship,
+            )
+
         result = self._core_actor.delete_reciprocal_trust(
             peerid=peer_id, delete_peer=True
         )
@@ -228,6 +281,39 @@ class TrustManager:
         """
         result = self._core_actor.delete_reciprocal_trust(delete_peer=True)
         return bool(result)
+
+    async def approve_relationship_async(self, peer_id: str) -> bool:
+        """Async variant of approve_relationship for use in async contexts (FastAPI).
+
+        Wraps the synchronous operation in run_in_executor to avoid blocking
+        the event loop during database operations.
+        """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.approve_relationship, peer_id)
+
+    async def delete_relationship_async(self, peer_id: str) -> bool:
+        """Async variant of delete_relationship for use in async contexts (FastAPI).
+
+        Wraps the synchronous operation in run_in_executor to avoid blocking
+        the event loop during database operations.
+        """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.delete_relationship, peer_id)
+
+    async def delete_all_relationships_async(self) -> bool:
+        """Async variant of delete_all_relationships for use in async contexts (FastAPI).
+
+        Wraps the synchronous operation in run_in_executor to avoid blocking
+        the event loop during database operations.
+        """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.delete_all_relationships)
 
     @property
     def active_relationships(self) -> list[TrustRelationship]:

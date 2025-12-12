@@ -1146,6 +1146,13 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         if "explanation" in params:
             list_prop.set_explanation(str(params["explanation"]))
 
+        # Register diff for metadata changes
+        myself.register_diffs(
+            target="properties",
+            subtarget=name,
+            blob=json.dumps({"action": "metadata_update", **params}),
+        )
+
         if self.response:
             self.response.set_status(204)
 
@@ -1315,6 +1322,19 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
 
                 list_prop.append(item_value)
 
+                # Register diff for subscription notifications
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps(
+                        {
+                            "action": "add",
+                            "index": len(list_prop) - 1,
+                            "value": item_value,
+                        }
+                    ),
+                )
+
                 if self.response:
                     self.response.write(
                         json.dumps({"success": True, "index": len(list_prop) - 1})
@@ -1350,6 +1370,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
 
                 list_prop[index] = item_value
 
+                # Register diff for subscription notifications
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps({"action": "update", "index": index, "value": item_value}),
+                )
+
                 if self.response:
                     self.response.set_status(204)
 
@@ -1375,6 +1402,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     return
 
                 del list_prop[index]
+
+                # Register diff for subscription notifications
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps({"action": "delete", "index": index}),
+                )
 
                 if self.response:
                     self.response.set_status(204)

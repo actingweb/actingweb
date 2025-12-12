@@ -854,6 +854,47 @@ class OAuth2CallbackHandler(BaseHandler):
                 actor_instance.store.oauth_refresh_token = refresh_token
             actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
+        # Execute oauth_success lifecycle hooks (same as non-SPA flow)
+        if self.hooks:
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
+
+                result = self.hooks.execute_lifecycle_hooks(
+                    "oauth_success",
+                    actor_interface,
+                    email=identifier,
+                    access_token=access_token,
+                    token_data=token_data,
+                    user_info=user_info,
+                )
+                oauth_valid = bool(result) if result is not None else True
+            except Exception as e:
+                logger.error(f"Error in SPA lifecycle hook for oauth_success: {e}")
+                oauth_valid = False
+
+            if not oauth_valid:
+                logger.warning(
+                    f"SPA OAuth success hook rejected authentication for {identifier}"
+                )
+                parsed = urlparse(spa_redirect_url)
+                params = {"error": "auth_rejected", "error_description": "Authentication rejected by application"}
+                spa_error_url = urlunparse((
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    urlencode(params),
+                    parsed.fragment
+                ))
+                self.response.set_status(302, "Found")
+                self.response.set_redirect(spa_error_url)
+                return {"redirect_required": True, "redirect_url": spa_error_url}
+
         # Generate SPA session tokens (session_manager already initialized at start of method)
         spa_access_token = self.config.new_token()
         actor_id_str = actor_instance.id or ""

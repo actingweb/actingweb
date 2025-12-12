@@ -402,7 +402,23 @@ def trust_helper():
 
                 if response.status_code != 204:
                     raise RuntimeError(
-                        f"Failed to approve trust: {response.status_code}"
+                        f"Failed to approve trust from to_actor: {response.status_code}"
+                    )
+
+                # Also approve from from_actor's side to establish mutual trust
+                peer_id = trust["peerid"]
+                from_actor_approval_url = (
+                    f"{from_actor['url']}/trust/{relationship}/{peer_id}"
+                )
+                response = requests.put(
+                    from_actor_approval_url,
+                    json={"approved": True},
+                    auth=(from_actor["creator"], from_actor["passphrase"]),
+                )
+
+                if response.status_code not in [200, 204]:
+                    raise RuntimeError(
+                        f"Failed to approve trust from from_actor: {response.status_code}"
                     )
 
             return trust

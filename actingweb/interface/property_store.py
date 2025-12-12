@@ -2,18 +2,25 @@
 Simplified property store interface for ActingWeb actors.
 """
 
+import json
+import logging
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from ..property import PropertyStore as CorePropertyStore
+
+if TYPE_CHECKING:
+    from ..actor import Actor as CoreActor
+    from ..config import Config
+    from .hooks import HookRegistry
 
 
 class PropertyStore:
     """
     Clean interface for actor property management.
 
-    Provides dictionary-like access to actor properties with type safety
-    and convenience methods.
+    Provides dictionary-like access to actor properties with automatic
+    subscription notifications and hook execution.
 
     Example usage:
         actor.properties.email = "user@example.com"
@@ -26,20 +33,75 @@ class PropertyStore:
             print(f"{key}: {value}")
     """
 
-    def __init__(self, core_store: CorePropertyStore):
+    def __init__(
+        self,
+        core_store: CorePropertyStore,
+        actor: Optional["CoreActor"] = None,
+        hooks: Optional["HookRegistry"] = None,
+        config: Optional["Config"] = None,
+    ):
         self._core_store = core_store
+        self._actor = actor
+        self._hooks = hooks
+        self._config = config
+
+    def _execute_property_hook(
+        self, key: str, operation: str, value: Any, path: list[str]
+    ) -> Any:
+        """Execute property hook and return transformed value (or original if no hook)."""
+        if not self._hooks or not self._actor:
+            return value
+
+        try:
+            from .actor_interface import ActorInterface
+
+            # Create ActorInterface wrapper for hook execution
+            actor_interface = ActorInterface(self._actor)
+
+            # Execute hook - returns transformed value or None if rejected
+            result = self._hooks.execute_property_hooks(
+                key, operation, actor_interface, value, path
+            )
+            return result if result is not None else value
+        except Exception as e:
+            logging.warning(f"Error executing property hook for {key}: {e}")
+            return value
+
+    def _register_diff(self, key: str, value: Any, resource: str = "") -> None:
+        """Register a diff for subscription notifications."""
+        if not self._actor:
+            return
+
+        try:
+            blob = json.dumps(value) if value is not None else ""
+            self._actor.register_diffs(
+                target="properties",
+                subtarget=key,
+                resource=resource or None,
+                blob=blob,
+            )
+        except Exception as e:
+            logging.warning(f"Error registering diff for {key}: {e}")
 
     def __getitem__(self, key: str) -> Any:
         """Get property value by key."""
         return self._core_store[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
-        """Set property value by key."""
-        self._core_store[key] = value
+        """Set property value by key with hook execution and diff registration."""
+        # Execute pre-store hook
+        transformed = self._execute_property_hook(key, "put", value, [key])
+
+        # Store the value
+        self._core_store[key] = transformed
+
+        # Register diff for subscribers
+        self._register_diff(key, transformed)
 
     def __delitem__(self, key: str) -> None:
-        """Delete property by key."""
+        """Delete property by key with diff registration."""
         self._core_store[key] = None
+        self._register_diff(key, "")
 
     def __contains__(self, key: str) -> bool:
         """Check if property exists."""
@@ -50,7 +112,6 @@ class PropertyStore:
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over property keys."""
-        # Get all properties from the core store
         try:
             if hasattr(self._core_store, "get_all"):
                 all_props = self._core_store.get_all()
@@ -73,7 +134,7 @@ class PropertyStore:
             super().__setattr__(key, value)
         else:
             if hasattr(self, "_core_store") and self._core_store is not None:
-                self._core_store[key] = value
+                self[key] = value  # Use __setitem__ for hooks/diffs
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get property value with default."""
@@ -84,14 +145,21 @@ class PropertyStore:
             return default
 
     def set(self, key: str, value: Any) -> None:
-        """Set property value."""
+        """Set property value with hooks and diff registration."""
+        self[key] = value  # Delegate to __setitem__
+
+    def set_without_notification(self, key: str, value: Any) -> None:
+        """Set property value without triggering subscription notifications.
+
+        Use this for internal operations where notifications are not desired.
+        """
         self._core_store[key] = value
 
     def delete(self, key: str) -> bool:
         """Delete property and return True if it existed."""
         try:
             if key in self:
-                self._core_store[key] = None
+                del self[key]  # Use __delitem__ for diff registration
                 return True
             return False
         except (KeyError, AttributeError):
@@ -112,14 +180,19 @@ class PropertyStore:
             yield (key, self[key])
 
     def update(self, other: dict[str, Any]) -> None:
-        """Update properties from dictionary."""
+        """Update properties from dictionary with hooks and diff registration."""
         for key, value in other.items():
             self[key] = value
 
     def clear(self) -> None:
-        """Clear all properties."""
-        for key in list(self.keys()):
+        """Clear all properties with diff registration."""
+        keys = list(self.keys())
+        for key in keys:
             del self[key]
+
+        # Also register a "clear all" diff
+        if self._actor and keys:
+            self._actor.register_diffs(target="properties", subtarget=None, blob="")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -129,3 +202,158 @@ class PropertyStore:
     def core_store(self) -> CorePropertyStore:
         """Access underlying core property store."""
         return self._core_store
+
+
+class NotifyingListProperty:
+    """Wrapper around ListProperty that registers diffs for subscription notifications.
+
+    All list mutation operations will trigger register_diffs to notify subscribers
+    of changes to the property list.
+    """
+
+    def __init__(
+        self,
+        list_prop: Any,  # ListProperty
+        list_name: str,
+        actor: Optional["CoreActor"] = None,
+    ):
+        self._list_prop = list_prop
+        self._list_name = list_name
+        self._actor = actor
+
+    def _register_diff(self, operation: str = "") -> None:
+        """Register a diff for the list property change."""
+        if not self._actor:
+            return
+
+        try:
+            # Create a summary of the change
+            # Note: For delete_all, we don't query length to avoid recreating metadata
+            if operation == "delete_all":
+                length = 0
+            else:
+                length = len(self._list_prop)
+
+            diff_info = {
+                "list": self._list_name,
+                "operation": operation,
+                "length": length,
+            }
+            self._actor.register_diffs(
+                target="properties",
+                subtarget=f"list:{self._list_name}",
+                resource=None,
+                blob=json.dumps(diff_info),
+            )
+        except Exception as e:
+            logging.warning(f"Error registering diff for list {self._list_name}: {e}")
+
+    # Read-only operations - delegate directly
+    def __len__(self) -> int:
+        return len(self._list_prop)
+
+    def __getitem__(self, index: int) -> Any:
+        return self._list_prop[index]
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._list_prop)
+
+    def get_description(self) -> str:
+        return self._list_prop.get_description()
+
+    def get_explanation(self) -> str:
+        return self._list_prop.get_explanation()
+
+    def to_list(self) -> list[Any]:
+        return self._list_prop.to_list()
+
+    def slice(self, start: int, end: int) -> list[Any]:
+        return self._list_prop.slice(start, end)
+
+    def index(self, value: Any, start: int = 0, stop: int | None = None) -> int:
+        return self._list_prop.index(value, start, stop)
+
+    def count(self, value: Any) -> int:
+        return self._list_prop.count(value)
+
+    # Mutation operations - register diffs after completion
+    def __setitem__(self, index: int, value: Any) -> None:
+        self._list_prop[index] = value
+        self._register_diff("update")
+
+    def __delitem__(self, index: int) -> None:
+        del self._list_prop[index]
+        self._register_diff("delete")
+
+    def set_description(self, description: str) -> None:
+        self._list_prop.set_description(description)
+        self._register_diff("metadata")
+
+    def set_explanation(self, explanation: str) -> None:
+        self._list_prop.set_explanation(explanation)
+        self._register_diff("metadata")
+
+    def append(self, item: Any) -> None:
+        self._list_prop.append(item)
+        self._register_diff("append")
+
+    def extend(self, items: list[Any]) -> None:
+        self._list_prop.extend(items)
+        self._register_diff("extend")
+
+    def clear(self) -> None:
+        self._list_prop.clear()
+        self._register_diff("clear")
+
+    def delete(self) -> None:
+        self._list_prop.delete()
+        self._register_diff("delete_all")
+
+    def pop(self, index: int = -1) -> Any:
+        result = self._list_prop.pop(index)
+        self._register_diff("pop")
+        return result
+
+    def insert(self, index: int, item: Any) -> None:
+        self._list_prop.insert(index, item)
+        self._register_diff("insert")
+
+    def remove(self, value: Any) -> None:
+        self._list_prop.remove(value)
+        self._register_diff("remove")
+
+
+class PropertyListStore:
+    """Property list store wrapper that adds register_diffs for subscription notifications.
+
+    Wraps the core PropertyListStore and returns NotifyingListProperty instances
+    for all list accesses, ensuring that list mutations trigger subscription notifications.
+    """
+
+    def __init__(
+        self,
+        core_list_store: Any,  # PropertyListStore from property.py
+        actor: Optional["CoreActor"] = None,
+    ):
+        self._core_store = core_list_store
+        self._actor = actor
+
+    def exists(self, name: str) -> bool:
+        """Check if a list property exists."""
+        return self._core_store.exists(name)
+
+    def list_all(self) -> list[str]:
+        """List all existing list property names."""
+        return self._core_store.list_all()
+
+    def __getattr__(self, name: str) -> NotifyingListProperty:
+        """Return a NotifyingListProperty for the requested list name."""
+        if name.startswith("_"):
+            raise AttributeError(
+                f"'{self.__class__.__name__}' object has no attribute '{name}'"
+            )
+
+        # Get the underlying ListProperty from core store
+        list_prop = getattr(self._core_store, name)
+        # Wrap it with notification support
+        return NotifyingListProperty(list_prop, name, self._actor)

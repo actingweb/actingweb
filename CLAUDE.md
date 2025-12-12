@@ -43,6 +43,38 @@ The library follows a micro-services model where each user gets their own "actor
 - **FastAPI Integration** (`actingweb/interface/integrations/fastapi_integration.py`): Async FastAPI support with OpenAPI docs
 - **Actor Interface** (`actingweb/interface/actor_interface.py`): Modern actor management wrapper
 - **Hook Registry** (`actingweb/interface/hook_registry.py`): Decorator-based event handling
+- **Authenticated Views** (`actingweb/interface/authenticated_views.py`): Permission-enforced actor access
+
+### Authenticated Views
+
+The authenticated views system provides permission-enforced access to actor resources. Three access modes are supported:
+
+**1. Owner Mode** (direct ActorInterface access - full access):
+```python
+actor = ActorInterface(core_actor)
+actor.properties["any_property"] = value  # Full access, no permission checks
+```
+
+**2. Peer Mode** (actor-to-actor access):
+```python
+peer_view = actor.as_peer(peer_id="peer123", trust_relationship=trust_data)
+peer_view.properties["shared_data"] = value  # Permission checks enforced
+```
+
+**3. Client Mode** (OAuth2/MCP client access):
+```python
+client_view = actor.as_client(client_id="mcp_client", trust_relationship=trust_data)
+client_view.properties["user_data"] = value  # Permission checks enforced
+```
+
+**Handler Helper Method:**
+```python
+# In handler code
+auth_view = self._get_authenticated_view(actor, auth_result)
+if auth_view:
+    # All operations now enforce permissions
+    data = auth_view.properties.get("config")
+```
 
 ### Key Design Patterns
 - Each actor has a unique root URL: `https://domain.com/{actor_id}`

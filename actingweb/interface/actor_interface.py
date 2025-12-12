@@ -13,6 +13,8 @@ from .trust_manager import TrustManager
 
 if TYPE_CHECKING:
     from ..config import Config
+    from .authenticated_views import AuthenticatedActorView
+    from .hooks import HookRegistry
 
 
 class ActorInterface:
@@ -55,12 +57,25 @@ class ActorInterface:
         )
     """
 
-    def __init__(self, core_actor: CoreActor, service_registry=None):
+    def __init__(
+        self,
+        core_actor: CoreActor,
+        service_registry=None,
+        hooks: Optional["HookRegistry"] = None,
+    ):
         self._core_actor = core_actor
         self._property_store: PropertyStore | None = None
         self._property_list_store = None  # Will be initialized on first access
         self._trust_manager: TrustManager | None = None
         self._subscription_manager: SubscriptionManager | None = None
+
+        # Get hooks from parameter, config, or None
+        if hooks is not None:
+            self._hooks = hooks
+        else:
+            config = getattr(core_actor, "config", None)
+            self._hooks = getattr(config, "_hooks", None) if config else None
+
         if service_registry is not None:
             self._service_registry = service_registry
         else:
@@ -229,26 +244,35 @@ class ActorInterface:
                 raise RuntimeError(
                     "Actor properties not available - actor may not be properly initialized"
                 )
-            self._property_store = PropertyStore(self._core_actor.property)
+            self._property_store = PropertyStore(
+                self._core_actor.property,
+                actor=self._core_actor,
+                hooks=self._hooks,
+                config=getattr(self._core_actor, "config", None),
+            )
         return self._property_store
 
     @property
     def property_lists(self):
-        """Actor property lists for distributed storage."""
+        """Actor property lists for distributed storage with subscription notifications."""
         if self._property_list_store is None:
             # Import here to avoid circular imports
-            from ..property import PropertyListStore
+            from ..property import PropertyListStore as CorePropertyListStore
+            from .property_store import PropertyListStore
 
-            self._property_list_store = PropertyListStore(
+            # Create the core store
+            core_store = CorePropertyListStore(
                 actor_id=self.id, config=self._core_actor.config
             )
+            # Wrap with notification support
+            self._property_list_store = PropertyListStore(core_store, self._core_actor)
         return self._property_list_store
 
     @property
     def trust(self) -> TrustManager:
         """Trust relationship manager."""
         if self._trust_manager is None:
-            self._trust_manager = TrustManager(self._core_actor)
+            self._trust_manager = TrustManager(self._core_actor, hooks=self._hooks)
         return self._trust_manager
 
     @property
@@ -326,6 +350,60 @@ class ActorInterface:
             Dictionary with peer information
         """
         return self._core_actor.get_peer_info(peer_url)
+
+    def as_peer(
+        self, peer_id: str, trust_relationship: dict[str, Any] | None = None
+    ) -> "AuthenticatedActorView":
+        """Create a view of this actor as seen by a peer.
+
+        All operations on this view will have permission checks enforced
+        based on the peer's trust relationship.
+
+        Args:
+            peer_id: The peer actor's ID
+            trust_relationship: Optional trust relationship data
+
+        Returns:
+            AuthenticatedActorView with permission enforcement
+
+        Example:
+            peer_view = actor.as_peer("peer123", trust_data)
+            peer_view.properties["shared_data"] = value  # Permission checked
+        """
+        from .authenticated_views import AuthContext, AuthenticatedActorView
+
+        auth_context = AuthContext(
+            peer_id=peer_id,
+            trust_relationship=trust_relationship,
+        )
+        return AuthenticatedActorView(self, auth_context, self._hooks)
+
+    def as_client(
+        self, client_id: str, trust_relationship: dict[str, Any] | None = None
+    ) -> "AuthenticatedActorView":
+        """Create a view of this actor as seen by an OAuth2/MCP client.
+
+        All operations on this view will have permission checks enforced
+        based on the client's trust relationship.
+
+        Args:
+            client_id: The OAuth2/MCP client ID
+            trust_relationship: Optional trust relationship data
+
+        Returns:
+            AuthenticatedActorView with permission enforcement
+
+        Example:
+            client_view = actor.as_client("mcp_client_123", trust_data)
+            client_view.properties["user_data"] = value  # Permission checked
+        """
+        from .authenticated_views import AuthContext, AuthenticatedActorView
+
+        auth_context = AuthContext(
+            client_id=client_id,
+            trust_relationship=trust_relationship,
+        )
+        return AuthenticatedActorView(self, auth_context, self._hooks)
 
     def to_dict(self) -> dict[str, Any]:
         """

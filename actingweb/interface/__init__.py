@@ -7,6 +7,14 @@ with improved developer experience.
 
 from .actor_interface import ActorInterface
 from .app import ActingWebApp
+from .authenticated_views import (
+    AuthContext,
+    AuthenticatedActorView,
+    AuthenticatedPropertyListStore,
+    AuthenticatedPropertyStore,
+    AuthenticatedSubscriptionManager,
+    PermissionError,
+)
 from .hooks import (
     HookRegistry,
     action_hook,
@@ -33,4 +41,11 @@ __all__ = [
     "subscription_hook",
     "method_hook",
     "action_hook",
+    # Authenticated views
+    "AuthContext",
+    "AuthenticatedActorView",
+    "AuthenticatedPropertyStore",
+    "AuthenticatedPropertyListStore",
+    "AuthenticatedSubscriptionManager",
+    "PermissionError",
 ]

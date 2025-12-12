@@ -2,6 +2,27 @@
 CHANGELOG
 =========
 
+v3.6.1: Dec 12, 2025
+--------------------
+
+ADDED
+~~~~~
+
+- **Async Authentication**: Added async versions of authentication methods to avoid blocking the event loop during OAuth2 token validation:
+
+  - ``Auth.check_token_auth_async()`` - Async bearer token validation
+  - ``Auth._check_oauth2_token_async()`` - Async OAuth2 token validation with httpx
+  - ``check_and_verify_auth_async()`` - Async authentication helper for custom routes
+  - ``OAuth2Authenticator.validate_token_and_get_user_info_async()`` - Async user info retrieval
+
+- **OAuth2 Token Heuristic**: Added ``Auth._looks_like_oauth2_token()`` method to quickly identify trust secrets vs OAuth2 tokens, avoiding unnecessary network calls to OAuth providers for obvious non-OAuth tokens
+- **List Property Subscriptions**: List property item operations (add, update, delete) now trigger subscription notifications with structured diff payloads including action type and index
+
+CHANGED
+~~~~~~~
+
+- OAuth2 token validation now includes a quick heuristic check before making network requests, significantly improving authentication performance for trust-based authentication
+
 v3.6.0: Dec 11, 2025
 --------------------
 

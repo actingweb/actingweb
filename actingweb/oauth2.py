@@ -407,6 +407,73 @@ class OAuth2Authenticator:
             _invalid_token_cache[token_hash] = current_time
             return None
 
+    async def validate_token_and_get_user_info_async(
+        self, access_token: str
+    ) -> dict[str, Any] | None:
+        """
+        Async version: Validate access token and extract user information.
+
+        Uses httpx for non-blocking HTTP requests, suitable for use within
+        async handlers where blocking the event loop would cause issues.
+
+        Args:
+            access_token: OAuth2 access token
+
+        Returns:
+            User information dict or None if validation failed
+        """
+        if not access_token or not self.provider.userinfo_uri:
+            return None
+
+        # Check cache for previously validated invalid tokens
+        current_time = time.time()
+        token_hash = hashlib.sha256(access_token.encode()).hexdigest()[:16]
+        if token_hash in _invalid_token_cache:
+            cache_time = _invalid_token_cache[token_hash]
+            if current_time - cache_time < _INVALID_TOKEN_CACHE_TTL:
+                logger.debug(
+                    "Token found in invalid token cache - skipping network request"
+                )
+                return None
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        }
+
+        # GitHub API requires User-Agent header
+        if self.provider.name == "github":
+            headers["User-Agent"] = "ActingWeb-OAuth2-Client"
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+                response = await client.get(
+                    url=self.provider.userinfo_uri,
+                    headers=headers,
+                )
+
+            if response.status_code != 200:
+                logger.debug(
+                    f"OAuth2 userinfo request failed (async): {response.status_code} {response.text}"
+                )
+                # Cache this invalid token to avoid future network requests
+                _invalid_token_cache[token_hash] = current_time
+                return None
+
+            userinfo = response.json()
+            return dict(userinfo)
+
+        except ImportError:
+            logger.warning("httpx not available, falling back to sync validation")
+            return self.validate_token_and_get_user_info(access_token)
+        except Exception as e:
+            logger.error(f"Exception during async token validation: {e}")
+            # Cache this invalid token to avoid future network requests
+            _invalid_token_cache[token_hash] = current_time
+            return None
+
     def get_email_from_user_info(
         self,
         user_info: dict[str, Any],

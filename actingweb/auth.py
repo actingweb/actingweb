@@ -289,6 +289,11 @@ class Auth:
             if self._check_spa_token(token):
                 return True
 
+            # Quick heuristic to avoid network calls for obvious trust secrets
+            if not self._looks_like_oauth2_token(token):
+                logging.debug("Token doesn't look like OAuth2, skipping validation")
+                return False
+
             from .oauth2 import create_oauth2_authenticator
 
             authenticator = create_oauth2_authenticator(self.config)
@@ -405,6 +410,188 @@ class Auth:
 
         except Exception as e:
             logging.debug(f"SPA token check failed: {e}")
+            return False
+
+    def _looks_like_oauth2_token(self, token: str) -> bool:
+        """Quick heuristic to check if token might be an OAuth2 token.
+
+        This avoids making network calls to OAuth providers for tokens that
+        are clearly trust secrets (short hex strings) or other non-OAuth tokens.
+
+        OAuth2 tokens are typically:
+        - Google: 100+ chars, JWT-like or opaque
+        - GitHub: 40+ chars, starts with 'gho_', 'ghu_', etc.
+        - SPA tokens: UUID format (already checked separately)
+
+        Trust secrets are typically:
+        - 40 char hex strings (SHA-1)
+        - Sometimes shorter random strings
+
+        Returns:
+            True if the token might be an OAuth2 token, False if definitely not
+        """
+        if not token:
+            return False
+
+        token_len = len(token)
+
+        # Trust secrets are typically 40 hex chars or shorter
+        # If it's a short hex-only string, it's likely a trust secret
+        if token_len <= 45 and all(c in "0123456789abcdef" for c in token.lower()):
+            logging.debug(f"Token looks like trust secret (hex, {token_len} chars)")
+            return False
+
+        # GitHub tokens have distinctive prefixes
+        if token.startswith(("gho_", "ghu_", "ghs_", "ghr_")):
+            return True
+
+        # Very short tokens are unlikely to be OAuth2
+        if token_len < 20:
+            return False
+
+        # Long tokens are likely OAuth2
+        if token_len > 80:
+            return True
+
+        # JWTs have 3 dot-separated parts
+        if token.count(".") == 2:
+            return True
+
+        # Default to potentially OAuth2 for medium-length tokens
+        return True
+
+    async def _check_oauth2_token_async(self, token):
+        """Async version: Check if the Bearer token is a valid OAuth2 token."""
+        try:
+            # First, check if this is an ActingWeb SPA token (sync - no network)
+            if self._check_spa_token(token):
+                return True
+
+            # Quick heuristic to avoid network calls for obvious trust secrets
+            if not self._looks_like_oauth2_token(token):
+                logging.debug("Token doesn't look like OAuth2, skipping validation")
+                return False
+
+            from .oauth2 import create_oauth2_authenticator
+
+            authenticator = create_oauth2_authenticator(self.config)
+
+            if not authenticator.is_enabled():
+                return False
+
+            # Use async validation for non-blocking network request
+            user_info = await authenticator.validate_token_and_get_user_info_async(token)
+            if not user_info:
+                return False
+
+            # Extract email from user info
+            email = authenticator.get_email_from_user_info(user_info)
+            if not email:
+                return False
+
+            # Check if this is the correct actor for this email
+            if (
+                self.actor
+                and self.actor.creator
+                and self.actor.creator.lower() == email.lower()
+            ):
+                self.acl["relationship"] = "creator"
+                self.acl["peerid"] = ""
+                self.acl["approved"] = True
+                self.acl["authenticated"] = True
+                self.response["code"] = 200
+                self.response["text"] = "Ok"
+                self.token = token
+                logging.debug(f"OAuth2 async authentication successful for {email}")
+                return True
+            else:
+                logging.debug(
+                    f"OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}"
+                )
+                if not self.actor:
+                    self.acl["relationship"] = "creator"
+                    self.acl["peerid"] = ""
+                    self.acl["approved"] = True
+                    self.acl["authenticated"] = True
+                    self.response["code"] = 200
+                    self.response["text"] = "Ok"
+                    self.token = token
+                    logging.debug(
+                        f"OAuth2 async authentication successful for {email} (no specific actor)"
+                    )
+                    return True
+
+                return False
+
+        except Exception as e:
+            logging.error(f"Error during async OAuth2 token validation: {e}")
+            return False
+
+    async def check_token_auth_async(self, appreq, via_hint: str | None = None):
+        """Async version: Validate bearer tokens without blocking the event loop."""
+        if "Authorization" not in appreq.request.headers:
+            return False
+        auth = appreq.request.headers["Authorization"]
+        auth_parts = auth.split(" ")
+        if len(auth_parts) != 2 or auth_parts[0].lower() != "bearer":
+            return False
+        token = auth_parts[1]
+        self.authn_done = True
+
+        # First, try OAuth2 authentication if configured (async version)
+        if await self._check_oauth2_token_async(token):
+            return True
+
+        # Fall through to sync trust token validation (no network calls)
+        trustee = (
+            self.actor.store.trustee_root if self.actor and self.actor.store else None
+        )
+        if (
+            trustee
+            and self.actor
+            and self.actor.creator
+            and self.actor.creator.lower() == TRUSTEE_CREATOR
+        ):
+            if (
+                self.actor.passphrase
+                and math.floor(len(self.actor.passphrase) * math.log(94, 2)) > 80
+            ):
+                if token == self.actor.passphrase:
+                    self.acl["relationship"] = TRUSTEE_CREATOR
+                    self.acl["peerid"] = ""
+                    self.acl["approved"] = True
+                    self.acl["authenticated"] = True
+                    self.response["code"] = 200
+                    self.response["text"] = "Ok"
+                    self.token = self.actor.passphrase if self.actor else None
+                    return True
+            else:
+                logging.warning(
+                    "Attempted trustee bearer token auth with <80 bit strength token."
+                )
+        tru = trust.Trust(
+            actor_id=self.actor.id if self.actor else None,
+            token=token,
+            config=self.config,
+        )
+        new_trust = tru.get()
+        if new_trust:
+            logging.debug("Found trust with token: (" + str(new_trust) + ")")
+            if self.actor and new_trust["peerid"] == self.actor.id:
+                logging.error("Peer == actor!!")
+                return False
+        if new_trust and len(new_trust) > 0:
+            self.acl["relationship"] = new_trust["relationship"]
+            self.acl["peerid"] = new_trust["peerid"]
+            self.acl["approved"] = new_trust["approved"]
+            self.acl["authenticated"] = True
+            self.response["code"] = 200
+            self.response["text"] = "Ok"
+            self.token = new_trust["secret"]
+            self.trust = new_trust
+            self._record_trust_usage(new_trust, via_hint=via_hint or "trust")
+            return True
+        else:
             return False
 
     def _should_redirect_to_oauth2(self, appreq, path):
@@ -639,6 +826,99 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
 
     # Check authentication without modifying the response object
     auth_obj.check_authentication(appreq=appreq, path="/custom")
+
+    # Copy response details
+    result["response"] = {
+        "code": auth_obj.response["code"],
+        "text": auth_obj.response["text"],
+        "headers": auth_obj.response["headers"].copy(),
+    }
+
+    # Set redirect if needed
+    if hasattr(auth_obj, "redirect") and auth_obj.redirect:
+        result["redirect"] = auth_obj.redirect
+
+    # Check if authentication was successful
+    if auth_obj.acl["authenticated"] and auth_obj.response["code"] == 200:
+        result["authenticated"] = True
+        result["actor"] = auth_obj.actor
+
+    return result
+
+
+async def check_and_verify_auth_async(appreq=None, actor_id=None, config=None):
+    """Async version: Check and verify authentication for non-ActingWeb routes.
+
+    This async function provides authentication verification for custom routes that don't
+    go through the standard ActingWeb handler system. It uses async HTTP calls to avoid
+    blocking the event loop during OAuth2 token validation.
+
+    Use this in async FastAPI endpoints instead of check_and_verify_auth() when the
+    endpoint might receive OAuth2 tokens that need validation against the provider.
+
+    Args:
+        appreq: Request object in the format used by ActingWeb handlers.
+        actor_id (str | None): Actor ID to verify authentication against.
+        config (Config | None): ActingWeb config object.
+
+    Returns:
+        dict: A dictionary with the following keys:
+
+        - ``authenticated`` (bool): True if authentication successful.
+        - ``actor`` (Actor | None): Actor object when authenticated, otherwise None.
+        - ``auth`` (Auth): Auth object with authentication details.
+        - ``response`` (dict): Response details: ``{"code": int, "text": str, "headers": dict}``.
+        - ``redirect`` (str | None): Redirect URL if authentication requires redirect.
+
+    Example:
+        .. code-block:: python
+
+            auth_result = await check_and_verify_auth_async(appreq, actor_id, config)
+            if not auth_result['authenticated']:
+                if auth_result['response']['code'] == 302:
+                    return RedirectResponse(auth_result['redirect'])
+                return JSONResponse(
+                    status_code=auth_result['response']['code'],
+                    content={"error": auth_result['response']['text']}
+                )
+
+            # Authentication successful, use auth_result['actor']
+            actor = auth_result['actor']
+    """
+
+    if not config:
+        config = config_class.Config()
+
+    # Use basic auth type for custom routes (supports both basic and Bearer token auth)
+    auth_obj = Auth(actor_id, auth_type="basic", config=config)
+
+    result = {
+        "authenticated": False,
+        "actor": None,
+        "auth": auth_obj,
+        "response": {"code": 403, "text": "Forbidden", "headers": {}},
+        "redirect": None,
+    }
+
+    if not auth_obj.actor:
+        result["response"] = {"code": 404, "text": "Actor not found", "headers": {}}
+        return result
+
+    # Use async token auth to avoid blocking during OAuth2 validation
+    via_hint = auth_obj._connection_hint_from_path("/custom")
+    if await auth_obj.check_token_auth_async(appreq, via_hint=via_hint):
+        result["authenticated"] = True
+        result["actor"] = auth_obj.actor
+        result["response"] = {
+            "code": auth_obj.response["code"],
+            "text": auth_obj.response["text"],
+            "headers": auth_obj.response["headers"].copy(),
+        }
+        return result
+
+    # Token auth failed, try basic auth if available (sync, no network)
+    if auth_obj.type == "basic":
+        auth_obj.check_authentication(appreq=appreq, path="/custom")
 
     # Copy response details
     result["response"] = {

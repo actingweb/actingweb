@@ -643,6 +643,93 @@ The ``check_and_verify_auth()`` function works with any Python web framework:
         actor = ActorInterface(auth_result['actor'])
         return render_dashboard(request, actor)
 
+Async Authentication for FastAPI
+--------------------------------
+
+For async FastAPI endpoints, use the ``check_and_verify_auth_async()`` function to avoid blocking
+the event loop during OAuth2 token validation. This is particularly important when your endpoint
+might receive OAuth2 tokens that need validation against the provider.
+
+**Why Use Async Authentication?**
+
+- OAuth2 token validation requires network calls to the provider (e.g., Google, GitHub)
+- Sync calls block the event loop, reducing throughput in async applications
+- The async version uses ``httpx`` for non-blocking HTTP requests
+
+**Function Signature:**
+
+.. code-block:: python
+
+    async def check_and_verify_auth_async(appreq=None, actor_id=None, config=None):
+        """Async version: Check and verify authentication for non-ActingWeb routes.
+
+        Args:
+            appreq: Request object (same format as used by ActingWeb handlers)
+            actor_id: Actor ID to verify authentication against
+            config: ActingWeb config object
+
+        Returns:
+            dict with:
+            - 'authenticated': bool - True if authentication successful
+            - 'actor': Actor object if authentication successful, None otherwise
+            - 'auth': Auth object with authentication details
+            - 'response': dict with response details {'code': int, 'text': str, 'headers': dict}
+            - 'redirect': str - redirect URL if authentication requires redirect
+        """
+
+**FastAPI Async Example:**
+
+.. code-block:: python
+
+    from fastapi import FastAPI, Request, HTTPException
+    from fastapi.responses import RedirectResponse, JSONResponse
+    from actingweb import auth
+    from actingweb.aw_web_request import AWWebObj
+
+    @fastapi_app.get("/{actor_id}/dashboard/memory")
+    async def dashboard_memory(actor_id: str, request: Request):
+        """Custom dashboard route with async authentication."""
+
+        # Convert FastAPI request to ActingWeb format
+        req_data = await normalize_fastapi_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        # Use async authentication to avoid blocking
+        auth_result = await auth.check_and_verify_auth_async(
+            appreq=webobj,
+            actor_id=actor_id,
+            config=app.get_config()
+        )
+
+        if not auth_result['authenticated']:
+            response_code = auth_result['response']['code']
+
+            if response_code == 404:
+                raise HTTPException(status_code=404, detail="Actor not found")
+            elif response_code == 302 and auth_result['redirect']:
+                return RedirectResponse(auth_result['redirect'])
+            else:
+                return JSONResponse(
+                    status_code=response_code,
+                    content={"error": auth_result['response']['text']}
+                )
+
+        # Authentication successful
+        actor = ActorInterface(auth_result['actor'])
+        return await render_dashboard(actor)
+
+**When to Use Async vs Sync:**
+
+- Use ``check_and_verify_auth_async()`` in async FastAPI routes that may receive OAuth2 tokens
+- Use ``check_and_verify_auth()`` (sync) in Flask routes or when you need synchronous behavior
+- Trust-based authentication (using ActingWeb trust secrets) doesn't require network calls and works efficiently with either version
+
 Implementation Files
 ====================
 
@@ -651,14 +738,21 @@ Core Files
 
 **actingweb/oauth2.py**
     Comprehensive OAuth2 module containing:
+
     - Base ``OAuth2Provider`` class
     - ``GoogleOAuth2Provider`` and ``GitHubOAuth2Provider`` implementations
     - ``OAuth2Authenticator`` class with full OAuth2 flow handling
+    - ``OAuth2Authenticator.validate_token_and_get_user_info_async()`` - Async token validation using httpx
     - Factory functions for creating authenticators
     - Utility functions for token and state handling
 
 **actingweb/auth.py**
-    Updated authentication module that integrates the new OAuth2 system with legacy authentication methods. Contains the ``check_and_verify_auth()`` function for custom route authentication.
+    Updated authentication module that integrates the new OAuth2 system with legacy authentication methods. Contains:
+
+    - ``check_and_verify_auth()`` - Sync authentication helper for custom routes
+    - ``check_and_verify_auth_async()`` - Async authentication helper for FastAPI routes
+    - ``Auth.check_token_auth_async()`` - Async bearer token validation
+    - ``Auth._looks_like_oauth2_token()`` - Quick heuristic to avoid unnecessary OAuth2 network calls
 
 **actingweb/handlers/oauth2_callback.py**
     Unified OAuth2 callback handler that processes callbacks from any OAuth2 provider.

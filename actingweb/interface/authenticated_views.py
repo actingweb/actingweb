@@ -98,8 +98,14 @@ class AuthenticatedPropertyStore:
         except PermissionError:
             raise
         except Exception as e:
-            logging.warning(f"Permission check error for {key}: {e}")
-            # On error, allow for backward compatibility
+            # Fail closed on permission system errors (security best practice)
+            logging.error(
+                f"Permission system error for {operation} on '{key}': {e}. "
+                f"Denying access as security precaution."
+            )
+            raise PermissionError(
+                f"Permission system error: unable to verify {operation} access to '{key}'"
+            ) from e
 
     def __getitem__(self, key: str) -> Any:
         """Get property value with permission check."""
@@ -214,7 +220,14 @@ class AuthenticatedPropertyListStore:
         except PermissionError:
             raise
         except Exception as e:
-            logging.warning(f"Permission check error for list {list_name}: {e}")
+            # Fail closed on permission system errors (security best practice)
+            logging.error(
+                f"Permission system error for {operation} on list '{list_name}': {e}. "
+                f"Denying access as security precaution."
+            )
+            raise PermissionError(
+                f"Permission system error: unable to verify {operation} access to list '{list_name}'"
+            ) from e
 
     def __getattr__(self, name: str) -> Any:
         """Get list property with permission check."""

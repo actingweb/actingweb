@@ -123,6 +123,9 @@ class BaseActingWebIntegration:
         - GET/PUT/DELETE /trust/{relationship}/{peerid} -> TrustPeerHandler
         - GET /trust/{relationship}/{peerid}/shared_properties -> TrustSharedPropertiesHandler
         - GET/POST /trust/{relationship}/{peerid}/permissions -> TrustPermissionHandler
+
+        Special case: UI forms that send GET /trust/<peerid>?_method=DELETE|PUT
+        are treated as peer operations (TrustPeerHandler).
         """
         from ...handlers import trust
 
@@ -141,6 +144,11 @@ class BaseActingWebIntegration:
                 webobj, config, hooks=self.aw_app.hooks
             )
 
+        # Check for _method override (used by UI forms for DELETE/PUT)
+        # When present, a single path segment should be treated as a peer ID
+        method_override = (webobj.request.get("_method") or "").upper()
+        is_method_override = method_override in ("DELETE", "PUT")
+
         # Determine handler based on path depth
         # Only count actual path parameters (non-None, non-empty)
         path_parts = []
@@ -152,9 +160,14 @@ class BaseActingWebIntegration:
         if len(path_parts) == 0:
             return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
         elif len(path_parts) == 1:
-            return trust.TrustRelationshipHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            )
+            # If _method override is present with DELETE/PUT, treat as peer operation
+            # (the single path segment will be interpreted as peerid by the caller)
+            if is_method_override:
+                return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
+            else:
+                return trust.TrustRelationshipHandler(
+                    webobj, config, hooks=self.aw_app.hooks
+                )
         else:
             return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
 

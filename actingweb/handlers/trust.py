@@ -536,6 +536,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             return
         approved = None
         permission_updates = None
+        actor_interface = None  # Initialize to satisfy type checker
         try:
             body = self.request.body
             if isinstance(body, bytes):
@@ -574,8 +575,8 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 desc = self.request.get("desc")
             else:
                 desc = ""
-        # Use developer API - ActorInterface with TrustManager (if not already initialized from above)
-        if "actor_interface" not in locals():
+        # Use developer API - ActorInterface with TrustManager
+        if actor_interface is None:
             actor_interface = self._get_actor_interface(myself)
             if not actor_interface:
                 if self.response:

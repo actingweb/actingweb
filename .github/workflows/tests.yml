@@ -9,6 +9,7 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     services:
       dynamodb:
@@ -57,9 +58,12 @@ jobs:
           echo "DynamoDB failed to start within 60 seconds"
           exit 1
 
-      - name: Run all tests
+      - name: Run all tests in parallel
         run: |
           poetry run pytest tests/ \
+            -n 4 \
+            --dist loadscope \
+            --max-worker-restart=2 \
             -v \
             --tb=short \
             --junitxml=test-results/tests.xml \
@@ -100,6 +104,7 @@ jobs:
 
   type-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code

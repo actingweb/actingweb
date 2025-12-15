@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.7.0: TBD, 2025
+v3.7.0: Dec 15, 2025
 --------------------
 
 BREAKING CHANGES

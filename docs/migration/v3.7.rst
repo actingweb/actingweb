@@ -1,0 +1,563 @@
+==========================
+Migrating to ActingWeb 3.7
+==========================
+
+Overview
+========
+
+ActingWeb 3.7 is a **major developer API enhancement release** that extends the SubscriptionManager and TrustManager interfaces with cleaner, more powerful methods. The handlers have been refactored to use a four-tier architecture for better separation of concerns.
+
+**Key Changes:**
+
+- Extended developer API with new methods for subscriptions and trust management
+- New wrapper classes (``SubscriptionWithDiffs``) for cleaner APIs
+- Automatic lifecycle hook triggering in trust operations
+- Handlers refactored to delegate business logic to developer API
+- **HTTP REST API remains 100% backward compatible**
+
+Who Needs to Migrate?
+=====================
+
+**You need to migrate if:**
+
+- Your application uses ``ActorInterface``, ``SubscriptionManager``, or ``TrustManager`` directly in Python code
+- You call core ``Actor`` methods for subscription or trust operations
+- You want to use the new cleaner APIs with better type safety
+
+**You do NOT need to migrate if:**
+
+- Your application only uses ActingWeb's HTTP REST endpoints (``/properties``, ``/trust``, ``/subscriptions``)
+- You only use hooks and don't call developer API methods directly
+- The HTTP API is 100% backward compatible
+
+Breaking Changes
+================
+
+Developer API Extensions
+------------------------
+
+The developer API has been extended with new methods. **Old methods still work**, but new code should use the enhanced APIs:
+
+SubscriptionManager Changes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**New Methods:**
+
+- ``create_local_subscription(peer_id, target, ...)`` - Create subscriptions with proper diff registration
+- ``get_subscription_with_diffs(peer_id, subscription_id)`` - Returns ``SubscriptionWithDiffs`` wrapper
+- ``get_callback_subscription(peer_id)`` - Get callback subscription (outbound)
+- ``delete_callback_subscription(peer_id)`` - Delete callback subscription
+
+**New Wrapper Class:**
+
+- ``SubscriptionWithDiffs`` - Clean access to subscription data and diffs
+
+  - ``.get_diffs()`` - Get pending diffs
+  - ``.mark_diff_delivered(diff_id)`` - Mark diff as delivered
+  - ``.subscription`` property - Access underlying subscription data
+
+TrustManager Changes
+~~~~~~~~~~~~~~~~~~~~
+
+**New Methods:**
+
+- ``create_verified_trust(peer_id, relationship, ...)`` - Create trust with automatic lifecycle hooks
+- ``modify_and_notify(peer_id, ...)`` - Modify trust and notify peer
+- ``delete_peer_trust(peer_id)`` - Delete trust with proper cleanup
+- ``trustee_root`` property - Get trustee root URL
+
+Migration Guide
+===============
+
+Subscription Operations
+-----------------------
+
+**Before (v3.6 and earlier):**
+
+.. code-block:: python
+
+    from actingweb.actor import Actor
+
+    # Direct core Actor usage
+    actor = Actor(actor_id, config)
+    sub = actor.get_subscription_obj(peerid=peer_id, subid=sub_id)
+    if sub:
+        diffs = sub.get_diffs()
+        for diff in diffs:
+            # Process diff
+            pass
+
+**After (v3.7+):**
+
+.. code-block:: python
+
+    from actingweb.interface import ActorInterface
+
+    # Clean developer API
+    actor = ActorInterface.get_by_id(actor_id, config)
+    sub_with_diffs = actor.subscriptions.get_subscription_with_diffs(
+        peer_id=peer_id,
+        subscription_id=sub_id
+    )
+    if sub_with_diffs:
+        diffs = sub_with_diffs.get_diffs()
+        for diff in diffs:
+            # Process diff
+            sub_with_diffs.mark_diff_delivered(diff["id"])
+
+**Benefits:**
+
+- ✅ Type-safe wrapper with IDE autocompletion
+- ✅ Cleaner method names (``peer_id`` not ``peerid``)
+- ✅ Built-in diff marking convenience method
+- ✅ Better error handling and validation
+
+Creating Subscriptions
+~~~~~~~~~~~~~~~~~~~~~~~
+
+**Before (v3.6 and earlier):**
+
+.. code-block:: python
+
+    from actingweb.actor import Actor
+
+    actor = Actor(actor_id, config)
+    subscription = actor.create_subscription(
+        peerid=peer_id,
+        target="properties",
+        subtarget="temperature"
+    )
+
+**After (v3.7+):**
+
+.. code-block:: python
+
+    from actingweb.interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(actor_id, config)
+    subscription = actor.subscriptions.create_local_subscription(
+        peer_id=peer_id,
+        target="properties",
+        subtarget="temperature"
+    )
+
+**Benefits:**
+
+- ✅ Automatic diff registration
+- ✅ Cleaner parameter names
+- ✅ Better validation and error messages
+
+Callback Subscriptions
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Callback subscriptions (outbound, where we receive callbacks from peers) now have dedicated methods:
+
+**Before (v3.6 and earlier):**
+
+.. code-block:: python
+
+    # Mixed with regular subscriptions
+    from actingweb.actor import Actor
+
+    actor = Actor(actor_id, config)
+    sub = actor.get_subscription(peerid=peer_id)
+
+**After (v3.7+):**
+
+.. code-block:: python
+
+    # Explicit callback subscription methods
+    from actingweb.interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(actor_id, config)
+
+    # Get callback subscription (we receive callbacks)
+    callback_sub = actor.subscriptions.get_callback_subscription(peer_id)
+
+    # Delete callback subscription
+    actor.subscriptions.delete_callback_subscription(peer_id)
+
+**Benefits:**
+
+- ✅ Clear distinction between inbound and outbound subscriptions
+- ✅ API explicitly documents subscription direction
+- ✅ Prevents confusion in multi-directional subscription scenarios
+
+Trust Relationship Operations
+------------------------------
+
+Creating Trust Relationships
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Before (v3.6 and earlier):**
+
+.. code-block:: python
+
+    from actingweb.actor import Actor
+
+    actor = Actor(actor_id, config)
+    trust = actor.create_trust(
+        peerid=peer_id,
+        relationship="friend",
+        desc="My friend"
+    )
+    # Manual lifecycle hook triggering may be needed
+
+**After (v3.7+):**
+
+.. code-block:: python
+
+    from actingweb.interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(actor_id, config)
+    trust = actor.trust.create_verified_trust(
+        peer_id=peer_id,
+        relationship="friend",
+        desc="My friend"
+    )
+    # trust_approved hook triggered automatically
+
+**Benefits:**
+
+- ✅ Automatic lifecycle hook triggering (``trust_approved``)
+- ✅ Cleaner parameter names (``peer_id`` not ``peerid``)
+- ✅ Better error handling and validation
+- ✅ Intention-revealing method name
+
+Modifying Trust Relationships
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Before (v3.6 and earlier):**
+
+.. code-block:: python
+
+    from actingweb.actor import Actor
+
+    actor = Actor(actor_id, config)
+    trust = actor.get_trust(peerid=peer_id)
+    if trust:
+        trust["desc"] = "Updated description"
+        actor.modify_trust(trust)
+        # Manual peer notification may be needed
+
+**After (v3.7+):**
+
+.. code-block:: python
+
+    from actingweb.interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(actor_id, config)
+    success = actor.trust.modify_and_notify(
+        peer_id=peer_id,
+        desc="Updated description"
+    )
+    # Peer automatically notified of changes
+
+**Benefits:**
+
+- ✅ Automatic peer notification
+- ✅ Simpler API (no need to get, modify, save pattern)
+- ✅ Better error handling
+
+Deleting Trust Relationships
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Before (v3.6 and earlier):**
+
+.. code-block:: python
+
+    from actingweb.actor import Actor
+
+    actor = Actor(actor_id, config)
+    actor.delete_trust(peerid=peer_id)
+    # Manual cleanup may be needed
+
+**After (v3.7+):**
+
+.. code-block:: python
+
+    from actingweb.interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(actor_id, config)
+    success = actor.trust.delete_peer_trust(peer_id)
+    # trust_deleted hook triggered automatically
+    # Peer notified, cleanup performed
+
+**Benefits:**
+
+- ✅ Automatic lifecycle hook triggering (``trust_deleted``)
+- ✅ Proper cleanup (permissions, subscriptions, etc.)
+- ✅ Peer notification handled automatically
+
+Accessing Trustee Root
+~~~~~~~~~~~~~~~~~~~~~~~
+
+**Before (v3.6 and earlier):**
+
+.. code-block:: python
+
+    from actingweb.actor import Actor
+
+    actor = Actor(actor_id, config)
+    trustee_root = actor.property["trustee_root"]
+
+**After (v3.7+):**
+
+.. code-block:: python
+
+    from actingweb.interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(actor_id, config)
+    trustee_root = actor.trust.trustee_root
+
+**Benefits:**
+
+- ✅ Clean property access
+- ✅ Type-safe
+- ✅ Better IDE support
+
+Property Operations (Unchanged)
+--------------------------------
+
+PropertyStore was already well-designed in v3.6, so **no changes are needed**:
+
+.. code-block:: python
+
+    from actingweb.interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(actor_id, config)
+
+    # Get all properties
+    all_props = actor.properties.to_dict()
+
+    # Get specific property
+    value = actor.properties.get("my_property")
+    value = actor.properties["my_property"]  # Also works
+
+    # Set property
+    actor.properties["my_property"] = "new_value"
+
+    # Delete property
+    actor.properties.delete("my_property")
+    del actor.properties["my_property"]  # Also works
+
+Architecture Changes
+====================
+
+Four-Tier Architecture
+----------------------
+
+Handlers have been refactored to a clean four-tier architecture:
+
+**v3.6 (Two-Tier):**
+
+.. code-block:: text
+
+    HTTP Handler
+        ↓ (direct call)
+    Core Actor
+        ↓
+    Database
+
+**Problems:**
+
+- Business logic scattered between handlers and core
+- Handlers tightly coupled to core implementation
+- Difficult to test handler logic independently
+
+**v3.7 (Four-Tier):**
+
+.. code-block:: text
+
+    HTTP Handler (HTTP concerns only)
+        ↓
+    Developer API (business logic)
+        ↓
+    Core Actor (data access)
+        ↓
+    Database
+
+**Benefits:**
+
+- ✅ Clean separation of concerns
+- ✅ Handlers are thin HTTP adapters
+- ✅ Business logic testable via unit tests
+- ✅ Developer API is full-featured
+- ✅ Easy to extend and maintain
+
+This architectural change does **not** affect application code using the developer API - it only improves the internal structure.
+
+Testing Your Migration
+======================
+
+After migrating to v3.7, verify your application works correctly:
+
+Unit Tests
+----------
+
+Test your business logic using the new developer API methods:
+
+.. code-block:: python
+
+    import pytest
+    from actingweb.interface import ActorInterface
+    from actingweb.config import Config
+
+    def test_subscription_with_diffs():
+        """Test the new subscription wrapper API."""
+        config = Config(...)
+        actor = ActorInterface.get_by_id(actor_id, config)
+
+        # Get subscription with diffs
+        sub_with_diffs = actor.subscriptions.get_subscription_with_diffs(
+            peer_id="peer123",
+            subscription_id="sub456"
+        )
+
+        assert sub_with_diffs is not None
+        diffs = sub_with_diffs.get_diffs()
+        assert len(diffs) >= 0
+
+Integration Tests
+-----------------
+
+Your existing integration tests should continue to work without changes since the HTTP API is backward compatible:
+
+.. code-block:: python
+
+    def test_subscription_endpoint():
+        """HTTP endpoint remains unchanged."""
+        response = requests.get(
+            f"{actor_url}/subscriptions/{peer_id}",
+            auth=(username, password)
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Response format unchanged
+
+Type Checking
+-------------
+
+Run type checking to catch any API usage issues:
+
+.. code-block:: bash
+
+    poetry run pyright actingweb your_app/
+
+Benefits of Upgrading
+=====================
+
+Type Safety
+-----------
+
+New methods return typed wrapper objects with full IDE support:
+
+.. code-block:: python
+
+    # IDE autocompletion works
+    sub_with_diffs = actor.subscriptions.get_subscription_with_diffs(...)
+    sub_with_diffs.get_diffs()  # IDE suggests this method
+    sub_with_diffs.mark_diff_delivered()  # And this one
+    sub_with_diffs.subscription  # And this property
+
+Automatic Lifecycle Hooks
+--------------------------
+
+Trust operations now trigger hooks automatically:
+
+.. code-block:: python
+
+    # trust_approved hook triggered automatically
+    trust = actor.trust.create_verified_trust(...)
+
+    # trust_deleted hook triggered automatically
+    actor.trust.delete_peer_trust(peer_id)
+
+Cleaner APIs
+------------
+
+Intention-revealing method names make code self-documenting:
+
+.. code-block:: python
+
+    # Clear what this does
+    actor.subscriptions.get_callback_subscription(peer_id)
+
+    # vs old generic method
+    actor.get_subscription(peerid=peer_id)  # What kind of subscription?
+
+Better Testing
+--------------
+
+Unit test business logic without HTTP concerns:
+
+.. code-block:: python
+
+    # Test subscription logic in isolation
+    def test_subscription_processing():
+        actor = ActorInterface.get_by_id(actor_id, config)
+        sub_with_diffs = actor.subscriptions.get_subscription_with_diffs(...)
+
+        # No HTTP requests, no database setup needed
+        # Pure business logic testing
+
+Comprehensive Docstrings
+-------------------------
+
+All new methods include detailed docstrings with examples:
+
+.. code-block:: python
+
+    help(actor.subscriptions.get_subscription_with_diffs)
+    # Shows full documentation with parameter descriptions and examples
+
+Backward Compatibility
+======================
+
+HTTP API
+--------
+
+The HTTP REST API remains **100% backward compatible**:
+
+- ``GET/POST/PUT/DELETE /properties``
+- ``GET/POST/PUT/DELETE /trust``
+- ``GET/POST/DELETE /subscriptions``
+- ``GET/POST /callbacks``
+- All other endpoints unchanged
+
+Old Developer API Methods
+--------------------------
+
+Core Actor methods still work (not deprecated):
+
+.. code-block:: python
+
+    # These still work in v3.7
+    actor.get_subscription_obj(peerid=peer_id, subid=sub_id)
+    actor.create_subscription(peerid=peer_id, ...)
+    actor.create_trust(peerid=peer_id, ...)
+    actor.modify_trust(trust)
+    actor.delete_trust(peerid=peer_id)
+
+However, **new code should use the enhanced developer API** for better type safety and cleaner APIs.
+
+Summary
+=======
+
+ActingWeb 3.7 extends the developer API with cleaner, more powerful methods while maintaining full HTTP API compatibility. The changes primarily benefit applications using the Python developer API directly.
+
+**Key Actions:**
+
+1. ✅ Review your code for direct ``Actor`` method usage
+2. ✅ Migrate to new ``SubscriptionManager`` and ``TrustManager`` methods
+3. ✅ Update to use ``SubscriptionWithDiffs`` wrapper
+4. ✅ Run tests to verify migration
+5. ✅ Enjoy better type safety and cleaner APIs
+
+**Remember:** If you only use HTTP endpoints, no migration is needed!
+
+For questions or issues, see:
+
+- `ActingWeb Documentation <https://actingweb.readthedocs.io>`_
+- `GitHub Issues <https://github.com/actingweb/actingweb/issues>`_
+- `Migration Guide Index <index.html>`_

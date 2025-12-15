@@ -12,11 +12,15 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   v3.7
    v3.1
    common-pitfalls
 
 Version Migrations
 ==================
+
+**v3.7 Migration**
+   Guide for upgrading to ActingWeb 3.7, covering developer API extensions for SubscriptionManager and TrustManager with cleaner APIs and automatic lifecycle hooks.
 
 **v3.1 Migration**
    Guide for upgrading to ActingWeb 3.1, including changes to the developer API, unified access control, and handler architecture.

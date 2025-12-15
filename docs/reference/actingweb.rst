@@ -7,8 +7,8 @@ Subpackages
 .. toctree::
     :maxdepth: 1
 
-    actingweb.db_dynamodb
-    actingweb.handlers
+    actingweb-db-dynamodb
+    handlers
 
 Submodules
 ----------

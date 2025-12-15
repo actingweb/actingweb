@@ -50,6 +50,7 @@ all = ["mcp", "flask", "werkzeug", "jinja2", "fastapi", "pydantic", "uvicorn"]
 pytest = "^9.0.1"
 pytest-cov = "^7.0.0"
 pytest-timeout = "^2.1.0"
+pytest-xdist = "^3.6.0"
 responses = "^0.25.8"
 black = "^25.1.0"
 mypy = "^1.0.0"

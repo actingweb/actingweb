@@ -284,7 +284,14 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.write(out)
 
     def listall(self, myself, check):
-        properties = myself.get_properties()
+        # Get actor interface for property access
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        properties = actor_interface.properties.to_dict()
         # Check if metadata is requested via query parameter
         include_metadata = self.request.get("metadata") == "true"
 
@@ -305,7 +312,6 @@ class PropertiesHandler(base_handler.BaseHandler):
 
         # Execute property hooks for all properties if available
         if self.hooks:
-            actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 auth_context = self._create_auth_context(check, "read")
                 result = {}
@@ -862,17 +868,22 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(403)
             return
         if not name:
+            # Get actor interface for property operations
+            actor_interface = self._get_actor_interface(myself)
+            if not actor_interface:
+                if self.response:
+                    self.response.set_status(500, "Internal error")
+                return
+
             # Execute property delete hook if available
             if self.hooks:
-                actor_interface = self._get_actor_interface(myself)
-                if actor_interface:
-                    result = self.hooks.execute_property_hooks(
-                        "*", "delete", actor_interface, myself.get_properties(), path
-                    )
-                    if result is None:
-                        self.response.set_status(403)
-                        return
-            myself.delete_properties()
+                result = self.hooks.execute_property_hooks(
+                    "*", "delete", actor_interface, actor_interface.properties.to_dict(), path
+                )
+                if result is None:
+                    self.response.set_status(403)
+                    return
+            actor_interface.properties.clear()
             myself.register_diffs(target="properties", subtarget=None, blob="")
             self.response.set_status(204)
             return

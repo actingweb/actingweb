@@ -58,13 +58,13 @@ class TrustHandler(base_handler.BaseHandler):
         if not myself:
             return
         relationship = self.request.get("relationship")
-        peer_type = self.request.get("type")
+        trust_type = self.request.get("type")
         peerid = self.request.get(
             "peerid",
         )
 
         pairs = myself.get_trust_relationships(
-            relationship=relationship, peerid=peerid, trust_type=peer_type
+            relationship=relationship, peerid=peerid, trust_type=trust_type
         )
         # Return empty array with 200 OK when no relationships exist (SPA-friendly, spec v1.2)
         if not pairs:
@@ -80,7 +80,6 @@ class TrustHandler(base_handler.BaseHandler):
             return
         desc = ""
         relationship = self.config.default_relationship
-        peer_type = ""
         try:
             body = self.request.body
             if isinstance(body, bytes):
@@ -94,28 +93,34 @@ class TrustHandler(base_handler.BaseHandler):
                 url = ""
             if "relationship" in params:
                 relationship = params["relationship"]
-            if "type" in params:
-                peer_type = params["type"]
             if "desc" in params:
                 desc = params["desc"]
         except ValueError:
             url = self.request.get("url")
             relationship = self.request.get("relationship")
-            peer_type = self.request.get("type")
         if len(url) == 0:
             self.response.set_status(400, "Missing peer URL")
             return
+
+        # Use developer API - ActorInterface with TrustManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
         secret = self.config.new_token()
-        new_trust = myself.create_reciprocal_trust(
-            url=url,
+        new_trust_rel = actor_interface.trust.create_relationship(
+            peer_url=url,
             secret=secret,
-            desc=desc,
+            description=desc,
             relationship=relationship,
-            trust_type=peer_type,
         )
-        if not new_trust:
+        if not new_trust_rel:
             self.response.set_status(408, "Unable to create trust relationship")
             return
+
+        new_trust = new_trust_rel.to_dict()
         self.response.headers["Location"] = str(
             self.config.root
             + (myself.id or "")
@@ -180,8 +185,16 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "No json content")
             return
-        if len(trustee_root) > 0 and myself and myself.store:
-            myself.store.trustee_root = trustee_root
+
+        # Use developer API - ActorInterface with TrustManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        if len(trustee_root) > 0:
+            actor_interface.trust.trustee_root = trustee_root
         if creator:
             myself.modify(creator=creator)
         if self.response:
@@ -202,8 +215,15 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         # Access is the same as /trust
         if not auth_result.authorize("DELETE", "trust"):
             return
-        if myself and myself.store:
-            myself.store.trustee_root = None
+
+        # Use developer API - ActorInterface with TrustManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        actor_interface.trust.trustee_root = None
         if self.response:
             self.response.set_status(204, "No content")
 
@@ -236,10 +256,6 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 peerid = params["id"]
             else:
                 peerid = ""
-            if "type" in params:
-                peer_type = params["type"]
-            else:
-                peer_type = ""
             if "secret" in params:
                 secret = params["secret"]
             else:
@@ -257,7 +273,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 self.response.set_status(400, "No json content")
             return
 
-        if len(baseuri) == 0 or len(peerid) == 0 or len(peer_type) == 0:
+        if len(baseuri) == 0 or len(peerid) == 0:
             self.response.set_status(400, "Missing mandatory attributes")
             return
         if (
@@ -267,19 +283,28 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             approved = True
         else:
             approved = False
+
+        # Use developer API - ActorInterface with TrustManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
         # Since we received a request for a relationship, assume that peer has approved
-        # Note: trust_type=peer_type is the peer's mini-app type (from JSON body)
+        # Note: trust_type is the peer's mini-app type (from JSON body "type" field)
         #       relationship is the trust type/permission level (from URL path)
-        new_trust = myself.create_verified_trust(
+        peer_app_type = params.get("type", "")
+        new_trust = actor_interface.trust.create_verified_trust(
             baseuri=baseuri,
-            peerid=peerid,
+            peer_id=peerid,
             approved=approved,
             secret=secret,
             verification_token=verification_token,
-            trust_type=peer_type,  # peer's mini-application type (e.g., "urn:actingweb:example.com:banking")
+            trust_type=peer_app_type,  # peer's mini-application type (e.g., "urn:actingweb:example.com:banking")
             peer_approved=True,
             relationship=relationship,  # trust type/permission level (e.g., "friend", "admin")
-            desc=desc,
+            description=desc,
         )
         if not new_trust:
             self.response.set_status(403, "Forbidden")
@@ -441,9 +466,16 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if not auth_result.authorize("POST", "trust", "<type>/<id>"):
                 return
 
+        # Use developer API - ActorInterface with TrustManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
         # Update the trust relationship
-        trust_updated = myself.modify_trust_and_notify(
-            relationship=relationship, peerid=peerid, peer_approved=peer_approved
+        trust_updated = actor_interface.trust.modify_and_notify(
+            peer_id=peerid, relationship=relationship, peer_approved=peer_approved
         )
 
         # Trigger trust_approved lifecycle hook when receiving peer approval notification
@@ -542,13 +574,21 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 desc = self.request.get("desc")
             else:
                 desc = ""
+        # Use developer API - ActorInterface with TrustManager (if not already initialized from above)
+        if "actor_interface" not in locals():
+            actor_interface = self._get_actor_interface(myself)
+            if not actor_interface:
+                if self.response:
+                    self.response.set_status(500, "Internal error")
+                return
+
         # Update trust relationship
-        trust_updated = myself.modify_trust_and_notify(
+        trust_updated = actor_interface.trust.modify_and_notify(
+            peer_id=peerid,
             relationship=relationship,
-            peerid=peerid,
             baseuri=baseuri,
             approved=approved,
-            desc=desc,
+            description=desc,
         )
 
         # Update permissions if provided
@@ -655,12 +695,16 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 self.response.set_status(404, "Not found")
             return
 
+        # Use developer API - ActorInterface with TrustManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
         # Trigger trust_deleted lifecycle hook BEFORE deleting
         if self.hooks:
             try:
-                from actingweb.interface.actor_interface import ActorInterface
-
-                actor_interface = ActorInterface(myself, self.config)
                 self.hooks.execute_lifecycle_hooks(
                     "trust_deleted",
                     actor=actor_interface,
@@ -670,10 +714,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
             except Exception as e:
                 logging.error(f"Error triggering trust_deleted hook: {e}")
 
+        # Delete trust relationship with appropriate peer notification setting
         if is_peer:
-            deleted = myself.delete_reciprocal_trust(peerid=peerid, delete_peer=False)
+            deleted = actor_interface.trust.delete_peer_trust(
+                peer_id=peerid, notify_peer=False
+            )
         else:
-            deleted = myself.delete_reciprocal_trust(peerid=peerid, delete_peer=True)
+            deleted = actor_interface.trust.delete_peer_trust(
+                peer_id=peerid, notify_peer=True
+            )
         if not deleted:
             self.response.set_status(502, "Not able to delete relationship with peer.")
             return

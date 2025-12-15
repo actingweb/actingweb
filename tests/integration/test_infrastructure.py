@@ -43,8 +43,9 @@ def test_actor_creation(actor_factory):
     assert "creator" in actor
     assert "passphrase" in actor
 
-    # Creator should match what we requested
-    assert actor["creator"] == "test@example.com"
+    # Creator should be based on what we requested (may be uniquified for parallel execution)
+    assert actor["creator"].endswith("@example.com")
+    assert "test" in actor["creator"]
 
 
 def test_actor_cleanup(actor_factory, http_client):

@@ -67,9 +67,17 @@ class CallbacksHandler(base_handler.BaseHandler):
                 if self.response:
                     self.response.set_status(403, "Forbidden")
                 return
-            sub = myself.get_subscription_obj(peerid=peerid, subid=subid, callback=True)
-            if sub:
-                sub.delete()
+
+            # Use developer API to delete callback subscription
+            actor_interface = self._get_actor_interface(myself)
+            if not actor_interface:
+                if self.response:
+                    self.response.set_status(500, "Internal error")
+                return
+
+            if actor_interface.subscriptions.delete_callback_subscription(
+                peer_id=peerid, subscription_id=subid
+            ):
                 self.response.set_status(204, "Deleted")
                 return
             self.response.set_status(404, "Not found")
@@ -106,12 +114,19 @@ class CallbacksHandler(base_handler.BaseHandler):
         if path[0] == "subscriptions":
             peerid = path[1]
             subid = path[2]
-            sub = (
-                myself.get_subscription(peerid=peerid, subid=subid, callback=True)
-                if myself
-                else None
+
+            # Use developer API to get callback subscription
+            actor_interface = self._get_actor_interface(myself) if myself else None
+            if not actor_interface:
+                self.response.set_status(404, "Not found")
+                return
+
+            sub_info = actor_interface.subscriptions.get_callback_subscription(
+                peer_id=peerid, subscription_id=subid
             )
-            if sub and len(sub) > 0:
+            if sub_info:
+                # Convert to dict for hook compatibility
+                sub = sub_info.to_dict()
                 logging.debug("Found subscription (" + str(sub) + ")")
                 if not check or not check.check_authorisation(
                     path="callbacks",
@@ -138,14 +153,12 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # Execute subscription callback hook
                 result = False
                 if self.hooks:
-                    actor_interface = self._get_actor_interface(myself)
-                    if actor_interface:
-                        hook_data = params.copy()
-                        hook_data.update({"subscription": sub, "peerid": peerid})
-                        hook_result = self.hooks.execute_callback_hooks(
-                            "subscription", actor_interface, hook_data
-                        )
-                        result = bool(hook_result) if hook_result is not None else False
+                    hook_data = params.copy()
+                    hook_data.update({"subscription": sub, "peerid": peerid})
+                    hook_result = self.hooks.execute_callback_hooks(
+                        "subscription", actor_interface, hook_data
+                    )
+                    result = bool(hook_result) if hook_result is not None else False
 
                 if result:
                     self.response.set_status(204, "Found")

@@ -99,6 +99,16 @@ class PropertyStore:
             )
             return self.__dict__[k]
 
+    def get_all(self) -> dict[str, Any]:
+        """Fetch all properties from the database and return as dictionary."""
+        if not self._actor_id or not self._config:
+            return {}
+        db_list = self._config.DbProperty.DbPropertyList()
+        props = db_list.fetch(actor_id=self._actor_id)
+        if isinstance(props, dict):
+            return props
+        return {}
+
 
 class Property:
     """

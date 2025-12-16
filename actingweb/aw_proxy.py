@@ -347,13 +347,31 @@ class AwProxy:
                     "message": "Timeout communicating with trust peer service.",
                 },
             }
-        except Exception as e:
-            logging.debug(f"Not able to get peer resource async: {e}")
-            self.last_response_code = 408
+        except httpx.ConnectError as e:
+            logging.debug(f"Connection error getting peer resource async: {e}")
+            self.last_response_code = 502
             return {
                 "error": {
-                    "code": 408,
-                    "message": "Unable to communicate with trust peer service.",
+                    "code": 502,
+                    "message": "Unable to connect to trust peer service.",
+                },
+            }
+        except httpx.NetworkError as e:
+            logging.debug(f"Network error getting peer resource async: {e}")
+            self.last_response_code = 502
+            return {
+                "error": {
+                    "code": 502,
+                    "message": "Network error communicating with trust peer service.",
+                },
+            }
+        except Exception as e:
+            logging.warning(f"Unexpected error getting peer resource async: {e}")
+            self.last_response_code = 500
+            return {
+                "error": {
+                    "code": 500,
+                    "message": "Internal error communicating with trust peer service.",
                 },
             }
         logging.debug(
@@ -421,13 +439,31 @@ class AwProxy:
                     "message": "Timeout communicating with trust peer service.",
                 },
             }
-        except Exception as e:
-            logging.debug(f"Not able to create new peer resource async: {e}")
-            self.last_response_code = 408
+        except httpx.ConnectError as e:
+            logging.debug(f"Connection error creating peer resource async: {e}")
+            self.last_response_code = 502
             return {
                 "error": {
-                    "code": 408,
-                    "message": "Unable to communicate with trust peer service.",
+                    "code": 502,
+                    "message": "Unable to connect to trust peer service.",
+                },
+            }
+        except httpx.NetworkError as e:
+            logging.debug(f"Network error creating peer resource async: {e}")
+            self.last_response_code = 502
+            return {
+                "error": {
+                    "code": 502,
+                    "message": "Network error communicating with trust peer service.",
+                },
+            }
+        except Exception as e:
+            logging.warning(f"Unexpected error creating peer resource async: {e}")
+            self.last_response_code = 500
+            return {
+                "error": {
+                    "code": 500,
+                    "message": "Internal error communicating with trust peer service.",
                 },
             }
         if "Location" in response.headers:
@@ -504,13 +540,31 @@ class AwProxy:
                     "message": "Timeout communicating with trust peer service.",
                 },
             }
-        except Exception as e:
-            logging.debug(f"Not able to change peer resource async: {e}")
-            self.last_response_code = 408
+        except httpx.ConnectError as e:
+            logging.debug(f"Connection error changing peer resource async: {e}")
+            self.last_response_code = 502
             return {
                 "error": {
-                    "code": 408,
-                    "message": "Unable to communicate with trust peer service.",
+                    "code": 502,
+                    "message": "Unable to connect to trust peer service.",
+                },
+            }
+        except httpx.NetworkError as e:
+            logging.debug(f"Network error changing peer resource async: {e}")
+            self.last_response_code = 502
+            return {
+                "error": {
+                    "code": 502,
+                    "message": "Network error communicating with trust peer service.",
+                },
+            }
+        except Exception as e:
+            logging.warning(f"Unexpected error changing peer resource async: {e}")
+            self.last_response_code = 500
+            return {
+                "error": {
+                    "code": 500,
+                    "message": "Internal error communicating with trust peer service.",
                 },
             }
         logging.debug(
@@ -568,13 +622,31 @@ class AwProxy:
                     "message": "Timeout communicating with trust peer service.",
                 },
             }
-        except Exception as e:
-            logging.debug(f"Not able to delete peer resource async: {e}")
-            self.last_response_code = 408
+        except httpx.ConnectError as e:
+            logging.debug(f"Connection error deleting peer resource async: {e}")
+            self.last_response_code = 502
             return {
                 "error": {
-                    "code": 408,
-                    "message": "Unable to communicate with trust peer service.",
+                    "code": 502,
+                    "message": "Unable to connect to trust peer service.",
+                },
+            }
+        except httpx.NetworkError as e:
+            logging.debug(f"Network error deleting peer resource async: {e}")
+            self.last_response_code = 502
+            return {
+                "error": {
+                    "code": 502,
+                    "message": "Network error communicating with trust peer service.",
+                },
+            }
+        except Exception as e:
+            logging.warning(f"Unexpected error deleting peer resource async: {e}")
+            self.last_response_code = 500
+            return {
+                "error": {
+                    "code": 500,
+                    "message": "Internal error communicating with trust peer service.",
                 },
             }
         logging.debug(

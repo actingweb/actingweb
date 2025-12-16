@@ -880,59 +880,6 @@ app = (
 )
 ```
 
-## Singleton Initialization
-
-**CRITICAL**: For applications using the unified access control system, you MUST initialize ActingWeb singletons at application startup to avoid severe performance issues.
-
-### Performance Impact
-
-Without proper initialization:
-- OAuth2 flows may hang for 4+ minutes
-- First requests trigger expensive singleton initialization
-- Database operations, system actor creation, and pattern compilation block request threads
-
-### Required Initialization
-
-Add this code at application startup, before serving requests:
-
-```python
-# CRITICAL: Initialize ActingWeb singletons at application startup
-try:
-    from actingweb.singleton_warmup import initialize_actingweb_singletons
-    initialize_actingweb_singletons(app.get_config())
-    logger.info("ActingWeb singletons initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize ActingWeb singletons: {e}")
-    # Continue anyway - system will fall back gracefully with degraded performance
-    logger.warning("Continuing with degraded performance - singletons will initialize lazily")
-```
-
-### What Gets Initialized
-
-1. **Trust Type Registry**: Pre-compiles all trust types and their permissions
-2. **Permission Evaluator**: Pre-loads system patterns and rule engine
-3. **Trust Permission Store**: Initializes custom permission overrides system
-
-### Debugging Singleton Issues
-
-If you see these symptoms:
-- OAuth2 callbacks hanging for minutes
-- First requests extremely slow after startup
-- Logs showing "Initializing trust type registry..." during requests
-
-Then singleton initialization is happening during request processing instead of at startup.
-
-**Check initialization logs:**
-```
-ActingWeb singletons initialized successfully
-Trust type registry initialized with X types
-Permission evaluator initialized successfully  
-Trust permission store initialized
-```
-
-**Handle initialization failures:**
-The system includes graceful fallbacks - if singleton initialization fails at startup, individual components will fall back to lazy loading with warnings.
-
 ## Security Notes
 
 - Always set `devtest = False` in production

@@ -298,7 +298,14 @@ class AuthenticatedSubscriptionManager:
         except PermissionError:
             raise
         except Exception as e:
-            logging.warning(f"Subscription permission check error: {e}")
+            # Fail closed on permission system errors (security best practice)
+            logging.error(
+                f"Subscription permission check error for {target}: {e}. "
+                f"Denying access as security precaution."
+            )
+            raise PermissionError(
+                f"Permission system error: unable to verify subscription to {target}"
+            ) from e
 
     def create_local_subscription(
         self,

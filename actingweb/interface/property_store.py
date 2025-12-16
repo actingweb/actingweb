@@ -221,8 +221,21 @@ class NotifyingListProperty:
         self._list_name = list_name
         self._actor = actor
 
-    def _register_diff(self, operation: str = "") -> None:
-        """Register a diff for the list property change."""
+    def _register_diff(
+        self,
+        operation: str = "",
+        item: Any = None,
+        index: int | None = None,
+        items: list[Any] | None = None,
+    ) -> None:
+        """Register a diff for the list property change.
+
+        Args:
+            operation: The operation type (append, update, delete, etc.)
+            item: Single item data for append/update/insert operations
+            index: Index for update/delete/insert operations
+            items: Multiple items for extend operation
+        """
         if not self._actor:
             return
 
@@ -234,11 +247,21 @@ class NotifyingListProperty:
             else:
                 length = len(self._list_prop)
 
-            diff_info = {
+            diff_info: dict[str, Any] = {
                 "list": self._list_name,
                 "operation": operation,
                 "length": length,
             }
+
+            # Include item data for operations that add/modify items
+            # This allows subscribers to receive the data directly without fetching
+            if item is not None:
+                diff_info["item"] = item
+            if index is not None:
+                diff_info["index"] = index
+            if items is not None:
+                diff_info["items"] = items
+
             self._actor.register_diffs(
                 target="properties",
                 subtarget=f"list:{self._list_name}",
@@ -279,11 +302,11 @@ class NotifyingListProperty:
     # Mutation operations - register diffs after completion
     def __setitem__(self, index: int, value: Any) -> None:
         self._list_prop[index] = value
-        self._register_diff("update")
+        self._register_diff("update", item=value, index=index)
 
     def __delitem__(self, index: int) -> None:
         del self._list_prop[index]
-        self._register_diff("delete")
+        self._register_diff("delete", index=index)
 
     def set_description(self, description: str) -> None:
         self._list_prop.set_description(description)
@@ -295,11 +318,14 @@ class NotifyingListProperty:
 
     def append(self, item: Any) -> None:
         self._list_prop.append(item)
-        self._register_diff("append")
+        # Include the item in the callback so subscribers can use it directly
+        # Index is length - 1 since append adds to the end
+        self._register_diff("append", item=item, index=len(self._list_prop) - 1)
 
     def extend(self, items: list[Any]) -> None:
         self._list_prop.extend(items)
-        self._register_diff("extend")
+        # Include all items in the callback
+        self._register_diff("extend", items=items)
 
     def clear(self) -> None:
         self._list_prop.clear()
@@ -311,12 +337,12 @@ class NotifyingListProperty:
 
     def pop(self, index: int = -1) -> Any:
         result = self._list_prop.pop(index)
-        self._register_diff("pop")
+        self._register_diff("pop", index=index)
         return result
 
     def insert(self, index: int, item: Any) -> None:
         self._list_prop.insert(index, item)
-        self._register_diff("insert")
+        self._register_diff("insert", item=item, index=index)
 
     def remove(self, value: Any) -> None:
         self._list_prop.remove(value)

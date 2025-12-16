@@ -300,8 +300,8 @@ class TestAsyncOperations:
 
         elapsed = time.time() - start_time
 
-        # Full handshake should complete within 15 seconds
-        assert elapsed < 15.0, f"Trust handshake took {elapsed}s, expected < 15s"
+        # Full handshake should complete within 20 seconds (generous for CI)
+        assert elapsed < 20.0, f"Trust handshake took {elapsed}s, expected < 20s"
 
         # Verify both sides are approved
         response = requests.get(

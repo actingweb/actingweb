@@ -1,5 +1,5 @@
 =====================================
-ActingWeb Specification - version 1.2
+ActingWeb Specification - version 1.3
 =====================================
 
 Introduction
@@ -30,6 +30,38 @@ All work, including code, derived from the concepts, specifications, and
 other instructions found in this specification do not require any
 license or permission, and may be distributed under any copyright or
 license.
+
+Changelog
+-----------------------------
+
+**Version 1.3** (December 2025)
+
+- Added List Property Subscriptions with structured diff payloads
+- Subscription subtarget format ``list:{name}`` for list properties
+- Diff payloads include ``operation``, ``item``, ``index``, and ``items`` fields
+- Updated ``listproperties`` option tag to include subscription capabilities
+
+**Version 1.2** (November 2025)
+
+- Added ``listproperties`` option tag for ordered collections
+- Added List Properties section with full CRUD operations and metadata
+- Added Response Conventions: empty collections return ``200 OK`` with ``[]``, not ``404``
+- Added ``/meta/trusttypes`` endpoint for SPA client trust type discovery
+- Changed empty ``/properties`` to return ``200 OK`` with ``{}``
+
+**Version 1.1** (October 2025)
+
+- Added ``trustpermissions`` option tag for per-relationship permission management
+- Reformatted option tags documentation for clarity
+- Updated copyright year range
+
+**Version 1.0** (November 2016)
+
+- Initial specification release
+- Core endpoints: ``/properties``, ``/meta``, ``/trust``, ``/subscriptions``
+- Optional endpoints: ``/actions``, ``/resources``, ``/methods``, ``/sessions``, ``/www``, ``/oauth``
+- Trust relationship model with verification flows
+- Subscription and callback mechanisms
 
 Terminology
 -----------------------------
@@ -390,7 +422,8 @@ nestedproperties
 
 listproperties
   Support for list properties under ``/properties``, allowing ordered collections of items with
-  individual item CRUD operations and list-level metadata (description, explanation).
+  individual item CRUD operations, list-level metadata (description, explanation), and structured
+  subscription diff payloads containing operation type, item data, and index information.
 
 trustpermissions
   The trust endpoint supports per‑relationship permission management (enhanced trust API and ``/permissions``).
@@ -2368,6 +2401,96 @@ diff).
 
 A mini-app MAY implement more advanced diff methods, but this diff
 method MUST be used for the /properties endpoint.
+
+**List Property Subscriptions (OPTIONAL)**
+
+This section applies only to actors that support the *listproperties* option tag.
+Subscriptions to list properties follow a modified diff format that provides
+additional context about list mutations. When subscribing to changes on a
+list property, the subtarget MUST use the format ``list:{name}`` where
+``{name}`` is the list property name. For example, to subscribe to changes
+on a list property named ``notes``, the subscription request MUST specify
+``subtarget: "list:notes"``.
+
+The diff payload for list property changes differs from regular property diffs
+in that it provides structured metadata about the mutation operation. The diff
+data MUST include the following fields:
+
++----------------+-------------+----------------------------------------------------------------+
+| **Field**      | **Required**| **Description**                                                |
++----------------+-------------+----------------------------------------------------------------+
+| ``list``       | REQUIRED    | The name of the list property (without the ``list:`` prefix)   |
++----------------+-------------+----------------------------------------------------------------+
+| ``operation``  | REQUIRED    | The mutation type: ``append``, ``insert``, ``update``,         |
+|                |             | ``delete``, ``pop``, ``extend``, ``clear``, ``remove``,        |
+|                |             | ``delete_all``, or ``metadata``                                |
++----------------+-------------+----------------------------------------------------------------+
+| ``length``     | REQUIRED    | The current length of the list after the operation             |
++----------------+-------------+----------------------------------------------------------------+
+| ``item``       | OPTIONAL    | The item data for ``append``, ``insert``, and ``update``       |
+|                |             | operations                                                     |
++----------------+-------------+----------------------------------------------------------------+
+| ``index``      | OPTIONAL    | The index affected for ``append``, ``insert``, ``update``,     |
+|                |             | ``delete``, and ``pop`` operations                             |
++----------------+-------------+----------------------------------------------------------------+
+| ``items``      | OPTIONAL    | Array of items for ``extend`` operations                       |
++----------------+-------------+----------------------------------------------------------------+
+
+Example diff for appending an item to the ``notes`` list property::
+
+  {
+    "list:notes": {
+      "list": "notes",
+      "operation": "append",
+      "length": 3,
+      "item": {"id": "3", "content": "New note"},
+      "index": 2
+    }
+  }
+
+Example diff for extending a list with multiple items::
+
+  {
+    "list:notes": {
+      "list": "notes",
+      "operation": "extend",
+      "length": 5,
+      "items": [{"id": "4", "content": "Note 4"}, {"id": "5", "content": "Note 5"}]
+    }
+  }
+
+Example diff for updating an item at a specific index::
+
+  {
+    "list:notes": {
+      "list": "notes",
+      "operation": "update",
+      "length": 5,
+      "item": {"id": "1", "content": "Updated content"},
+      "index": 0
+    }
+  }
+
+Example diff for deleting an item at a specific index::
+
+  {
+    "list:notes": {
+      "list": "notes",
+      "operation": "delete",
+      "length": 4,
+      "index": 2
+    }
+  }
+
+The ``item``, ``index``, and ``items`` fields allow subscribers to receive the
+modified data directly in the callback without needing to make additional GET
+requests to the list property endpoint. This is particularly useful for
+high-frequency updates where minimizing API calls is important.
+
+Note: When evaluating permissions for list property subscriptions, the
+``list:`` prefix MUST be stripped from the subtarget before checking
+permissions. For example, a subscription to ``list:notes`` should be
+authorized against permission rules for ``notes``, not ``list:notes``.
 
 **Getting the Updates**
 

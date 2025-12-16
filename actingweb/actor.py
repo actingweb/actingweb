@@ -1563,35 +1563,83 @@ class Actor:
             "Authorization": "Bearer " + trust_rel["secret"],
             "Content-Type": "application/json",
         }
+
+        # Fire callback asynchronously to avoid blocking the caller
+        async def _send_callback_async():
+            """Send subscription callback using httpx (non-blocking)."""
+            import httpx
+
+            try:
+                logging.debug(
+                    "Doing async callback on subscription at url("
+                    + requrl
+                    + ") with body("
+                    + str(data)
+                    + ")"
+                )
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(10.0, connect=5.0)
+                ) as client:
+                    response = await client.post(
+                        requrl, content=data.encode("utf-8"), headers=headers
+                    )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+                if response.status_code == 204 and sub["granularity"] == "high":
+                    if not sub_obj:
+                        logging.warning("About to clear diff without having subobj set")
+                    else:
+                        sub_obj.clear_diff(diff["sequence"])
+            except Exception as e:
+                logging.debug(
+                    f"Peer did not respond to callback on url({requrl}): {e}"
+                )
+                self.last_response_code = 0
+                self.last_response_message = (
+                    "No response from peer for subscription callback"
+                )
+
+        # Schedule the async callback without blocking
         try:
-            logging.debug(
-                "Doing a callback on subscription at url("
-                + requrl
-                + ") with body("
-                + str(data)
-                + ")"
-            )
-            response = requests.post(
-                url=requrl, data=data.encode("utf-8"), headers=headers, timeout=(5, 10)
-            )
-        except Exception:
-            logging.debug("Peer did not respond to callback on url(" + requrl + ")")
-            self.last_response_code = 0
-            self.last_response_message = (
-                "No response from peer for subscription callback"
-            )
-            return
-        self.last_response_code = response.status_code
-        self.last_response_message = (
-            response.content.decode("utf-8", "ignore")
-            if isinstance(response.content, bytes)
-            else str(response.content)
-        )
-        if response.status_code == 204 and sub["granularity"] == "high":
-            if not sub_obj:
-                logging.warning("About to clear diff without having subobj set")
-            else:
-                sub_obj.clear_diff(diff["sequence"])
+            import asyncio
+
+            loop = asyncio.get_running_loop()
+            # We're in an async context - create a background task
+            loop.create_task(_send_callback_async())
+            logging.debug("Scheduled async callback task")
+        except RuntimeError:
+            # No running event loop - fall back to sync request
+            logging.debug("No async loop, falling back to sync callback")
+            try:
+                response = requests.post(
+                    url=requrl,
+                    data=data.encode("utf-8"),
+                    headers=headers,
+                    timeout=(5, 10),
+                )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+                if response.status_code == 204 and sub["granularity"] == "high":
+                    if not sub_obj:
+                        logging.warning("About to clear diff without having subobj set")
+                    else:
+                        sub_obj.clear_diff(diff["sequence"])
+            except Exception:
+                logging.debug(
+                    "Peer did not respond to callback on url(" + requrl + ")"
+                )
+                self.last_response_code = 0
+                self.last_response_message = (
+                    "No response from peer for subscription callback"
+                )
 
     async def create_verified_trust_async(
         self,
@@ -1706,8 +1754,14 @@ class Actor:
 
             filtered_data = {}
             for property_name, value in data.items():
+                # Normalize property list keys: strip 'list:' prefix for permission checks
+                # Property lists use 'list:name' internally but permissions use 'name'
+                normalized_name = (
+                    property_name[5:] if property_name.startswith("list:") else property_name
+                )
+
                 # Build full property path for permission check
-                property_path = f"{subtarget}/{property_name}" if subtarget else property_name
+                property_path = f"{subtarget}/{normalized_name}" if subtarget else normalized_name
                 result = evaluator.evaluate_property_access(
                     self.id, peerid, property_path, operation="read"
                 )

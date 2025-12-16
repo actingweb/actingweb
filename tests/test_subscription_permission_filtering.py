@@ -166,6 +166,55 @@ class TestSubscriptionPermissionFiltering:
             # Should return the blob as-is
             assert result == blob
 
+    def test_filter_strips_list_prefix_for_property_lists(self):
+        """Filter should strip 'list:' prefix from property list keys for permission checks.
+
+        Property lists use 'list:name' internally but permissions are configured
+        with clean names like 'memory_news', not 'list:memory_news'.
+        """
+        actor = Actor(config=self.mock_config)
+        actor.id = "test-actor-id"
+
+        # Blob contains property list key with 'list:' prefix (as sent by property_list)
+        blob = json.dumps({
+            "list:memory_news": {"list": "memory_news", "operation": "append", "length": 3}
+        })
+
+        with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
+            mock_evaluator = Mock()
+            mock_get_eval.return_value = mock_evaluator
+
+            # Permission check should be called with 'memory_news', not 'list:memory_news'
+            # Note: operation is passed as a keyword argument
+            def check_property_path(_actor_id, _peer_id, property_path, operation=None):
+                # Verify the 'list:' prefix was stripped
+                if property_path == "memory_news":
+                    return PermissionResult.ALLOWED
+                # If called with 'list:memory_news', deny to make test fail
+                return PermissionResult.DENIED
+
+            mock_evaluator.evaluate_property_access.side_effect = check_property_path
+
+            result = actor._filter_subscription_data_by_permissions(
+                peerid="peer-123",
+                blob=blob,
+                subtarget=None,
+            )
+
+            # Should succeed because 'list:' was stripped and 'memory_news' matched
+            assert result is not None
+            result_data = json.loads(result)
+            # Original key should be preserved in output
+            assert "list:memory_news" in result_data
+
+            # Verify permission was checked with stripped name
+            mock_evaluator.evaluate_property_access.assert_called_once_with(
+                "test-actor-id",
+                "peer-123",
+                "memory_news",  # Not 'list:memory_news'
+                operation="read",
+            )
+
 
 class TestCallbackSubscriptionFiltering:
     """Test that callback_subscription integrates permission filtering."""

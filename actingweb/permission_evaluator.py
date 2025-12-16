@@ -452,9 +452,18 @@ class PermissionEvaluator:
                 logger.debug(f"Target '{target}' matched pattern, operation '{operation}' allowed")
                 return PermissionResult.ALLOWED
             else:
-                logger.debug(f"Target '{target}' did not match any patterns {patterns}")
+                # When patterns are explicitly defined, non-match means DENIED
+                # EXCEPT: empty target (listing requests) should return NOT_FOUND to allow
+                # the listing endpoint to proceed - individual properties are filtered there
+                if target == "":
+                    logger.debug(
+                        f"Empty target with patterns {patterns} - allowing listing (filter at response level)"
+                    )
+                    return PermissionResult.NOT_FOUND
+                logger.debug(f"Target '{target}' did not match any patterns {patterns} - denying access")
+                return PermissionResult.DENIED
 
-        # No matching rule found
+        # No matching rule found (no patterns/operations configured at all)
         logger.debug(f"No matching rule found for target='{target}', operation='{operation}'")
         return PermissionResult.NOT_FOUND
 

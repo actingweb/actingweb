@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-v3.7.0: Dec 15, 2025
+v3.7.0: Dec 16, 2025
 --------------------
 
 BREAKING CHANGES
@@ -15,6 +15,12 @@ BREAKING CHANGES
 FIXED
 ~~~~~
 
+- **SECURITY**: Permission evaluator now returns DENIED (not NOT_FOUND) when explicit patterns are defined but target doesn't match - fixes permission bypass via legacy ACL fallback
+- **SECURITY**: Properties ``listall`` endpoint now filters properties and list properties based on peer permissions - prevents unauthorized data exposure
+- Properties ``listall`` now includes list properties even when all regular properties are filtered by permissions
+- Subscription callbacks now fire asynchronously in async contexts to avoid blocking the caller
+- Fixed permission filtering for property lists to strip 'list:' prefix before permission checks
+- Property list diff notifications now include item data (item, index, items) for subscribers
 - Add trigger of oauth_success hook in SPA oauth2 login
 - Fixed unused variable and import warnings identified by ruff linting
 - Fixed ``hasattr(x, '__call__')`` pattern replaced with ``callable(x)`` for better type safety

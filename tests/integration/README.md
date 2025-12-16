@@ -3,7 +3,10 @@
 ## Quick Start
 
 ```bash
-# Run all integration tests
+# Run all integration tests (parallel - 3-4x faster!)
+make test-parallel
+
+# Run all integration tests (sequential)
 make test-integration
 
 # Run specific test file
@@ -11,7 +14,28 @@ poetry run pytest tests/integration/test_basic_flow.py -v
 
 # Run with coverage
 poetry run pytest tests/integration/ --cov=actingweb --cov-report=html
+
+# Run in parallel with specific worker count
+poetry run pytest tests/integration/ -n 4 -v
 ```
+
+## Parallel Execution
+
+The test suite supports parallel execution using `pytest-xdist` for significantly faster test runs:
+
+- **3-4x speedup** on multi-core systems
+- **Automatic worker isolation** - each worker gets unique database tables, ports, and actor emails
+- **No code changes needed** - tests run safely in parallel without modification
+
+```bash
+make test-parallel           # Auto-detect CPU cores
+make test-parallel-fast      # Skip slow tests
+poetry run pytest tests/integration/ -n auto -v --dist loadscope
+```
+
+**Note**: Use `--dist loadscope` to keep test classes together on the same worker, which is required for tests that use class-level state.
+
+See `../../CONTRIBUTING.rst` for detailed parallel testing documentation.
 
 ## Test Suite
 

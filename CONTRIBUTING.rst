@@ -16,6 +16,7 @@ Local Setup
 - Useful commands:
 
   - Tests + coverage: ``poetry run pytest`` (fails <80%; HTML in ``htmlcov/``)
+  - Parallel tests: ``make test-parallel`` (3-4x faster using all CPU cores)
   - Lint: ``poetry run ruff check .``
   - Format: ``poetry run black .``
   - Types: ``poetry run mypy actingweb``
@@ -56,6 +57,79 @@ Devtest endpoints are for validating ActingWeb behavior during development. Neve
     - ``PUT /devtest/attribute/<bucket>/<key>`` with JSON → set value.
     - ``DELETE /devtest/attribute/<bucket>/<key>`` or ``DELETE /devtest/attribute`` → remove key/buckets.
 
+Running Tests
+=============
+
+Sequential Execution
+--------------------
+
+Run tests one at a time (traditional approach):
+
+.. code-block:: bash
+
+    # All integration tests
+    make test-integration
+
+    # Unit tests only
+    poetry run pytest tests/ --ignore=tests/integration
+
+    # Specific test file
+    poetry run pytest tests/integration/test_factory.py -v
+
+Parallel Execution (Recommended)
+---------------------------------
+
+Run tests in parallel across multiple CPU cores for 3-4x speedup:
+
+.. code-block:: bash
+
+    # All integration tests (auto-detects CPU cores)
+    make test-parallel
+
+    # Fast tests only (skips slow tests)
+    make test-parallel-fast
+
+    # All tests (unit + integration)
+    make test-all-parallel
+
+    # Manual control (4 workers with loadscope distribution)
+    poetry run pytest tests/integration/ -n 4 -v --dist loadscope
+
+**How Parallel Testing Works:**
+
+- Each worker gets isolated database tables (``test_w0_``, ``test_w1_``, etc.)
+- Test servers run on unique ports per worker (5555, 5565, 5575, etc.)
+- Actor emails are automatically made unique (``user_gw0_1_abc@example.com``)
+- Tests from the same class stay on the same worker (``--dist loadscope``)
+- No test code changes needed - isolation is automatic
+
+**Writing Parallel-Safe Tests:**
+
+- Always use ``actor_factory`` fixture for creating actors
+- Avoid hardcoded emails - let the factory generate unique ones
+- Don't share state between tests
+- Each test should be independent
+
+.. code-block:: python
+
+    # Good - automatically unique per worker
+    def test_something(actor_factory):
+        actor = actor_factory.create("test@example.com")
+
+    # Bad - may conflict across workers
+    def test_something(actor_factory):
+        actor = actor_factory.create("fixed_email_123@example.com")
+
+**Debugging Parallel Tests:**
+
+.. code-block:: bash
+
+    # Run with single worker for easier debugging
+    poetry run pytest tests/integration/ -n 1 -v
+
+    # Run sequentially (no parallelization)
+    poetry run pytest tests/integration/ -v
+
 DynamoDB for Development
 ========================
 
@@ -82,3 +156,11 @@ Commits and PRs
 - Commits: imperative mood, concise (e.g., "Fix trust permission mapping").
 - PRs: include motivation, scope, linked issues (e.g., ``Closes #123``), test updates, and any doc changes.
 - CI must pass: pytest (with coverage), mypy, Ruff, Black, and package build.
+
+CI/CD Testing
+=============
+
+- GitHub Actions runs tests in parallel using ``pytest-xdist`` for 3-4× speedup
+- Tests run with 4 workers on public repos, 2 workers on private repos
+- Coverage reporting works seamlessly with parallel execution
+- Same test suite runs locally (``make test-parallel``) and in CI

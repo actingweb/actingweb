@@ -6,6 +6,240 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the ActingWeb Python library - a reference implementation of the ActingWeb REST protocol for distributed micro-services. It's designed for bot-to-bot communication and enables secure, granular sharing of user data across services.
 
+## Project Documentation System
+
+The project uses a structured documentation system in `thoughts/shared/` to track research, planning, patterns, and completed work. This system helps maintain institutional knowledge and provides context for development decisions.
+
+### Directory Structure
+
+```
+thoughts/shared/
+├── research/          # Research documents analyzing features and architecture
+├── patterns/          # Reusable patterns and best practices
+├── plans/            # Planning documents for upcoming work (dated YYYY-MM-DD)
+├── completed/        # Completed work documentation (dated YYYY-MM-DD)
+└── *.md              # General documentation (test requirements, etc.)
+```
+
+### Document Types and Usage
+
+#### Research Documents (`research/`)
+
+**Purpose**: Deep analysis of architectural decisions, feature designs, and technical investigations.
+
+**Example**: `2025-12-12-unified-handler-architecture.md`
+- Analyzes current architecture
+- Identifies gaps and issues
+- Proposes solutions and improvements
+- Documents trade-offs and design rationale
+
+**When to create**: When investigating a complex architectural question or evaluating multiple design approaches.
+
+#### Pattern Documents (`patterns/`)
+
+**Purpose**: Reusable patterns, best practices, and established conventions that should be followed across the codebase.
+
+**Example**: `handler-refactoring-pattern.md`
+- Step-by-step refactoring guide
+- Code examples showing before/after
+- Success metrics and verification steps
+- Testing requirements (unit tests + integration tests)
+- Anti-patterns to avoid
+
+**When to create**: When you've successfully solved a problem that will need to be repeated (e.g., refactoring multiple similar files).
+
+**Key characteristics**:
+- Prescriptive (tells you HOW to do something)
+- Includes concrete code examples
+- Lists success criteria and verification steps
+- Should be reusable across multiple similar tasks
+
+#### Planning Documents (`plans/`)
+
+**Purpose**: Track upcoming work, implementation plans, gap analysis, and progress on initiatives.
+
+**Naming**: `YYYY-MM-DD-description.md` (e.g., `2025-12-13-unified-handler-gaps.md`)
+
+**Structure**:
+- Overview and objectives
+- Gaps identified (what's missing)
+- Phase-by-phase implementation plan
+- Success criteria for each phase
+- Progress tracking (checkboxes)
+- Verification steps
+
+**Example**: `2025-12-13-unified-handler-gaps.md`
+- Lists all gaps between research and implementation
+- Breaks work into 7 phases
+- Tracks completion with checkboxes
+- Documents dependencies between phases
+- Includes risk mitigation strategies
+
+**When to create**: Before starting a major initiative or when planning multi-phase work.
+
+**When to update**: As phases complete, check off items and update status sections.
+
+#### Completed Work (`completed/`)
+
+**Purpose**: Document completed initiatives, refactorings, or feature implementations for future reference.
+
+**Naming**: `YYYY-MM-DD-description.md` (e.g., `2025-12-14-trust-handler-refactoring.md`)
+
+**Structure**:
+- Executive summary
+- What was changed and why
+- Code metrics (lines added/changed/deleted)
+- Test coverage added
+- Files modified
+- Verification results
+- Lessons learned
+
+**Example**: `2025-12-14-handler-refactoring-initiative-complete.md`
+- Summarizes 6-handler refactoring initiative
+- Provides before/after architecture diagrams
+- Lists all files modified
+- Documents test coverage (46 unit tests, 79+ integration tests)
+- Tracks metrics (308 lines added to developer API)
+- Key learnings and success factors
+
+**When to create**: When completing a significant piece of work that others might need to reference later.
+
+### Workflow Examples
+
+#### Starting a New Initiative
+
+1. **Research** (`research/`) - Analyze the problem
+2. **Plan** (`plans/YYYY-MM-DD-*.md`) - Create implementation plan
+3. **Pattern** (`patterns/*.md`) - Document reusable approaches (if applicable)
+4. **Complete** (`completed/YYYY-MM-DD-*.md`) - Document results when done
+
+#### Iterative Development
+
+```
+Day 1: Create plan document in plans/
+Day 2-5: Implement Phase 1, update checkboxes in plan
+Day 6: Complete Phase 1, update plan with ✅
+Day 7-10: Implement Phase 2, update checkboxes
+...
+Final: Move plan summary to completed/, create completion doc
+```
+
+#### Reusing Patterns
+
+When starting similar work:
+1. Check `patterns/` for established approaches
+2. Follow the pattern's step-by-step guide
+3. Update pattern if improvements are discovered
+4. Reference pattern in your completion doc
+
+### Best Practices
+
+**For Research Documents:**
+- Start with clear problem statement
+- Document current state thoroughly
+- List alternatives considered
+- Explain why chosen approach is best
+- Include diagrams where helpful
+
+**For Pattern Documents:**
+- Make it step-by-step and prescriptive
+- Include complete code examples
+- List all success criteria
+- Document both good and bad examples
+- Keep it up-to-date as patterns evolve
+
+**For Planning Documents:**
+- Use checkboxes for tracking progress
+- Break work into logical phases
+- Document dependencies between phases
+- Include verification steps for each phase
+- Update regularly as work progresses
+- Mark items with ✅ COMPLETE when done
+
+**For Completion Documents:**
+- Summarize what was accomplished
+- Include metrics (lines changed, tests added)
+- Document all files modified
+- List lessons learned
+- Provide verification evidence (test results)
+
+### Example Documentation Flow
+
+**Handler Refactoring Initiative:**
+
+1. **Research**: `research/2025-12-12-unified-handler-architecture.md`
+   - Analyzed all 6 handlers
+   - Found 4 needed refactoring, 2 were clean
+   - Proposed developer API extensions
+
+2. **Pattern**: `patterns/handler-refactoring-pattern.md`
+   - Established 5-step refactoring process
+   - Documented testing requirements
+   - Created reusable template
+
+3. **Plan**: `plans/2025-12-13-unified-handler-gaps.md`
+   - Listed 6 gap categories
+   - Created 7-phase implementation plan
+   - Tracked progress with checkboxes
+
+4. **Individual Completions**:
+   - `completed/2025-12-14-subscription-handler-refactoring.md`
+   - `completed/2025-12-14-trust-handler-refactoring.md`
+   - `completed/2025-12-14-properties-handler-refactoring.md`
+   - `completed/2025-12-14-callbacks-handler-refactoring.md`
+
+5. **Final Summary**: `completed/2025-12-14-handler-refactoring-initiative-complete.md`
+   - Consolidated all results
+   - Provided grand totals (382 lines added, 46 unit tests)
+   - Documented architecture transformation
+   - Listed key learnings
+
+### Finding Relevant Documentation
+
+**Before starting work:**
+```bash
+# Check for existing patterns
+ls thoughts/shared/patterns/
+
+# Check for related research
+grep -r "your topic" thoughts/shared/research/
+
+# Check active plans
+ls thoughts/shared/plans/
+```
+
+**Looking for completed examples:**
+```bash
+# Find similar work
+ls thoughts/shared/completed/ | grep handler
+
+# Read completion doc for reference
+cat thoughts/shared/completed/2025-12-14-trust-handler-refactoring.md
+```
+
+### When to Create Each Document Type
+
+| Situation | Document Type | Example |
+|-----------|---------------|---------|
+| Investigating architecture | `research/` | "Should we use hooks or direct calls?" |
+| Found reusable solution | `patterns/` | "Handler refactoring pattern" |
+| Planning multi-phase work | `plans/` | "Gap implementation plan" |
+| Finished significant work | `completed/` | "Trust handler refactoring complete" |
+| General reference | Root level | "Test requirements from actingweb_mcp" |
+
+### Integration with CLAUDE.md
+
+This documentation system complements CLAUDE.md:
+- **CLAUDE.md**: Guidance for Claude Code on how to work with the codebase
+- **thoughts/shared/**: Historical context, design decisions, completed work
+
+When working on the codebase:
+1. Check CLAUDE.md for current architecture and patterns
+2. Check `thoughts/shared/patterns/` for established practices
+3. Check `thoughts/shared/research/` for design rationale
+4. Check `thoughts/shared/plans/` for ongoing initiatives
+5. Document completed work in `thoughts/shared/completed/`
+
 ## Architecture
 
 The library follows a micro-services model where each user gets their own "actor" instance with a unique URL. The core components are:
@@ -43,6 +277,38 @@ The library follows a micro-services model where each user gets their own "actor
 - **FastAPI Integration** (`actingweb/interface/integrations/fastapi_integration.py`): Async FastAPI support with OpenAPI docs
 - **Actor Interface** (`actingweb/interface/actor_interface.py`): Modern actor management wrapper
 - **Hook Registry** (`actingweb/interface/hook_registry.py`): Decorator-based event handling
+- **Authenticated Views** (`actingweb/interface/authenticated_views.py`): Permission-enforced actor access
+
+### Authenticated Views
+
+The authenticated views system provides permission-enforced access to actor resources. Three access modes are supported:
+
+**1. Owner Mode** (direct ActorInterface access - full access):
+```python
+actor = ActorInterface(core_actor)
+actor.properties["any_property"] = value  # Full access, no permission checks
+```
+
+**2. Peer Mode** (actor-to-actor access):
+```python
+peer_view = actor.as_peer(peer_id="peer123", trust_relationship=trust_data)
+peer_view.properties["shared_data"] = value  # Permission checks enforced
+```
+
+**3. Client Mode** (OAuth2/MCP client access):
+```python
+client_view = actor.as_client(client_id="mcp_client", trust_relationship=trust_data)
+client_view.properties["user_data"] = value  # Permission checks enforced
+```
+
+**Handler Helper Method:**
+```python
+# In handler code
+auth_view = self._get_authenticated_view(actor, auth_result)
+if auth_view:
+    # All operations now enforce permissions
+    data = auth_view.properties.get("config")
+```
 
 ### Key Design Patterns
 - Each actor has a unique root URL: `https://domain.com/{actor_id}`
@@ -111,6 +377,28 @@ poetry run pytest tests/ -v --ignore=tests/integration
 # Run specific test files
 poetry run pytest tests/test_actor.py tests/test_config.py -v
 ```
+
+#### Parallel Test Execution (Recommended)
+
+For significantly faster test runs, use parallel execution with `pytest-xdist`:
+
+```bash
+# Run integration tests in parallel (3-4x faster)
+make test-parallel
+
+# Run all tests in parallel
+make test-all-parallel
+
+# Manual control over worker count
+poetry run pytest tests/integration/ -n 4 -v --dist loadscope
+```
+
+Parallel testing features:
+- Automatic worker isolation (unique DB tables, ports, actor emails)
+- Test classes stay together on same worker (`--dist loadscope`)
+- 3-4x speedup on multi-core systems
+- No test code changes needed
+- See `CONTRIBUTING.rst` for detailed documentation
 
 #### Running Integration Tests with DynamoDB
 
@@ -591,59 +879,6 @@ app = (
     # Comment out .with_oauth() to disable OAuth2
 )
 ```
-
-## Singleton Initialization
-
-**CRITICAL**: For applications using the unified access control system, you MUST initialize ActingWeb singletons at application startup to avoid severe performance issues.
-
-### Performance Impact
-
-Without proper initialization:
-- OAuth2 flows may hang for 4+ minutes
-- First requests trigger expensive singleton initialization
-- Database operations, system actor creation, and pattern compilation block request threads
-
-### Required Initialization
-
-Add this code at application startup, before serving requests:
-
-```python
-# CRITICAL: Initialize ActingWeb singletons at application startup
-try:
-    from actingweb.singleton_warmup import initialize_actingweb_singletons
-    initialize_actingweb_singletons(app.get_config())
-    logger.info("ActingWeb singletons initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize ActingWeb singletons: {e}")
-    # Continue anyway - system will fall back gracefully with degraded performance
-    logger.warning("Continuing with degraded performance - singletons will initialize lazily")
-```
-
-### What Gets Initialized
-
-1. **Trust Type Registry**: Pre-compiles all trust types and their permissions
-2. **Permission Evaluator**: Pre-loads system patterns and rule engine
-3. **Trust Permission Store**: Initializes custom permission overrides system
-
-### Debugging Singleton Issues
-
-If you see these symptoms:
-- OAuth2 callbacks hanging for minutes
-- First requests extremely slow after startup
-- Logs showing "Initializing trust type registry..." during requests
-
-Then singleton initialization is happening during request processing instead of at startup.
-
-**Check initialization logs:**
-```
-ActingWeb singletons initialized successfully
-Trust type registry initialized with X types
-Permission evaluator initialized successfully  
-Trust permission store initialized
-```
-
-**Handle initialization failures:**
-The system includes graceful fallbacks - if singleton initialization fails at startup, individual components will fall back to lazy loading with warnings.
 
 ## Security Notes
 

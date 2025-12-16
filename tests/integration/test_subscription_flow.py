@@ -180,7 +180,8 @@ class TestSubscriptionActorFlow:
             f"{self.actor1_url}/trust/friend/{self.actor2_id}/permissions",
             json={
                 "properties": {
-                    "patterns": ["properties", "properties/*", "meta"],
+                    # Patterns match property paths (not URL paths), use * for all
+                    "patterns": ["*"],
                     "operations": ["read", "write", "subscribe"],
                 }
             },
@@ -200,7 +201,8 @@ class TestSubscriptionActorFlow:
             f"{self.actor1_url}/trust/friend/{self.actor3_id}/permissions",
             json={
                 "properties": {
-                    "patterns": ["properties", "properties/data2"],
+                    # Patterns match property paths (not URL paths)
+                    "patterns": ["data2", "data2/*"],
                     "operations": ["read", "write", "subscribe"],
                 }
             },

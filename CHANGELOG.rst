@@ -2,26 +2,54 @@
 CHANGELOG
 =========
 
-v3.6.1: Dec 12, 2025
+v3.7.0: Dec 16, 2025
 --------------------
+
+BREAKING CHANGES
+~~~~~~~~~~~~~~~~
+
+- **Developer API Extended**: SubscriptionManager and TrustManager have new methods with cleaner APIs and automatic lifecycle hooks
+- See ``docs/migration/v3.7.rst`` for comprehensive migration guide
+- **HTTP API remains 100% backward compatible** - no changes required for applications using REST endpoints only
+
+FIXED
+~~~~~
+
+- **SECURITY**: Permission evaluator now returns DENIED (not NOT_FOUND) when explicit patterns are defined but target doesn't match - fixes permission bypass via legacy ACL fallback
+- **SECURITY**: Properties ``listall`` endpoint now filters properties and list properties based on peer permissions - prevents unauthorized data exposure
+- Properties ``listall`` now includes list properties even when all regular properties are filtered by permissions
+- Subscription callbacks now fire asynchronously in async contexts to avoid blocking the caller
+- Fixed permission filtering for property lists to strip 'list:' prefix before permission checks
+- Property list diff notifications now include item data (item, index, items) for subscribers
+- Add trigger of oauth_success hook in SPA oauth2 login
+- Fixed unused variable and import warnings identified by ruff linting
+- Fixed ``hasattr(x, '__call__')`` pattern replaced with ``callable(x)`` for better type safety
 
 ADDED
 ~~~~~
 
-- **Async Authentication**: Added async versions of authentication methods to avoid blocking the event loop during OAuth2 token validation:
-
-  - ``Auth.check_token_auth_async()`` - Async bearer token validation
-  - ``Auth._check_oauth2_token_async()`` - Async OAuth2 token validation with httpx
-  - ``check_and_verify_auth_async()`` - Async authentication helper for custom routes
-  - ``OAuth2Authenticator.validate_token_and_get_user_info_async()`` - Async user info retrieval
-
-- **OAuth2 Token Heuristic**: Added ``Auth._looks_like_oauth2_token()`` method to quickly identify trust secrets vs OAuth2 tokens, avoiding unnecessary network calls to OAuth providers for obvious non-OAuth tokens
-- **List Property Subscriptions**: List property item operations (add, update, delete) now trigger subscription notifications with structured diff payloads including action type and index
+- **Developer API Extensions**: Added methods to SubscriptionManager: ``create_local_subscription()``, ``get_subscription_with_diffs()``, ``get_callback_subscription()``, ``delete_callback_subscription()``
+- **Developer API Extensions**: Added methods to TrustManager: ``create_verified_trust()``, ``modify_and_notify()``, ``delete_peer_trust()``, ``trustee_root`` property
+- **Wrapper Classes**: Added ``SubscriptionWithDiffs`` wrapper providing clean access to subscription data and diffs
+- **Async Authentication**: Added async versions of authentication methods (``check_token_auth_async()``, ``check_and_verify_auth_async()``) to avoid blocking event loop during OAuth2 validation
+- **OAuth2 Token Heuristic**: Added ``Auth._looks_like_oauth2_token()`` method to avoid unnecessary network calls for non-OAuth tokens
+- **List Property Subscriptions**: List property operations now trigger subscription notifications with structured diff payloads
+- **Parallel Test Execution**: Added pytest-xdist support with worker isolation (unique DB prefixes, ports, emails) for 3-4x faster test runs
+- Added Makefile targets: ``make test-parallel``, ``make test-parallel-fast``, ``make test-all-parallel``
+- Added ``pytest-xdist`` dependency for parallel test execution
+- GitHub Actions CI now runs tests in parallel with 4 workers
+- oauth_success hook now receives full OAuth user info
 
 CHANGED
 ~~~~~~~
 
-- OAuth2 token validation now includes a quick heuristic check before making network requests, significantly improving authentication performance for trust-based authentication
+- **Architecture**: Handlers refactored to four-tier architecture (Handler → Developer API → Core Actor → Database) for clean separation of concerns
+- **Handler Simplification**: Handlers are now thin HTTP adapters delegating business logic to developer API
+- OAuth2 token validation now includes quick heuristic check before network requests for better performance
+- Integration tests now support parallel execution with automatic worker isolation
+- GitHub Actions workflow uses parallel testing (4 workers for public repos, 2 for private)
+- Added timeout-minutes to GitHub Actions jobs (20 min tests, 10 min type-check)
+- Documentation consolidated into CONTRIBUTING.rst and CLAUDE.md
 
 v3.6.0: Dec 11, 2025
 --------------------

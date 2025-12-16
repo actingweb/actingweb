@@ -5,6 +5,7 @@ from actingweb import config as config_class
 
 if TYPE_CHECKING:
     from actingweb.interface.actor_interface import ActorInterface
+    from actingweb.interface.authenticated_views import AuthenticatedActorView
     from actingweb.interface.hooks import HookRegistry
 
 
@@ -26,8 +27,65 @@ class BaseHandler:
             from actingweb.interface.actor_interface import ActorInterface
 
             registry = getattr(self.config, "service_registry", None)
-            return ActorInterface(actor, service_registry=registry)
+            return ActorInterface(actor, service_registry=registry, hooks=self.hooks)
         return None
+
+    def _get_authenticated_view(
+        self, actor, auth_result: "AuthResult"
+    ) -> "AuthenticatedActorView | None":
+        """Create an authenticated view of an actor with permission enforcement.
+
+        This method wraps the actor in an AuthenticatedActorView that enforces
+        permission checks based on the authentication context.
+
+        Args:
+            actor: The actor to wrap
+            auth_result: The AuthResult from authentication
+
+        Returns:
+            AuthenticatedActorView with permission enforcement, or None if actor is None
+        """
+        if not actor:
+            return None
+
+        from actingweb.interface.actor_interface import ActorInterface
+        from actingweb.interface.authenticated_views import (
+            AuthContext,
+            AuthenticatedActorView,
+        )
+
+        # Get peer/client info from auth object
+        peer_id = ""
+        client_id = ""
+        trust_relationship: dict[str, Any] = {}
+
+        if auth_result.auth_obj and hasattr(auth_result.auth_obj, "acl"):
+            acl = auth_result.auth_obj.acl
+            peer_id = acl.get("peerid", "") or ""
+            # For OAuth2 clients, use the client_id from ACL
+            if not peer_id and acl.get("oauth2_client"):
+                client_id = acl.get("oauth2_client", "")
+
+            # Extract trust relationship info if available
+            if peer_id:
+                trust_relationship = {
+                    "peer_id": peer_id,
+                    "relationship": acl.get("relationship", ""),
+                    "approved": acl.get("approved", False),
+                }
+
+        # Create auth context
+        auth_context = AuthContext(
+            peer_id=peer_id,
+            client_id=client_id,
+            trust_relationship=trust_relationship,
+        )
+
+        # Get or create ActorInterface
+        registry = getattr(self.config, "service_registry", None)
+        actor_interface = ActorInterface(actor, service_registry=registry, hooks=self.hooks)
+
+        return AuthenticatedActorView(actor_interface, auth_context, self.hooks)
 
     def _authenticate_dual_context(
         self,

@@ -14,14 +14,32 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         myself = self.require_authenticated_actor(actor_id, "subscriptions", "GET")
         if not myself:
             return
+
+        # Use developer API - ActorInterface with SubscriptionManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
         peerid = self.request.get("peerid")
         target = self.request.get("target")
         subtarget = self.request.get("subtarget")
         resource = self.request.get("resource")
 
-        subscriptions = myself.get_subscriptions(
-            peerid=peerid, target=target, subtarget=subtarget, resource=resource
-        )
+        # Use SubscriptionManager to get subscriptions
+        if peerid:
+            subscription_infos = actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+        elif target:
+            subscription_infos = actor_interface.subscriptions.get_subscriptions_for_target(
+                target, subtarget or "", resource or ""
+            )
+        else:
+            subscription_infos = actor_interface.subscriptions.all_subscriptions
+
+        # Convert SubscriptionInfo objects to dicts for JSON response
+        subscriptions = [sub.to_dict() for sub in subscription_infos]
+
         # Return empty data array with 200 OK when no subscriptions exist (SPA-friendly, spec v1.2)
         if not subscriptions:
             subscriptions = []
@@ -39,6 +57,14 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         myself = self.require_authenticated_actor(actor_id, "subscriptions", "POST")
         if not myself:
             return
+
+        # Use developer API - ActorInterface with SubscriptionManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
         try:
             body = self.request.body
             if isinstance(body, bytes):
@@ -46,32 +72,18 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
-            if "peerid" in params:
-                peerid = params["peerid"]
-            else:
-                peerid = None
-            if "target" in params:
-                target = params["target"]
-            else:
-                target = None
-            if "subtarget" in params:
-                subtarget = params["subtarget"]
-            else:
-                subtarget = None
-            if "resource" in params:
-                resource = params["resource"]
-            else:
-                resource = None
-            if "granularity" in params:
-                granularity = params["granularity"]
-            else:
-                granularity = "none"
+            peerid = params.get("peerid")
+            target = params.get("target")
+            subtarget = params.get("subtarget", "")
+            resource = params.get("resource", "")
+            granularity = params.get("granularity", "none")
         except ValueError:
             peerid = self.request.get("peerid")
             target = self.request.get("target")
-            subtarget = self.request.get("subtarget")
-            resource = self.request.get("resource")
-            granularity = self.request.get("granularity")
+            subtarget = self.request.get("subtarget") or ""
+            resource = self.request.get("resource") or ""
+            granularity = self.request.get("granularity") or "none"
+
         if not peerid or len(peerid) == 0:
             if self.response:
                 self.response.set_status(400, "Missing peer URL")
@@ -80,13 +92,16 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Missing target")
             return
-        remote_loc = myself.create_remote_subscription(
-            peerid=peerid,
+
+        # Use SubscriptionManager to create remote subscription
+        remote_loc = actor_interface.subscriptions.subscribe_to_peer(
+            peer_id=peerid,
             target=target,
             subtarget=subtarget,
             resource=resource,
             granularity=granularity,
         )
+
         if not remote_loc:
             if self.response:
                 self.response.set_status(
@@ -120,13 +135,31 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403)
             return
+
+        # Use developer API - ActorInterface with SubscriptionManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
         target = self.request.get("target")
         subtarget = self.request.get("subtarget")
         resource = self.request.get("resource")
 
-        subscriptions = myself.get_subscriptions(
-            peerid=peerid, target=target, subtarget=subtarget, resource=resource
-        )
+        # Use SubscriptionManager to get subscriptions for peer
+        if target:
+            subscription_infos = actor_interface.subscriptions.get_subscriptions_for_target(
+                target, subtarget or "", resource or ""
+            )
+            # Filter to only this peer's subscriptions
+            subscription_infos = [sub for sub in subscription_infos if sub.peer_id == peerid]
+        else:
+            subscription_infos = actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+
+        # Convert SubscriptionInfo objects to dicts for JSON response
+        subscriptions = [sub.to_dict() for sub in subscription_infos]
+
         # Return empty data array with 200 OK when no subscriptions exist (SPA-friendly, spec v1.2)
         if not subscriptions:
             subscriptions = []
@@ -190,11 +223,20 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         # Subscription authorization is handled by ACL rules (e.g., ("subscriptions/<id>", "POST", "a"))
         # The ACL check happens in authenticate_actor/authorize above
         # Property-level filtering happens at callback time based on permission patterns
-        new_sub = myself.create_subscription(
-            peerid=auth_result.auth_obj.acl["peerid"],
+
+        # Use developer API - ActorInterface with SubscriptionManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        # Use SubscriptionManager to create local subscription (peer subscribes to us)
+        new_sub = actor_interface.subscriptions.create_local_subscription(
+            peer_id=auth_result.auth_obj.acl["peerid"],
             target=target,
-            subtarget=subtarget,
-            resource=resource,
+            subtarget=subtarget or "",
+            resource=resource or "",
             granularity=granularity,
         )
         if not new_sub:
@@ -242,17 +284,30 @@ class SubscriptionHandler(base_handler.BaseHandler):
         myself = auth_result.actor
         if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
             return
-        sub = myself.get_subscription_obj(peerid=peerid, subid=subid)
-        if not sub:
+
+        # Use developer API - ActorInterface with SubscriptionManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        # Use SubscriptionManager to get subscription with diff operations
+        sub_with_diffs = actor_interface.subscriptions.get_subscription_with_diffs(
+            peer_id=peerid, subscription_id=subid
+        )
+        if not sub_with_diffs:
             if self.response:
                 self.response.set_status(404, "Subscription does not exist")
             return
-        sub_data = sub.get()
-        if not sub_data or len(sub_data) == 0:
+
+        sub_info = sub_with_diffs.subscription_info
+        if not sub_info:
             if self.response:
                 self.response.set_status(404, "Subscription does not exist")
             return
-        diffs = sub.get_diffs()
+
+        diffs = sub_with_diffs.get_diffs()
         pairs = []
         for diff in diffs:
             try:
@@ -269,13 +324,15 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if len(pairs) == 0:
             self.response.set_status(404, "No diffs available")
             return
+
+        sub_dict = sub_info.to_dict()
         data = {
             "id": myself.id,
             "peerid": peerid,
             "subscriptionid": subid,
-            "target": sub_data["target"],
-            "subtarget": sub_data["subtarget"],
-            "resource": sub_data["resource"],
+            "target": sub_dict["target"],
+            "subtarget": sub_dict["subtarget"],
+            "resource": sub_dict["resource"],
             "data": pairs,
         }
         out = json.dumps(data)
@@ -322,11 +379,23 @@ class SubscriptionHandler(base_handler.BaseHandler):
         except ValueError:
             self.response.set_status(400, "Sequence does not contain a number")
             return
-        sub = myself.get_subscription_obj(peerid=peerid, subid=subid)
-        if not sub:
+
+        # Use developer API - ActorInterface with SubscriptionManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        # Use SubscriptionManager to get subscription with diff operations
+        sub_with_diffs = actor_interface.subscriptions.get_subscription_with_diffs(
+            peer_id=peerid, subscription_id=subid
+        )
+        if not sub_with_diffs:
             self.response.set_status(404, "Subscription does not exist")
             return
-        sub.clear_diffs(seqnr=seqnr)
+
+        sub_with_diffs.clear_diffs(seqnr=seqnr)
         if self.response:
             self.response.set_status(204)
         return
@@ -364,34 +433,55 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
         myself = auth_result.actor
         if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
             return
-        sub = myself.get_subscription_obj(peerid=peerid, subid=subid)
-        if not sub:
+
+        # Use developer API - ActorInterface with SubscriptionManager
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        # Use SubscriptionManager to get subscription with diff operations
+        sub_with_diffs = actor_interface.subscriptions.get_subscription_with_diffs(
+            peer_id=peerid, subscription_id=subid
+        )
+        if not sub_with_diffs:
             if self.response:
                 self.response.set_status(404, "Subscription does not exist")
             return
-        sub_data = sub.get()
+
+        sub_info = sub_with_diffs.subscription_info
+        if not sub_info:
+            if self.response:
+                self.response.set_status(404, "Subscription does not exist")
+            return
+
         if not isinstance(seqnr, int):
             seqnr = int(seqnr)
-        diff = sub.get_diff(seqnr=seqnr)
+
+        diff = sub_with_diffs.get_diff(seqnr=seqnr)
         if not diff:
             self.response.set_status(404, "No diffs available")
             return
+
         try:
             d = json.loads(diff["data"])
         except (TypeError, ValueError, KeyError):
             d = diff["data"]
+
+        sub_dict = sub_info.to_dict()
         pairs = {
             "id": myself.id,
             "peerid": peerid,
             "subscriptionid": subid,
             "timestamp": diff["timestamp"].strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "target": sub_data["target"],
-            "subtarget": sub_data["subtarget"],
-            "resource": sub_data["resource"],
+            "target": sub_dict["target"],
+            "subtarget": sub_dict["subtarget"],
+            "resource": sub_dict["resource"],
             "sequence": seqnr,
             "data": d,
         }
-        sub.clear_diff(seqnr)
+        sub_with_diffs.clear_diff(seqnr)
         out = json.dumps(pairs)
         if self.response:
             self.response.write(out)

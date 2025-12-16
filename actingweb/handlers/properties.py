@@ -284,7 +284,14 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.write(out)
 
     def listall(self, myself, check):
-        properties = myself.get_properties()
+        # Get actor interface for property access
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+
+        properties = actor_interface.properties.to_dict()
         # Check if metadata is requested via query parameter
         include_metadata = self.request.get("metadata") == "true"
 
@@ -303,9 +310,30 @@ class PropertiesHandler(base_handler.BaseHandler):
             except ValueError:
                 pair[name] = value
 
+        # Filter properties based on peer permissions
+        peer_id = check.acl.get("peerid", "") if hasattr(check, "acl") else ""
+        if peer_id and actor_interface and actor_interface.id:
+            try:
+                evaluator = get_permission_evaluator(self.config)
+                filtered_pair = {}
+                for prop_name, prop_value in pair.items():
+                    result = evaluator.evaluate_property_access(
+                        actor_interface.id, peer_id, prop_name, "read"
+                    )
+                    if result == PermissionResult.ALLOWED:
+                        filtered_pair[prop_name] = prop_value
+                    elif result == PermissionResult.NOT_FOUND:
+                        # No specific rule - include for backward compatibility
+                        filtered_pair[prop_name] = prop_value
+                    # DENIED properties are excluded
+                pair = filtered_pair
+            except Exception as e:
+                logging.error(f"Error filtering properties by permission: {e}")
+                # On error, return empty for security (fail closed)
+                pair = {}
+
         # Execute property hooks for all properties if available
         if self.hooks:
-            actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 auth_context = self._create_auth_context(check, "read")
                 result = {}
@@ -317,22 +345,39 @@ class PropertiesHandler(base_handler.BaseHandler):
                         result[key] = transformed
                 pair = result
 
-        # After hook processing, if pair is empty, return empty object (200 OK)
-        if not pair:
-            out = json.dumps({})
-            self.response.write(out)
-            self.response.headers["Content-Type"] = "application/json"
-            return
+        # Note: Don't return early if pair is empty - we still need to add list properties below
+        # The final output will be handled at the end of the function
 
         # Add list property metadata if requested
         if include_metadata:
             list_names = set()
-            if hasattr(myself, "property_lists") and myself.property_lists is not None:
-                list_names = set(myself.property_lists.list_all() or [])
+            # Use actor_interface for consistent property list access
+            if actor_interface and hasattr(actor_interface, "property_lists") and actor_interface.property_lists is not None:
+                all_list_names = set(actor_interface.property_lists.list_all() or [])
+                logging.debug(f"Found {len(all_list_names)} list properties: {all_list_names}")
 
-                # Add metadata for list properties
+                # Filter list properties based on peer permissions
+                if peer_id and actor_interface and actor_interface.id:
+                    try:
+                        evaluator = get_permission_evaluator(self.config)
+                        for list_name in all_list_names:
+                            result = evaluator.evaluate_property_access(
+                                actor_interface.id, peer_id, list_name, "read"
+                            )
+                            if result == PermissionResult.ALLOWED or result == PermissionResult.NOT_FOUND:
+                                list_names.add(list_name)
+                            # DENIED list properties are excluded
+                    except Exception as e:
+                        logging.error(f"Error filtering list properties by permission: {e}")
+                        # On error, exclude all list properties for security
+                        list_names = set()
+                else:
+                    # No peer - include all (owner access)
+                    list_names = all_list_names
+
+                # Add metadata for permitted list properties
                 for list_name in list_names:
-                    list_prop = getattr(myself.property_lists, list_name)
+                    list_prop = getattr(actor_interface.property_lists, list_name)
                     pair[list_name] = {
                         "is_list": True,
                         "item_count": len(list_prop),
@@ -407,7 +452,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                         "put",
                         actor_interface,
                         new_body,
-                        path,
+                        path[1:],  # Exclude property name from path (already in property_name)
                         auth_context,
                     )
                     if transformed is not None:
@@ -457,7 +502,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 property_name = path[0] if path else "*"
                 auth_context = self._create_auth_context(check, "write")
                 transformed = self.hooks.execute_property_hooks(
-                    property_name, "put", actor_interface, res, path, auth_context
+                    property_name, "put", actor_interface, res, path[1:], auth_context
                 )
                 if transformed is not None:
                     final_res = transformed
@@ -574,7 +619,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     if actor_interface:
                         auth_context = self._create_auth_context(check, "write")
                         transformed = self.hooks.execute_property_hooks(
-                            name, "post", actor_interface, val, [name], auth_context
+                            name, "post", actor_interface, val, [], auth_context
                         )
                         if transformed is not None:
                             val = transformed
@@ -816,7 +861,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                         if actor_interface:
                             auth_context = self._create_auth_context(check, "write")
                             transformed = self.hooks.execute_property_hooks(
-                                key, "post", actor_interface, val, [key], auth_context
+                                key, "post", actor_interface, val, [], auth_context
                             )
                             if transformed is not None:
                                 val = transformed
@@ -862,17 +907,22 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.response.set_status(403)
             return
         if not name:
+            # Get actor interface for property operations
+            actor_interface = self._get_actor_interface(myself)
+            if not actor_interface:
+                if self.response:
+                    self.response.set_status(500, "Internal error")
+                return
+
             # Execute property delete hook if available
             if self.hooks:
-                actor_interface = self._get_actor_interface(myself)
-                if actor_interface:
-                    result = self.hooks.execute_property_hooks(
-                        "*", "delete", actor_interface, myself.get_properties(), path
-                    )
-                    if result is None:
-                        self.response.set_status(403)
-                        return
-            myself.delete_properties()
+                result = self.hooks.execute_property_hooks(
+                    "*", "delete", actor_interface, actor_interface.properties.to_dict(), path
+                )
+                if result is None:
+                    self.response.set_status(403)
+                    return
+            actor_interface.properties.clear()
             myself.register_diffs(target="properties", subtarget=None, blob="")
             self.response.set_status(204)
             return
@@ -1146,6 +1196,13 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         if "explanation" in params:
             list_prop.set_explanation(str(params["explanation"]))
 
+        # Register diff for metadata changes
+        myself.register_diffs(
+            target="properties",
+            subtarget=name,
+            blob=json.dumps({"action": "metadata_update", **params}),
+        )
+
         if self.response:
             self.response.set_status(204)
 
@@ -1315,6 +1372,19 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
 
                 list_prop.append(item_value)
 
+                # Register diff for subscription notifications
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps(
+                        {
+                            "action": "add",
+                            "index": len(list_prop) - 1,
+                            "value": item_value,
+                        }
+                    ),
+                )
+
                 if self.response:
                     self.response.write(
                         json.dumps({"success": True, "index": len(list_prop) - 1})
@@ -1350,6 +1420,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
 
                 list_prop[index] = item_value
 
+                # Register diff for subscription notifications
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps({"action": "update", "index": index, "value": item_value}),
+                )
+
                 if self.response:
                     self.response.set_status(204)
 
@@ -1375,6 +1452,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     return
 
                 del list_prop[index]
+
+                # Register diff for subscription notifications
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps({"action": "delete", "index": index}),
+                )
 
                 if self.response:
                     self.response.set_status(204)

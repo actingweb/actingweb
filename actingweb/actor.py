@@ -112,6 +112,44 @@ class Actor:
             }
         return res
 
+    async def get_peer_info_async(self, url: str) -> dict[str, Any]:
+        """Async version of get_peer_info using AwProxy.
+
+        Contacts another actor over HTTP/S to retrieve meta information without blocking.
+
+        :param url: Root URI of a remote actor
+        :return: Dict with last_response_code, last_response_message, and data
+        """
+        try:
+            from .aw_proxy import AwProxy
+
+            logging.debug(f"Getting peer info async at url({url})")
+            proxy = AwProxy(
+                peer_target={"url": url},
+                config=self.config,
+            )
+            json_data = await proxy.get_resource_async(path="meta")
+
+            if json_data is None:
+                res = {
+                    "last_response_code": proxy.last_response_code,
+                    "last_response_message": proxy.last_response_message,
+                    "data": {},
+                }
+            else:
+                res = {
+                    "last_response_code": proxy.last_response_code,
+                    "last_response_message": proxy.last_response_message,
+                    "data": json_data,
+                }
+            logging.debug(f"Got peer info async from url({url})")
+        except Exception as e:
+            logging.error(f"Error getting peer info async from {url}: {e}")
+            res = {
+                "last_response_code": 500,
+            }
+        return res
+
     def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
         """Retrieves an actor from storage or initialises if it does not exist"""
         if not actor_id and not self.id:
@@ -750,6 +788,87 @@ class Actor:
                 self.last_response_code = 500
         return result
 
+    async def modify_trust_and_notify_async(
+        self,
+        relationship=None,
+        peerid=None,
+        baseuri="",
+        secret="",
+        desc="",
+        approved=None,
+        verified=None,
+        verification_token=None,
+        peer_approved=None,
+        # Client metadata for OAuth2 clients
+        client_name=None,
+        client_version=None,
+        client_platform=None,
+        oauth_client_id=None,
+        # Connection tracking
+        last_accessed=None,
+        last_connected_via=None,
+    ):
+        """Async version of modify_trust_and_notify - prevents blocking on peer notification.
+
+        Changes a trust relationship and notifies the peer if approval is changed.
+        Database operations remain synchronous, but peer HTTP notification is async.
+        """
+        if not relationship or not peerid:
+            return False
+        relationships = self.get_trust_relationships(
+            relationship=relationship, peerid=peerid
+        )
+        if not relationships:
+            return False
+        this_trust = relationships[0]
+
+        # IMPORTANT: Save approval to database BEFORE notifying peer
+        # This prevents race condition where peer tries to subscribe back
+        # before our approval is saved
+        dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
+        result = dbtrust.modify(
+            baseuri=baseuri,
+            secret=secret,
+            desc=desc,
+            approved=approved,
+            verified=verified,
+            verification_token=verification_token,
+            peer_approved=peer_approved,
+            client_name=client_name,
+            client_version=client_version,
+            client_platform=client_platform,
+            oauth_client_id=oauth_client_id,
+            last_accessed=last_accessed,
+            last_connected_via=last_connected_via,
+        )
+
+        # Now that approval is saved, notify peer async so their auto-subscribe will succeed
+        if approved is True and this_trust["approved"] is False:
+            from .aw_proxy import AwProxy
+
+            logging.debug(
+                f"Trust relationship approved, notifying peer async at {this_trust['baseuri']}"
+            )
+            try:
+                proxy = AwProxy(
+                    peer_target={"baseuri": this_trust["baseuri"], "secret": this_trust.get("secret", "")},
+                    config=self.config,
+                )
+                await proxy.change_resource_async(
+                    path=f"trust/{relationship}/{self.id}",
+                    params={"approved": True},
+                )
+                self.last_response_code = proxy.last_response_code
+                self.last_response_message = (
+                    proxy.last_response_message.decode("utf-8", "ignore")
+                    if isinstance(proxy.last_response_message, bytes)
+                    else str(proxy.last_response_message)
+                )
+            except Exception as e:
+                logging.debug(f"Not able to notify peer async: {e}")
+                self.last_response_code = 500
+        return result
+
     def create_reciprocal_trust(
         self,
         url,
@@ -864,6 +983,112 @@ class Actor:
             return mod_trust.get()
         else:
             logging.debug("Not able to create trust with peer, deleting my trust.")
+            dbtrust.delete()
+            return False
+
+    async def create_reciprocal_trust_async(
+        self,
+        url,
+        secret=None,
+        desc="",
+        relationship="",
+        trust_type="",
+    ):
+        """Async version of create_reciprocal_trust - prevents blocking on peer HTTP calls.
+
+        Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
+        """
+        if len(url) == 0:
+            return False
+        if not secret or len(secret) == 0:
+            return False
+
+        # Get peer info async
+        res = await self.get_peer_info_async(url)
+        if (
+            not res
+            or res["last_response_code"] < 200
+            or res["last_response_code"] >= 300
+        ):
+            return False
+        peer = res["data"]
+        if not peer.get("id") or not peer.get("type") or len(peer["type"]) == 0:
+            logging.info(
+                "Received invalid peer info when trying to establish trust: " + url
+            )
+            return False
+        if len(trust_type) > 0:
+            if trust_type.lower() != peer["type"].lower():
+                logging.info("Peer is of the wrong actingweb type: " + peer["type"])
+                return False
+        if not relationship or len(relationship) == 0:
+            relationship = self.config.default_relationship if self.config else ""
+
+        # Create trust locally (synchronous DB operation)
+        dbtrust = trust.Trust(actor_id=self.id, peerid=peer["id"], config=self.config)
+        if not dbtrust.create(
+            baseuri=url,
+            secret=secret,
+            peer_type=peer["type"],
+            relationship=relationship,
+            approved=True,
+            verified=True,
+            desc=desc,
+            established_via="trust",
+        ):
+            logging.warning(
+                f"Trying to establish a new Reciprocal trust when peer relationship already exists ({peer['id']})"
+            )
+            return False
+
+        # Request relationship from peer async
+        new_trust = dbtrust.get()
+        params = {
+            "baseuri": (self.config.root if self.config else "") + (self.id or ""),
+            "id": self.id,
+            "type": self.config.aw_type if self.config else "",
+            "secret": secret,
+            "desc": desc,
+            "verify": new_trust["verification_token"] if new_trust else "",
+        }
+
+        from .aw_proxy import AwProxy
+
+        logging.debug(f"Creating reciprocal trust async at {url}/trust/{relationship}")
+        try:
+            proxy = AwProxy(peer_target={"url": url}, config=self.config)
+            await proxy.create_resource_async(
+                path=f"trust/{relationship}",
+                params=params,
+            )
+            self.last_response_code = proxy.last_response_code
+            self.last_response_message = (
+                proxy.last_response_message.decode("utf-8", "ignore")
+                if isinstance(proxy.last_response_message, bytes)
+                else str(proxy.last_response_message)
+            )
+        except Exception as e:
+            logging.debug(f"Not able to create trust with peer async: {e}, deleting my trust.")
+            dbtrust.delete()
+            return False
+
+        if self.last_response_code == 201 or self.last_response_code == 202:
+            # Reload trust to check if approval was done
+            mod_trust = trust.Trust(
+                actor_id=self.id, peerid=peer["id"], config=self.config
+            )
+            mod_trust_data = mod_trust.get()
+            if not mod_trust_data or len(mod_trust_data) == 0:
+                logging.error(
+                    "Couldn't find trust relationship after peer POST and verification"
+                )
+                return False
+            if self.last_response_code == 201:
+                # Already approved by peer (probably auto-approved)
+                mod_trust.modify(peer_approved=True)
+            return mod_trust.get()
+        else:
+            logging.debug("Not able to create trust with peer async, deleting my trust.")
             dbtrust.delete()
             return False
 
@@ -1338,35 +1563,162 @@ class Actor:
             "Authorization": "Bearer " + trust_rel["secret"],
             "Content-Type": "application/json",
         }
+
+        # Fire callback asynchronously to avoid blocking the caller
+        async def _send_callback_async():
+            """Send subscription callback using httpx (non-blocking)."""
+            import httpx
+
+            try:
+                logging.debug(
+                    "Doing async callback on subscription at url("
+                    + requrl
+                    + ") with body("
+                    + str(data)
+                    + ")"
+                )
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(10.0, connect=5.0)
+                ) as client:
+                    response = await client.post(
+                        requrl, content=data.encode("utf-8"), headers=headers
+                    )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+                if response.status_code == 204 and sub["granularity"] == "high":
+                    if not sub_obj:
+                        logging.warning("About to clear diff without having subobj set")
+                    else:
+                        sub_obj.clear_diff(diff["sequence"])
+            except Exception as e:
+                logging.debug(
+                    f"Peer did not respond to callback on url({requrl}): {e}"
+                )
+                self.last_response_code = 0
+                self.last_response_message = (
+                    "No response from peer for subscription callback"
+                )
+
+        # Schedule the async callback without blocking
         try:
-            logging.debug(
-                "Doing a callback on subscription at url("
-                + requrl
-                + ") with body("
-                + str(data)
-                + ")"
-            )
-            response = requests.post(
-                url=requrl, data=data.encode("utf-8"), headers=headers, timeout=(5, 10)
-            )
-        except Exception:
-            logging.debug("Peer did not respond to callback on url(" + requrl + ")")
-            self.last_response_code = 0
-            self.last_response_message = (
-                "No response from peer for subscription callback"
-            )
-            return
-        self.last_response_code = response.status_code
-        self.last_response_message = (
-            response.content.decode("utf-8", "ignore")
-            if isinstance(response.content, bytes)
-            else str(response.content)
+            import asyncio
+
+            loop = asyncio.get_running_loop()
+            # We're in an async context - create a background task
+            loop.create_task(_send_callback_async())
+            logging.debug("Scheduled async callback task")
+        except RuntimeError:
+            # No running event loop - fall back to sync request
+            logging.debug("No async loop, falling back to sync callback")
+            try:
+                response = requests.post(
+                    url=requrl,
+                    data=data.encode("utf-8"),
+                    headers=headers,
+                    timeout=(5, 10),
+                )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+                if response.status_code == 204 and sub["granularity"] == "high":
+                    if not sub_obj:
+                        logging.warning("About to clear diff without having subobj set")
+                    else:
+                        sub_obj.clear_diff(diff["sequence"])
+            except Exception:
+                logging.debug(
+                    "Peer did not respond to callback on url(" + requrl + ")"
+                )
+                self.last_response_code = 0
+                self.last_response_message = (
+                    "No response from peer for subscription callback"
+                )
+
+    async def create_verified_trust_async(
+        self,
+        baseuri="",
+        peerid=None,
+        approved=False,
+        secret=None,
+        verification_token=None,
+        trust_type=None,
+        peer_approved=None,
+        relationship=None,
+        desc="",
+    ):
+        """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            self.create_verified_trust,
+            baseuri=baseuri,
+            peerid=peerid,
+            approved=approved,
+            secret=secret,
+            verification_token=verification_token,
+            trust_type=trust_type,
+            peer_approved=peer_approved,
+            relationship=relationship,
+            desc=desc,
         )
-        if response.status_code == 204 and sub["granularity"] == "high":
-            if not sub_obj:
-                logging.warning("About to clear diff without having subobj set")
-            else:
-                sub_obj.clear_diff(diff["sequence"])
+
+    async def delete_reciprocal_trust_async(self, peerid=None, delete_peer=False):
+        """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            self.delete_reciprocal_trust, peerid=peerid, delete_peer=delete_peer
+        )
+
+    async def create_remote_subscription_async(
+        self,
+        peerid=None,
+        target=None,
+        subtarget=None,
+        resource=None,
+        granularity=None,
+    ):
+        """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            self.create_remote_subscription,
+            peerid=peerid,
+            target=target,
+            subtarget=subtarget,
+            resource=resource,
+            granularity=granularity,
+        )
+
+    async def delete_remote_subscription_async(self, peerid=None, subid=None):
+        """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            self.delete_remote_subscription, peerid=peerid, subid=subid
+        )
+
+    async def callback_subscription_async(
+        self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
+    ):
+        """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            self.callback_subscription,
+            peerid=peerid,
+            sub_obj=sub_obj,
+            sub=sub,
+            diff=diff,
+            blob=blob,
+        )
 
     def _filter_subscription_data_by_permissions(
         self, peerid: str, blob: str | bytes, subtarget: str | None = None
@@ -1402,8 +1754,14 @@ class Actor:
 
             filtered_data = {}
             for property_name, value in data.items():
+                # Normalize property list keys: strip 'list:' prefix for permission checks
+                # Property lists use 'list:name' internally but permissions use 'name'
+                normalized_name = (
+                    property_name[5:] if property_name.startswith("list:") else property_name
+                )
+
                 # Build full property path for permission check
-                property_path = f"{subtarget}/{property_name}" if subtarget else property_name
+                property_path = f"{subtarget}/{normalized_name}" if subtarget else normalized_name
                 result = evaluator.evaluate_property_access(
                     self.id, peerid, property_path, operation="read"
                 )

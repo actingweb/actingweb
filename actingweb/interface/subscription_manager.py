@@ -5,6 +5,7 @@ Simplified subscription management for ActingWeb actors.
 from typing import Any
 
 from ..actor import Actor as CoreActor
+from ..subscription import Subscription as CoreSubscription
 
 
 class SubscriptionInfo:
@@ -64,6 +65,73 @@ class SubscriptionInfo:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return self._data.copy()
+
+
+class SubscriptionWithDiffs:
+    """
+    Wrapper around a core Subscription object that provides access to diff operations.
+
+    This class is returned by get_subscription_with_diffs() and provides methods
+    to retrieve and manage subscription diffs (change notifications).
+    """
+
+    def __init__(self, core_subscription: CoreSubscription):
+        """Initialize with a core Subscription object."""
+        self._core_sub = core_subscription
+
+    @property
+    def subscription_info(self) -> SubscriptionInfo | None:
+        """Get the subscription info as a SubscriptionInfo object."""
+        sub_data = self._core_sub.get()
+        if sub_data:
+            return SubscriptionInfo(sub_data)
+        return None
+
+    def get_diffs(self) -> list[dict[str, Any]]:
+        """
+        Get all pending diffs for this subscription.
+
+        Returns a list of diffs ordered by timestamp (oldest first).
+        Each diff contains: sequence, timestamp, and diff data.
+        """
+        diffs = self._core_sub.get_diffs()
+        if diffs is None:
+            return []
+        return diffs if isinstance(diffs, list) else []
+
+    def get_diff(self, seqnr: int) -> dict[str, Any] | None:
+        """
+        Get a specific diff by sequence number.
+
+        Args:
+            seqnr: The sequence number of the diff to retrieve
+
+        Returns:
+            The diff data if found, None otherwise
+        """
+        return self._core_sub.get_diff(seqnr=seqnr)
+
+    def clear_diffs(self, seqnr: int = 0) -> None:
+        """
+        Clear all diffs up to and including the specified sequence number.
+
+        Args:
+            seqnr: Clear all diffs up to this sequence number.
+                   If 0, clears all diffs.
+        """
+        self._core_sub.clear_diffs(seqnr=seqnr)
+
+    def clear_diff(self, seqnr: int) -> bool:
+        """
+        Clear a specific diff by sequence number.
+
+        Args:
+            seqnr: The sequence number of the diff to clear
+
+        Returns:
+            True if the diff was cleared successfully, False otherwise
+        """
+        return bool(self._core_sub.clear_diff(seqnr=seqnr))
 
 
 class SubscriptionManager:
@@ -213,6 +281,71 @@ class SubscriptionManager:
             return SubscriptionInfo(sub_data)
         return None
 
+    def get_callback_subscription(
+        self, peer_id: str, subscription_id: str
+    ) -> SubscriptionInfo | None:
+        """
+        Get a callback subscription (outbound - we subscribed to them).
+
+        Callback subscriptions are ones we initiated - we receive callbacks from the peer.
+        This is used when processing incoming callbacks to verify the subscription exists.
+
+        Args:
+            peer_id: ID of the peer actor we subscribed to
+            subscription_id: ID of the subscription
+
+        Returns:
+            SubscriptionInfo if found, None otherwise
+
+        Example:
+            # In a callback handler, verify subscription exists
+            sub = actor.subscriptions.get_callback_subscription(
+                peer_id="peer123",
+                subscription_id="sub456"
+            )
+            if sub:
+                # Process the callback
+                process_callback_data(data)
+        """
+        sub_data = self._core_actor.get_subscription(
+            peerid=peer_id, subid=subscription_id, callback=True
+        )
+        if sub_data and isinstance(sub_data, dict):
+            return SubscriptionInfo(sub_data)
+        return None
+
+    def delete_callback_subscription(
+        self, peer_id: str, subscription_id: str
+    ) -> bool:
+        """
+        Delete a callback subscription (local only, no peer notification).
+
+        This is used when a peer terminates our subscription to them via a callback.
+        We just remove our local record without notifying the peer (they already know).
+
+        This is different from unsubscribe() which notifies the peer first.
+
+        Args:
+            peer_id: ID of the peer actor
+            subscription_id: ID of the subscription to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+
+        Example:
+            # Peer sent DELETE callback to terminate our subscription
+            deleted = actor.subscriptions.delete_callback_subscription(
+                peer_id="peer123",
+                subscription_id="sub456"
+            )
+            if deleted:
+                logger.info("Callback subscription removed")
+        """
+        result = self._core_actor.delete_subscription(
+            peerid=peer_id, subid=subscription_id, callback=True
+        )
+        return bool(result)
+
     def has_subscribers_for(
         self, target: str, subtarget: str = "", resource: str = ""
     ) -> bool:
@@ -247,3 +380,87 @@ class SubscriptionManager:
             if not result:
                 success = False
         return success
+
+    def create_local_subscription(
+        self,
+        peer_id: str,
+        target: str,
+        subtarget: str = "",
+        resource: str = "",
+        granularity: str = "high",
+    ) -> dict[str, Any] | None:
+        """
+        Create a local subscription (accept an incoming subscription from a peer).
+
+        This is used when another actor subscribes to our data. The subscription
+        is stored locally and we will send callbacks to the peer when data changes.
+
+        Args:
+            peer_id: ID of the peer actor subscribing to us
+            target: Target they're subscribing to (e.g., "properties")
+            subtarget: Optional subtarget (e.g., specific property name)
+            resource: Optional resource identifier
+            granularity: Notification granularity ("high", "low", or "none")
+
+        Returns:
+            Dictionary containing subscription details if successful:
+            {
+                "subscriptionid": "...",
+                "peerid": "...",
+                "target": "...",
+                "subtarget": "...",
+                "resource": "...",
+                "granularity": "...",
+                "sequence": 1
+            }
+            Returns None if creation failed.
+        """
+        new_sub = self._core_actor.create_subscription(
+            peerid=peer_id,
+            target=target,
+            subtarget=subtarget or None,
+            resource=resource or None,
+            granularity=granularity,
+            callback=False,  # Local subscriptions have callback=False (we send callbacks)
+        )
+        if new_sub and isinstance(new_sub, dict):
+            return new_sub
+        return None
+
+    def get_subscription_with_diffs(
+        self, peer_id: str, subscription_id: str
+    ) -> SubscriptionWithDiffs | None:
+        """
+        Get a subscription object with diff operations support.
+
+        This returns a SubscriptionWithDiffs object that provides methods
+        to retrieve and manage subscription diffs (change notifications).
+
+        Args:
+            peer_id: ID of the peer actor
+            subscription_id: ID of the subscription
+
+        Returns:
+            SubscriptionWithDiffs object if subscription exists, None otherwise
+
+        Example:
+            sub_with_diffs = actor.subscriptions.get_subscription_with_diffs(
+                peer_id="peer123",
+                subscription_id="sub456"
+            )
+            if sub_with_diffs:
+                # Get all pending diffs
+                diffs = sub_with_diffs.get_diffs()
+
+                # Clear diffs up to sequence 10
+                sub_with_diffs.clear_diffs(seqnr=10)
+        """
+        core_sub = self._core_actor.get_subscription_obj(
+            peerid=peer_id, subid=subscription_id
+        )
+        if core_sub:
+            # Verify subscription exists by checking if it has data
+            sub_data = core_sub.get()
+            if sub_data and len(sub_data) > 0:
+                return SubscriptionWithDiffs(core_sub)
+        return None

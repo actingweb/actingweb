@@ -4,10 +4,13 @@ Simplified trust relationship management for ActingWeb actors.
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from ..actor import Actor as CoreActor
 from ..trust import canonical_connection_method
+
+if TYPE_CHECKING:
+    from .hooks import HookRegistry
 
 
 class TrustRelationship:
@@ -148,8 +151,35 @@ class TrustManager:
         actor.trust.approve_relationship(peer_id="peer123")
     """
 
-    def __init__(self, core_actor: CoreActor):
+    def __init__(self, core_actor: CoreActor, hooks: Optional["HookRegistry"] = None):
         self._core_actor = core_actor
+        self._hooks = hooks
+
+    def _execute_lifecycle_hook(
+        self,
+        event: str,
+        peer_id: str = "",
+        relationship: str = "",
+        trust_data: dict[str, Any] | None = None,
+    ) -> None:
+        """Execute a lifecycle hook."""
+        if not self._hooks:
+            return
+
+        try:
+            from .actor_interface import ActorInterface
+
+            actor_interface = ActorInterface(self._core_actor, hooks=self._hooks)
+            self._hooks.execute_lifecycle_hooks(
+                event,
+                actor=actor_interface,
+                peer_id=peer_id,
+                relationship=relationship,
+                trust_data=trust_data or {},
+            )
+            logging.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
+        except Exception as e:
+            logging.error(f"Error executing lifecycle hook '{event}': {e}")
 
     @property
     def relationships(self) -> list[TrustRelationship]:
@@ -199,7 +229,7 @@ class TrustManager:
         return None
 
     def approve_relationship(self, peer_id: str) -> bool:
-        """Approve a trust relationship."""
+        """Approve a trust relationship with lifecycle hook execution."""
         relationship = self.get_relationship(peer_id)
         if not relationship:
             return False
@@ -207,14 +237,37 @@ class TrustManager:
         result = self._core_actor.modify_trust_and_notify(
             peerid=peer_id, relationship=relationship.relationship, approved=True
         )
+
+        if result:
+            # Get updated trust data and trigger lifecycle hook
+            updated_trust = self.get_relationship(peer_id)
+            if updated_trust and updated_trust.approved and updated_trust.peer_approved:
+                self._execute_lifecycle_hook(
+                    "trust_approved",
+                    peer_id=peer_id,
+                    relationship=relationship.relationship,
+                    trust_data=updated_trust.to_dict(),
+                )
+
         return bool(result)
 
     def delete_relationship(self, peer_id: str) -> bool:
-        """Delete a trust relationship.
+        """Delete a trust relationship with lifecycle hook execution.
 
         Note: Associated permissions are automatically deleted by the core
         delete_reciprocal_trust method.
         """
+        # Get relationship data before deletion for the hook
+        relationship = self.get_relationship(peer_id)
+
+        # Execute lifecycle hook BEFORE deletion
+        if relationship:
+            self._execute_lifecycle_hook(
+                "trust_deleted",
+                peer_id=peer_id,
+                relationship=relationship.relationship,
+            )
+
         result = self._core_actor.delete_reciprocal_trust(
             peerid=peer_id, delete_peer=True
         )
@@ -228,6 +281,39 @@ class TrustManager:
         """
         result = self._core_actor.delete_reciprocal_trust(delete_peer=True)
         return bool(result)
+
+    async def approve_relationship_async(self, peer_id: str) -> bool:
+        """Async variant of approve_relationship for use in async contexts (FastAPI).
+
+        Wraps the synchronous operation in run_in_executor to avoid blocking
+        the event loop during database operations.
+        """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.approve_relationship, peer_id)
+
+    async def delete_relationship_async(self, peer_id: str) -> bool:
+        """Async variant of delete_relationship for use in async contexts (FastAPI).
+
+        Wraps the synchronous operation in run_in_executor to avoid blocking
+        the event loop during database operations.
+        """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.delete_relationship, peer_id)
+
+    async def delete_all_relationships_async(self) -> bool:
+        """Async variant of delete_all_relationships for use in async contexts (FastAPI).
+
+        Wraps the synchronous operation in run_in_executor to avoid blocking
+        the event loop during database operations.
+        """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.delete_all_relationships)
 
     @property
     def active_relationships(self) -> list[TrustRelationship]:
@@ -505,3 +591,130 @@ class TrustManager:
                 pass
 
         return True
+
+    def create_verified_trust(
+        self,
+        baseuri: str,
+        peer_id: str,
+        approved: bool,
+        secret: str,
+        verification_token: str | None,
+        trust_type: str,
+        peer_approved: bool,
+        relationship: str,
+        description: str = "",
+    ) -> dict[str, Any] | None:
+        """
+        Create a verified trust relationship (accept incoming trust from peer).
+
+        This is used when another actor initiates a trust relationship with us
+        (ActingWeb protocol). The peer sends a POST request with trust details.
+
+        Args:
+            baseuri: Base URI of the peer actor
+            peer_id: ID of the peer actor
+            approved: Whether we approve the relationship
+            secret: Shared secret for authentication
+            verification_token: Optional verification token for validation
+            trust_type: Type of the peer actor (mini-app type)
+            peer_approved: Whether the peer has approved
+            relationship: Trust type/permission level (e.g., "friend", "admin")
+            description: Optional description of the relationship
+
+        Returns:
+            Dictionary containing trust details if successful:
+            {
+                "peerid": "...",
+                "relationship": "...",
+                "approved": bool,
+                "peer_approved": bool,
+                ...
+            }
+            Returns None if creation failed.
+        """
+        new_trust = self._core_actor.create_verified_trust(
+            baseuri=baseuri,
+            peerid=peer_id,
+            approved=approved,
+            secret=secret,
+            verification_token=verification_token,
+            trust_type=trust_type,
+            peer_approved=peer_approved,
+            relationship=relationship,
+            desc=description,
+        )
+        if new_trust and isinstance(new_trust, dict):
+            return new_trust
+        return None
+
+    def modify_and_notify(
+        self,
+        peer_id: str,
+        relationship: str,
+        baseuri: str = "",
+        approved: bool | None = None,
+        peer_approved: bool | None = None,
+        description: str = "",
+    ) -> bool:
+        """
+        Modify a trust relationship and notify the peer of changes.
+
+        This method updates trust relationship fields and sends a notification
+        to the peer about the changes. Use this when the change should be
+        communicated to the remote peer.
+
+        Args:
+            peer_id: ID of the peer actor
+            relationship: Trust type/permission level
+            baseuri: New base URI (if changing)
+            approved: New approval status (if changing)
+            peer_approved: New peer approval status (if changing)
+            description: New description (if changing)
+
+        Returns:
+            True if the trust was modified successfully, False otherwise
+        """
+        result = self._core_actor.modify_trust_and_notify(
+            peerid=peer_id,
+            relationship=relationship,
+            baseuri=baseuri if baseuri else "",
+            approved=approved,
+            peer_approved=peer_approved,
+            desc=description if description else "",
+        )
+        return bool(result)
+
+    def delete_peer_trust(self, peer_id: str, notify_peer: bool = True) -> bool:
+        """
+        Delete a trust relationship, optionally notifying the peer.
+
+        Args:
+            peer_id: ID of the peer actor
+            notify_peer: Whether to notify the peer of the deletion.
+                        Set to False when the peer is the one deleting
+                        (to avoid infinite loops).
+
+        Returns:
+            True if the trust was deleted successfully, False otherwise
+
+        Note:
+            - Lifecycle hooks (trust_deleted) should be executed by the caller
+            - Associated permissions are automatically deleted by the core method
+        """
+        result = self._core_actor.delete_reciprocal_trust(
+            peerid=peer_id, delete_peer=notify_peer
+        )
+        return bool(result)
+
+    @property
+    def trustee_root(self) -> str | None:
+        """Get the trustee root URL."""
+        if self._core_actor.store:
+            return self._core_actor.store.trustee_root
+        return None
+
+    @trustee_root.setter
+    def trustee_root(self, value: str | None) -> None:
+        """Set the trustee root URL."""
+        if self._core_actor.store:
+            self._core_actor.store.trustee_root = value

@@ -7,7 +7,7 @@ on:
     branches: [master, main, develop]
 
 jobs:
-  integration-tests:
+  all-tests:
     runs-on: ubuntu-latest
 
     services:
@@ -57,12 +57,15 @@ jobs:
           echo "DynamoDB failed to start within 60 seconds"
           exit 1
 
-      - name: Run integration tests
+      - name: Run all tests
         run: |
-          poetry run pytest tests/integration/ \
+          echo "Collecting tests..."
+          poetry run pytest tests/ --collect-only -q
+          echo "Running all tests (unit + integration)..."
+          poetry run pytest tests/ \
             -v \
             --tb=short \
-            --junitxml=test-results/integration-tests.xml \
+            --junitxml=test-results/all-tests.xml \
             --cov=actingweb \
             --cov-report=xml \
             --cov-report=html
@@ -93,7 +96,7 @@ jobs:
           files: test-results/*.xml
 
   publish:
-    needs: integration-tests
+    needs: all-tests
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
 

@@ -1,12 +1,10 @@
-version: '3.8'
-
 services:
   dynamodb-test:
     image: amazon/dynamodb-local:latest
     container_name: actingweb-test-dynamodb
-    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    command: '-jar DynamoDBLocal.jar -sharedDb -dbPath ./data'
     ports:
-      - "8001:8000"
+      - '8001:8000'
     volumes:
       - ./tests/integration/dynamodb-data:/home/dynamodblocal/data
     working_dir: /home/dynamodblocal

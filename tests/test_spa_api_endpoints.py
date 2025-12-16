@@ -284,27 +284,46 @@ class TestListPropertyMetadata(unittest.TestCase):
 class TestHandlerRouteMetadata(unittest.TestCase):
     """Test that handler routes have correct metadata flags."""
 
-    def test_fastapi_integration_has_metadata_flag_handling(self):
-        """Verify FastAPI integration handles metadata flag in _get_handler."""
+    def test_base_integration_has_metadata_flag_handling(self):
+        """Verify base integration handles metadata flag in get_handler_class."""
         import inspect
 
-        from actingweb.interface.integrations import fastapi_integration
+        from actingweb.interface.integrations import base_integration
 
-        source = inspect.getsource(fastapi_integration.FastAPIIntegration._get_handler)
+        source = inspect.getsource(
+            base_integration.BaseActingWebIntegration.get_handler_class
+        )
 
         # Verify metadata flag handling for properties
         self.assertIn("metadata", source)
 
-    def test_flask_integration_has_metadata_flag_handling(self):
-        """Verify Flask integration handles metadata flag in _get_handler."""
-        import inspect
+    def test_fastapi_integration_inherits_from_base(self):
+        """Verify FastAPI integration inherits from base integration."""
+        from actingweb.interface.integrations import (
+            base_integration,
+            fastapi_integration,
+        )
 
-        from actingweb.interface.integrations import flask_integration
+        self.assertTrue(
+            issubclass(
+                fastapi_integration.FastAPIIntegration,
+                base_integration.BaseActingWebIntegration,
+            )
+        )
 
-        source = inspect.getsource(flask_integration.FlaskIntegration._get_handler)
+    def test_flask_integration_inherits_from_base(self):
+        """Verify Flask integration inherits from base integration."""
+        from actingweb.interface.integrations import (
+            base_integration,
+            flask_integration,
+        )
 
-        # Verify metadata flag handling for properties
-        self.assertIn("metadata", source)
+        self.assertTrue(
+            issubclass(
+                flask_integration.FlaskIntegration,
+                base_integration.BaseActingWebIntegration,
+            )
+        )
 
 
 if __name__ == "__main__":

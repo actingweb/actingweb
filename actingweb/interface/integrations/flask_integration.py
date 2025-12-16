@@ -11,29 +11,14 @@ from flask import Flask, Response, redirect, render_template, request
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 from ...aw_web_request import AWWebObj
-from ...handlers import (
-    actions,
-    bot,
-    callbacks,
-    devtest,
-    factory,
-    mcp,
-    meta,
-    methods,
-    properties,
-    resources,
-    root,
-    services,
-    subscription,
-    trust,
-    www,
-)
+from ...handlers import bot, factory, mcp, services
+from .base_integration import BaseActingWebIntegration
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
 
 
-class FlaskIntegration:
+class FlaskIntegration(BaseActingWebIntegration):
     """
     Flask integration for ActingWeb applications.
 
@@ -42,7 +27,7 @@ class FlaskIntegration:
     """
 
     def __init__(self, aw_app: "ActingWebApp", flask_app: Flask):
-        self.aw_app = aw_app
+        super().__init__(aw_app)
         self.flask_app = flask_app
 
     def setup_routes(self) -> None:
@@ -1493,101 +1478,12 @@ class FlaskIntegration:
         """Get the appropriate handler for an endpoint."""
         config = self.aw_app.get_config()
 
-        handlers = {
-            "root": lambda: root.RootHandler(webobj, config, hooks=self.aw_app.hooks),
-            "meta": lambda: meta.MetaHandler(webobj, config, hooks=self.aw_app.hooks),
-            "www": lambda: www.WwwHandler(webobj, config, hooks=self.aw_app.hooks),
-            "properties": lambda: properties.PropertiesHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            ),
-            "resources": lambda: resources.ResourcesHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            ),
-            "callbacks": lambda: callbacks.CallbacksHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            ),
-            "devtest": lambda: devtest.DevtestHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            ),
-            "methods": lambda: methods.MethodsHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            ),
-            "actions": lambda: actions.ActionsHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            ),
-            "services": lambda: self._create_services_handler(webobj, config),
-        }
+        # Special handling for services endpoint (not in base class)
+        if endpoint == "services":
+            return self._create_services_handler(webobj, config)
 
-        # Special handling for properties metadata endpoint
-        if endpoint == "properties" and kwargs.get("metadata"):
-            return properties.PropertyMetadataHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            )
-
-        # Special handling for trust endpoint
-        if endpoint == "trust":
-            relationship = kwargs.get("relationship")
-            peerid = kwargs.get("peerid")
-
-            # Check for shared_properties endpoint
-            if kwargs.get("shared_properties"):
-                return trust.TrustSharedPropertiesHandler(
-                    webobj, config, hooks=self.aw_app.hooks
-                )
-
-            # Check for permissions endpoint
-            if kwargs.get("permissions"):
-                return trust.TrustPermissionHandler(
-                    webobj, config, hooks=self.aw_app.hooks
-                )
-
-            # For trust endpoint, we need to distinguish between path parameters and query parameters
-            # If peerid appears in query params but not as path param, it's a query-based request
-            query_peerid = webobj.request.get("peerid")
-
-            # Only count actual path parameters (non-None, non-empty)
-            path_parts = []
-            if relationship is not None and relationship != "":
-                path_parts.append(relationship)
-            # Only count peerid as path param if it's not a query param request
-            if peerid is not None and peerid != "" and not query_peerid:
-                path_parts.append(peerid)
-
-            if len(path_parts) == 0:
-                return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
-            elif len(path_parts) == 1:
-                return trust.TrustRelationshipHandler(
-                    webobj, config, hooks=self.aw_app.hooks
-                )
-            else:
-                return trust.TrustPeerHandler(webobj, config, hooks=self.aw_app.hooks)
-
-        # Special handling for subscriptions endpoint
-        if endpoint == "subscriptions":
-            path_parts = [p for p in [kwargs.get("peerid"), kwargs.get("subid")] if p]
-            seqnr = kwargs.get("seqnr")
-
-            if len(path_parts) == 0:
-                return subscription.SubscriptionRootHandler(
-                    webobj, config, hooks=self.aw_app.hooks
-                )
-            elif len(path_parts) == 1:
-                return subscription.SubscriptionRelationshipHandler(
-                    webobj, config, hooks=self.aw_app.hooks
-                )
-            elif len(path_parts) == 2 and seqnr is None:
-                return subscription.SubscriptionHandler(
-                    webobj, config, hooks=self.aw_app.hooks
-                )
-            else:
-                return subscription.SubscriptionDiffHandler(
-                    webobj, config, hooks=self.aw_app.hooks
-                )
-
-        if endpoint in handlers:
-            return handlers[endpoint]()
-
-        return None
+        # Use base class handler selection for all other endpoints
+        return self.get_handler_class(endpoint, webobj, config, **kwargs)
 
     def _create_oauth_discovery_response(self) -> dict[str, Any]:
         """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""

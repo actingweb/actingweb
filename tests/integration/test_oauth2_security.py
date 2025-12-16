@@ -212,6 +212,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 1: Alice creates her actor
         alice_actor = actor_factory.create("alice@example.com")
         alice_actor_id = alice_actor["id"]
+        alice_email = alice_actor["creator"]  # Get actual email (may be uniquified)
 
         # Step 2: Alice starts MCP authorization for her own actor
         state = encode_state(
@@ -254,9 +255,8 @@ class TestCrossActorAuthorizationPrevention:
                 "expires_in": 3600,
             }
 
-            mock_authenticator.get_email_from_user_info.return_value = (
-                "alice@example.com"
-            )
+            # Use actual actor email (may be uniquified for parallel execution)
+            mock_authenticator.get_email_from_user_info.return_value = alice_email
             mock_authenticator.provider.name = "google"
 
             # Step 5: Call handler

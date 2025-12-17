@@ -342,6 +342,72 @@ The system maintains audit capabilities through:
 * Permission evaluation logging
 * Security event tracking
 
+Permission Override Merging
+---------------------------
+
+When individual trust relationships override base trust type permissions, the system uses
+**union merge** semantics for ``patterns`` and ``excluded_patterns`` arrays by default.
+This provides fail-safe security:
+
+**Default Behavior (merge_base=True):**
+
+* Base ``patterns`` are preserved; overrides can only ADD patterns
+* Base ``excluded_patterns`` are preserved; overrides can only ADD exclusions
+* Other fields (``operations``, ``allowed``, ``denied``) are replaced by overrides
+
+.. code-block:: python
+
+   # Example: mcp_client trust type has base patterns
+   base_permissions = {
+       "properties": {
+           "patterns": ["public/*", "shared/*", "profile/*"],
+           "excluded_patterns": ["private/*", "security/*", "oauth_*"]
+       }
+   }
+
+   # Individual override adds memory_* access
+   override = {
+       "properties": {
+           "patterns": ["memory_*"],
+           "excluded_patterns": ["memory_personal"]
+       }
+   }
+
+   # Result: patterns and excluded_patterns are UNIONED
+   # patterns: ["public/*", "shared/*", "profile/*", "memory_*"]
+   # excluded_patterns: ["private/*", "security/*", "oauth_*", "memory_personal"]
+
+**Security Benefits:**
+
+* Profile properties (displayname, email, etc.) remain accessible regardless of overrides
+* Security exclusions (private/*, oauth_*) cannot be accidentally removed
+* Individual grants can only expand access, not reduce base trust type security
+
+**Full Override Mode (merge_base=False):**
+
+When explicit full control is needed, pass ``merge_base=False`` to ``merge_permissions()``:
+
+.. code-block:: python
+
+   from actingweb.trust_permissions import merge_permissions
+
+   # Override replaces base patterns entirely
+   result = merge_permissions(base, override, merge_base=False)
+
+   # patterns: ["memory_*"] (base patterns NOT preserved)
+   # excluded_patterns: ["memory_personal"] (base exclusions NOT preserved)
+
+**Design Decision:**
+
+Base trust type patterns can no longer be restricted by individual overrides for HTTP endpoint
+access when using the default ``merge_base=True``. This is intentional:
+
+* Ensures consistent profile display across all MCP clients
+* Prevents accidental security regressions
+* Simplifies permission management for administrators
+
+To restrict access, use ``excluded_patterns`` instead of trying to narrow ``patterns``.
+
 Performance Considerations
 ==========================
 

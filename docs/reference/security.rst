@@ -18,6 +18,9 @@ Access Control
 - Prefer built-in trust types: `viewer`, `friend`, `partner`, `admin`, `mcp_client`.
 - Add custom trust types only when necessary; use pattern-based permissions.
 - Precedence: Explicit deny > explicit allow > trust type allow > default deny.
+- **Permission merging**: Individual overrides UNION with base patterns (fail-safe).
+- To restrict access, use `excluded_patterns`; base `patterns` cannot be narrowed.
+- Use `merge_base=False` only when explicit full override is needed.
 
 OAuth2
 ------

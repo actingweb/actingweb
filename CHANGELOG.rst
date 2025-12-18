@@ -2,6 +2,21 @@
 CHANGELOG
 =========
 
+v3.7.2: Dec 18, 2025
+--------------------
+
+FIXED
+~~~~~
+
+- Fixed Flask integration cookie handling: added ``path`` and ``samesite`` parameters for proper session cookie behavior across browser security policies
+- Simplified Flask OAuth session validation to use session manager directly instead of OAuth2 authenticator, fixing token validation issues
+- Improved Flask template rendering error logging for easier debugging
+
+CHANGED
+~~~~~
+
+- Added thoughts/shared/plans/2025-12-18-passphrase-login-feature.md as a way to support www login without a 3rd parth auth provider
+
 v3.7.1: Dec 18, 2025
 --------------------
 

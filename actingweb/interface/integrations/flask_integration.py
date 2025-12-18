@@ -491,8 +491,10 @@ class FlaskIntegration(BaseActingWebIntegration):
                 cookie["name"],
                 cookie["value"],
                 max_age=cookie.get("max_age"),
+                path=cookie.get("path", "/"),
                 secure=cookie.get("secure", False),
                 httponly=cookie.get("httponly", False),
+                samesite=cookie.get("samesite", "Lax"),
             )
 
         return response
@@ -1255,34 +1257,20 @@ class FlaskIntegration(BaseActingWebIntegration):
             return None
 
         # Check for OAuth token cookie (for session-based authentication)
+        # The oauth_token cookie contains an ActingWeb session token, NOT a Google/GitHub OAuth token
         oauth_cookie = request.cookies.get("oauth_token")
         if oauth_cookie:
-            logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
-            # Validate the OAuth cookie token
+            # Validate the ActingWeb session token using session manager
             try:
-                from ...oauth2 import create_oauth2_authenticator
+                from ...oauth_session import get_oauth2_session_manager
 
-                authenticator = create_oauth2_authenticator(self.aw_app.get_config())
-                if authenticator.is_enabled():
-                    user_info = authenticator.validate_token_and_get_user_info(
-                        oauth_cookie
-                    )
-                    if user_info:
-                        email = authenticator.get_email_from_user_info(
-                            user_info, oauth_cookie
-                        )
-                        if email:
-                            logging.debug(
-                                f"OAuth cookie validation successful for {email}"
-                            )
-                            return None  # Valid OAuth cookie
-                    logging.debug(
-                        "OAuth cookie token is expired or invalid - will redirect to fresh OAuth"
-                    )
+                session_manager = get_oauth2_session_manager(self.aw_app.get_config())
+                token_data = session_manager.validate_access_token(oauth_cookie)
+                if token_data:
+                    return None  # Valid session token
+                logging.debug("OAuth cookie token is expired or invalid")
             except Exception as e:
-                logging.debug(
-                    f"OAuth cookie validation error: {e} - will redirect to fresh OAuth"
-                )
+                logging.debug(f"OAuth cookie validation error: {e}")
 
         # No valid authentication - redirect to OAuth2
         original_url = request.url
@@ -1463,8 +1451,9 @@ class FlaskIntegration(BaseActingWebIntegration):
                     return Response(
                         render_template("aw-actor-www-trust.html", **template_values)
                     )
-            except Exception:
-                pass  # Fall back to default response
+            except Exception as e:
+                logging.debug(f"Template rendering failed for www/{path}: {e}")
+                # Fall back to default response
 
         return self._create_flask_response(webobj)
 

@@ -1,0 +1,81 @@
+# Codecov configuration for ActingWeb
+# https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  # Coverage status checks
+  status:
+    # Project-wide coverage
+    project:
+      default:
+        # Target coverage percentage
+        target: 50%
+        # Allow coverage to drop by up to 1% without failing
+        threshold: 1%
+        # Only check coverage on files that were changed
+        if_ci_failed: error
+
+    # Per-patch coverage (new/changed code)
+    patch:
+      default:
+        # New code should have at least 60% coverage
+        target: 60%
+        threshold: 5%
+
+  # Precision of coverage percentages
+  precision: 2
+
+  # Round coverage percentages
+  round: down
+
+  # Range for coverage colors (red to green)
+  range: "30...80"
+
+# Comment configuration for PRs
+comment:
+  # Show coverage comment
+  layout: "header, diff, flags, components"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+
+# Flags for different test types
+flags:
+  unittests:
+    paths:
+      - actingweb/
+    carryforward: true
+
+# Ignore specific files/paths from coverage
+ignore:
+  - "tests/**/*"
+  - "**/__init__.py"
+  - "**/deprecated_*/**"
+  - "docs/**/*"
+  - "scripts/**/*"
+
+# Component-level coverage tracking
+component_management:
+  individual_components:
+    - component_id: core
+      name: Core Modules
+      paths:
+        - actingweb/actor.py
+        - actingweb/config.py
+        - actingweb/auth.py
+        - actingweb/trust.py
+        - actingweb/subscription.py
+        - actingweb/property.py
+    - component_id: interface
+      name: Interface Layer
+      paths:
+        - actingweb/interface/**
+    - component_id: handlers
+      name: HTTP Handlers
+      paths:
+        - actingweb/handlers/**
+    - component_id: oauth
+      name: OAuth System
+      paths:
+        - actingweb/oauth*.py
+        - actingweb/oauth2_server/**

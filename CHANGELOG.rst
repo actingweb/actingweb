@@ -2,6 +2,15 @@
 CHANGELOG
 =========
 
+v3.7.1: Dec 18, 2025
+--------------------
+
+FIXED
+~~~~~
+
+- **SECURITY**: Permission override merging now uses union semantics for both ``patterns`` AND ``excluded_patterns`` arrays by default - base security exclusions (private/*, security/*, oauth_*) can no longer be accidentally cleared by individual trust relationship overrides
+- Cleaned up integration/unit tests to have all dynamodb-dependent tests in integration dir
+
 v3.7.0: Dec 16, 2025
 --------------------
 
@@ -28,6 +37,7 @@ FIXED
 ADDED
 ~~~~~
 
+- **Permission Merge Control**: Added ``merge_base`` parameter to ``merge_permissions()`` function - defaults to ``True`` for fail-safe union merging of patterns/excluded_patterns; set to ``False`` for explicit full override capability
 - **Developer API Extensions**: Added methods to SubscriptionManager: ``create_local_subscription()``, ``get_subscription_with_diffs()``, ``get_callback_subscription()``, ``delete_callback_subscription()``
 - **Developer API Extensions**: Added methods to TrustManager: ``create_verified_trust()``, ``modify_and_notify()``, ``delete_peer_trust()``, ``trustee_root`` property
 - **Wrapper Classes**: Added ``SubscriptionWithDiffs`` wrapper providing clean access to subscription data and diffs
@@ -43,6 +53,7 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Permission Merge Documentation**: Added "Permission Override Merging" section to ``docs/guides/access-control.rst`` and updated ``docs/reference/security.rst`` cheatsheet
 - **Architecture**: Handlers refactored to four-tier architecture (Handler → Developer API → Core Actor → Database) for clean separation of concerns
 - **Handler Simplification**: Handlers are now thin HTTP adapters delegating business logic to developer API
 - OAuth2 token validation now includes quick heuristic check before network requests for better performance

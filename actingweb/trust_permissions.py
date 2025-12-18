@@ -269,20 +269,41 @@ class TrustPermissionStore:
 
 
 def merge_permissions(
-    base_permissions: dict[str, Any], override_permissions: dict[str, Any] | None
+    base_permissions: dict[str, Any],
+    override_permissions: dict[str, Any] | None,
+    merge_base: bool = True,
 ) -> dict[str, Any]:
     """
     Merge base permissions with override permissions.
 
+    By default (merge_base=True), 'patterns' and 'excluded_patterns' arrays are
+    combined (union) rather than replaced. This provides fail-safe security:
+    - Base trust type patterns (e.g., profile/*, public/*) are preserved
+    - Base security exclusions (e.g., private/*, security/*) are preserved
+    - Overrides can only ADD patterns/exclusions, not remove them
+
+    When merge_base=False, override values completely replace base values,
+    allowing full control over permissions when explicitly needed.
+
     Args:
         base_permissions: Default permissions from trust type
         override_permissions: Override permissions from trust relationship (can be None)
+        merge_base: If True (default), union patterns and excluded_patterns arrays.
+                   If False, override values replace base values entirely.
 
     Returns:
         Merged permissions dict
+
+    Security Notes:
+        - With merge_base=True: Cannot accidentally remove base security exclusions
+        - With merge_base=False: Full override capability, use with caution
+        - Other fields (operations, allowed, denied) are always replaced by overrides
     """
     if not override_permissions:
         return base_permissions.copy()
+
+    # Fields that use union merge when merge_base=True
+    UNION_MERGE_FIELDS = {"patterns", "excluded_patterns"}
 
     # Deep merge the permissions
     merged = base_permissions.copy()
@@ -295,7 +316,27 @@ def merge_permissions(
         if category in merged:
             if isinstance(merged[category], dict) and isinstance(overrides, dict):
                 # Deep merge dictionaries
-                merged[category] = {**merged[category], **overrides}
+                merged_category = merged[category].copy()
+                for key, value in overrides.items():
+                    if merge_base and key in UNION_MERGE_FIELDS and isinstance(value, list):
+                        # Union merge: combine arrays, preserving base values
+                        # - Empty override arrays preserve base values (fail-safe)
+                        # - To clear base values entirely, use merge_base=False
+                        # - Pattern order: base patterns first, then new patterns
+                        #   (order doesn't affect evaluation; all patterns are matched)
+                        base_list = merged_category.get(key, [])
+                        if isinstance(base_list, list):
+                            # Combine and deduplicate, base values first
+                            combined = list(base_list) + [
+                                item for item in value if item not in base_list
+                            ]
+                            merged_category[key] = combined
+                        else:
+                            merged_category[key] = value
+                    else:
+                        # Replace: override value replaces base value
+                        merged_category[key] = value
+                merged[category] = merged_category
             else:
                 # Replace with override
                 merged[category] = overrides
@@ -352,8 +393,14 @@ def initialize_trust_permission_store(config: config_class.Config) -> None:
         logger.info("Trust permission store initialized")
 
 
-def get_trust_permission_store(config: config_class.Config) -> TrustPermissionStore:
-    """Get the singleton trust permission store (must be initialized first)."""
+def get_trust_permission_store(
+    config: config_class.Config,  # pylint: disable=unused-argument
+) -> TrustPermissionStore:
+    """Get the singleton trust permission store (must be initialized first).
+
+    Note: config parameter kept for interface consistency but not used since
+    the store is initialized via initialize_trust_permission_store().
+    """
     global _permission_store
     if _permission_store is None:
         raise RuntimeError(

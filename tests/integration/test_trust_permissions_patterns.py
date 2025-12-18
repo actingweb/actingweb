@@ -1,15 +1,18 @@
 """
-Trust Permissions Pattern Tests.
+Trust Permissions Integration Tests.
 
-Tests trust permission pattern matching and excluded_patterns functionality
-critical for actingweb_mcp memory access control:
+Integration tests for trust permission storage and retrieval functionality
+critical for actingweb_mcp memory access control. These tests require DynamoDB.
+
+Tests:
 - excluded_patterns array in trust permissions
-- Pattern matching with wildcards (memory_*, get_*)
 - Permission inheritance from trust types
 - Individual permission overrides
 - Permission updates and retrieval
+- Complex multi-client scenarios
 
-These tests protect actingweb_mcp from regressions in access control logic.
+For unit tests (pattern matching, merge_permissions), see:
+  tests/test_trust_permissions_unit.py
 
 References:
 - actingweb/trust_permissions.py:22-257 - TrustPermissions and store
@@ -201,102 +204,6 @@ class TestTrustPermissionsExcludedPatterns:
         finally:
             actor1.delete()
             actor2.delete()
-
-
-class TestTrustPermissionsPatternMatching:
-    """Test pattern matching with wildcards."""
-
-    def test_wildcard_pattern_matches_multiple_properties(self):
-        """
-        Test that memory_* pattern matches all memory types.
-
-        actingweb_mcp uses memory_* to match all memory property lists.
-
-        Spec: actingweb/permission_evaluator.py:487-497 - Glob to regex conversion
-        """
-        import fnmatch
-
-        # Test pattern matching logic
-        pattern = "memory_*"
-
-        matching_names = [
-            "memory_personal",
-            "memory_travel",
-            "memory_food",
-            "memory_health",
-            "memory_work",
-        ]
-
-        non_matching_names = ["settings_private", "notes_general", "user_profile"]
-
-        # All memory_ names should match
-        for name in matching_names:
-            assert fnmatch.fnmatch(name, pattern), f"{name} should match {pattern}"
-
-        # Non-memory names should not match
-        for name in non_matching_names:
-            assert not fnmatch.fnmatch(name, pattern), (
-                f"{name} should not match {pattern}"
-            )
-
-    def test_method_pattern_matching(self):
-        """
-        Test that get_* pattern matches method names.
-
-        actingweb_mcp allows method patterns like get_*, list_*, search_*.
-
-        Spec: actingweb_mcp uses method patterns for permission control
-        """
-        import fnmatch
-
-        pattern = "get_*"
-
-        matching_methods = ["get_profile", "get_notes", "get_memory", "get_settings"]
-
-        non_matching_methods = [
-            "list_items",
-            "search_memories",
-            "update_profile",
-            "delete_note",
-        ]
-
-        for method in matching_methods:
-            assert fnmatch.fnmatch(method, pattern)
-
-        for method in non_matching_methods:
-            assert not fnmatch.fnmatch(method, pattern)
-
-    def test_multiple_wildcard_patterns(self):
-        """
-        Test permissions with multiple wildcard patterns.
-
-        actingweb_mcp defines multiple allowed patterns for different categories.
-
-        Spec: actingweb/permission_evaluator.py:442-454 - Matches any pattern
-        """
-        import fnmatch
-
-        patterns = ["memory_*", "notes_*", "public_*"]
-
-        matching_names = [
-            "memory_personal",
-            "notes_work",
-            "public_profile",
-            "memory_travel",
-            "notes_2025",
-        ]
-
-        non_matching_names = ["private_settings", "user_config", "auth_token"]
-
-        # Should match at least one pattern
-        for name in matching_names:
-            matched = any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
-            assert matched, f"{name} should match at least one pattern"
-
-        # Should not match any pattern
-        for name in non_matching_names:
-            matched = any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
-            assert not matched, f"{name} should not match any pattern"
 
 
 class TestTrustPermissionsInheritance:

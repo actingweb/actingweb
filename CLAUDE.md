@@ -451,9 +451,9 @@ docker-compose -f docker-compose.test.yml down -v
 
 #### Integration Test Fixtures
 
-The integration tests use pytest fixtures defined in `tests/integration/conftest.py`:
+The integration tests use pytest fixtures defined in `tests/integration/conftest.py`. **These fixtures automatically start DynamoDB via Docker Compose** - no manual setup required when running tests in the `tests/integration/` directory.
 
-- **`docker_services`**: Starts DynamoDB via Docker Compose (session-scoped)
+- **`docker_services`**: Automatically starts DynamoDB via Docker Compose (session-scoped). This fixture is auto-used by integration tests.
 - **`test_app`**: Starts a FastAPI test server on port 5555 (session-scoped)
 - **`peer_app`**: Starts a second test server on port 5556 for peer testing (session-scoped)
 - **`www_test_app`**: Test server without OAuth for www template testing on port 5557

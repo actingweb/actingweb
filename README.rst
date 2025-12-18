@@ -1,6 +1,23 @@
 ======================================================
 README - actingweb - an ActingWeb Library
 ======================================================
+
+.. image:: https://github.com/actingweb/actingweb/actions/workflows/tests.yml/badge.svg
+   :target: https://github.com/actingweb/actingweb/actions/workflows/tests.yml
+   :alt: Tests
+
+.. image:: https://codecov.io/gh/actingweb/actingweb/branch/master/graph/badge.svg
+   :target: https://codecov.io/gh/actingweb/actingweb
+   :alt: Coverage
+
+.. image:: https://img.shields.io/pypi/v/actingweb.svg
+   :target: https://pypi.org/project/actingweb/
+   :alt: PyPI
+
+.. image:: https://readthedocs.org/projects/actingweb/badge/?version=latest
+   :target: https://actingweb.readthedocs.io/en/latest/?badge=latest
+   :alt: Documentation Status
+
 This is a python library implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
 distributed micro-services model. A typical use case is bot to bot communication on a peer to peer level.
 It serves as the reference implementation for the `ActingWeb REST protocol

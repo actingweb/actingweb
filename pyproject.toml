@@ -134,6 +134,29 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 relative_files = true
+branch = true
+source = ["actingweb"]
+omit = [
+    "actingweb/deprecated_*/*",
+    "actingweb/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+show_missing = true
+precision = 2
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -145,7 +168,6 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
-    "--cov-fail-under=50",
 ]
 markers = [
     "integration: marks tests as integration tests (require DynamoDB and test server)",

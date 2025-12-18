@@ -15,8 +15,60 @@ import os
 import subprocess
 import time
 
+import filelock
 import pytest
 import requests
+
+
+def _prewarm_botocore():
+    """
+    Pre-warm botocore's service model cache.
+
+    Botocore lazily loads AWS service model files on first use. When multiple
+    pytest-xdist workers start simultaneously and all try to load these files
+    at the same time, it can cause a deadlock in os.listdir().
+
+    This function forces botocore to load the DynamoDB service model upfront,
+    before parallel workers start their test apps.
+    """
+    try:
+        import boto3
+
+        # Create a dummy client to force service model loading
+        # This populates botocore's internal caches
+        boto3.client(
+            "dynamodb",
+            region_name="us-east-1",
+            endpoint_url="http://localhost:8001",
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+    except Exception:
+        # If this fails, tests will still work (just potentially slower)
+        pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def prewarm_aws_client(tmp_path_factory):
+    """
+    Pre-warm botocore client before parallel workers start.
+
+    Uses a file lock to ensure only one worker does the warming,
+    while others wait. This prevents the race condition where multiple
+    workers try to load botocore service models simultaneously.
+    """
+    # Get a shared lock file path that all workers can access
+    root_tmp_dir = tmp_path_factory.getbasetemp().parent
+    lock_file = root_tmp_dir / "botocore_prewarm.lock"
+    warmup_done = root_tmp_dir / "botocore_warmup_done"
+
+    with filelock.FileLock(str(lock_file)):
+        if not warmup_done.exists():
+            # First worker to acquire lock does the warming
+            _prewarm_botocore()
+            warmup_done.touch()
+
+    yield
 
 
 def pytest_collection_modifyitems(items):

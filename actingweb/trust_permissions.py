@@ -320,6 +320,10 @@ def merge_permissions(
                 for key, value in overrides.items():
                     if merge_base and key in UNION_MERGE_FIELDS and isinstance(value, list):
                         # Union merge: combine arrays, preserving base values
+                        # - Empty override arrays preserve base values (fail-safe)
+                        # - To clear base values entirely, use merge_base=False
+                        # - Pattern order: base patterns first, then new patterns
+                        #   (order doesn't affect evaluation; all patterns are matched)
                         base_list = merged_category.get(key, [])
                         if isinstance(base_list, list):
                             # Combine and deduplicate, base values first
@@ -397,7 +401,6 @@ def get_trust_permission_store(
     Note: config parameter kept for interface consistency but not used since
     the store is initialized via initialize_trust_permission_store().
     """
-    _ = config  # Acknowledge parameter for interface consistency
     global _permission_store
     if _permission_store is None:
         raise RuntimeError(

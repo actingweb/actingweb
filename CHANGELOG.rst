@@ -2,13 +2,14 @@
 CHANGELOG
 =========
 
-v3.7.1: Dec 17, 2025
+v3.7.1: Dec 18, 2025
 --------------------
 
 FIXED
 ~~~~~
 
 - **SECURITY**: Permission override merging now uses union semantics for both ``patterns`` AND ``excluded_patterns`` arrays by default - base security exclusions (private/*, security/*, oauth_*) can no longer be accidentally cleared by individual trust relationship overrides
+- Cleaned up integration/unit tests to have all dynamodb-dependent tests in integration dir
 
 v3.7.0: Dec 16, 2025
 --------------------

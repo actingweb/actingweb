@@ -247,7 +247,7 @@ class TestHookDecorators:
             ):
                 return {"status": "ok"}
 
-            handle_notes  # Mark as used
+            _ = handle_notes  # Suppress unused variable warning
 
         # Property hooks are stored in _property_hooks dict
         assert "notes" in app.hooks._property_hooks
@@ -263,7 +263,7 @@ class TestHookDecorators:
             ):
                 return {"status": "pong"}
 
-            handle_ping  # Mark as used
+            _ = handle_ping  # Suppress unused variable warning
 
         # Callback hooks are stored in _callback_hooks dict
         assert "ping" in app.hooks._callback_hooks
@@ -279,7 +279,7 @@ class TestHookDecorators:
             ):
                 pass
 
-            handle_actor_created  # Mark as used
+            _ = handle_actor_created  # Suppress unused variable warning
 
         # Lifecycle hooks are stored in _lifecycle_hooks dict
         assert "actor_created" in app.hooks._lifecycle_hooks
@@ -295,7 +295,7 @@ class TestHookDecorators:
             ):
                 return {"result": "done"}
 
-            handle_custom_method  # Mark as used
+            _ = handle_custom_method  # Suppress unused variable warning
 
         # Method hooks are stored in _method_hooks dict
         assert "custom_method" in app.hooks._method_hooks
@@ -311,7 +311,7 @@ class TestHookDecorators:
             ):
                 return []
 
-            handle_search  # Mark as used
+            _ = handle_search  # Suppress unused variable warning
 
         # Action hooks are stored in _action_hooks dict
         assert "search" in app.hooks._action_hooks

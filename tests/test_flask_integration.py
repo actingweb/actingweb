@@ -35,7 +35,7 @@ class TestFlaskIntegrationMethods:
     def test_setup_routes_method_exists(self):
         """Test that FlaskIntegration has setup_routes method."""
         assert hasattr(FlaskIntegration, "setup_routes")
-        assert callable(getattr(FlaskIntegration, "setup_routes"))
+        assert callable(FlaskIntegration.setup_routes)
 
     def test_get_handler_class_inherited(self):
         """Test FlaskIntegration inherits get_handler_class from base."""

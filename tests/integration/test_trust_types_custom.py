@@ -15,15 +15,36 @@ References:
 - actingweb_mcp customizes mcp_client trust type
 """
 
+import os
+
 import pytest
 
 from actingweb.interface.app import ActingWebApp
 from actingweb.trust_type_registry import get_registry
 
+# Use same DynamoDB host as conftest
+TEST_DYNAMODB_HOST = os.environ.get("AWS_DB_HOST", "http://localhost:8001")
+
 
 @pytest.fixture
-def aw_app():
-    """Create ActingWeb app for testing trust types."""
+def aw_app(docker_services, worker_info):  # pylint: disable=unused-argument
+    """Create ActingWeb app for testing trust types.
+
+    Depends on docker_services to ensure DynamoDB is running.
+    Sets up AWS environment variables for database access.
+    Resets the trust type registry singleton to ensure clean state.
+    """
+    # Set environment for DynamoDB with worker-specific prefix
+    os.environ["AWS_ACCESS_KEY_ID"] = "test"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
+    os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
+    os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
+
+    # Reset the trust type registry singleton to ensure fresh state
+    import actingweb.trust_type_registry as registry_module
+
+    registry_module._registry = None
+
     return ActingWebApp(
         aw_type="urn:actingweb:test:trust_types",
         database="dynamodb",

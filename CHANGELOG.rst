@@ -15,7 +15,7 @@ FIXED
 CHANGED
 ~~~~~
 
-- Added thoughts/shared/plans/2025-12-18-passphrase-login-feature.md as a way to support www login without a 3rd parth auth provider
+- Added thoughts/shared/plans/2025-12-18-passphrase-login-feature.md as a way to support www login without a 3rd party auth provider
 
 v3.7.1: Dec 18, 2025
 --------------------

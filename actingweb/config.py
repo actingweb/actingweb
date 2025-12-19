@@ -121,6 +121,16 @@ class Config:
             ("friend", "resources", "", "a"),
             ("partner", "resources", "", "a"),
             ("admin", "resources", "", "a"),
+            # Allow creator access to /methods (RPC-style functions)
+            ("creator", "methods", "", "a"),
+            ("friend", "methods", "", "a"),
+            ("partner", "methods", "", "a"),
+            ("admin", "methods", "", "a"),
+            # Allow creator access to /actions (state-modifying operations)
+            ("creator", "actions", "", "a"),
+            ("friend", "actions", "", "a"),
+            ("partner", "actions", "", "a"),
+            ("admin", "actions", "", "a"),
             # Allow service management for actor owners and administrators
             ("creator", "services", "", "a"),
             ("trustee", "services", "", "a"),

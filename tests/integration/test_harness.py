@@ -69,6 +69,28 @@ def create_test_app(
     if enable_mcp:
         aw_app = aw_app.with_mcp(enable=True)
 
+    # Register callback hook for custom www path template rendering test
+    @aw_app.callback_hook("www")
+    def handle_www_paths(actor, name, data):
+        """
+        Handle custom www paths to test template rendering from callback hooks.
+
+        When a callback hook returns {"template": "...", "data": {...}},
+        the integration should render that template with the provided data.
+        """
+        path = data.get("path", "")
+
+        if path == "custom":
+            # Test custom template rendering
+            return {
+                "template": "aw-actor-www-custom.html",
+                "data": {
+                    "custom_message": "Hello from callback hook!",
+                },
+            }
+
+        return False
+
     # Create FastAPI app
     fastapi_app = FastAPI(title="ActingWeb Test Harness")
 

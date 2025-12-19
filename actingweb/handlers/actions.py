@@ -92,8 +92,9 @@ class ActionsHandler(base_handler.BaseHandler):
             self.post(actor_id, name)
             return
 
-        auth_result = self.authenticate_actor(
-            actor_id, "actions", subpath=name, add_response=False
+        # Use dual-context auth to support both web UI (OAuth cookie) and API (basic auth)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "actions", "actions", name=name, add_response=False
         )
         if (
             not auth_result.actor
@@ -141,8 +142,9 @@ class ActionsHandler(base_handler.BaseHandler):
 
         POST /actions/action_name - Execute action
         """
-        auth_result = self.authenticate_actor(
-            actor_id, "actions", subpath=name, add_response=False
+        # Use dual-context auth to support both web UI (OAuth cookie) and API (basic auth)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "actions", "actions", name=name, add_response=False
         )
         if (
             not auth_result.actor
@@ -202,8 +204,9 @@ class ActionsHandler(base_handler.BaseHandler):
 
         PUT /actions/action_name - Execute action (same as POST)
         """
-        auth_result = self.authenticate_actor(
-            actor_id, "actions", subpath=name, add_response=False
+        # Use dual-context auth to support both web UI (OAuth cookie) and API (basic auth)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "actions", "actions", name=name, add_response=False
         )
         if (
             not auth_result.actor

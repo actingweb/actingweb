@@ -29,16 +29,20 @@ class CallbacksHandler(base_handler.BaseHandler):
         if not auth_result.authorize("GET", "callbacks", name):
             return
         # Execute callback hook for GET
-        result = False
+        hook_result = None
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, {"method": "GET"}
                 )
-                result = bool(hook_result) if hook_result is not None else False
 
-        if not result:
+        if hook_result is not None:
+            if self.response:
+                self.response.set_status(200, "OK")
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps(hook_result))
+        else:
             self.response.set_status(403, "Forbidden")
 
     def put(self, actor_id, name):
@@ -89,16 +93,20 @@ class CallbacksHandler(base_handler.BaseHandler):
                 self.response.set_status(403, "Forbidden")
             return
         # Execute callback hook for DELETE
-        result = False
+        hook_result = None
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, {"method": "DELETE"}
                 )
-                result = bool(hook_result) if hook_result is not None else False
 
-        if not result:
+        if hook_result is not None:
+            if self.response:
+                self.response.set_status(200, "OK")
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps(hook_result))
+        else:
             self.response.set_status(403, "Forbidden")
 
     def post(self, actor_id, name):
@@ -177,7 +185,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         if not auth_result.authorize("POST", "callbacks", name):
             return
         # Execute callback hook for POST
-        result = False
+        hook_result = None
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
@@ -198,7 +206,11 @@ class CallbacksHandler(base_handler.BaseHandler):
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, hook_data
                 )
-                result = bool(hook_result) if hook_result is not None else False
 
-        if not result:
+        if hook_result is not None:
+            if self.response:
+                self.response.set_status(200, "OK")
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps(hook_result))
+        else:
             self.response.set_status(403, "Forbidden")

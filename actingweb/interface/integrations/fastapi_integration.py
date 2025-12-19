@@ -543,17 +543,27 @@ class FastAPIIntegration(BaseActingWebIntegration):
             Unified logout endpoint that handles both:
             1. MCP OAuth2 client token revocation (if Authorization header present)
             2. Web UI session logout (if oauth_token cookie present)
+
+            Uses SPA CORS (echo origin + credentials) because logout clears cookies
+            and cross-origin SPAs need credentialed CORS for Set-Cookie to work.
             """
-            # Handle OPTIONS (CORS preflight) immediately
-            if request.method == "OPTIONS":
-                cors_headers = {
-                    "Access-Control-Allow-Origin": "*",
+            # Helper to get SPA CORS headers (echo origin + credentials)
+            def get_spa_cors_headers() -> dict[str, str]:
+                origin = request.headers.get("origin", "")
+                return {
+                    "Access-Control-Allow-Origin": origin if origin else "*",
                     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+                    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+                    "Access-Control-Allow-Credentials": "true",
                     "Access-Control-Max-Age": "86400",
                 }
+
+            # Handle OPTIONS (CORS preflight) immediately
+            if request.method == "OPTIONS":
                 return JSONResponse(
-                    {"message": "CORS preflight"}, status_code=200, headers=cors_headers
+                    {"message": "CORS preflight"},
+                    status_code=200,
+                    headers=get_spa_cors_headers(),
                 )
 
             # Check if this is an AJAX request (expects JSON response)
@@ -581,7 +591,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                             "success": True,
                             "message": "Logged out successfully",
                             "redirect_url": "/",
-                        }
+                        },
+                        headers=get_spa_cors_headers(),
                     )
                     response.delete_cookie("oauth_token", path="/")
                     return response
@@ -589,13 +600,18 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     # Return redirect for direct navigation
                     response = RedirectResponse(url="/", status_code=302)
                     response.delete_cookie("oauth_token", path="/")
+                    # Add CORS headers even for redirects
+                    for key, value in get_spa_cors_headers().items():
+                        response.headers[key] = value
                     return response
 
             # If neither token nor cookie, just return success
             if not auth_header and not oauth_cookie:
                 self.logger.info("Logout: No active session found")
                 return JSONResponse(
-                    {"message": "No active session to logout"}, status_code=200
+                    {"message": "No active session to logout"},
+                    status_code=200,
+                    headers=get_spa_cors_headers(),
                 )
 
             # MCP client logout without web UI redirect
@@ -666,8 +682,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.post("/oauth/spa/logout")
         @self.fastapi_app.options("/oauth/spa/logout")
         async def oauth2_spa_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            """Logout (deprecated, use /oauth/logout with Accept: application/json)."""
-            return await self._handle_oauth2_spa_endpoint(request, "logout")
+            """Logout (deprecated, use /oauth/logout)."""
+            # Delegate to main logout handler for consistency
+            return await self._handle_oauth2_endpoint(request, "logout")
 
         # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
 
@@ -1830,12 +1847,27 @@ class FastAPIIntegration(BaseActingWebIntegration):
         from fastapi.responses import JSONResponse
 
         # Add CORS headers for OAuth2 endpoints
-        cors_headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
-            "Access-Control-Max-Age": "86400",
-        }
+        # Logout needs SPA CORS (echo origin + credentials) for cookie clearing to work
+        # in cross-origin scenarios. Other endpoints use wildcard CORS.
+        if endpoint == "logout":
+            # Headers may be lowercase (FastAPI normalizes them)
+            origin = req_data["headers"].get("origin", "") or req_data["headers"].get(
+                "Origin", ""
+            )
+            cors_headers = {
+                "Access-Control-Allow-Origin": origin if origin else "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Max-Age": "86400",
+            }
+        else:
+            cors_headers = {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+                "Access-Control-Max-Age": "86400",
+            }
 
         # Merge handler headers (e.g., WWW-Authenticate) with CORS headers
         response_headers = dict(cors_headers)
@@ -1849,9 +1881,25 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if hasattr(webobj.response, "status_code")
             else 200
         )
-        return JSONResponse(
+        response = JSONResponse(
             content=result, headers=response_headers, status_code=status_code
         )
+
+        # Copy cookies from handler response (e.g., for logout)
+        if hasattr(webobj.response, "cookies"):
+            for cookie_data in webobj.response.cookies:
+                # FastAPI uses 'key' instead of 'name' for cookie name
+                response.set_cookie(
+                    key=cookie_data["name"],
+                    value=cookie_data["value"],
+                    max_age=cookie_data.get("max_age"),
+                    secure=cookie_data.get("secure", False),
+                    httponly=cookie_data.get("httponly", False),
+                    path=cookie_data.get("path", "/"),
+                    samesite=cookie_data.get("samesite", "lax"),
+                )
+
+        return response
 
     async def _handle_oauth2_spa_endpoint(
         self, request: Request, endpoint: str
@@ -2256,6 +2304,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if not template_name and path.startswith("properties/"):
                 # This is an individual property page
                 template_name = "aw-actor-www-property.html"
+
+            # Check for custom template name from callback hook
+            if not template_name and hasattr(webobj.response, "template_name") and webobj.response.template_name:
+                template_name = webobj.response.template_name
 
             if template_name:
                 return self.templates.TemplateResponse(

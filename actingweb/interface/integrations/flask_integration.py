@@ -150,7 +150,8 @@ class FlaskIntegration(BaseActingWebIntegration):
 
         @self.flask_app.route("/oauth/spa/logout", methods=["POST", "OPTIONS"])
         def oauth2_spa_logout() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
-            return self._handle_oauth2_spa_endpoint("logout")
+            # Delegate to main logout handler for consistency
+            return self._handle_oauth2_endpoint("logout")
 
         # Bot endpoint
         @self.flask_app.route("/bot", methods=["POST"])
@@ -1085,12 +1086,37 @@ class FlaskIntegration(BaseActingWebIntegration):
             for key, value in webobj.response.headers.items():
                 json_response.headers[key] = value
 
+        # Copy cookies from handler response (e.g., for logout)
+        if hasattr(webobj.response, "cookies"):
+            for cookie in webobj.response.cookies:
+                json_response.set_cookie(**cookie)
+
         # Add CORS headers for OAuth2 endpoints
-        json_response.headers["Access-Control-Allow-Origin"] = "*"
-        json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        json_response.headers["Access-Control-Allow-Headers"] = (
-            "Authorization, Content-Type, mcp-protocol-version"
-        )
+        # Logout needs SPA CORS (echo origin + credentials) for cookie clearing to work
+        # in cross-origin scenarios. Other endpoints use wildcard CORS.
+        if endpoint == "logout":
+            # Headers may have different casing depending on framework
+            origin = req_data["headers"].get("Origin", "") or req_data["headers"].get(
+                "origin", ""
+            )
+            json_response.headers["Access-Control-Allow-Origin"] = (
+                origin if origin else "*"
+            )
+            json_response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, OPTIONS"
+            )
+            json_response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, Accept"
+            )
+            json_response.headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            json_response.headers["Access-Control-Allow-Origin"] = "*"
+            json_response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, OPTIONS"
+            )
+            json_response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, mcp-protocol-version"
+            )
         json_response.headers["Access-Control-Max-Age"] = "86400"
 
         return json_response
@@ -1476,6 +1502,11 @@ class FlaskIntegration(BaseActingWebIntegration):
                 elif path == "trust":
                     return Response(
                         render_template("aw-actor-www-trust.html", **template_values)
+                    )
+                elif hasattr(webobj.response, "template_name") and webobj.response.template_name:
+                    # Custom template from callback hook
+                    return Response(
+                        render_template(webobj.response.template_name, **template_values)
                     )
             except Exception as e:
                 logging.debug(f"Template rendering failed for www/{path}: {e}")

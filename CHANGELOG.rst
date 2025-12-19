@@ -2,6 +2,31 @@
 CHANGELOG
 =========
 
+v3.7.3: Dec 19, 2025
+--------------------
+
+FIXED
+~~~~~
+
+- **WWW Callback Hook Template Rendering**: The ``www`` callback hook can now render custom templates by returning ``{"template": "template-name.html", "data": {...}}``. This allows applications to add custom web UI pages without modifying the core library.
+- **Callbacks Handler Response Data**: GET, POST, and DELETE callback handlers now return the hook's response data as JSON (200 OK) instead of just boolean success/failure, enabling richer callback interactions.
+- **Methods/Actions ACL Rules**: Added default ACL rules for ``/methods`` and ``/actions`` endpoints for creator, friend, partner, and admin trust types.
+- Added ``template_name`` attribute to ``AWResponse`` for custom template rendering support.
+- Fixed methods and actions handlers to use dual-context authentication (``_authenticate_dual_context``) supporting both web UI (OAuth cookie) and API (basic auth) access.
+
+ADDED
+~~~~~
+
+- Added integration tests for custom www template rendering via callback hooks.
+- Added integration tests for OAuth2 logout SPA CORS behavior (origin echoing and credentials).
+
+CHANGED
+~~~~~~~
+
+- **OAuth2 Logout Consolidation**: ``/oauth/spa/logout`` now delegates to the main ``/oauth/logout`` handler for consistent behavior. The logout endpoint uses SPA CORS (echoed origin + credentials) to ensure cross-origin SPAs can clear session cookies. Both Flask and FastAPI integrations now properly propagate cookies from handler responses.
+- Callbacks handler now returns actual hook results as JSON response body instead of just HTTP status codes.
+- Documentation updated with template rendering examples for www callback hooks.
+
 v3.7.2: Dec 19, 2025
 --------------------
 
@@ -13,7 +38,7 @@ FIXED
 - Improved Flask template rendering error logging for easier debugging
 
 CHANGED
-~~~~~
+~~~~~~~
 
 - Added thoughts/shared/plans/2025-12-18-passphrase-login-feature.md as a way to support www login without a 3rd party auth provider
 

@@ -600,7 +600,24 @@ class WwwHandler(base_handler.BaseHandler):
                     "www", actor_interface, {"path": path, "method": "GET"}
                 )
                 if hook_result is not None:
-                    if isinstance(hook_result, str):
+                    # Check if hook wants to render a template
+                    if isinstance(hook_result, dict) and "template" in hook_result:
+                        # Hook returned template rendering request
+                        # Set template values for Flask integration to render
+                        template_data = hook_result.get("data", {})
+                        # Use consistent URL calculation
+                        urls = self._get_consistent_urls(actor_id)
+                        self.response.template_values = {
+                            "id": actor_id,
+                            "url": urls["url"],
+                            "actor_root": urls["actor_root"],
+                            "actor_www": urls["actor_www"],
+                            **template_data,
+                        }
+                        # Store template name for integration to use
+                        self.response.template_name = hook_result.get("template")
+                        return
+                    elif isinstance(hook_result, str):
                         output = hook_result  # type: ignore[unreachable]
                     elif isinstance(hook_result, dict):
                         output = json.dumps(hook_result)  # type: ignore[unreachable]

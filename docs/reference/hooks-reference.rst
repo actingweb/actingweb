@@ -39,7 +39,35 @@ Decorator: ``app.callback_hook(name: str = "*")``
 Signature: ``func(actor, name: str, data: dict) -> bool | dict``
 
 - Return ``True`` when processed; optionally return a ``dict`` as response payload
-- Used for custom endpoints registered by the framework (e.g., ``bot``)
+- Used for custom endpoints registered by the framework (e.g., ``bot``, ``www``)
+
+Template Rendering for WWW Hooks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The special ``www`` callback hook can render custom templates by returning a dict with ``template`` key:
+
+.. code-block:: python
+
+    @app.callback_hook("www")
+    def handle_www_paths(actor, name, data):
+        path = data.get("path", "")
+
+        if path == "custom":
+            return {
+                "template": "aw-actor-www-custom.html",
+                "data": {
+                    "custom_message": "Hello from hook!",
+                },
+            }
+
+        return False  # Fall through to default handling
+
+The template will receive:
+
+- Standard values: ``id``, ``url``, ``actor_root``, ``actor_www``
+- Custom data from the ``data`` dict in the return value
+
+This allows applications to add custom web UI pages without modifying the core library.
 
 Application Callback Hooks
 ==========================

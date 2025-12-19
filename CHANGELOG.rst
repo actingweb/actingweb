@@ -22,7 +22,7 @@ ADDED
 CHANGED
 ~~~~~~~
 
-- **OAuth2 Logout Consolidation**: ``/oauth/spa/logout`` now delegates to the main ``/oauth/logout`` handler for consistent behavior. Both Flask and FastAPI integrations now properly propagate cookies from handler responses, ensuring logout correctly clears session cookies.
+- **OAuth2 Logout Consolidation**: ``/oauth/spa/logout`` now delegates to the main ``/oauth/logout`` handler for consistent behavior. The logout endpoint uses SPA CORS (echoed origin + credentials) to ensure cross-origin SPAs can clear session cookies. Both Flask and FastAPI integrations now properly propagate cookies from handler responses.
 - Callbacks handler now returns actual hook results as JSON response body instead of just HTTP status codes.
 - Documentation updated with template rendering examples for www callback hooks.
 

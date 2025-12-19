@@ -1831,12 +1831,24 @@ class FastAPIIntegration(BaseActingWebIntegration):
         from fastapi.responses import JSONResponse
 
         # Add CORS headers for OAuth2 endpoints
-        cors_headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
-            "Access-Control-Max-Age": "86400",
-        }
+        # Logout needs SPA CORS (echo origin + credentials) for cookie clearing to work
+        # in cross-origin scenarios. Other endpoints use wildcard CORS.
+        if endpoint == "logout":
+            origin = req_data["headers"].get("Origin", "")
+            cors_headers = {
+                "Access-Control-Allow-Origin": origin if origin else "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Max-Age": "86400",
+            }
+        else:
+            cors_headers = {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
+                "Access-Control-Max-Age": "86400",
+            }
 
         # Merge handler headers (e.g., WWW-Authenticate) with CORS headers
         response_headers = dict(cors_headers)

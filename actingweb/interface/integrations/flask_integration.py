@@ -1092,11 +1092,28 @@ class FlaskIntegration(BaseActingWebIntegration):
                 json_response.set_cookie(**cookie)
 
         # Add CORS headers for OAuth2 endpoints
-        json_response.headers["Access-Control-Allow-Origin"] = "*"
-        json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        json_response.headers["Access-Control-Allow-Headers"] = (
-            "Authorization, Content-Type, mcp-protocol-version"
-        )
+        # Logout needs SPA CORS (echo origin + credentials) for cookie clearing to work
+        # in cross-origin scenarios. Other endpoints use wildcard CORS.
+        if endpoint == "logout":
+            origin = req_data["headers"].get("Origin", "")
+            json_response.headers["Access-Control-Allow-Origin"] = (
+                origin if origin else "*"
+            )
+            json_response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, OPTIONS"
+            )
+            json_response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, Accept"
+            )
+            json_response.headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            json_response.headers["Access-Control-Allow-Origin"] = "*"
+            json_response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, OPTIONS"
+            )
+            json_response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, mcp-protocol-version"
+            )
         json_response.headers["Access-Control-Max-Age"] = "86400"
 
         return json_response

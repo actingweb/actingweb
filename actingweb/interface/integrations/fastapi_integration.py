@@ -666,8 +666,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.post("/oauth/spa/logout")
         @self.fastapi_app.options("/oauth/spa/logout")
         async def oauth2_spa_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            """Logout (deprecated, use /oauth/logout with Accept: application/json)."""
-            return await self._handle_oauth2_spa_endpoint(request, "logout")
+            """Logout (deprecated, use /oauth/logout)."""
+            # Delegate to main logout handler for consistency
+            return await self._handle_oauth2_endpoint(request, "logout")
 
         # OAuth2 discovery endpoint - removed duplicate, handled by OAuth2EndpointsHandler below
 
@@ -1849,9 +1850,25 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if hasattr(webobj.response, "status_code")
             else 200
         )
-        return JSONResponse(
+        response = JSONResponse(
             content=result, headers=response_headers, status_code=status_code
         )
+
+        # Copy cookies from handler response (e.g., for logout)
+        if hasattr(webobj.response, "cookies"):
+            for cookie_data in webobj.response.cookies:
+                # FastAPI uses 'key' instead of 'name' for cookie name
+                response.set_cookie(
+                    key=cookie_data["name"],
+                    value=cookie_data["value"],
+                    max_age=cookie_data.get("max_age"),
+                    secure=cookie_data.get("secure", False),
+                    httponly=cookie_data.get("httponly", False),
+                    path=cookie_data.get("path", "/"),
+                    samesite=cookie_data.get("samesite", "lax"),
+                )
+
+        return response
 
     async def _handle_oauth2_spa_endpoint(
         self, request: Request, endpoint: str
@@ -2256,6 +2273,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if not template_name and path.startswith("properties/"):
                 # This is an individual property page
                 template_name = "aw-actor-www-property.html"
+
+            # Check for custom template name from callback hook
+            if not template_name and hasattr(webobj.response, "template_name") and webobj.response.template_name:
+                template_name = webobj.response.template_name
 
             if template_name:
                 return self.templates.TemplateResponse(

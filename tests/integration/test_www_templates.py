@@ -386,6 +386,80 @@ class TestWWWTemplateURLConsistency:
         assert response.status_code in [200, 204]  # 204 No Content is valid for DELETE
 
 
+class TestWWWCustomTemplateRendering:
+    """
+    Test custom template rendering via www callback hooks.
+
+    When a www callback hook returns {"template": "...", "data": {...}},
+    the integration should render that template with the provided data
+    merged with standard template values (id, url, actor_root, actor_www).
+    """
+
+    actor_id: str | None = None
+    actor_url: str | None = None
+    passphrase: str | None = None
+    creator: str = "customtemplate@actingweb.net"
+
+    def test_001_create_actor(self, www_test_app):
+        """Create an actor for custom template testing."""
+        import requests
+
+        response = requests.post(
+            f"{www_test_app}/",
+            json={"creator": self.creator},
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 201
+
+        actor_data = response.json()
+        TestWWWCustomTemplateRendering.actor_id = actor_data["id"]
+        TestWWWCustomTemplateRendering.passphrase = actor_data["passphrase"]
+        TestWWWCustomTemplateRendering.actor_url = (
+            f"{www_test_app}/{TestWWWCustomTemplateRendering.actor_id}"
+        )
+
+    def test_002_custom_path_renders_template(self, www_test_app):
+        """
+        Verify custom www path renders template from callback hook.
+
+        The test_harness registers a www callback hook for path "custom"
+        that returns {"template": "aw-actor-www-custom.html", "data": {...}}.
+        This should render the template with both hook data and standard values.
+        """
+        import requests
+
+        response = requests.get(
+            f"{self.actor_url}/www/custom",
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+
+        assert response.status_code == 200
+        assert "text/html" in response.headers.get("Content-Type", "")
+
+        html = response.text
+        # Verify standard template values are present
+        assert self.actor_id in html, "Template should contain actor_id"  # type: ignore[arg-type]
+        assert f"/{self.actor_id}/www" in html, "Template should contain actor_www URL"
+
+        # Verify custom data from hook is present
+        assert "Hello from callback hook!" in html, (
+            "Template should contain custom_message from hook"
+        )
+        assert "Custom Template Test" in html, "Template title should be present"
+
+    def test_003_cleanup_actor(self, www_test_app):
+        """Delete the test actor."""
+        import requests
+
+        response = requests.delete(
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+
+        assert response.status_code in [200, 204]
+
+
 class TestWWWWithOAuthCookie:
     """
     Test www endpoints with OAuth authentication using cookies.

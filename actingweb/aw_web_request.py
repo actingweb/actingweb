@@ -95,6 +95,10 @@ class AWResponse:
         self.redirect: str | None = None
         self.cookies: list[dict[str, Any]] = []
         self.template_values: dict[str, Any] = {}
+        # Custom template name for www callback hooks that want to render templates.
+        # When set, the Flask/FastAPI integration will render this template
+        # instead of the default www handler templates.
+        self.template_name: str | None = None
 
 
 class AWWebObj:

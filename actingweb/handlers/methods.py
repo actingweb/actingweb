@@ -92,8 +92,9 @@ class MethodsHandler(base_handler.BaseHandler):
             self.post(actor_id, name)
             return
 
-        auth_result = self.authenticate_actor(
-            actor_id, "methods", subpath=name, add_response=False
+        # Use dual-context auth to support both web UI (OAuth cookie) and API (basic auth)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "methods", "methods", name=name, add_response=False
         )
         if (
             not auth_result.actor
@@ -142,8 +143,9 @@ class MethodsHandler(base_handler.BaseHandler):
 
         POST /methods/method_name - Execute method with JSON-RPC support
         """
-        auth_result = self.authenticate_actor(
-            actor_id, "methods", subpath=name, add_response=False
+        # Use dual-context auth to support both web UI (OAuth cookie) and API (basic auth)
+        auth_result = self._authenticate_dual_context(
+            actor_id, "methods", "methods", name=name, add_response=False
         )
         if (
             not auth_result.actor

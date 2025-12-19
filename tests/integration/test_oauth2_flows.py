@@ -471,6 +471,67 @@ class TestOAuth2CORSPreflight:
         assert "Access-Control-Allow-Origin" in response.headers
         assert "Access-Control-Allow-Methods" in response.headers
 
+    def test_logout_uses_spa_cors_with_origin(self, test_app):
+        """
+        Test that /oauth/logout uses SPA CORS (echo origin + credentials).
+
+        Logout needs credentialed CORS because it clears session cookies.
+        Cross-origin SPAs require Access-Control-Allow-Credentials: true
+        and the exact origin (not *) for Set-Cookie to work.
+        """
+        origin = "https://my-spa.example.com"
+        response = requests.post(
+            f"{test_app}/oauth/logout",
+            headers={"Origin": origin},
+        )
+
+        # Should echo the origin, not use wildcard
+        assert response.headers.get("Access-Control-Allow-Origin") == origin, (
+            f"Logout should echo origin, got: {response.headers.get('Access-Control-Allow-Origin')}"
+        )
+        # Must include credentials header for cookies to be accepted
+        assert response.headers.get("Access-Control-Allow-Credentials") == "true", (
+            "Logout should include Access-Control-Allow-Credentials: true"
+        )
+
+    def test_logout_without_origin_uses_wildcard(self, test_app):
+        """
+        Test that /oauth/logout falls back to wildcard when no Origin header.
+
+        Same-origin requests and non-browser clients don't send Origin.
+        """
+        response = requests.post(
+            f"{test_app}/oauth/logout",
+            # No Origin header
+        )
+
+        # Should fall back to wildcard when no origin
+        assert response.headers.get("Access-Control-Allow-Origin") == "*", (
+            f"Logout without origin should use *, got: {response.headers.get('Access-Control-Allow-Origin')}"
+        )
+
+    def test_spa_logout_delegates_to_main_logout(self, test_app):
+        """
+        Test that /oauth/spa/logout delegates to the main logout handler.
+
+        Both endpoints should behave identically for SPA CORS.
+        """
+        origin = "https://my-spa.example.com"
+
+        # Call the SPA logout endpoint
+        response = requests.post(
+            f"{test_app}/oauth/spa/logout",
+            headers={"Origin": origin},
+        )
+
+        # Should have SPA CORS headers just like the main endpoint
+        assert response.headers.get("Access-Control-Allow-Origin") == origin, (
+            f"SPA logout should echo origin, got: {response.headers.get('Access-Control-Allow-Origin')}"
+        )
+        assert response.headers.get("Access-Control-Allow-Credentials") == "true", (
+            "SPA logout should include Access-Control-Allow-Credentials: true"
+        )
+
 
 class TestOAuth2Discovery:
     """Test OAuth2 discovery endpoints."""

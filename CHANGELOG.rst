@@ -18,6 +18,7 @@ ADDED
 ~~~~~
 
 - Added integration tests for custom www template rendering via callback hooks.
+- Added integration tests for OAuth2 logout SPA CORS behavior (origin echoing and credentials).
 
 CHANGED
 ~~~~~~~

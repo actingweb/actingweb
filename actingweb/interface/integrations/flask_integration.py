@@ -1095,7 +1095,10 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Logout needs SPA CORS (echo origin + credentials) for cookie clearing to work
         # in cross-origin scenarios. Other endpoints use wildcard CORS.
         if endpoint == "logout":
-            origin = req_data["headers"].get("Origin", "")
+            # Headers may have different casing depending on framework
+            origin = req_data["headers"].get("Origin", "") or req_data["headers"].get(
+                "origin", ""
+            )
             json_response.headers["Access-Control-Allow-Origin"] = (
                 origin if origin else "*"
             )

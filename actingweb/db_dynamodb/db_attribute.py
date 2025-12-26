@@ -1,6 +1,12 @@
 import os
+import time
 
-from pynamodb.attributes import JSONAttribute, UnicodeAttribute, UTCDateTimeAttribute
+from pynamodb.attributes import (
+    JSONAttribute,
+    NumberAttribute,
+    UnicodeAttribute,
+    UTCDateTimeAttribute,
+)
 from pynamodb.models import Model
 
 """
@@ -27,6 +33,9 @@ class Attribute(Model):
     name = UnicodeAttribute()
     data = JSONAttribute(null=True)
     timestamp = UTCDateTimeAttribute(null=True)
+    # TTL timestamp for automatic DynamoDB expiration (Unix epoch timestamp)
+    # Enable DynamoDB TTL on this field for automatic cleanup
+    ttl_timestamp = NumberAttribute(null=True)
 
 
 class DbAttribute:
@@ -72,8 +81,26 @@ class DbAttribute:
         }
 
     @staticmethod
-    def set_attr(actor_id=None, bucket=None, name=None, data=None, timestamp=None):
-        """Sets a data value for a given attribute in a bucket"""
+    def set_attr(
+        actor_id=None,
+        bucket=None,
+        name=None,
+        data=None,
+        timestamp=None,
+        ttl_seconds=None,
+    ):
+        """Sets a data value for a given attribute in a bucket.
+
+        Args:
+            actor_id: The actor ID
+            bucket: The bucket name
+            name: The attribute name
+            data: The data to store (JSON-serializable)
+            timestamp: Optional timestamp
+            ttl_seconds: Optional TTL in seconds from now. If provided,
+                         DynamoDB will automatically delete this item after expiry.
+                         Note: A 1-hour buffer is added for clock skew safety.
+        """
         if not actor_id or not name or not bucket:
             return False
         if not data:
@@ -85,6 +112,13 @@ class DbAttribute:
             except Exception:  # PynamoDB DoesNotExist exception
                 pass
             return True
+
+        # Calculate TTL timestamp if provided
+        ttl_timestamp = None
+        if ttl_seconds is not None:
+            # Add 1 hour buffer for clock skew safety
+            ttl_timestamp = int(time.time()) + ttl_seconds + 3600
+
         new = Attribute(
             id=actor_id,
             bucket_name=bucket + ":" + name,
@@ -92,6 +126,7 @@ class DbAttribute:
             name=name,
             data=data,
             timestamp=timestamp,
+            ttl_timestamp=ttl_timestamp,
         )
         new.save()
         return True

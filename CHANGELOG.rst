@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.7.4: Dec 26, 2025
+--------------------
+
+ADDED
+~~~~~
+
+- DynamoDB TTL support for automatic cleanup of expired tokens, sessions, and auth codes.
+
 v3.7.3: Dec 19, 2025
 --------------------
 

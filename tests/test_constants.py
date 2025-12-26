@@ -8,10 +8,17 @@ from actingweb.constants import (
     DEFAULT_FETCH_DEADLINE,
     DEFAULT_REFRESH_TOKEN_EXPIRY,
     DEFAULT_RELATIONSHIP,
+    INDEX_TTL_BUFFER,
     JSON_CONTENT_TYPE,
     LOCATION_HEADER,
+    MCP_ACCESS_TOKEN_TTL,
+    MCP_AUTH_CODE_TTL,
+    MCP_REFRESH_TOKEN_TTL,
     MINIMUM_TOKEN_ENTROPY,
+    OAUTH_SESSION_TTL,
     OAUTH_TOKEN_COOKIE,
+    SPA_ACCESS_TOKEN_TTL,
+    SPA_REFRESH_TOKEN_TTL,
     TRUSTEE_CREATOR,
     AuthType,
     DatabaseType,
@@ -103,6 +110,52 @@ class TestConstants:
         assert DEFAULT_COOKIE_MAX_AGE == 1209600  # 14 days
         assert MINIMUM_TOKEN_ENTROPY == 80
         assert DEFAULT_REFRESH_TOKEN_EXPIRY == 365 * 24 * 3600  # 1 year
+
+
+class TestTTLConstants:
+    """Test TTL constant values."""
+
+    def test_oauth_session_ttl(self):
+        """Test OAuth session TTL is 10 minutes."""
+        assert OAUTH_SESSION_TTL == 600
+        assert OAUTH_SESSION_TTL == 10 * 60  # 10 minutes
+
+    def test_spa_token_ttls(self):
+        """Test SPA token TTL values."""
+        assert SPA_ACCESS_TOKEN_TTL == 3600  # 1 hour
+        assert SPA_REFRESH_TOKEN_TTL == 86400 * 14  # 2 weeks
+        assert SPA_ACCESS_TOKEN_TTL == 60 * 60  # 1 hour in minutes * seconds
+        assert SPA_REFRESH_TOKEN_TTL == 1209600  # 2 weeks in seconds
+
+    def test_mcp_token_ttls(self):
+        """Test MCP token TTL values."""
+        assert MCP_AUTH_CODE_TTL == 600  # 10 minutes
+        assert MCP_ACCESS_TOKEN_TTL == 3600  # 1 hour
+        assert MCP_REFRESH_TOKEN_TTL == 2592000  # 30 days
+        assert MCP_REFRESH_TOKEN_TTL == 30 * 24 * 60 * 60  # 30 days in seconds
+
+    def test_index_ttl_buffer(self):
+        """Test index TTL buffer is 2 hours."""
+        assert INDEX_TTL_BUFFER == 7200  # 2 hours
+        assert INDEX_TTL_BUFFER == 2 * 60 * 60  # 2 hours in seconds
+
+    def test_ttl_relationships(self):
+        """Test TTL values have correct relationships."""
+        # Auth codes and sessions should have same short TTL
+        assert OAUTH_SESSION_TTL == MCP_AUTH_CODE_TTL
+
+        # Access tokens should have same TTL across SPA and MCP
+        assert SPA_ACCESS_TOKEN_TTL == MCP_ACCESS_TOKEN_TTL
+
+        # Refresh tokens should be longer than access tokens
+        assert SPA_REFRESH_TOKEN_TTL > SPA_ACCESS_TOKEN_TTL
+        assert MCP_REFRESH_TOKEN_TTL > MCP_ACCESS_TOKEN_TTL
+
+        # MCP refresh tokens should be longer than SPA refresh tokens
+        assert MCP_REFRESH_TOKEN_TTL > SPA_REFRESH_TOKEN_TTL
+
+        # Index buffer should be positive
+        assert INDEX_TTL_BUFFER > 0
 
 
 class TestEnumUsage:

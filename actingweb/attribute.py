@@ -82,8 +82,17 @@ class Attributes:
         name: str | None = None,
         data: Any | None = None,
         timestamp: Any | None = None,
+        ttl_seconds: int | None = None,
     ) -> bool:
-        """Sets new data for this attribute"""
+        """Sets new data for this attribute.
+
+        Args:
+            name: Attribute name
+            data: Data to store (JSON-serializable)
+            timestamp: Optional timestamp
+            ttl_seconds: Optional TTL in seconds. If provided, DynamoDB will
+                         automatically delete this item after expiry.
+        """
         if not self.actor_id or not self.bucket:
             return False
         if name not in self.data or self.data[name] is None:
@@ -97,6 +106,7 @@ class Attributes:
                 name=name,
                 data=data,
                 timestamp=timestamp,
+                ttl_seconds=ttl_seconds,
             )
         return False
 

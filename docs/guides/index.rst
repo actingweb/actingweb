@@ -25,6 +25,7 @@ Contents
    mcp-applications
    web-ui
    service-integration
+   database-maintenance
    troubleshooting
 
 Authentication & Authorization
@@ -55,6 +56,11 @@ Integration
 - **MCP Applications** - Building AI-accessible applications with MCP
 - **Web UI** - Customizing the web interface templates
 - **Service Integration** - Integrating ActingWeb with external services
+
+Operations
+==========
+
+- **Database Maintenance** - DynamoDB TTL configuration and cleanup Lambda setup
 
 Troubleshooting
 ===============

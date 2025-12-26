@@ -147,6 +147,28 @@ class TestAttributesSetAttr:
             name="key",
             data="value",
             timestamp="2023-01-01",
+            ttl_seconds=None,
+        )
+
+    def test_set_attr_with_ttl(self):
+        """Test set_attr passes ttl_seconds to database."""
+        mock_config = Mock()
+        mock_db_attr = Mock()
+        mock_db_attr.get_bucket.return_value = {}
+        mock_db_attr.set_attr.return_value = True
+        mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
+
+        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        result = attrs.set_attr(name="key", data="value", ttl_seconds=3600)
+
+        assert result is True
+        mock_db_attr.set_attr.assert_called_once_with(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="key",
+            data="value",
+            timestamp=None,
+            ttl_seconds=3600,
         )
 
 

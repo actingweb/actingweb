@@ -400,12 +400,14 @@ class ActingWebTokenManager:
         """Store authorization code in private attributes."""
         try:
             from .. import attribute
+            from ..constants import INDEX_TTL_BUFFER, MCP_AUTH_CODE_TTL
 
             # Store auth code in private attributes bucket
             auth_bucket = attribute.Attributes(
                 actor_id=actor_id, bucket=self.auth_codes_bucket, config=self.config
             )
-            auth_bucket.set_attr(name=code, data=auth_data)
+            # Auth codes expire in 10 minutes
+            auth_bucket.set_attr(name=code, data=auth_data, ttl_seconds=MCP_AUTH_CODE_TTL)
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
@@ -413,7 +415,10 @@ class ActingWebTokenManager:
                 bucket=AUTH_CODE_INDEX_BUCKET,
                 config=self.config,
             )
-            index_bucket.set_attr(name=code, data=actor_id)
+            # Index entry gets slightly longer TTL
+            index_bucket.set_attr(
+                name=code, data=actor_id, ttl_seconds=MCP_AUTH_CODE_TTL + INDEX_TTL_BUFFER
+            )
 
             logger.debug(f"Successfully stored auth code for actor {actor_id}")
 
@@ -519,12 +524,16 @@ class ActingWebTokenManager:
         """Store Google OAuth2 token data in private attributes."""
         try:
             from .. import attribute
+            from ..constants import MCP_ACCESS_TOKEN_TTL
 
             # Store Google token data in private attributes bucket
             google_bucket = attribute.Attributes(
                 actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
             )
-            google_bucket.set_attr(name=token_key, data=google_token_data)
+            # Google token data is tied to access token lifetime
+            google_bucket.set_attr(
+                name=token_key, data=google_token_data, ttl_seconds=MCP_ACCESS_TOKEN_TTL
+            )
             logger.debug(
                 f"Stored Google token data for actor {actor_id} with key {token_key}"
             )
@@ -583,12 +592,14 @@ class ActingWebTokenManager:
         """Store access token in private attributes."""
         try:
             from .. import attribute
+            from ..constants import INDEX_TTL_BUFFER, MCP_ACCESS_TOKEN_TTL
 
             # Store access token in private attributes bucket
             tokens_bucket = attribute.Attributes(
                 actor_id=actor_id, bucket=self.tokens_bucket, config=self.config
             )
-            tokens_bucket.set_attr(name=token, data=token_data)
+            # Access tokens expire in 1 hour
+            tokens_bucket.set_attr(name=token, data=token_data, ttl_seconds=MCP_ACCESS_TOKEN_TTL)
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
@@ -596,7 +607,10 @@ class ActingWebTokenManager:
                 bucket=ACCESS_TOKEN_INDEX_BUCKET,
                 config=self.config,
             )
-            index_bucket.set_attr(name=token, data=actor_id)
+            # Index entry gets slightly longer TTL
+            index_bucket.set_attr(
+                name=token, data=actor_id, ttl_seconds=MCP_ACCESS_TOKEN_TTL + INDEX_TTL_BUFFER
+            )
 
             logger.debug(f"Stored access token for actor {actor_id}")
 
@@ -759,12 +773,16 @@ class ActingWebTokenManager:
         """Store refresh token in private attributes."""
         try:
             from .. import attribute
+            from ..constants import INDEX_TTL_BUFFER, MCP_REFRESH_TOKEN_TTL
 
             # Store refresh token in private attributes bucket
             refresh_bucket = attribute.Attributes(
                 actor_id=actor_id, bucket=self.refresh_tokens_bucket, config=self.config
             )
-            refresh_bucket.set_attr(name=token, data=refresh_data)
+            # Refresh tokens expire in 30 days
+            refresh_bucket.set_attr(
+                name=token, data=refresh_data, ttl_seconds=MCP_REFRESH_TOKEN_TTL
+            )
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
@@ -772,7 +790,10 @@ class ActingWebTokenManager:
                 bucket=REFRESH_TOKEN_INDEX_BUCKET,
                 config=self.config,
             )
-            index_bucket.set_attr(name=token, data=actor_id)
+            # Index entry gets slightly longer TTL
+            index_bucket.set_attr(
+                name=token, data=actor_id, ttl_seconds=MCP_REFRESH_TOKEN_TTL + INDEX_TTL_BUFFER
+            )
 
             logger.debug(f"Stored refresh token for actor {actor_id}")
 
@@ -1032,6 +1053,118 @@ class ActingWebTokenManager:
             logger.error(f"Error revoking tokens for client {client_id}: {e}")
 
         return revoked_count
+
+    def cleanup_expired_tokens(self) -> dict[str, int]:
+        """
+        Clean up expired MCP tokens and associated data.
+
+        .. warning::
+            **SCHEDULED LAMBDA ONLY** - Do NOT call from request handlers.
+
+        This method iterates through all token indexes and removes expired
+        entries. It should only be invoked by a scheduled cleanup Lambda
+        triggered via EventBridge/CloudWatch Events.
+
+        Calling this from the request path will:
+        - Add significant latency to requests
+        - Impact Lambda cold start time
+        - Cause unpredictable performance
+
+        Returns:
+            Dictionary with counts of cleaned items by type:
+            - access_tokens: Number of expired access tokens removed
+            - refresh_tokens: Number of expired refresh tokens removed
+            - auth_codes: Number of expired auth codes removed
+            - index_entries: Number of orphaned index entries removed
+        """
+        from .. import attribute
+
+        current_time = int(time.time())
+        cleaned: dict[str, int] = {
+            "access_tokens": 0,
+            "refresh_tokens": 0,
+            "auth_codes": 0,
+            "index_entries": 0,
+        }
+
+        # Clean up access token index
+        access_index = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=ACCESS_TOKEN_INDEX_BUCKET,
+            config=self.config,
+        )
+        access_index_data = access_index.get_bucket()
+
+        if access_index_data:
+            for token, index_attr in list(access_index_data.items()):
+                if not index_attr or "data" not in index_attr:
+                    # Orphaned index entry
+                    access_index.delete_attr(name=token)
+                    cleaned["index_entries"] += 1
+                    continue
+
+                # Check if the actual token still exists and is valid
+                token_data = self._load_access_token(token)
+                if not token_data:
+                    # Token doesn't exist, clean index
+                    access_index.delete_attr(name=token)
+                    cleaned["index_entries"] += 1
+                elif current_time > token_data.get("expires_at", 0):
+                    # Token expired, clean both
+                    self._remove_access_token(token)
+                    cleaned["access_tokens"] += 1
+
+        # Clean up refresh token index
+        refresh_index = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=REFRESH_TOKEN_INDEX_BUCKET,
+            config=self.config,
+        )
+        refresh_index_data = refresh_index.get_bucket()
+
+        if refresh_index_data:
+            for token, index_attr in list(refresh_index_data.items()):
+                if not index_attr or "data" not in index_attr:
+                    refresh_index.delete_attr(name=token)
+                    cleaned["index_entries"] += 1
+                    continue
+
+                token_data = self._load_refresh_token(token)
+                if not token_data:
+                    refresh_index.delete_attr(name=token)
+                    cleaned["index_entries"] += 1
+                elif current_time > token_data.get("expires_at", 0):
+                    self._remove_refresh_token(token)
+                    cleaned["refresh_tokens"] += 1
+
+        # Clean up auth code index
+        auth_index = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=AUTH_CODE_INDEX_BUCKET,
+            config=self.config,
+        )
+        auth_index_data = auth_index.get_bucket()
+
+        if auth_index_data:
+            for code, index_attr in list(auth_index_data.items()):
+                if not index_attr or "data" not in index_attr:
+                    auth_index.delete_attr(name=code)
+                    cleaned["index_entries"] += 1
+                    continue
+
+                auth_data = self._load_auth_code(code)
+                if not auth_data:
+                    auth_index.delete_attr(name=code)
+                    cleaned["index_entries"] += 1
+                elif current_time > auth_data.get("expires_at", 0):
+                    self._remove_auth_code(code)
+                    cleaned["auth_codes"] += 1
+
+        total = sum(cleaned.values())
+        if total > 0:
+            logger.info(f"Cleanup complete: {cleaned}")
+
+        return cleaned
 
 
 # Global token manager

@@ -27,10 +27,6 @@ logger = logging.getLogger(__name__)
 # Session TTL - 10 minutes
 _SESSION_TTL = 600
 
-# Token TTLs
-_ACCESS_TOKEN_TTL = 3600  # 1 hour
-_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks
-
 # Bucket names for token storage
 _ACCESS_TOKEN_BUCKET = "spa_access_tokens"
 _REFRESH_TOKEN_BUCKET = "spa_refresh_tokens"
@@ -96,12 +92,14 @@ class OAuth2SessionManager:
             logger.debug("Stored PKCE verifier in session")
 
         # Store in attribute bucket for persistence across containers
+        from .constants import OAUTH_SESSION_TTL
+
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=OAUTH_SESSION_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=session_id, data=session_data)
+        bucket.set_attr(name=session_id, data=session_data, ttl_seconds=OAUTH_SESSION_TTL)
 
         logger.debug(
             f"Stored OAuth session {session_id[:8]}... for provider {provider}"
@@ -287,13 +285,15 @@ class OAuth2SessionManager:
             ttl: Time to live in seconds (default: 1 hour)
         """
         from . import attribute
-        from .constants import OAUTH2_SYSTEM_ACTOR
+        from .constants import OAUTH2_SYSTEM_ACTOR, SPA_ACCESS_TOKEN_TTL
+
+        effective_ttl = ttl or SPA_ACCESS_TOKEN_TTL
 
         token_data = {
             "actor_id": actor_id,
             "identifier": identifier,
             "created_at": int(time.time()),
-            "expires_at": int(time.time()) + (ttl or _ACCESS_TOKEN_TTL),
+            "expires_at": int(time.time()) + effective_ttl,
         }
 
         bucket = attribute.Attributes(
@@ -301,7 +301,7 @@ class OAuth2SessionManager:
             bucket=_ACCESS_TOKEN_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=token, data=token_data)
+        bucket.set_attr(name=token, data=token_data, ttl_seconds=effective_ttl)
 
         logger.debug(f"Stored access token for actor {actor_id}")
 
@@ -388,15 +388,16 @@ class OAuth2SessionManager:
             The new refresh token
         """
         from . import attribute
-        from .constants import OAUTH2_SYSTEM_ACTOR
+        from .constants import OAUTH2_SYSTEM_ACTOR, SPA_REFRESH_TOKEN_TTL
 
+        effective_ttl = ttl or SPA_REFRESH_TOKEN_TTL
         refresh_token = secrets.token_urlsafe(48)
 
         token_data = {
             "actor_id": actor_id,
             "identifier": identifier or "",
             "created_at": int(time.time()),
-            "expires_at": int(time.time()) + (ttl or _REFRESH_TOKEN_TTL),
+            "expires_at": int(time.time()) + effective_ttl,
             "used": False,
         }
 
@@ -405,7 +406,7 @@ class OAuth2SessionManager:
             bucket=_REFRESH_TOKEN_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=refresh_token, data=token_data)
+        bucket.set_attr(name=refresh_token, data=token_data, ttl_seconds=effective_ttl)
 
         logger.debug(f"Created refresh token for actor {actor_id}")
         return refresh_token

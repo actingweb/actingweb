@@ -131,3 +131,44 @@ ESTABLISHED_VIA_OAUTH2_CLIENT = (
 # Email verification settings
 EMAIL_VERIFICATION_TOKEN_LENGTH = 32  # Length of URL-safe verification tokens
 EMAIL_VERIFICATION_TOKEN_EXPIRY = 86400  # 24 hours in seconds
+
+# TTL Values for Attribute Storage (in seconds)
+# =============================================
+# These define how long different data types should persist before
+# DynamoDB automatically deletes them via TTL.
+
+# OAuth session TTL (for postponed actor creation)
+OAUTH_SESSION_TTL = 600  # 10 minutes
+
+# SPA token TTLs
+SPA_ACCESS_TOKEN_TTL = 3600  # 1 hour
+SPA_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks (1,209,600 seconds)
+
+# MCP token TTLs
+MCP_AUTH_CODE_TTL = 600  # 10 minutes
+MCP_ACCESS_TOKEN_TTL = 3600  # 1 hour
+MCP_REFRESH_TOKEN_TTL = 2592000  # 30 days
+
+# Index entry TTLs (slightly longer than the data they reference)
+# This ensures indexes aren't deleted before the data they point to
+INDEX_TTL_BUFFER = 7200  # 2 hours extra buffer for indexes
+
+# Clock skew buffer for TTL calculations
+# DynamoDB TTL can be delayed up to 48 hours, but items may appear
+# expired before TTL fires. This buffer prevents premature invalidation.
+TTL_CLOCK_SKEW_BUFFER = 3600  # 1 hour buffer for clock skew safety
+
+
+def _validate_ttl_constants() -> None:
+    """Validate TTL constant relationships at import time."""
+    assert SPA_REFRESH_TOKEN_TTL > SPA_ACCESS_TOKEN_TTL, (
+        "SPA refresh TTL must exceed access TTL"
+    )
+    assert MCP_REFRESH_TOKEN_TTL > MCP_ACCESS_TOKEN_TTL, (
+        "MCP refresh TTL must exceed access TTL"
+    )
+    assert INDEX_TTL_BUFFER > 0, "Index TTL buffer must be positive"
+    assert TTL_CLOCK_SKEW_BUFFER > 0, "Clock skew buffer must be positive"
+
+
+_validate_ttl_constants()

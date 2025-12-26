@@ -190,13 +190,13 @@ class TestOAuth2SessionManagerTokens:
 
     def test_token_ttl_constants(self):
         """Test that token TTL constants are properly defined."""
-        from actingweb.oauth_session import _ACCESS_TOKEN_TTL, _REFRESH_TOKEN_TTL
+        from actingweb.constants import SPA_ACCESS_TOKEN_TTL, SPA_REFRESH_TOKEN_TTL
 
         # Access token: 1 hour
-        assert _ACCESS_TOKEN_TTL == 3600
+        assert SPA_ACCESS_TOKEN_TTL == 3600
 
         # Refresh token: 2 weeks
-        assert _REFRESH_TOKEN_TTL == 86400 * 14
+        assert SPA_REFRESH_TOKEN_TTL == 86400 * 14
 
     def test_bucket_names_defined(self):
         """Test that bucket names for tokens are defined."""

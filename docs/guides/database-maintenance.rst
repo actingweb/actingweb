@@ -304,6 +304,36 @@ actively cleaning up data:
       --period 86400 \
       --statistics Sum
 
+Troubleshooting with CloudWatch Logs Insights
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Query cleanup Lambda results:**
+
+.. code-block:: text
+
+    fields @timestamp, @message
+    | filter @message like /Cleanup complete/
+    | sort @timestamp desc
+    | limit 20
+
+**Find cleanup errors:**
+
+.. code-block:: text
+
+    fields @timestamp, @message
+    | filter @message like /Error/ or @message like /error/
+    | filter @logStream like /cleanup/
+    | sort @timestamp desc
+    | limit 50
+
+**Monitor token creation rate (if logging enabled):**
+
+.. code-block:: text
+
+    fields @timestamp, @message
+    | filter @message like /Stored access token/ or @message like /Created refresh token/
+    | stats count() as token_count by bin(1h)
+
 Data Lifecycle Reference
 ------------------------
 

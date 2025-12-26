@@ -19,6 +19,7 @@ from actingweb.constants import (
     OAUTH_TOKEN_COOKIE,
     SPA_ACCESS_TOKEN_TTL,
     SPA_REFRESH_TOKEN_TTL,
+    TTL_CLOCK_SKEW_BUFFER,
     TRUSTEE_CREATOR,
     AuthType,
     DatabaseType,
@@ -138,6 +139,11 @@ class TestTTLConstants:
         """Test index TTL buffer is 2 hours."""
         assert INDEX_TTL_BUFFER == 7200  # 2 hours
         assert INDEX_TTL_BUFFER == 2 * 60 * 60  # 2 hours in seconds
+
+    def test_clock_skew_buffer(self):
+        """Test clock skew buffer is 1 hour."""
+        assert TTL_CLOCK_SKEW_BUFFER == 3600  # 1 hour
+        assert TTL_CLOCK_SKEW_BUFFER == 60 * 60  # 1 hour in seconds
 
     def test_ttl_relationships(self):
         """Test TTL values have correct relationships."""

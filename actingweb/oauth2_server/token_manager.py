@@ -1058,12 +1058,24 @@ class ActingWebTokenManager:
         """
         Clean up expired MCP tokens and associated data.
 
-        This method is intended to be called by a scheduled cleanup Lambda,
-        NOT during request processing. It iterates through all token indexes
-        and removes expired entries.
+        .. warning::
+            **SCHEDULED LAMBDA ONLY** - Do NOT call from request handlers.
+
+        This method iterates through all token indexes and removes expired
+        entries. It should only be invoked by a scheduled cleanup Lambda
+        triggered via EventBridge/CloudWatch Events.
+
+        Calling this from the request path will:
+        - Add significant latency to requests
+        - Impact Lambda cold start time
+        - Cause unpredictable performance
 
         Returns:
-            Dictionary with counts of cleaned items by type
+            Dictionary with counts of cleaned items by type:
+            - access_tokens: Number of expired access tokens removed
+            - refresh_tokens: Number of expired refresh tokens removed
+            - auth_codes: Number of expired auth codes removed
+            - index_entries: Number of orphaned index entries removed
         """
         from .. import attribute
 

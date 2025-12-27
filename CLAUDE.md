@@ -866,6 +866,32 @@ The factory endpoint (`POST /`) supports content negotiation:
 - **GET** `/`: Shows HTML form for email input
 - **POST** `/` from form: Returns HTML success/error page or redirects to OAuth2
 
+### Actor Root Endpoint
+
+The actor root endpoint (`GET /{actor_id}`) supports content negotiation:
+
+**For API clients (Accept: application/json or ?format=json):**
+- **Response**: `200 OK` with JSON body:
+  ```json
+  {
+    "id": "actor-id",
+    "creator": "user@example.com",
+    "passphrase": "actor-passphrase",
+    "trustee_root": "optional-trustee-root"
+  }
+  ```
+
+**For web browsers (default):**
+
+When authenticated:
+- If `config.ui` is enabled: Redirects to `/{actor_id}/www`
+- If `config.ui` is disabled: Redirects to `/{actor_id}/app` (for SPAs)
+
+When unauthenticated:
+- Redirects to `/login` for a consistent login experience
+
+This eliminates the need for applications to override the `/{actor_id}` route to redirect browsers to their UI. SPAs that use `/{actor_id}/app` will automatically receive browser redirects when `config.ui` is disabled.
+
 ### Testing Configuration
 
 For running the standard ActingWeb test suite, use these settings:

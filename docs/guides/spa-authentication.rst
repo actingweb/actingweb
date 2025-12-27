@@ -77,6 +77,50 @@ ActingWeb provides dedicated SPA OAuth2 endpoints that:
 - Implement refresh token rotation for security
 - Include CORS headers for cross-origin requests
 
+SPA Route Requirements
+~~~~~~~~~~~~~~~~~~~~~~
+
+When building an SPA with ActingWeb, configure your app with ``with_web_ui(False)``:
+
+.. code-block:: python
+
+   app = ActingWebApp(...)
+       .with_web_ui(enable=False)  # Disable server templates, use SPA mode
+       .with_oauth(...)
+
+Your application must provide these routes:
+
+1. **``/login``** - SPA login page with OAuth buttons
+2. **``/<actor_id>/app``** - Main SPA entry point for authenticated users
+
+Browser Redirect Behavior
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ActingWeb automatically handles browser redirects for SPAs:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Scenario
+     - Redirect Target
+   * - Unauthenticated browser → ``/<actor_id>``
+     - ``/login``
+   * - After OAuth login completes
+     - ``/<actor_id>/app``
+   * - Authenticated browser → ``/<actor_id>``
+     - ``/<actor_id>/app``
+
+This eliminates the need for custom route handlers to redirect browsers. Your SPA
+only needs to:
+
+1. Serve the login page at ``/login``
+2. Serve the SPA shell at ``/<actor_id>/app``
+3. Handle authentication state in JavaScript
+
+API clients (sending ``Accept: application/json``) always receive JSON responses,
+not redirects.
+
 Token Architecture
 ------------------
 

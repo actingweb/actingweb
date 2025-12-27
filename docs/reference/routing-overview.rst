@@ -25,7 +25,7 @@ Core Actor Routes
 =================
 
 - `/`: Root factory (create actor via web or API)
-- `/<actor_id>`: Actor root endpoint
+- `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
 - `/<actor_id>/meta`: Discovery metadata
 - `/<actor_id>/properties`: Get/update/delete properties
 - `/<actor_id>/resources`: Fetch external resources (read-only)
@@ -55,6 +55,139 @@ Base Paths
 - Deployments under a base path (e.g., `/my-server`) are supported by both integrations.
 - Templates receive `actor_root` and `actor_www` to generate correct links regardless of base path.
 - Avoid relative links in templates; prefer the provided variables.
+
+.. _actor-root-endpoint:
+
+Actor Root Endpoint Behavior
+============================
+
+The actor root endpoint (``GET /<actor_id>``) supports content negotiation based on
+the ``Accept`` header and authentication status.
+
+API Clients
+-----------
+
+API clients (sending ``Accept: application/json`` or no specific Accept header) receive
+JSON with actor information:
+
+.. code-block:: json
+
+    {
+        "id": "actor-id",
+        "creator": "user@example.com",
+        "passphrase": "actor-passphrase",
+        "trustee_root": "optional-trustee-root"
+    }
+
+If not authenticated, API clients receive a 401 or 403 error response.
+
+Browser Redirect Behavior
+-------------------------
+
+Browsers (sending ``Accept: text/html``) are redirected based on authentication status
+and the ``with_web_ui()`` configuration:
+
+.. list-table:: Browser Redirect Matrix
+   :header-rows: 1
+   :widths: 20 20 30 30
+
+   * - Authenticated
+     - ``with_web_ui()``
+     - Redirect Target
+     - Use Case
+   * - No
+     - Any
+     - ``/login``
+     - Consistent login experience
+   * - Yes
+     - ``True``
+     - ``/<actor_id>/www``
+     - Traditional server-rendered UI
+   * - Yes
+     - ``False``
+     - ``/<actor_id>/app``
+     - Single Page Applications (SPAs)
+
+**Key behaviors:**
+
+1. **Unauthenticated browsers** always redirect to ``/login``, providing a consistent
+   login experience rather than triggering OAuth directly.
+
+2. **Authenticated browsers** redirect to the appropriate UI endpoint based on
+   whether the traditional web UI (``/www``) or SPA mode (``/app``) is configured.
+
+OAuth Callback Redirect Behavior
+--------------------------------
+
+After successful OAuth authentication, the callback handler redirects users to their
+UI endpoint based on the same ``with_web_ui()`` configuration:
+
+.. list-table:: Post-OAuth Redirect
+   :header-rows: 1
+   :widths: 30 40 30
+
+   * - ``with_web_ui()``
+     - Redirect Target
+     - Use Case
+   * - ``True``
+     - ``/<actor_id>/www``
+     - Traditional web UI with server templates
+   * - ``False``
+     - ``/<actor_id>/app``
+     - SPA that handles its own routing
+
+This ensures users land on the correct UI after logging in, without applications
+needing to override OAuth callback behavior.
+
+SPA Route Requirements
+----------------------
+
+When using ``with_web_ui(False)`` for SPA mode, your application must provide:
+
+1. **``/login``** - Login page with OAuth buttons (served by your SPA)
+2. **``/<actor_id>/app``** - Main SPA entry point for authenticated users
+
+Example SPA route registration (FastAPI):
+
+.. code-block:: python
+
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page(request: Request):
+        return HTMLResponse(content=render_spa_shell())
+
+    @app.get("/{actor_id}/app", response_class=HTMLResponse)
+    @app.get("/{actor_id}/app/{path:path}", response_class=HTMLResponse)
+    async def spa_app(actor_id: str, request: Request, path: str = ""):
+        return HTMLResponse(content=render_spa_shell(actor_id=actor_id))
+
+The SPA shell is served unconditionally - the JavaScript application handles
+authentication state and redirects unauthenticated users to ``/login``.
+
+Configuration Examples
+----------------------
+
+**Traditional Web UI (server-rendered templates):**
+
+.. code-block:: python
+
+    app = ActingWebApp(...)
+        .with_web_ui(enable=True)
+        .with_oauth(...)
+
+    # Browsers → /<actor_id>/www (ActingWeb provides templates)
+    # OAuth callback → /<actor_id>/www
+
+**Single Page Application:**
+
+.. code-block:: python
+
+    app = ActingWebApp(...)
+        .with_web_ui(enable=False)  # Disable server templates
+        .with_oauth(...)
+
+    # Browsers → /<actor_id>/app (your SPA handles rendering)
+    # OAuth callback → /<actor_id>/app
+    # You must provide /login and /<actor_id>/app routes
 
 Notes
 =====

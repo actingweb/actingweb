@@ -49,7 +49,8 @@ class OAuth2CallbackHandler(BaseHandler):
 
     1. Web UI Login (no trust_type in state):
        - User clicks "Login with Google/GitHub" on factory page
-       - After OAuth, creates/looks up actor and redirects to /www
+       - After OAuth, creates/looks up actor and redirects to UI page
+         (/www if config.ui is enabled, /app for SPAs when config.ui is disabled)
        - If email is missing, redirects to /oauth/email for manual input
 
     2. MCP Authorization (trust_type in state, e.g., 'mcp_client'):
@@ -500,7 +501,7 @@ class OAuth2CallbackHandler(BaseHandler):
             return self.error_response(403, "Authentication rejected")
 
         # Set up successful response
-        # Use return_path from state for SPA mode (defaults to /app), /www for traditional mode
+        # Use return_path from state for SPA mode (defaults to /app), /www or /app for traditional mode
         if spa_mode:
             return_path = state_extras.get("return_path", "/app")
             # Support {actor_id} placeholder in return_path
@@ -509,7 +510,11 @@ class OAuth2CallbackHandler(BaseHandler):
             else:
                 final_redirect = f"/{actor_instance.id}{return_path}"
         else:
-            final_redirect = f"/{actor_instance.id}/www"
+            # Traditional (non-SPA) mode: redirect based on config.ui setting
+            if self.config.ui:
+                final_redirect = f"/{actor_instance.id}/www"
+            else:
+                final_redirect = f"/{actor_instance.id}/app"
 
         response_data = {
             "status": "success",
@@ -588,15 +593,16 @@ class OAuth2CallbackHandler(BaseHandler):
             )
             return response_data
 
-        # For interactive web authentication, redirect to the actor's www page
+        # For interactive web authentication, redirect to the actor's UI page
+        # (/www if config.ui is enabled, /app for SPAs)
         # For API clients, they would use the Bearer token directly
 
-        logger.debug(f"Redirecting to actor www page: {final_redirect}")
+        logger.debug(f"Redirecting to actor page: {final_redirect}")
 
         # Log the original URL for reference but don't use it
         if redirect_url:
             logger.debug(
-                f"Original URL was: {redirect_url} (redirecting to www page instead)"
+                f"Original URL was: {redirect_url} (redirecting to UI page instead)"
             )
 
         # Generate ActingWeb session token for /www mode (same approach as SPA)

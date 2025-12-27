@@ -33,12 +33,50 @@ Core Identity
 Runtime Switches
 ----------------
 
-- ``ui``: Enable ``/<actor_id>/www`` web UI (``with_web_ui()``).
+- ``ui``: Enable ``/<actor_id>/www`` web UI (``with_web_ui()``). Also affects browser redirects.
 - ``devtest``: Enable development endpoints; MUST be ``False`` in production.
 - ``www_auth``: ``basic`` or ``oauth``; set by ``with_oauth()``.
 - ``unique_creator``: Enforce one actor per creator (``with_unique_creator()``).
 - ``force_email_prop_as_creator``: Copy ``email`` property to ``creator``.
 - ``mcp``: Include MCP capability; toggle via ``with_mcp()``.
+
+Browser Redirect Behavior
+-------------------------
+
+The ``ui`` setting (``with_web_ui()``) controls where browsers are redirected:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 25 25
+
+   * - Scenario
+     - ``with_web_ui()``
+     - Redirect
+     - Use Case
+   * - Unauthenticated browser → ``/<actor_id>``
+     - Any
+     - ``/login``
+     - Consistent login experience
+   * - Authenticated browser → ``/<actor_id>``
+     - ``True``
+     - ``/<actor_id>/www``
+     - Server-rendered templates
+   * - Authenticated browser → ``/<actor_id>``
+     - ``False``
+     - ``/<actor_id>/app``
+     - Single Page Applications
+   * - After OAuth login
+     - ``True``
+     - ``/<actor_id>/www``
+     - Server-rendered templates
+   * - After OAuth login
+     - ``False``
+     - ``/<actor_id>/app``
+     - Single Page Applications
+
+API clients (``Accept: application/json``) always receive JSON responses, not redirects.
+
+For SPAs, you must provide ``/login`` and ``/<actor_id>/app`` routes. See :doc:`../guides/spa-authentication`.
 
 OAuth2
 ------

@@ -739,7 +739,23 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.post("/{actor_id}")
         @self.fastapi_app.delete("/{actor_id}")
         async def app_actor_root(actor_id: str, request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            # Check authentication and redirect to Google OAuth2 if needed
+            # For browser requests (Accept: text/html), redirect to /login if not authenticated
+            # This provides a consistent login experience instead of going directly to OAuth
+            accept_header = request.headers.get("accept", "")
+            if "text/html" in accept_header:
+                # Check if user is authenticated
+                basic_auth = await get_basic_auth(request)
+                bearer_token = await get_bearer_token(request)
+                oauth_cookie = request.cookies.get("oauth_token")
+
+                if not basic_auth and not bearer_token and not oauth_cookie:
+                    # Unauthenticated browser - redirect to login page
+                    config = self.aw_app.get_config()
+                    return RedirectResponse(
+                        url=f"{config.root}login", status_code=302
+                    )
+
+            # For API requests or authenticated browsers, use normal auth flow
             auth_redirect = await check_authentication_and_redirect(
                 request, self.aw_app.get_config()
             )

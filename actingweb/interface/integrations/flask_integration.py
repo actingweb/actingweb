@@ -204,7 +204,20 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Actor root
         @self.flask_app.route("/<actor_id>", methods=["GET", "POST", "DELETE"])
         def app_actor_root(actor_id: str) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
-            # Align with FastAPI: protect actor root with OAuth when enabled
+            # For browser requests (Accept: text/html), redirect to /login if not authenticated
+            # This provides a consistent login experience instead of going directly to OAuth
+            accept_header = request.headers.get("Accept", "")
+            if "text/html" in accept_header:
+                # Check if user is authenticated
+                auth_header = request.headers.get("Authorization")
+                oauth_cookie = request.cookies.get("oauth_token")
+
+                if not auth_header and not oauth_cookie:
+                    # Unauthenticated browser - redirect to login page
+                    config = self.aw_app.get_config()
+                    return redirect(f"{config.root}login")
+
+            # For API requests or authenticated browsers, use normal auth flow
             auth_redirect = self._check_authentication_and_redirect()
             if auth_redirect:
                 return auth_redirect

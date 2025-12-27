@@ -3,6 +3,12 @@ WWW Handler and Templates
 
 The WWW Handler provides a web-based user interface for ActingWeb actors, allowing users to manage properties, trust relationships, and other actor functionality through a browser interface.
 
+.. note::
+
+   This guide covers the traditional server-rendered web UI (``with_web_ui(True)``).
+   For Single Page Applications (SPAs), see :ref:`spa-mode` below and
+   :doc:`spa-authentication` for the full SPA authentication guide.
+
 Overview
 --------
 
@@ -24,6 +30,25 @@ This creates several web endpoints:
 - ``/<actor_id>/www/trust`` - Trust relationship management
 - ``/<actor_id>/www/trust/new`` - Add new trust relationship
 - ``/<actor_id>/www/init`` - Actor initialization
+
+Browser Redirect Behavior
+-------------------------
+
+When the web UI is enabled (``with_web_ui(True)``), ActingWeb handles browser redirects automatically:
+
+**Authenticated browsers** accessing ``/<actor_id>``:
+  Redirected to ``/<actor_id>/www``
+
+**Unauthenticated browsers** accessing ``/<actor_id>``:
+  Redirected to ``/login`` for a consistent login experience
+
+**After OAuth login**:
+  Redirected to ``/<actor_id>/www``
+
+**API clients** (sending ``Accept: application/json``):
+  Receive JSON responses (no redirect)
+
+This eliminates the need for custom route handlers to redirect browsers.
 
 Web Interface Features
 ----------------------
@@ -657,6 +682,63 @@ This template demonstrates:
 - Conditional actions based on property protection
 - Modern UI patterns with cards and badges
 - Proper navigation using provided URL variables
+
+.. _spa-mode:
+
+SPA Mode (Alternative to WWW Handler)
+-------------------------------------
+
+For Single Page Applications that handle their own rendering, disable the web UI:
+
+.. code-block:: python
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com"
+    ).with_web_ui(enable=False)  # Disable server templates
+    .with_oauth(...)
+
+With ``with_web_ui(False)``, ActingWeb adjusts its redirect behavior:
+
+**Authenticated browsers** accessing ``/<actor_id>``:
+  Redirected to ``/<actor_id>/app`` (your SPA)
+
+**Unauthenticated browsers** accessing ``/<actor_id>``:
+  Redirected to ``/login`` (your SPA login page)
+
+**After OAuth login**:
+  Redirected to ``/<actor_id>/app`` (your SPA)
+
+Required SPA Routes
+~~~~~~~~~~~~~~~~~~~
+
+Your application must provide these routes:
+
+1. **``/login``** - SPA login page with OAuth buttons
+2. **``/<actor_id>/app``** - Main SPA entry point
+
+Example (FastAPI):
+
+.. code-block:: python
+
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page(request: Request):
+        return HTMLResponse(content=render_spa_shell())
+
+    @app.get("/{actor_id}/app", response_class=HTMLResponse)
+    @app.get("/{actor_id}/app/{path:path}", response_class=HTMLResponse)
+    async def spa_app(actor_id: str, request: Request, path: str = ""):
+        # Serve SPA shell - JavaScript handles auth & routing
+        return HTMLResponse(content=render_spa_shell(actor_id=actor_id))
+
+The SPA shell is served unconditionally. Your JavaScript application:
+
+1. Checks authentication state via ``/oauth/session`` API
+2. Redirects to ``/login`` if not authenticated
+3. Makes authenticated API calls with access tokens
+
+For complete SPA implementation details, see :doc:`spa-authentication`.
 
 Related Documentation
 ---------------------

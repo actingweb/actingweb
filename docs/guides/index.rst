@@ -33,7 +33,7 @@ Authentication & Authorization
 
 - **Authentication** - Overview of ActingWeb's authentication system (basic, OAuth, OAuth2)
 - **OAuth2 Setup** - Configure OAuth2 with Google, GitHub, or custom providers
-- **SPA Authentication** - Single Page Application authentication patterns
+- **SPA Authentication** - Single Page Application authentication patterns, including browser redirect behavior
 - **Access Control (Simple)** - Quick guide to ActingWeb's unified access control
 - **Access Control** - Detailed guide to permissions, trust types, and access patterns
 
@@ -54,7 +54,7 @@ Integration
 
 - **MCP Quickstart** - Quick start guide for Model Context Protocol integration
 - **MCP Applications** - Building AI-accessible applications with MCP
-- **Web UI** - Customizing the web interface templates
+- **Web UI** - Server-rendered web interface templates and SPA mode configuration
 - **Service Integration** - Integrating ActingWeb with external services
 
 Operations

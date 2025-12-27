@@ -2,6 +2,24 @@
 CHANGELOG
 =========
 
+v3.7.5: Dec 27, 2025
+----------
+
+ADDED
+~~~~~
+
+- **Actor Root Content Negotiation**: ``GET /<actor_id>`` now supports content negotiation - API clients receive JSON, browsers are redirected based on authentication status and ``with_web_ui()`` configuration.
+- **Browser Redirect to /login**: Unauthenticated browser requests to ``/<actor_id>`` now redirect to ``/login`` for a consistent login experience instead of triggering OAuth directly.
+- **SPA Redirect Support**: When ``with_web_ui(False)``, authenticated browsers and OAuth callbacks redirect to ``/<actor_id>/app`` instead of ``/<actor_id>/www``.
+- Integration tests for actor root endpoint content negotiation and redirect behavior.
+
+CHANGED
+~~~~~~~
+
+- OAuth2 callback handler now respects ``config.ui`` setting - redirects to ``/<actor_id>/app`` when web UI is disabled (SPA mode).
+- FastAPI and Flask integrations updated to redirect unauthenticated browser requests to ``/login``.
+- Documentation extensively updated: routing-overview, web-ui guide, spa-authentication guide, and configuration reference now document browser redirect behavior.
+
 v3.7.4: Dec 26, 2025
 --------------------
 

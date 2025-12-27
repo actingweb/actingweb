@@ -8,7 +8,7 @@ class RootHandler(base_handler.BaseHandler):
         """Check if client prefers HTML response (browser)."""
         # Check Accept header - browsers typically send text/html
         # Use get_header() for case-insensitive lookup (FastAPI normalizes to lowercase)
-        accept = self.request.get_header("Accept")
+        accept = self.request.get_header("Accept") or ""
         if "text/html" in accept:
             return True
 
@@ -38,15 +38,17 @@ class RootHandler(base_handler.BaseHandler):
             actor_id_str = myself.id or ""
             if self.config.ui:
                 # Web UI enabled - redirect to /www
-                redirect_target = f"/{actor_id_str}/www"
+                redirect_path = f"/{actor_id_str}/www"
             else:
                 # Web UI disabled - redirect to /app (for SPAs)
-                redirect_target = f"/{actor_id_str}/app"
+                redirect_path = f"/{actor_id_str}/app"
 
             if self.response:
-                self.response.set_redirect(redirect_target)
+                self.response.set_redirect(redirect_path)
+                # Build full URL: config.root already includes protocol and host
+                # Strip trailing slash from root to avoid double slashes
                 self.response.headers["Location"] = (
-                    f"{self.config.root}{actor_id_str}{redirect_target.split(actor_id_str)[1]}"
+                    f"{self.config.root.rstrip('/')}{redirect_path}"
                 )
                 self.response.set_status(302, "Found")
             return

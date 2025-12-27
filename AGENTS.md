@@ -1,65 +1,83 @@
-# Repository Guidelines
+# AGENTS.md
 
-Use CLAUDE.md to understand details of the repo.
+Quick reference for AI agents working with this repository.
 
-## Project Structure & Module Organization
+## Project
 
-- Source: `actingweb/` (core library modules, e.g., `actor.py`, `auth.py`, `handlers/`, `interface/`).
-- Tests: `tests/` (pytest suite; coverage targets configured in `pyproject.toml`).
-- Docs: Sphinx config at repo root (`conf.py`, `index.rst`), content in `docs/`.
-- Packaging/Config: `pyproject.toml` (Poetry), `README.rst`, `CHANGELOG.rst`.
+**ActingWeb** - Python library for distributed micro-services with the ActingWeb REST protocol.
 
-## Build, Test, and Development Commands
+## Structure
 
-- Install (with dev extras): `poetry install` (use `-E all` to include optional extras).
-- Run tests: `poetry run pytest` (474 tests, 100% passing).
-- **Type check (Pyright - PRIMARY)**: `poetry run pyright actingweb tests` ✅ **0 errors, 0 warnings**
-- **Lint (Ruff)**: `poetry run ruff check actingweb tests` ✅ **All checks passing**
-- Format (Ruff): `poetry run ruff format actingweb tests`
-- Type check (mypy - legacy): `poetry run mypy actingweb`
-- Build package: `poetry build`
-- Build docs: `make html` (Sphinx; output in `_build/html`).
-
-**Quality Status:** The codebase maintains **zero errors and zero warnings** for all type checking and linting.
-
-## Coding Style & Naming Conventions
-
-- Python 3.11+, 4-space indentation, line length 88.
-- Naming: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`.
-- Imports: keep tidy; Ruff enforces style and formatting.
-- **Type hints REQUIRED**: All new/modified functions must have type annotations.
-- **Zero-tolerance for warnings**: All code must pass `pyright` and `ruff` with zero errors/warnings.
-- Configuration files: `pyrightconfig.json`, `pyproject.toml` (ruff config), `.vscode/settings.json`.
-
-## Testing Guidelines
-
-- Framework: `pytest` with config in `pyproject.toml`.
-- Discover: files `test_*.py` or `*_test.py`, classes `Test*`, functions `test_*`.
-- Coverage: minimum 80% (`--cov=actingweb`); add focused unit tests for new logic.
-- Avoid external dependencies in unit tests; mock AWS/DynamoDB and network I/O.
-
-## Commit & Pull Request Guidelines
-
-- Commits: imperative mood, concise summary (e.g., "Add OAuth2 token refresh"), include scope when helpful.
-- PRs must:
-  - Describe changes, motivation, and impact.
-  - Link related issues (e.g., `Closes #123`).
-  - Include tests and docs updates when applicable.
-  - **Pass ALL quality checks with zero errors/warnings**:
-    - `poetry run pyright actingweb tests` → 0 errors, 0 warnings
-    - `poetry run ruff check actingweb tests` → All checks passing
-    - `poetry run pytest` → All tests passing
-  - Build package: `poetry build`
-
-**Pre-commit Checklist:**
-```bash
-poetry run pyright actingweb tests  # Must show: 0 errors, 0 warnings
-poetry run ruff check actingweb tests  # Must show: All checks passed!
-poetry run pytest tests/  # Must show: 474 passed
+```text
+actingweb/          # Source code
+├── interface/      # Modern API (ActingWebApp, ActorInterface)
+├── handlers/       # HTTP handlers
+├── db_dynamodb/    # Database backend
+tests/              # pytest tests (474+)
+docs/               # Sphinx documentation
 ```
 
-## Security & Configuration Tips
+## Commands
 
-- Do not commit secrets or AWS credentials. Use environment variables for local dev.
-- Optional extras: `-E flask`, `-E fastapi`, `-E mcp` (or `-E all`) when working with those integrations.
-- Initialize any required singletons at app startup if embedding the library (see docs under `docs/`).
+```bash
+# Setup
+poetry install
+
+# Quality (run before commits)
+poetry run pyright actingweb tests    # Type check - 0 errors required
+poetry run ruff check actingweb tests # Lint - must pass
+poetry run ruff format actingweb tests
+
+# Test
+make test-integration                 # Full test suite with DynamoDB
+poetry run pytest tests/ -v           # Tests only (DynamoDB must be running)
+
+# Build
+poetry build
+```
+
+## Quality Requirements
+
+- **Zero errors, zero warnings** on pyright and ruff
+- **Type hints required** on all functions
+- **All tests passing** before merge
+
+## Pre-commit Checklist
+
+```bash
+poetry run pyright actingweb tests    # → 0 errors, 0 warnings
+poetry run ruff check actingweb tests # → All checks passed
+poetry run pytest tests/              # → All tests passing
+```
+
+## Version Updates
+
+Change version in three files:
+1. `pyproject.toml`
+2. `actingweb/__init__.py`
+3. `CHANGELOG.rst`
+
+## Documentation
+
+| Topic | File |
+|-------|------|
+| Configuration | `docs/quickstart/configuration.rst` |
+| Routing & Redirects | `docs/reference/routing-overview.rst` |
+| Authentication | `docs/guides/authentication.rst` |
+| SPA Mode | `docs/guides/spa-authentication.rst` |
+| Web UI | `docs/guides/web-ui.rst` |
+| Hooks | `docs/reference/hooks-reference.rst` |
+| Testing | `CONTRIBUTING.rst` |
+
+## Key Files
+
+- `CLAUDE.md` - Detailed guidance for Claude Code
+- `CONTRIBUTING.rst` - Contribution guidelines
+- `docs/` - Full documentation
+- `thoughts/shared/` - Development notes, patterns, plans
+
+## Commits
+
+- Imperative mood: "Add feature" not "Added feature"
+- Include scope when helpful: "fix(oauth): Handle token refresh"
+- Link issues: "Closes #123"

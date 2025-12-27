@@ -24,8 +24,10 @@ class RootHandler(base_handler.BaseHandler):
             # For browser requests, redirect to /login instead of returning auth error
             # This provides better UX than throwing users directly into OAuth flow
             if self._wants_html():
-                self.response.set_redirect("/login")
-                self.response.headers["Location"] = f"{self.config.root}login"
+                # Build full URL for redirect - config.root includes protocol, host, and any base path
+                full_login_url = f"{self.config.root.rstrip('/')}/login"
+                self.response.set_redirect(full_login_url)
+                self.response.headers["Location"] = full_login_url
                 self.response.set_status(302, "Found")
             return  # Response already set (either our redirect or auth error)
         if not auth_result.authorize("GET", "/"):
@@ -44,12 +46,11 @@ class RootHandler(base_handler.BaseHandler):
                 redirect_path = f"/{actor_id_str}/app"
 
             if self.response:
-                self.response.set_redirect(redirect_path)
-                # Build full URL: config.root already includes protocol and host
-                # Strip trailing slash from root to avoid double slashes
-                self.response.headers["Location"] = (
-                    f"{self.config.root.rstrip('/')}{redirect_path}"
-                )
+                # Build full URL for redirect - config.root includes protocol, host, and any base path
+                # The integration uses response.redirect directly for RedirectResponse
+                full_redirect_url = f"{self.config.root.rstrip('/')}{redirect_path}"
+                self.response.set_redirect(full_redirect_url)
+                self.response.headers["Location"] = full_redirect_url
                 self.response.set_status(302, "Found")
             return
 

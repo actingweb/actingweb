@@ -118,7 +118,48 @@ class TestActorRootContentNegotiation:
         location = response.headers.get("Location", "")
         assert "/login" in location
 
-    def test_007_cleanup_actor(self, http_client):
+    def test_007_redirect_uses_full_url_not_relative(self, http_client):
+        """
+        Redirect Location header is a full URL, not a relative path.
+
+        This ensures that deployments with base paths (e.g., example.com/base/)
+        work correctly. The redirect should include the protocol and host.
+        """
+        response = requests.get(
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+            headers={"Accept": "text/html"},
+            allow_redirects=False,
+        )
+        assert response.status_code == 302
+        location = response.headers.get("Location", "")
+        # Location should be a full URL starting with http:// or https://
+        assert location.startswith("http://") or location.startswith("https://"), (
+            f"Expected full URL, got relative path: {location}"
+        )
+        # Should contain the host from the test server
+        assert "localhost" in location or "127.0.0.1" in location
+
+    def test_008_unauthenticated_redirect_uses_full_url(self, http_client):
+        """
+        Unauthenticated browser redirect to /login uses full URL.
+
+        This ensures base paths are preserved in the login redirect.
+        """
+        response = requests.get(
+            self.actor_url,  # type: ignore[arg-type]
+            # No auth credentials
+            headers={"Accept": "text/html"},
+            allow_redirects=False,
+        )
+        assert response.status_code == 302
+        location = response.headers.get("Location", "")
+        # Location should be a full URL starting with http:// or https://
+        assert location.startswith("http://") or location.startswith("https://"), (
+            f"Expected full URL for login redirect, got: {location}"
+        )
+
+    def test_009_cleanup_actor(self, http_client):
         """Clean up test actor."""
         if self.actor_url:
             response = requests.delete(

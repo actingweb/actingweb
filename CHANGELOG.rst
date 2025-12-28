@@ -2,6 +2,20 @@
 CHANGELOG
 =========
 
+v3.7.6: Dec 28, 2025
+--------------------
+
+FIXED
+~~~~~
+
+- **Subscription Filtering**: Fixed ``get_subscriptions()`` callback parameter to properly filter by callback flag - ``callback=None`` now returns all subscriptions, ``callback=False`` returns inbound subscriptions, ``callback=True`` returns outbound subscriptions
+- **Trust Deletion Hook**: Enhanced ``trust_deleted`` lifecycle hook to include ``relationship`` and ``trust_data`` parameters for consistency with ``trust_approved`` hook
+
+CHANGED
+~~~~~~~
+
+- Added documentation to ``get_subscriptions()`` method explaining parameter filtering behavior
+
 v3.7.5: Dec 27, 2025
 ----------
 

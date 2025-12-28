@@ -1396,9 +1396,17 @@ class Actor:
             return None
 
     def get_subscriptions(
-        self, peerid=None, target=None, subtarget=None, resource=None, callback=False
+        self, peerid=None, target=None, subtarget=None, resource=None, callback=None
     ):
-        """Retrieves subscriptions from db."""
+        """Retrieves subscriptions from db.
+
+        Args:
+            peerid: Filter by peer ID (None = all peers)
+            target: Filter by target (None = all targets)
+            subtarget: Filter by subtarget (None = all subtargets)
+            resource: Filter by resource (None = all resources)
+            callback: Filter by callback flag (None = all, False = inbound, True = outbound)
+        """
         if not self.id:
             return None
         if not self.subs_list:
@@ -1416,9 +1424,7 @@ class Actor:
                             if not resource or (
                                 resource and sub["resource"] == resource
                             ):
-                                if not callback or (
-                                    callback and sub["callback"] == callback
-                                ):
+                                if callback is None or sub["callback"] == callback:
                                     ret.append(sub)
         return ret
 

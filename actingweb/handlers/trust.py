@@ -706,10 +706,14 @@ class TrustPeerHandler(base_handler.BaseHandler):
         # Trigger trust_deleted lifecycle hook BEFORE deleting
         if self.hooks:
             try:
+                # Pass relationship and trust_data for consistency with trust_approved hook
+                trust_data = relationships[0] if relationships else {}
                 self.hooks.execute_lifecycle_hooks(
                     "trust_deleted",
                     actor=actor_interface,
                     peer_id=peerid,
+                    relationship=relationship,
+                    trust_data=trust_data,
                 )
                 logging.debug(f"trust_deleted hook triggered for {actor_id} <-> {peerid}")
             except Exception as e:

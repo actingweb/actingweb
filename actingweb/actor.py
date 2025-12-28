@@ -851,7 +851,10 @@ class Actor:
             )
             try:
                 proxy = AwProxy(
-                    peer_target={"baseuri": this_trust["baseuri"], "secret": this_trust.get("secret", "")},
+                    peer_target={
+                        "baseuri": this_trust["baseuri"],
+                        "secret": this_trust.get("secret", ""),
+                    },
                     config=self.config,
                 )
                 await proxy.change_resource_async(
@@ -1068,7 +1071,9 @@ class Actor:
                 else str(proxy.last_response_message)
             )
         except Exception as e:
-            logging.debug(f"Not able to create trust with peer async: {e}, deleting my trust.")
+            logging.debug(
+                f"Not able to create trust with peer async: {e}, deleting my trust."
+            )
             dbtrust.delete()
             return False
 
@@ -1088,7 +1093,9 @@ class Actor:
                 mod_trust.modify(peer_approved=True)
             return mod_trust.get()
         else:
-            logging.debug("Not able to create trust with peer async, deleting my trust.")
+            logging.debug(
+                "Not able to create trust with peer async, deleting my trust."
+            )
             dbtrust.delete()
             return False
 
@@ -1396,9 +1403,25 @@ class Actor:
             return None
 
     def get_subscriptions(
-        self, peerid=None, target=None, subtarget=None, resource=None, callback=False
-    ):
-        """Retrieves subscriptions from db."""
+        self,
+        peerid: str | None = None,
+        target: str | None = None,
+        subtarget: str | None = None,
+        resource: str | None = None,
+        callback: bool | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Retrieves subscriptions from db.
+
+        Args:
+            peerid: Filter by peer ID (None = all peers)
+            target: Filter by target (None = all targets)
+            subtarget: Filter by subtarget (None = all subtargets)
+            resource: Filter by resource (None = all resources)
+            callback: Filter by callback flag (None = all, False = inbound, True = outbound)
+
+        Returns:
+            List of subscription dictionaries, or None if actor has no ID
+        """
         if not self.id:
             return None
         if not self.subs_list:
@@ -1416,9 +1439,7 @@ class Actor:
                             if not resource or (
                                 resource and sub["resource"] == resource
                             ):
-                                if not callback or (
-                                    callback and sub["callback"] == callback
-                                ):
+                                if callback is None or sub["callback"] == callback:
                                     ret.append(sub)
         return ret
 
@@ -1595,9 +1616,7 @@ class Actor:
                     else:
                         sub_obj.clear_diff(diff["sequence"])
             except Exception as e:
-                logging.debug(
-                    f"Peer did not respond to callback on url({requrl}): {e}"
-                )
+                logging.debug(f"Peer did not respond to callback on url({requrl}): {e}")
                 self.last_response_code = 0
                 self.last_response_message = (
                     "No response from peer for subscription callback"
@@ -1633,9 +1652,7 @@ class Actor:
                     else:
                         sub_obj.clear_diff(diff["sequence"])
             except Exception:
-                logging.debug(
-                    "Peer did not respond to callback on url(" + requrl + ")"
-                )
+                logging.debug("Peer did not respond to callback on url(" + requrl + ")")
                 self.last_response_code = 0
                 self.last_response_message = (
                     "No response from peer for subscription callback"
@@ -1742,7 +1759,7 @@ class Actor:
 
             # Parse blob with explicit encoding handling for bytes
             if isinstance(blob, bytes):
-                data = json.loads(blob.decode('utf-8'))
+                data = json.loads(blob.decode("utf-8"))
             elif isinstance(blob, str):
                 data = json.loads(blob)
             else:
@@ -1757,11 +1774,15 @@ class Actor:
                 # Normalize property list keys: strip 'list:' prefix for permission checks
                 # Property lists use 'list:name' internally but permissions use 'name'
                 normalized_name = (
-                    property_name[5:] if property_name.startswith("list:") else property_name
+                    property_name[5:]
+                    if property_name.startswith("list:")
+                    else property_name
                 )
 
                 # Build full property path for permission check
-                property_path = f"{subtarget}/{normalized_name}" if subtarget else normalized_name
+                property_path = (
+                    f"{subtarget}/{normalized_name}" if subtarget else normalized_name
+                )
                 result = evaluator.evaluate_property_access(
                     self.id, peerid, property_path, operation="read"
                 )
@@ -1773,7 +1794,9 @@ class Actor:
                     )
 
             if not filtered_data:
-                logging.debug(f"No permitted properties in callback to {peerid}, skipping")
+                logging.debug(
+                    f"No permitted properties in callback to {peerid}, skipping"
+                )
                 return None
 
             return json.dumps(filtered_data)

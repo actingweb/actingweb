@@ -119,12 +119,26 @@ Event Details
 ``trust_approved``
     Triggered when a trust relationship is approved.
 
-    **Signature**: ``func(actor: ActorInterface, peer_id: str, trust_type: str) -> None``
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict) -> None``
+
+    **Parameters**:
+
+    - ``actor``: The ActorInterface for the current actor
+    - ``peer_id``: The ID of the peer in the trust relationship
+    - ``relationship``: The type of trust relationship (e.g., "friend", "partner")
+    - ``trust_data``: Dictionary containing the full trust relationship data
 
 ``trust_deleted``
     Triggered when a trust relationship is deleted.
 
-    **Signature**: ``func(actor: ActorInterface, peer_id: str) -> None``
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict) -> None``
+
+    **Parameters**:
+
+    - ``actor``: The ActorInterface for the current actor
+    - ``peer_id``: The ID of the peer in the trust relationship
+    - ``relationship``: The type of trust relationship (e.g., "friend", "partner")
+    - ``trust_data``: Dictionary containing the trust relationship data (may be empty if trust was already deleted)
 
 ``email_verification_required``
     Triggered when email verification is needed for OAuth2 actors.

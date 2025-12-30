@@ -123,6 +123,28 @@ class TrustHandler(base_handler.BaseHandler):
             return
 
         new_trust = new_trust_rel.to_dict()
+
+        # Trigger trust_initiated lifecycle hook to notify application of outgoing trust request
+        if self.hooks:
+            try:
+                peerid = new_trust.get("peerid", "")
+                logger.debug(
+                    f"trust_initiated hook called for {actor_id} -> {peerid}, "
+                    f"relationship={relationship}"
+                )
+                self.hooks.execute_lifecycle_hooks(
+                    "trust_initiated",
+                    actor=actor_interface,
+                    peer_id=peerid,
+                    relationship=relationship,
+                    trust_data=new_trust,
+                )
+                logger.info(
+                    f"trust_initiated hook triggered for {actor_id} -> {peerid}"
+                )
+            except Exception as e:
+                logger.error(f"Error triggering trust_initiated hook: {e}")
+
         self.response.headers["Location"] = str(
             self.config.root
             + (myself.id or "")
@@ -311,6 +333,27 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if not new_trust:
             self.response.set_status(403, "Forbidden")
             return
+
+        # Trigger trust_request_received lifecycle hook to notify application of incoming trust request
+        if self.hooks:
+            try:
+                logger.debug(
+                    f"trust_request_received hook called for {actor_id} <- {peerid}, "
+                    f"relationship={relationship}"
+                )
+                self.hooks.execute_lifecycle_hooks(
+                    "trust_request_received",
+                    actor=actor_interface,
+                    peer_id=peerid,
+                    relationship=relationship,
+                    trust_data=new_trust,
+                )
+                logger.info(
+                    f"trust_request_received hook triggered for {actor_id} <- {peerid}"
+                )
+            except Exception as e:
+                logger.error(f"Error triggering trust_request_received hook: {e}")
+
         self.response.headers["Location"] = str(
             self.config.root
             + (myself.id or "")
@@ -480,11 +523,11 @@ class TrustPeerHandler(base_handler.BaseHandler):
             peer_id=peerid, relationship=relationship, peer_approved=peer_approved
         )
 
-        # Trigger trust_approved lifecycle hook when receiving peer approval notification
+        # Trigger trust_fully_approved_remote lifecycle hook when receiving peer approval notification
         # This is the critical step where Actor A (who initiated the trust) learns that
         # Actor B has approved, and can now create subscriptions
         logger.info(
-            f"📬 POST notification received: peer_approved={peer_approved}, "
+            f"POST notification received: peer_approved={peer_approved}, "
             f"has_hooks={self.hooks is not None}"
         )
         if peer_approved is True and self.hooks:
@@ -498,21 +541,20 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     # Only trigger hook if BOTH sides have approved
                     if trust_data.get("approved") and trust_data.get("peer_approved"):
                         logger.info(
-                            f"🎉 Trust fully approved via POST notification: {actor_id} <-> {peerid}, "
-                            f"triggering trust_approved hook"
+                            f"Trust fully approved remotely via POST notification: {peerid} approved, completing relationship with {actor_id}"
                         )
                         from actingweb.interface.actor_interface import ActorInterface
 
                         actor_interface = ActorInterface(myself, self.config)
                         self.hooks.execute_lifecycle_hooks(
-                            "trust_approved",
+                            "trust_fully_approved_remote",
                             actor=actor_interface,
                             peer_id=peerid,
                             relationship=relationship,
                             trust_data=trust_data,
                         )
                         logger.info(
-                            f"✅ trust_approved hook triggered via POST for {actor_id} <-> {peerid}"
+                            f"trust_fully_approved_remote hook triggered via POST for {actor_id} <-> {peerid}"
                         )
                     else:
                         logger.debug(
@@ -521,7 +563,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                         )
             except Exception as e:
                 logger.error(
-                    f"❌ Error triggering trust_approved hook in POST handler: {e}"
+                    f"Error triggering trust_fully_approved_remote hook in POST handler: {e}"
                 )
 
         if trust_updated:
@@ -593,6 +635,33 @@ class TrustPeerHandler(base_handler.BaseHandler):
             approved=approved,
             description=desc,
         )
+
+        # Trigger trust_fully_approved_local lifecycle hook if this actor just approved and both are now approved
+        if approved is True and self.hooks:
+            try:
+                # Get the trust relationship data to check if both sides approved
+                relationships = myself.get_trust_relationships(
+                    relationship=relationship, peerid=peerid
+                )
+                if relationships:
+                    trust_data = relationships[0]
+                    # Only trigger hook if BOTH sides have approved
+                    if trust_data.get("approved") and trust_data.get("peer_approved"):
+                        logger.info(
+                            f"Trust fully approved locally via PUT: {actor_id} approved, completing relationship with {peerid}"
+                        )
+                        self.hooks.execute_lifecycle_hooks(
+                            "trust_fully_approved_local",
+                            actor=actor_interface,
+                            peer_id=peerid,
+                            relationship=relationship,
+                            trust_data=trust_data,
+                        )
+                        logger.info(
+                            f"trust_fully_approved_local hook triggered for {actor_id} <-> {peerid}"
+                        )
+            except Exception as e:
+                logger.error(f"Error triggering trust_fully_approved_local hook in PUT handler: {e}")
 
         # Update permissions if provided
         permissions_updated = True
@@ -721,9 +790,10 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     peer_id=peerid,
                     relationship=relationship,
                     trust_data=trust_data,
+                    initiated_by_peer=is_peer,
                 )
                 logger.debug(
-                    f"trust_deleted hook triggered for {actor_id} <-> {peerid}"
+                    f"trust_deleted hook triggered for {actor_id} <-> {peerid}, initiated_by_peer={is_peer}"
                 )
             except Exception as e:
                 logger.error(f"Error triggering trust_deleted hook: {e}")

@@ -139,8 +139,9 @@ jobs:
         if: always()
         uses: EnricoMi/publish-unit-test-result-action@v2
         with:
-          files: test-results/*.xml
+          files: test-results/tests-${{ matrix.backend }}.xml
           check_name: Test Results (${{ matrix.backend }})
+          comment_mode: off
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -148,15 +149,56 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-${{ matrix.backend }}.xml
           flags: ${{ matrix.backend }}
-          name: codecov-actingweb-${{ matrix.backend }}
+          name: codecov-${{ matrix.backend }}-python-${{ matrix.python-version }}
           fail_ci_if_error: false
           verbose: true
 
-      - name: Comment PR with coverage
-        if: github.event_name == 'pull_request'
-        uses: py-cov-action/python-coverage-comment-action@v3
+  test-summary:
+    runs-on: ubuntu-latest
+    needs: tests
+    if: always() && github.event_name == 'pull_request'
+
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v4
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          pattern: test-results-*
+          path: all-test-results/
+
+      - name: Comment PR with test summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            let comment = '## 🧪 Test Results Summary\n\n';
+            comment += '### Matrix Testing: Both Database Backends\n\n';
+            comment += '| Backend | Status | Details |\n';
+            comment += '|---------|--------|----------|\n';
+
+            const backends = ['dynamodb', 'postgresql'];
+            for (const backend of backends) {
+              const dir = `all-test-results/test-results-${backend}`;
+              if (fs.existsSync(dir)) {
+                comment += `| ${backend} | ✅ Tests executed | See workflow checks for details |\n`;
+              } else {
+                comment += `| ${backend} | ⚠️ Results not found | - |\n`;
+              }
+            }
+
+            comment += '\n**Note**: \n';
+            comment += '- Each backend is tested independently in parallel\n';
+            comment += '- Full test results are available in workflow check runs\n';
+            comment += '- Coverage reports are uploaded to Codecov with backend-specific flags\n';
+
+            // Post comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
 
   type-check:
     runs-on: ubuntu-latest

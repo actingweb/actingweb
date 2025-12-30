@@ -14,6 +14,7 @@ Contents
 
    architecture
    testing
+   backend-testing
    style-guide
 
 Getting Started
@@ -60,6 +61,9 @@ Documentation
 
 **Testing**
    Guide to running and writing tests.
+
+**Backend Testing**
+   Understanding dual database backend testing strategy and coverage reporting.
 
 **Style Guide**
    Code style conventions and type annotation guidelines.

@@ -425,3 +425,4 @@ See Also
 - :doc:`../guides/postgresql-migration` - DynamoDB to PostgreSQL migration guide
 - :doc:`../guides/database-maintenance` - TTL and cleanup configuration
 - :doc:`../quickstart/local-dev-setup` - Local development setup
+- :doc:`../contributing/backend-testing` - Testing strategy for dual backends

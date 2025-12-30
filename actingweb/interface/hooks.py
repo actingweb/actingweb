@@ -51,6 +51,8 @@ class LifecycleEvent(Enum):
     TRUST_APPROVED = "trust_approved"
     TRUST_DELETED = "trust_deleted"
 
+logger = logging.getLogger(__name__)
+
 
 class HookRegistry:
     """
@@ -109,7 +111,7 @@ class HookRegistry:
             # Extract context
             actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
             if not actor_id:
-                logging.warning("Cannot determine actor ID for permission check")
+                logger.warning("Cannot determine actor ID for permission check")
                 return True  # Allow if we can't determine actor
 
             peer_id = auth_context.get("peer_id", "")
@@ -122,7 +124,7 @@ class HookRegistry:
             if PERMISSION_SYSTEM_AVAILABLE:
                 evaluator = get_permission_evaluator(config)  # type: ignore
             else:
-                logging.warning(
+                logger.warning(
                     "Permission system is not available due to failed import."
                 )
                 return True
@@ -149,13 +151,13 @@ class HookRegistry:
                     actor_id, peer_id, resource_name
                 )
             else:
-                logging.warning(f"Unknown hook type for permission check: {hook_type}")
+                logger.warning(f"Unknown hook type for permission check: {hook_type}")
                 return True
 
             if result == PermissionResult.ALLOWED:  # type: ignore
                 return True
             elif result == PermissionResult.DENIED:  # type: ignore
-                logging.info(
+                logger.info(
                     f"Hook access denied: {hook_type}:{resource_name} for {actor_id} -> {peer_id}"
                 )
                 return False
@@ -164,7 +166,7 @@ class HookRegistry:
                 return True
 
         except Exception as e:
-            logging.error(f"Error in hook permission check: {e}")
+            logger.error(f"Error in hook permission check: {e}")
             return True  # Allow on errors to maintain compatibility
 
     def register_property_hook(
@@ -284,7 +286,7 @@ class HookRegistry:
         if not self._check_hook_permission(
             "property", property_path, actor, auth_context
         ):
-            logging.debug(f"Property hook permission denied for {property_path}")
+            logger.debug(f"Property hook permission denied for {property_path}")
             return None if operation in ["put", "post"] else value
 
         # Execute hooks for specific property
@@ -297,7 +299,7 @@ class HookRegistry:
                         # Hook rejected the operation
                         return None
                 except Exception as e:
-                    logging.error(f"Error in property hook for {property_name}: {e}")
+                    logger.error(f"Error in property hook for {property_name}: {e}")
                     if operation in ["put", "post"]:
                         return None
 
@@ -310,7 +312,7 @@ class HookRegistry:
                     if value is None and operation in ["put", "post"]:
                         return None
                 except Exception as e:
-                    logging.error(f"Error in wildcard property hook: {e}")
+                    logger.error(f"Error in wildcard property hook: {e}")
                     if operation in ["put", "post"]:
                         return None
 
@@ -333,7 +335,7 @@ class HookRegistry:
                         if isinstance(hook_result, dict):
                             result_data = hook_result
                 except Exception as e:
-                    logging.error(f"Error in callback hook for {callback_name}: {e}")
+                    logger.error(f"Error in callback hook for {callback_name}: {e}")
 
         # Execute hooks for all callbacks
         if "*" in self._callback_hooks:
@@ -345,7 +347,7 @@ class HookRegistry:
                         if isinstance(hook_result, dict):
                             result_data = hook_result
                 except Exception as e:
-                    logging.error(f"Error in wildcard callback hook: {e}")
+                    logger.error(f"Error in wildcard callback hook: {e}")
 
         # Return result data if available, otherwise return processed status
         if result_data is not None:
@@ -369,7 +371,7 @@ class HookRegistry:
                         if isinstance(hook_result, dict):
                             result_data = hook_result
                 except Exception as e:
-                    logging.error(f"Error in app callback hook '{callback_name}': {e}")
+                    logger.error(f"Error in app callback hook '{callback_name}': {e}")
 
         # Return result data if available, otherwise return processed status
         if result_data is not None:
@@ -387,7 +389,7 @@ class HookRegistry:
                 if hook(actor, subscription, peer_id, data):
                     processed = True
             except Exception as e:
-                logging.error(f"Error in subscription hook: {e}")
+                logger.error(f"Error in subscription hook: {e}")
 
         return processed
 
@@ -402,7 +404,7 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                 except Exception as e:
-                    logging.error(f"Error in lifecycle hook for {event}: {e}")
+                    logger.error(f"Error in lifecycle hook for {event}: {e}")
 
         return result
 
@@ -416,7 +418,7 @@ class HookRegistry:
         """Execute method hooks with transparent permission checking."""
         # Check permission before executing hooks
         if not self._check_hook_permission("method", method_name, actor, auth_context):
-            logging.debug(f"Method hook permission denied for {method_name}")
+            logger.debug(f"Method hook permission denied for {method_name}")
             return None
 
         result = None
@@ -430,7 +432,7 @@ class HookRegistry:
                         result = hook_result
                         break  # First successful hook wins
                 except Exception as e:
-                    logging.error(f"Error in method hook for {method_name}: {e}")
+                    logger.error(f"Error in method hook for {method_name}: {e}")
 
         # Execute hooks for all methods if no specific hook handled it
         if result is None and "*" in self._method_hooks:
@@ -441,7 +443,7 @@ class HookRegistry:
                         result = hook_result
                         break  # First successful hook wins
                 except Exception as e:
-                    logging.error(f"Error in wildcard method hook: {e}")
+                    logger.error(f"Error in wildcard method hook: {e}")
 
         return result
 
@@ -455,7 +457,7 @@ class HookRegistry:
         """Execute action hooks with transparent permission checking."""
         # Check permission before executing hooks
         if not self._check_hook_permission("action", action_name, actor, auth_context):
-            logging.debug(f"Action hook permission denied for {action_name}")
+            logger.debug(f"Action hook permission denied for {action_name}")
             return None
 
         result = None
@@ -469,7 +471,7 @@ class HookRegistry:
                         result = hook_result
                         break  # First successful hook wins
                 except Exception as e:
-                    logging.error(f"Error in action hook for {action_name}: {e}")
+                    logger.error(f"Error in action hook for {action_name}: {e}")
 
         # Execute hooks for all actions if no specific hook handled it
         if result is None and "*" in self._action_hooks:
@@ -480,7 +482,7 @@ class HookRegistry:
                         result = hook_result
                         break  # First successful hook wins
                 except Exception as e:
-                    logging.error(f"Error in wildcard action hook: {e}")
+                    logger.error(f"Error in wildcard action hook: {e}")
 
         return result
 

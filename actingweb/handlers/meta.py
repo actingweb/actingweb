@@ -3,6 +3,8 @@ import logging
 
 from actingweb.handlers import base_handler
 
+logger = logging.getLogger(__name__)
+
 
 class MetaHandler(base_handler.BaseHandler):
     def get(self, actor_id, path):
@@ -92,7 +94,7 @@ class MetaHandler(base_handler.BaseHandler):
                 else:
                     out = json.dumps([])
             except Exception as e:
-                logging.error(f"Error retrieving trust types: {e}")
+                logger.error(f"Error retrieving trust types: {e}")
                 out = json.dumps([])
 
             if self.response:
@@ -136,7 +138,7 @@ class MetaHandler(base_handler.BaseHandler):
                 }
                 out = json.dumps(result)
             except Exception as e:
-                logging.error(f"Error retrieving trust types: {e}")
+                logger.error(f"Error retrieving trust types: {e}")
                 out = json.dumps({"trust_types": {}, "default_trust_type": None})
 
             if self.response:

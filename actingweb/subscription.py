@@ -2,6 +2,8 @@ import datetime
 import logging
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 
 class Subscription:
     """Base class with core subscription methods (storage-related)"""
@@ -32,12 +34,12 @@ class Subscription:
     ) -> bool:
         """Create new subscription and push it to db"""
         if self.subscription and len(self.subscription) > 0:
-            logging.debug(
+            logger.debug(
                 "Attempted creation of subscription when already loaded from storage"
             )
             return False
         if not self.actor_id or not self.peerid:
-            logging.debug(
+            logger.debug(
                 "Attempted creation of subscription without actor_id or peerid set"
             )
             return False
@@ -74,7 +76,7 @@ class Subscription:
     def delete(self):
         """Delete a subscription in storage"""
         if not self.handle:
-            logging.debug("Attempted delete of subscription without storage handle")
+            logger.debug("Attempted delete of subscription without storage handle")
             return False
         self.clear_diffs()
         self.handle.delete()
@@ -82,7 +84,7 @@ class Subscription:
 
     def increase_seq(self):
         if not self.handle:
-            logging.debug(
+            logger.debug(
                 "Attempted increase_seq without subscription retrieved from storage"
             )
             return False
@@ -92,7 +94,7 @@ class Subscription:
     def add_diff(self, blob=None):
         """Add a new diff for this subscription"""
         if not self.actor_id or not self.subid or not blob:
-            logging.debug("Attempted add_diff without actorid, subid, or blob")
+            logger.debug("Attempted add_diff without actorid, subid, or blob")
             return False
         if not self.config:
             return False
@@ -104,7 +106,7 @@ class Subscription:
             seqnr=self.subscription["sequence"],
         )
         if not self.increase_seq():
-            logging.error(
+            logger.error(
                 "Failed increasing sequence number for subscription "
                 + self.subid
                 + " for peer "
@@ -183,7 +185,7 @@ class Subscriptions:
 
     def delete(self):
         if not self.list:
-            logging.debug("Already deleted list in subscriptions")
+            logger.debug("Already deleted list in subscriptions")
             return False
         if self.subscriptions:
             for sub in self.subscriptions:
@@ -202,7 +204,7 @@ class Subscriptions:
         self.config = config
         if not actor_id:
             self.list = None
-            logging.debug("No actor_id in initialisation of subscriptions")
+            logger.debug("No actor_id in initialisation of subscriptions")
             return
         if self.config:
             self.list = self.config.DbSubscription.DbSubscriptionList()

@@ -25,7 +25,7 @@ class TestTTLAttributePersistence:
         from actingweb import attribute
         from actingweb.config import Config
         from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
-        from actingweb.db_dynamodb.db_attribute import Attribute
+        from actingweb.db.dynamodb.attribute import Attribute
 
         # Create actor
         actor = actor_factory.create("ttl_test@example.com")
@@ -62,7 +62,7 @@ class TestTTLAttributePersistence:
 
         from actingweb import attribute
         from actingweb.config import Config
-        from actingweb.db_dynamodb.db_attribute import Attribute
+        from actingweb.db.dynamodb.attribute import Attribute
 
         # Create actor
         actor = actor_factory.create("no_ttl_test@example.com")
@@ -94,7 +94,7 @@ class TestTTLAttributePersistence:
         from actingweb import attribute
         from actingweb.config import Config
         from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
-        from actingweb.db_dynamodb.db_attribute import Attribute
+        from actingweb.db.dynamodb.attribute import Attribute
 
         # Create actor
         actor = actor_factory.create("short_ttl_test@example.com")
@@ -341,7 +341,7 @@ class TestMCPTokenTTL:
 
         from actingweb.config import Config
         from actingweb.constants import MCP_ACCESS_TOKEN_TTL, TTL_CLOCK_SKEW_BUFFER
-        from actingweb.db_dynamodb.db_attribute import Attribute
+        from actingweb.db.dynamodb.attribute import Attribute
         from actingweb.oauth2_server.token_manager import ActingWebTokenManager
 
         # Create actor

@@ -17,6 +17,8 @@ from ..permission_evaluator import (
     get_permission_evaluator,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class MethodsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/methods endpoint."""
@@ -53,7 +55,7 @@ class MethodsHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
-                logging.info(
+                logger.info(
                     f"Method access denied: {actor_id} -> {peer_id} -> {method_name}"
                 )
                 return False
@@ -64,7 +66,7 @@ class MethodsHandler(base_handler.BaseHandler):
                 )
 
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Error in method permission evaluation for {actor_id}:{peer_id}:{method_name}: {e}"
             )
             # Fall back to legacy authorization on errors
@@ -311,7 +313,7 @@ class MethodsHandler(base_handler.BaseHandler):
                     "id": params.get("id"),
                 }
         except Exception as e:
-            logging.error(f"Error executing method {params['method']}: {e}")
+            logger.error(f"Error executing method {params['method']}: {e}")
             return {
                 "jsonrpc": "2.0",
                 "error": {"code": -32603, "message": "Internal error", "data": str(e)},

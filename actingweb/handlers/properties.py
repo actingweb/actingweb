@@ -30,20 +30,22 @@ def delete_dict(d1, path):
     or dict that is specified by path.
     """
     if not d1:
-        # logging.debug('Path not found')
+        # logger.debug('Path not found')
         return False
-    # logging.debug('d1: ' + json.dumps(d1))
-    # logging.debug('path: ' + str(path))
+    # logger.debug('d1: ' + json.dumps(d1))
+    # logger.debug('path: ' + str(path))
     if len(path) > 1 and path[1] and len(path[1]) > 0:
         return delete_dict(d1.get(path[0]), path[1:])
     if len(path) == 1 and path[0] and path[0] in d1:
-        # logging.debug('Deleting d1[' + path[0] + ']')
+        # logger.debug('Deleting d1[' + path[0] + ']')
         try:
             del d1[path[0]]
             return True
         except KeyError:
             return False
     return False
+
+logger = logging.getLogger(__name__)
 
 
 class PropertiesHandler(base_handler.BaseHandler):
@@ -89,7 +91,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
-                logging.info(
+                logger.info(
                     f"Property access denied: {actor_id} -> {peer_id} -> {property_path} ({operation})"
                 )
                 return False
@@ -104,7 +106,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 )
 
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Error in permission evaluation for {actor_id}:{peer_id}:{property_path}: {e}"
             )
             # Fall back to legacy authorization on errors
@@ -228,7 +230,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 return
 
             except Exception as e:
-                logging.error(f"Error accessing list property '{name}': {e}")
+                logger.error(f"Error accessing list property '{name}': {e}")
                 if self.response:
                     self.response.set_status(500, "Error accessing list property")
                 return
@@ -328,7 +330,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     # DENIED properties are excluded
                 pair = filtered_pair
             except Exception as e:
-                logging.error(f"Error filtering properties by permission: {e}")
+                logger.error(f"Error filtering properties by permission: {e}")
                 # On error, return empty for security (fail closed)
                 pair = {}
 
@@ -354,7 +356,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             # Use actor_interface for consistent property list access
             if actor_interface and hasattr(actor_interface, "property_lists") and actor_interface.property_lists is not None:
                 all_list_names = set(actor_interface.property_lists.list_all() or [])
-                logging.debug(f"Found {len(all_list_names)} list properties: {all_list_names}")
+                logger.debug(f"Found {len(all_list_names)} list properties: {all_list_names}")
 
                 # Filter list properties based on peer permissions
                 if peer_id and actor_interface and actor_interface.id:
@@ -368,7 +370,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 list_names.add(list_name)
                             # DENIED list properties are excluded
                     except Exception as e:
-                        logging.error(f"Error filtering list properties by permission: {e}")
+                        logger.error(f"Error filtering list properties by permission: {e}")
                         # On error, exclude all list properties for security
                         list_names = set()
                 else:
@@ -477,17 +479,17 @@ class PropertiesHandler(base_handler.BaseHandler):
         except (TypeError, ValueError, KeyError):
             pass
         store = {path[len(path) - 1]: body}
-        # logging.debug('store with body:' + json.dumps(store))
+        # logger.debug('store with body:' + json.dumps(store))
         # Make store to be at same level as orig value
         i = len(path) - 2
         while i > 0:
             c = copy.copy(store)
             store = {path[i]: c}
-            # logging.debug('store with i=' + str(i) + ' (' + json.dumps(store) + ')')
+            # logger.debug('store with i=' + str(i) + ' (' + json.dumps(store) + ')')
             i -= 1
-        # logging.debug('Snippet to store(' + json.dumps(store) + ')')
+        # logger.debug('Snippet to store(' + json.dumps(store) + ')')
         orig = myself.property[name] if myself and myself.property else None
-        logging.debug("Original value(" + (orig or "") + ")")
+        logger.debug("Original value(" + (orig or "") + ")")
         try:
             orig = json.loads(orig or "{}")
             merge_dict(orig, store)
@@ -511,7 +513,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     return
         res = final_res
         res = json.dumps(res)
-        logging.debug("Result to store( " + res + ") in /properties/" + name)
+        logger.debug("Result to store( " + res + ") in /properties/" + name)
         if myself and myself.property:
             myself.property[name] = res
         myself.register_diffs(
@@ -686,7 +688,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 elif isinstance(val, dict) and "items" in val:
                     # Validate items array structure
                     if not isinstance(val["items"], list):
-                        logging.error(
+                        logger.error(
                             f"Invalid 'items' field for property '{key}': expected list, got {type(val['items']).__name__}"
                         )
                         if self.response:
@@ -697,7 +699,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                         return
 
                     if len(val["items"]) == 0:
-                        logging.warning(
+                        logger.warning(
                             f"Empty 'items' array for property '{key}': no updates to perform"
                         )
                         pair[key] = "[No items to update]"
@@ -718,7 +720,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                             for i, item_spec in enumerate(val["items"]):
                                 # Validate item structure
                                 if not isinstance(item_spec, dict):
-                                    logging.error(
+                                    logger.error(
                                         f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}"
                                     )
                                     if self.response:
@@ -730,7 +732,7 @@ class PropertiesHandler(base_handler.BaseHandler):
 
                                 # Check for required "index" field
                                 if "index" not in item_spec:
-                                    logging.error(
+                                    logger.error(
                                         f"Missing 'index' field in item at position {i}: {item_spec}"
                                     )
                                     if self.response:
@@ -744,7 +746,7 @@ class PropertiesHandler(base_handler.BaseHandler):
 
                                 # Validate index type and value
                                 if not isinstance(index, int):
-                                    logging.error(
+                                    logger.error(
                                         f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}"
                                     )
                                     if self.response:
@@ -755,7 +757,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     return
 
                                 if index < 0:
-                                    logging.error(
+                                    logger.error(
                                         f"Invalid index value in item at position {i}: {index} (must be >= 0)"
                                     )
                                     if self.response:
@@ -774,12 +776,12 @@ class PropertiesHandler(base_handler.BaseHandler):
                                             del list_prop[index]
                                             items_deleted += 1
                                         else:
-                                            logging.warning(
+                                            logger.warning(
                                                 f"Cannot delete item at index {index}: index out of range (list length: {len(list_prop)})"
                                             )
                                             # Don't fail the entire operation, just log warning
                                     except IndexError as e:
-                                        logging.error(
+                                        logger.error(
                                             f"Error deleting item at index {index}: {e}"
                                         )
                                         # Don't fail the entire operation for delete errors
@@ -798,7 +800,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                         list_prop[index] = item_data
                                         items_updated += 1
                                     except (IndexError, ValueError) as e:
-                                        logging.error(
+                                        logger.error(
                                             f"Error updating item at index {index}: {e}"
                                         )
                                         if self.response:
@@ -838,7 +840,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                             )
 
                         except Exception as e:
-                            logging.error(
+                            logger.error(
                                 f"Error in bulk update for list property '{key}': {e}"
                             )
                             if self.response:
@@ -964,7 +966,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     return
 
                 except Exception as e:
-                    logging.error(f"Error deleting list property '{name}': {e}")
+                    logger.error(f"Error deleting list property '{name}': {e}")
                     self.response.set_status(
                         500, f"Error deleting list property: {str(e)}"
                     )
@@ -996,7 +998,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
         orig = myself.property[name] if myself and myself.property else None
         old = orig
-        logging.debug("DELETE /properties original value(" + (orig or "") + ")")
+        logger.debug("DELETE /properties original value(" + (orig or "") + ")")
         try:
             orig = json.loads(orig or "{}")
         except (TypeError, ValueError, KeyError):
@@ -1025,7 +1027,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(403)
                     return
         res = json.dumps(orig)
-        logging.debug("Result to store( " + res + ") in /properties/" + name)
+        logger.debug("Result to store( " + res + ") in /properties/" + name)
         if myself and myself.property:
             myself.property[name] = res
         myself.register_diffs(
@@ -1073,7 +1075,7 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
-                logging.info(
+                logger.info(
                     f"Property metadata access denied: {actor_id} -> {peer_id} -> {property_path} ({operation})"
                 )
                 return False
@@ -1088,7 +1090,7 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
                 )
 
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Error in permission evaluation for metadata {actor_id}:{peer_id}:{property_path}: {e}"
             )
             # Fall back to legacy authorization on errors
@@ -1246,7 +1248,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
-                logging.info(
+                logger.info(
                     f"Property items access denied: {actor_id} -> {peer_id} -> {property_path} ({operation})"
                 )
                 return False
@@ -1261,7 +1263,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 )
 
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Error in permission evaluation for items {actor_id}:{peer_id}:{property_path}: {e}"
             )
             # Fall back to legacy authorization on errors
@@ -1469,6 +1471,6 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 return
 
         except Exception as e:
-            logging.error(f"Error in list item operation '{action}' for '{name}': {e}")
+            logger.error(f"Error in list item operation '{action}' for '{name}': {e}")
             if self.response:
                 self.response.set_status(500, f"Error processing list item: {str(e)}")

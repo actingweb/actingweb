@@ -6,12 +6,25 @@ import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from actingweb.interface.hooks import HookRegistry
 
 
 class Config:
     # Optional hook registry, set by ActingWebApp.get_config()
     _hooks: Optional["HookRegistry"]
+
+    # Database backend modules (dynamically loaded)
+    # These are typed as ModuleType to enable IDE autocomplete while
+    # allowing dynamic loading of different backends (dynamodb, postgresql, etc.)
+    DbActor: "ModuleType"
+    DbProperty: "ModuleType"
+    DbAttribute: "ModuleType"
+    DbTrust: "ModuleType"
+    DbPeerTrustee: "ModuleType"
+    DbSubscription: "ModuleType"
+    DbSubscriptionDiff: "ModuleType"
 
     def __init__(self, **kwargs: Any) -> None:
         #########
@@ -24,7 +37,8 @@ class Config:
         self.fqdn = "demo.actingweb.io"
         self.proto = "https://"  # http or https
         self.env = ""
-        self.database = "dynamodb"
+        # Read database backend from environment variable if set, otherwise default to dynamodb
+        self.database = os.getenv("DATABASE_BACKEND", "dynamodb")
         # Turn on the /www path
         self.ui = True
         # Enable /devtest path for test purposes, MUST be False in production
@@ -179,25 +193,25 @@ class Config:
             }
         # Dynamically load all the database modules
         self.DbActor = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_actor"
+            "actingweb.db." + self.database + ".actor"
         )
         self.DbPeerTrustee = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_peertrustee"
+            "actingweb.db." + self.database + ".peertrustee"
         )
         self.DbProperty = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_property"
+            "actingweb.db." + self.database + ".property"
         )
         self.DbAttribute = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_attribute"
+            "actingweb.db." + self.database + ".attribute"
         )
         self.DbSubscription = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_subscription"
+            "actingweb.db." + self.database + ".subscription"
         )
         self.DbSubscriptionDiff = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_subscription_diff"
+            "actingweb.db." + self.database + ".subscription_diff"
         )
         self.DbTrust = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_trust"
+            "actingweb.db." + self.database + ".trust"
         )
         self.module: dict[str, Any] = {}
         self.module["deferred"] = None
@@ -237,14 +251,10 @@ class Config:
         # Only touch the below if you know what you are doing
         #########
         logging.basicConfig(level=self.logLevel)
-        # Turn off debugging for pynamodb and botocore, too noisy
-        if self.logLevel == logging.DEBUG:
-            log = logging.getLogger("pynamodb")
-            log.setLevel(logging.INFO)
-            log.propagate = True
-            log = logging.getLogger("botocore")
-            log.setLevel(logging.INFO)
-            log.propagate = True
+        # Configure ActingWeb logging hierarchy
+        from .logging_config import configure_actingweb_logging
+
+        configure_actingweb_logging(level=self.logLevel)
         # root URI used to identity actor externally
         self.root = self.proto + self.fqdn + "/"
         # Authentication realm used in Basic auth

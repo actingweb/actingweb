@@ -43,12 +43,13 @@ class ActingWebApp:
     def __init__(
         self,
         aw_type: str,
-        database: str = "dynamodb",
+        database: str | None = None,
         fqdn: str = "",
         proto: str = "https://",
     ):
         self.aw_type = aw_type
-        self.database = database
+        # Allow DATABASE_BACKEND environment variable to override default
+        self.database = database or os.getenv("DATABASE_BACKEND", "dynamodb")
         self.fqdn = fqdn or os.getenv("APP_HOST_FQDN", "localhost")
         self.proto = proto or os.getenv("APP_HOST_PROTOCOL", "https://")
 

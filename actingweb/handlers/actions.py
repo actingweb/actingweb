@@ -17,6 +17,8 @@ from ..permission_evaluator import (
     get_permission_evaluator,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class ActionsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/actions endpoint."""
@@ -53,7 +55,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 return True
             elif result == PermissionResult.DENIED:
-                logging.info(
+                logger.info(
                     f"Action access denied: {actor_id} -> {peer_id} -> {action_name}"
                 )
                 return False
@@ -64,7 +66,7 @@ class ActionsHandler(base_handler.BaseHandler):
                 )
 
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Error in action permission evaluation for {actor_id}:{peer_id}:{action_name}: {e}"
             )
             # Fall back to legacy authorization on errors

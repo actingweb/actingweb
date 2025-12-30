@@ -306,6 +306,20 @@ class ActorInterface:
         """Access to underlying core actor (for advanced use)."""
         return self._core_actor
 
+    @property
+    def config(self):
+        """Get the ActingWeb configuration object.
+
+        Returns:
+            ActingWeb configuration instance
+
+        Raises:
+            RuntimeError: If config is not available
+        """
+        if not hasattr(self._core_actor, 'config') or self._core_actor.config is None:
+            raise RuntimeError("Actor config not available")
+        return self._core_actor.config
+
     def delete(self) -> None:
         """Delete this actor and all associated data."""
         self._core_actor.delete()

@@ -165,8 +165,7 @@ class TrustTypeRegistry:
             setattr(sys_actor.property, prop_name, trust_type_json)
             # Update cache
             self._cache[trust_type.name] = trust_type
-            logger.info(f"Registered trust type: {trust_type.name}")
-            logger.debug(f"Trust type '{trust_type.name}' stored with permissions: {trust_type.base_permissions}")
+            logger.info(f"Registered trust type '{trust_type.name}' with {len(trust_type.base_permissions)} permissions")
             return True
         except Exception as e:
             logger.error(f"Error registering trust type {trust_type.name}: {e}")

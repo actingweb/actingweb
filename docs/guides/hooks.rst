@@ -54,7 +54,27 @@ Lifecycle Hooks
    def on_actor_created(actor, **kwargs):
        actor.properties.created_at = datetime.now().isoformat()
 
-Available events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_approved``, ``trust_deleted``.
+   @app.lifecycle_hook("trust_initiated")
+   def on_trust_initiated(actor, peer_id, relationship, trust_data, **kwargs):
+       # Called when this actor initiates a trust request to a peer
+       print(f"Trust initiated to {peer_id}")
+
+   @app.lifecycle_hook("trust_request_received")
+   def on_trust_request_received(actor, peer_id, relationship, trust_data, **kwargs):
+       # Called when this actor receives a trust request from a peer
+       notify_user(actor, f"New trust request from {peer_id}")
+
+   @app.lifecycle_hook("trust_fully_approved_local")
+   def on_trust_fully_approved_local(actor, peer_id, relationship, trust_data, **kwargs):
+       # Called when this actor approves, completing mutual approval
+       notify_user(actor, f"You approved! Relationship with {peer_id} established")
+
+   @app.lifecycle_hook("trust_fully_approved_remote")
+   def on_trust_fully_approved_remote(actor, peer_id, relationship, trust_data, **kwargs):
+       # Called when peer approves, completing mutual approval
+       notify_user(actor, f"{peer_id} approved your request! Relationship established")
+
+Available events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``.
 
 Subscription Hook
 -----------------

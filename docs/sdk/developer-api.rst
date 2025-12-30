@@ -60,6 +60,7 @@ The ``ActorInterface`` exposes several useful properties:
     actor.type            # Actor type (urn:...)
     actor.creator         # Creator email/identifier
     actor.passphrase      # Actor passphrase
+    actor.config          # ActingWeb configuration object
     actor.properties      # PropertyStore instance
     actor.trust           # TrustManager instance
     actor.subscriptions   # SubscriptionManager instance

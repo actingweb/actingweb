@@ -20,9 +20,18 @@ poetry run pyright actingweb tests   # Type checking - must be 0 errors
 poetry run ruff check actingweb tests # Linting - must pass
 poetry run ruff format actingweb tests # Auto-format
 
-# Testing
-make test-integration             # Run all tests (starts DynamoDB automatically)
-poetry run pytest tests/ -v       # Run tests (requires DynamoDB running)
+# Testing (Sequential)
+make test-integration             # Integration tests only (sequential, ~5 min)
+make test-integration-fast        # Skip slow tests (sequential, ~3 min)
+poetry run pytest tests/ -v       # All tests (requires DynamoDB running)
+
+# Testing (Parallel) - FASTER but may have isolation issues
+make test-parallel                # Integration tests (parallel, ~2 min)
+make test-parallel-fast           # Skip slow tests (parallel, ~1 min)
+make test-all-parallel            # ALL tests inc. unit tests (parallel, ~4 min)
+
+# Final Validation Before Committing
+make test-all-parallel            # Run ALL tests (unit + integration)
 
 # Build
 poetry build                      # Build package
@@ -61,7 +70,10 @@ actingweb/
 │   ├── hook_registry.py    # Decorator-based event handling
 │   └── integrations/   # Flask & FastAPI integrations
 ├── handlers/           # HTTP request handlers
-├── db_dynamodb/        # DynamoDB backend (PynamoDB models)
+├── db/                 # Database backends (pluggable)
+│   ├── dynamodb/      # DynamoDB backend (PynamoDB models)
+│   ├── postgresql/    # PostgreSQL backend (psycopg3 + Alembic)
+│   └── protocols.py   # Database interface protocols
 ├── actor.py           # Core actor implementation
 ├── config.py          # Configuration management
 ├── oauth2.py          # OAuth2 authentication
@@ -77,6 +89,82 @@ actingweb/
 
 See `docs/sdk/handler-architecture.rst` for detailed architecture.
 
+## Database Backends
+
+ActingWeb supports two database backends:
+
+### DynamoDB (Default)
+- **Production-ready**: AWS-managed NoSQL database
+- **Auto-scaling**: Automatic read/write capacity management
+- **Requirements**: DynamoDB Local for testing (`docker compose -f docker-compose.test.yml up dynamodb-test`)
+- **Installation**: No extra dependencies needed
+
+### PostgreSQL
+- **Production-ready**: Open-source relational database
+- **Schema management**: Alembic migrations
+- **Requirements**: PostgreSQL 12+ server
+- **Installation**: `poetry install --extras postgresql`
+
+### PostgreSQL Setup
+
+**Installation**:
+```bash
+poetry install --extras postgresql
+```
+
+**Environment Configuration**:
+```bash
+DATABASE_BACKEND=postgresql    # Select PostgreSQL backend
+PG_DB_HOST=localhost          # Database host
+PG_DB_PORT=5432               # Database port (5433 for test)
+PG_DB_NAME=actingweb          # Database name
+PG_DB_USER=actingweb          # Database user
+PG_DB_PASSWORD=yourpassword   # Database password
+PG_DB_PREFIX=                 # Optional: prefix for schema names (used in tests)
+PG_DB_SCHEMA=public           # Schema name (default: public)
+```
+
+**Run Migrations**:
+```bash
+cd actingweb/db/postgresql/migrations
+alembic upgrade head
+```
+
+**Testing with PostgreSQL**:
+```bash
+# Start PostgreSQL test container
+docker compose -f docker-compose.test.yml up postgres-test -d
+
+# Run tests with PostgreSQL backend
+DATABASE_BACKEND=postgresql \
+PG_DB_HOST=localhost \
+PG_DB_PORT=5433 \
+PG_DB_NAME=actingweb_test \
+PG_DB_USER=actingweb \
+PG_DB_PASSWORD=testpassword \
+make test-integration
+
+# Stop container when done
+docker compose -f docker-compose.test.yml down
+```
+
+**Migration Management**:
+```bash
+cd actingweb/db/postgresql/migrations
+
+# Create a new migration
+alembic revision --autogenerate -m "Description of changes"
+
+# Apply migrations
+alembic upgrade head
+
+# Rollback one migration
+alembic downgrade -1
+
+# Show current migration version
+alembic current
+```
+
 ## Critical Configuration
 
 ```python
@@ -85,7 +173,7 @@ from actingweb.interface import ActingWebApp
 app = (
     ActingWebApp(
         aw_type="urn:actingweb:example.com:myapp",
-        database="dynamodb",
+        database="dynamodb",    # or "postgresql" - can also use DATABASE_BACKEND env var
         fqdn="myapp.example.com",
         proto="https://"
     )
@@ -95,6 +183,11 @@ app = (
     .with_mcp(enable=True)
 )
 ```
+
+**Database Backend Selection**:
+- Set `database="postgresql"` in ActingWebApp, OR
+- Set `DATABASE_BACKEND=postgresql` environment variable (takes precedence)
+- Default is `"dynamodb"` if not specified
 
 See `docs/quickstart/configuration.rst` for all options.
 
@@ -119,7 +212,23 @@ API clients always receive JSON. See `docs/reference/routing-overview.rst`.
 - **Type hints required** on all functions
 - **Pyright** for type checking (primary)
 - **Ruff** for linting and formatting
-- **Tests**: 474+ tests, 100% passing required
+- **Tests**: 900+ tests, 100% passing required
+
+## Testing
+
+**Before committing**: Always run `make test-all-parallel` (all 900+ tests)
+
+**Test Modes**:
+- **Parallel** (recommended for development): `make test-all-parallel` (~4 min)
+- **Sequential** (recommended for CI): `make test-integration` (~5 min)
+
+Parallel tests are 2-3x faster but may have occasional isolation issues. If parallel tests fail, re-run sequentially to verify.
+
+**Full testing guide**: See `docs/contributing/testing.rst` for:
+- Test execution modes and tradeoffs
+- Test isolation troubleshooting
+- Running specific tests
+- Known parallel execution issues
 
 ## Project Documentation System
 
@@ -134,6 +243,26 @@ thoughts/shared/
 ```
 
 Check these before starting significant work to find existing patterns and context.
+
+## Logging
+
+ActingWeb uses hierarchical logging with named loggers (`__name__`).
+
+**Quick setup**:
+```python
+from actingweb.logging_config import configure_actingweb_logging
+import logging
+
+configure_actingweb_logging(logging.DEBUG)  # Development
+configure_actingweb_logging(logging.WARNING, db_level=logging.ERROR)  # Production
+```
+
+**Convenience functions**: `configure_production_logging()`, `configure_development_logging()`, `configure_testing_logging()`
+
+**Performance-critical loggers** (use WARNING+ in production):
+- `actingweb.db.dynamodb`, `actingweb.auth`, `actingweb.handlers.properties`, `actingweb.aw_proxy`
+
+**See also**: `actingweb/logging_config.py` module docstrings for detailed configuration options.
 
 ## Security Notes
 

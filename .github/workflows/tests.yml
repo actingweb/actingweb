@@ -10,12 +10,33 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [dynamodb, postgresql]
+        python-version: ['3.11']
+
+    name: Tests (Python ${{ matrix.python-version }}, ${{ matrix.backend }})
 
     services:
       dynamodb:
         image: amazon/dynamodb-local:latest
         ports:
           - 8000:8000
+
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: actingweb
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: actingweb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -24,7 +45,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install Poetry
         uses: snok/install-poetry@v1
@@ -38,13 +59,26 @@ jobs:
         uses: actions/cache@v3
         with:
           path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          key: venv-${{ runner.os }}-${{ matrix.backend }}-${{ hashFiles('**/poetry.lock') }}
 
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
         run: poetry install --no-interaction --with dev --extras "all"
 
+      - name: Run PostgreSQL migrations
+        if: matrix.backend == 'postgresql'
+        run: |
+          cd actingweb/db/postgresql
+          poetry run alembic upgrade head
+        env:
+          PG_DB_HOST: localhost
+          PG_DB_PORT: 5432
+          PG_DB_NAME: actingweb_test
+          PG_DB_USER: actingweb
+          PG_DB_PASSWORD: testpassword
+
       - name: Wait for DynamoDB to be ready
+        if: matrix.backend == 'dynamodb'
         run: |
           echo "Waiting for DynamoDB to be ready..."
           for i in {1..30}; do
@@ -62,58 +96,111 @@ jobs:
         run: |
           echo "Collecting tests..."
           poetry run pytest tests/ --collect-only -q
-          echo "Running all tests (unit + integration)..."
+          echo "Running all tests (unit + integration) with ${{ matrix.backend }} backend..."
+          echo "Note: Benchmark tests are excluded from parallel runs (run separately with 'pytest -m benchmark')"
           poetry run pytest tests/ \
+            -m "not benchmark" \
             -n 4 \
             --dist loadscope \
             --max-worker-restart=2 \
             -v \
             --tb=short \
-            --junitxml=test-results/tests.xml \
+            --junitxml=test-results/tests-${{ matrix.backend }}.xml \
             --cov=actingweb \
-            --cov-report=xml \
-            --cov-report=html
+            --cov-report=xml:coverage-${{ matrix.backend }}.xml \
+            --cov-report=html:htmlcov-${{ matrix.backend }}
         env:
+          DATABASE_BACKEND: ${{ matrix.backend }}
+          # DynamoDB settings
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_DB_HOST: http://localhost:8000
           AWS_DB_PREFIX: test
+          # PostgreSQL settings
+          PG_DB_HOST: localhost
+          PG_DB_PORT: 5432
+          PG_DB_NAME: actingweb_test
+          PG_DB_USER: actingweb
+          PG_DB_PASSWORD: testpassword
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-${{ matrix.backend }}
           path: test-results/
 
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: htmlcov/
+          name: coverage-report-${{ matrix.backend }}
+          path: htmlcov-${{ matrix.backend }}/
 
       - name: Publish test results
         if: always()
         uses: EnricoMi/publish-unit-test-result-action@v2
         with:
-          files: test-results/*.xml
+          files: test-results/tests-${{ matrix.backend }}.xml
+          check_name: Test Results (${{ matrix.backend }})
+          comment_mode: off
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.xml
-          flags: unittests
-          name: codecov-actingweb
+          files: ./coverage-${{ matrix.backend }}.xml
+          flags: ${{ matrix.backend }}
+          name: codecov-${{ matrix.backend }}-python-${{ matrix.python-version }}
           fail_ci_if_error: false
           verbose: true
 
-      - name: Comment PR with coverage
-        if: github.event_name == 'pull_request'
-        uses: py-cov-action/python-coverage-comment-action@v3
+  test-summary:
+    runs-on: ubuntu-latest
+    needs: tests
+    if: always() && github.event_name == 'pull_request'
+
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v4
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          pattern: test-results-*
+          path: all-test-results/
+
+      - name: Comment PR with test summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            let comment = '## 🧪 Test Results Summary\n\n';
+            comment += '### Matrix Testing: Both Database Backends\n\n';
+            comment += '| Backend | Status | Details |\n';
+            comment += '|---------|--------|----------|\n';
+
+            const backends = ['dynamodb', 'postgresql'];
+            for (const backend of backends) {
+              const dir = `all-test-results/test-results-${backend}`;
+              if (fs.existsSync(dir)) {
+                comment += `| ${backend} | ✅ Tests executed | See workflow checks for details |\n`;
+              } else {
+                comment += `| ${backend} | ⚠️ Results not found | - |\n`;
+              }
+            }
+
+            comment += '\n**Note**: \n';
+            comment += '- Each backend is tested independently in parallel\n';
+            comment += '- Full test results are available in workflow check runs\n';
+            comment += '- Coverage reports are uploaded to Codecov with backend-specific flags\n';
+
+            // Post comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
 
   type-check:
     runs-on: ubuntu-latest

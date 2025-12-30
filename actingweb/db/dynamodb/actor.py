@@ -11,6 +11,8 @@ from pynamodb.models import Model
     Google datastore for google is used as a backend.
 """
 
+logger = logging.getLogger(__name__)
+
 
 class CreatorIndex(GlobalSecondaryIndex[Any]):
     """
@@ -83,7 +85,7 @@ class DbActor:
         self.handle = Actor.creator_index.query(creator)
         ret = []
         for c in self.handle:
-            logging.warning("    id (" + c.id + ")")
+            logger.warning("    id (" + c.id + ")")
             ret.append(self.get(actor_id=c.id))
         return ret
 
@@ -92,7 +94,7 @@ class DbActor:
     ) -> bool:
         """Modify an actor"""
         if not self.handle:
-            logging.debug("Attempted modification of DbActor without db handle")
+            logger.debug("Attempted modification of DbActor without db handle")
             return False
         if creator and len(creator) > 0:
             # Email in creator needs to be lower case
@@ -121,7 +123,7 @@ class DbActor:
         if not passphrase:
             passphrase = ""
         if self.get(actor_id=actor_id):
-            logging.warning("Trying to create actor that exists(" + actor_id + ")")
+            logger.warning("Trying to create actor that exists(" + actor_id + ")")
             return False
         self.handle = Actor(id=actor_id, creator=creator, passphrase=passphrase)
         self.handle.save()
@@ -130,7 +132,7 @@ class DbActor:
     def delete(self):
         """Deletes the actor in the database"""
         if not self.handle:
-            logging.debug("Attempted delete of DbActor without db handle")
+            logger.debug("Attempted delete of DbActor without db handle")
             return False
         self.handle.delete()  # type: ignore[attr-defined]
         self.handle = None

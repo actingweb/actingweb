@@ -17,6 +17,8 @@ from .base_integration import BaseActingWebIntegration
 if TYPE_CHECKING:
     from ..app import ActingWebApp
 
+logger = logging.getLogger(__name__)
+
 
 class FlaskIntegration(BaseActingWebIntegration):
     """
@@ -527,7 +529,7 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Check if user is already authenticated with OAuth2 and redirect to their actor
         oauth_cookie = request.cookies.get("oauth_token")
         if oauth_cookie and request.method == "GET":
-            logging.debug(
+            logger.debug(
                 f"Processing GET request with OAuth cookie (length {len(oauth_cookie)})"
             )
             # User has OAuth session - try to find their actor and redirect
@@ -536,7 +538,7 @@ class FlaskIntegration(BaseActingWebIntegration):
 
                 authenticator = create_oauth2_authenticator(self.aw_app.get_config())
                 if authenticator.is_enabled():
-                    logging.debug("OAuth2 is enabled, validating token...")
+                    logger.debug("OAuth2 is enabled, validating token...")
                     # Validate the token and get user info
                     user_info = authenticator.validate_token_and_get_user_info(
                         oauth_cookie
@@ -546,7 +548,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                             user_info, oauth_cookie
                         )
                         if email:
-                            logging.debug(f"Token validation successful for {email}")
+                            logger.debug(f"Token validation successful for {email}")
                             # Look up actor by email
                             actor_instance = (
                                 authenticator.lookup_or_create_actor_by_email(email)
@@ -554,12 +556,12 @@ class FlaskIntegration(BaseActingWebIntegration):
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
                                 redirect_url = f"/{actor_instance.id}/www"
-                                logging.debug(
+                                logger.debug(
                                     f"Redirecting authenticated user {email} to {redirect_url}"
                                 )
                                 return redirect(redirect_url, code=302)
                     # Token is invalid/expired - clear the cookie and redirect to new OAuth flow
-                    logging.debug(
+                    logger.debug(
                         "OAuth token expired or invalid - clearing cookie and redirecting to OAuth"
                     )
                     original_url = request.url
@@ -568,11 +570,11 @@ class FlaskIntegration(BaseActingWebIntegration):
                     )
                     return oauth_redirect
                 else:
-                    logging.warning("OAuth2 not enabled in config")
+                    logger.warning("OAuth2 not enabled in config")
             except Exception as e:
-                logging.error(f"OAuth token validation failed in factory: {e}")
+                logger.error(f"OAuth token validation failed in factory: {e}")
                 # Token validation failed - clear cookie and redirect to fresh OAuth
-                logging.debug(
+                logger.debug(
                     "OAuth token validation error - clearing cookie and redirecting to OAuth"
                 )
                 original_url = request.url
@@ -594,7 +596,7 @@ class FlaskIntegration(BaseActingWebIntegration):
             else:
                 return Response(status=405)
         except Exception as e:
-            logging.error(f"Error in factory handler: {e}")
+            logger.error(f"Error in factory handler: {e}")
             # Map common network/SSL errors to clearer status codes if handler didn't set one
             if webobj.response.status_code != 200:
                 pass
@@ -707,7 +709,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                 except Exception:
                     return Response("Email is required", status=400)
 
-            logging.debug(f"Factory POST with email: {email}")
+            logger.debug(f"Factory POST with email: {email}")
 
             # Create OAuth2 redirect with email hint
             try:
@@ -726,25 +728,25 @@ class FlaskIntegration(BaseActingWebIntegration):
                         user_agent=user_agent,
                     )
 
-                    logging.debug(f"Redirecting to OAuth2 with email hint: {email}")
+                    logger.debug(f"Redirecting to OAuth2 with email hint: {email}")
                     return redirect(auth_url)
                 else:
-                    logging.warning(
+                    logger.warning(
                         "OAuth2 not configured - falling back to standard actor creation"
                     )
                     # Fall back to standard actor creation without OAuth
                     return self._handle_factory_post_without_oauth(email)
 
             except Exception as e:
-                logging.error(f"Error creating OAuth2 redirect: {e}")
+                logger.error(f"Error creating OAuth2 redirect: {e}")
                 # Fall back to standard actor creation if OAuth2 setup fails
-                logging.debug(
+                logger.debug(
                     "OAuth2 setup failed - falling back to standard actor creation"
                 )
                 return self._handle_factory_post_without_oauth(email)
 
         except Exception as e:
-            logging.error(f"Error in factory POST handler: {e}")
+            logger.error(f"Error in factory POST handler: {e}")
             return Response("Internal server error", status=500)
 
     def _handle_factory_post_without_oauth(
@@ -791,7 +793,7 @@ class FlaskIntegration(BaseActingWebIntegration):
             return self._create_flask_response(webobj)
 
         except Exception as e:
-            logging.error(f"Error in standard actor creation: {e}")
+            logger.error(f"Error in standard actor creation: {e}")
             try:
                 return Response(
                     render_template(
@@ -891,7 +893,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                 )
             except Exception as e:
                 # Template not found - provide basic HTML form as fallback
-                logging.warning(f"Template aw-oauth-email.html not found: {e}")
+                logger.warning(f"Template aw-oauth-email.html not found: {e}")
                 session_id = webobj.response.template_values.get("session_id", "")
                 error = webobj.response.template_values.get("error", "")
                 provider = webobj.response.template_values.get(
@@ -972,7 +974,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                 )
             except Exception as e:
                 # Template not found - provide basic HTML as fallback
-                logging.warning(f"Template aw-verify-email.html not found: {e}")
+                logger.warning(f"Template aw-verify-email.html not found: {e}")
                 status = webobj.response.template_values.get("status", "")
                 webobj.response.template_values.get("message", "")
                 email = webobj.response.template_values.get("email", "")
@@ -1306,12 +1308,12 @@ class FlaskIntegration(BaseActingWebIntegration):
                 session_manager = get_oauth2_session_manager(self.aw_app.get_config())
                 token_data = session_manager.validate_access_token(oauth_cookie)
                 if token_data:
-                    logging.debug(
+                    logger.debug(
                         f"ActingWeb session token validation successful for actor {token_data.get('actor_id')}"
                     )
                     return None  # Valid ActingWeb session token
             except Exception as e:
-                logging.debug(f"ActingWeb token validation failed: {e}")
+                logger.debug(f"ActingWeb token validation failed: {e}")
 
             # Fall back to validating as OAuth provider token (legacy support)
             try:
@@ -1327,15 +1329,15 @@ class FlaskIntegration(BaseActingWebIntegration):
                             user_info, oauth_cookie
                         )
                         if email:
-                            logging.debug(
+                            logger.debug(
                                 f"OAuth provider token validation successful for {email}"
                             )
                             return None  # Valid OAuth provider token
-                    logging.debug(
+                    logger.debug(
                         "OAuth cookie token is expired or invalid - will redirect to fresh OAuth"
                     )
             except Exception as e:
-                logging.debug(f"OAuth provider token validation error: {e}")
+                logger.debug(f"OAuth provider token validation error: {e}")
 
         # No valid authentication - redirect to OAuth2
         original_url = request.url
@@ -1360,10 +1362,10 @@ class FlaskIntegration(BaseActingWebIntegration):
                     if clear_cookie:
                         # Clear the expired oauth_token cookie
                         response.delete_cookie("oauth_token", path="/")
-                        logging.debug("Cleared expired oauth_token cookie")
+                        logger.debug("Cleared expired oauth_token cookie")
                     return response
         except Exception as e:
-            logging.error(f"Error creating OAuth2 redirect: {e}")
+            logger.error(f"Error creating OAuth2 redirect: {e}")
 
         # Fallback to 401 if OAuth2 not configured
         response = Response("Authentication required", status=401)
@@ -1456,7 +1458,7 @@ class FlaskIntegration(BaseActingWebIntegration):
             else:
                 return Response(status=405)
         except Exception as e:
-            logging.error(f"Error in {endpoint} handler: {e}")
+            logger.error(f"Error in {endpoint} handler: {e}")
             # Map common network/SSL errors to clearer status codes if handler didn't set one
             if webobj.response.status_code != 200:
                 pass
@@ -1522,7 +1524,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         render_template(webobj.response.template_name, **template_values)
                     )
             except Exception as e:
-                logging.debug(f"Template rendering failed for www/{path}: {e}")
+                logger.debug(f"Template rendering failed for www/{path}: {e}")
                 # Fall back to default response
 
         return self._create_flask_response(webobj)

@@ -116,7 +116,7 @@ class DbAttribute:
         # Calculate TTL timestamp if provided
         ttl_timestamp = None
         if ttl_seconds is not None:
-            from ..constants import TTL_CLOCK_SKEW_BUFFER
+            from ...constants import TTL_CLOCK_SKEW_BUFFER
 
             # Add buffer for clock skew safety
             ttl_timestamp = int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER

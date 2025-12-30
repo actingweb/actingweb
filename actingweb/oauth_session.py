@@ -84,12 +84,12 @@ class OAuth2SessionManager:
         # Store verified emails if provided
         if verified_emails:
             session_data["verified_emails"] = verified_emails
-            logger.debug(f"Stored {len(verified_emails)} verified emails in session")
+            logger.info(f"Stored {len(verified_emails)} verified emails in session")
 
         # Store PKCE verifier if provided (for SPA server-managed PKCE)
         if pkce_verifier:
             session_data["pkce_verifier"] = pkce_verifier
-            logger.debug("Stored PKCE verifier in session")
+            logger.info("Stored PKCE verifier in session")
 
         # Store in attribute bucket for persistence across containers
         from .constants import OAUTH_SESSION_TTL
@@ -303,7 +303,7 @@ class OAuth2SessionManager:
         )
         bucket.set_attr(name=token, data=token_data, ttl_seconds=effective_ttl)
 
-        logger.debug(f"Stored access token for actor {actor_id}")
+        logger.info(f"Stored access token for actor {actor_id}")
 
     def validate_access_token(self, token: str) -> dict[str, Any] | None:
         """

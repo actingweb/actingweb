@@ -3,6 +3,8 @@ import logging
 
 from actingweb.handlers import base_handler
 
+logger = logging.getLogger(__name__)
+
 
 class SubscriptionRootHandler(base_handler.BaseHandler):
     """Handles requests to /subscription"""
@@ -211,7 +213,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
                 self.response.set_status(400, "No json body")
             return
         if peerid != auth_result.auth_obj.acl["peerid"]:
-            logging.warning(
+            logger.warning(
                 "Peer "
                 + peerid
                 + " tried to create a subscription for peer "

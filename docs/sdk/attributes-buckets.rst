@@ -441,6 +441,6 @@ Best Practices
 See Also
 --------
 
-- :doc:`../reference/actingweb-db-dynamodb` - Database implementation details
+- :doc:`../reference/actingweb-db` - Database implementation details
 - :doc:`../guides/mcp-applications` - MCP application guide
 - :doc:`trust-relationships` - Trust and permission management

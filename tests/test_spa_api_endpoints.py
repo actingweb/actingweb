@@ -123,7 +123,7 @@ class TestTrustEndpointOAuth2Data(unittest.TestCase):
 
     def test_trust_db_model_has_oauth2_fields(self):
         """Verify Trust DB model has OAuth2 client fields."""
-        from actingweb.db_dynamodb.db_trust import Trust
+        from actingweb.db.dynamodb.trust import Trust
 
         # Verify OAuth2 client metadata fields exist
         self.assertTrue(hasattr(Trust, "client_name"))

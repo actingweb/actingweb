@@ -16,9 +16,10 @@ Contents
    hooks-reference
    handlers
    routing-overview
+   database-backends
    security
    actingweb
-   actingweb-db-dynamodb
+   actingweb-db
 
 High-Level API
 ==============
@@ -38,6 +39,12 @@ HTTP Handlers
 **Routing Overview**
    Complete list of routes, browser redirect behavior, and content negotiation rules.
 
+Database Backends
+=================
+
+**Database Backends**
+   Detailed comparison of DynamoDB and PostgreSQL backends, performance characteristics, cost analysis, and migration guide.
+
 Configuration & Security
 ========================
 
@@ -50,7 +57,7 @@ Module Reference
 **actingweb**
    Auto-generated documentation for the actingweb package.
 
-**actingweb.db_dynamodb**
+**actingweb.db.dynamodb**
    Documentation for the DynamoDB database backend.
 
 Quick Links
@@ -62,6 +69,8 @@ Common tasks and their reference sections:
 | Task                      | Reference                      |
 +===========================+================================+
 | Configure the app         | :doc:`interface-api`           |
++---------------------------+--------------------------------+
+| Choose database backend   | :doc:`database-backends`       |
 +---------------------------+--------------------------------+
 | Register hooks            | :doc:`hooks-reference`         |
 +---------------------------+--------------------------------+

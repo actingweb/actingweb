@@ -94,7 +94,7 @@ The library now provides a modern fluent API interface that simplifies applicati
     app = (
         ActingWebApp(
             aw_type="urn:actingweb:example.com:myapp",
-            database="dynamodb",
+            database="postgresql",  # or "dynamodb" (default)
             fqdn="myapp.example.com"
         )
         .with_oauth(
@@ -123,6 +123,7 @@ The library now provides a modern fluent API interface that simplifies applicati
     app.integrate_flask(flask_app)  # Auto-generates all routes
 
 **Key Modern Features:**
+- **Multiple Database Backends**: Choose between DynamoDB (serverless, auto-scaling) or PostgreSQL (SQL, cost-effective)
 - **OAuth2 Authentication**: Modern OAuth2 with Google/GitHub support, email validation, and CSRF protection
 - **Flask/FastAPI Integration**: Automatic route generation with async support for FastAPI
 - **MCP Support**: Model Context Protocol integration for AI language model interactions
@@ -232,11 +233,21 @@ The actingweb library requires Python 3.11 or higher and uses modern Python feat
 - Modern enum classes for constants
 - Enhanced error handling with custom exception hierarchies
 
-Dependencies:
+**Database Backends:**
 
-- ``pynamodb`` - DynamoDB ORM for AWS DynamoDB backend
-- ``boto3`` - AWS SDK for Python (DynamoDB support)
+ActingWeb supports two production-ready database backends:
+
+- **DynamoDB** (default) - AWS DynamoDB with auto-scaling and global tables support
+- **PostgreSQL** - PostgreSQL 12+ with Alembic migrations and connection pooling
+
+Core dependencies:
+
 - ``requests`` - HTTP client library
+
+Backend-specific dependencies (installed via extras):
+
+- **DynamoDB**: ``pynamodb`` (DynamoDB ORM), ``boto3`` (AWS SDK)
+- **PostgreSQL**: ``psycopg`` (PostgreSQL driver with connection pool), ``sqlalchemy`` (for Alembic), ``alembic`` (database migrations)
 
 Development dependencies:
 
@@ -250,12 +261,25 @@ Building and installing
 
 ::
 
-    # Install from PyPI:
+    # Install from PyPI (minimal, no database backend):
     pip install actingweb
+
+    # Install with DynamoDB backend:
+    pip install 'actingweb[dynamodb]'
+
+    # Install with PostgreSQL backend:
+    pip install 'actingweb[postgresql]'
+
+    # Install with Flask/FastAPI integration:
+    pip install 'actingweb[flask,postgresql]'
+    pip install 'actingweb[fastapi,dynamodb]'
+
+    # Install all backends and integrations:
+    pip install 'actingweb[all]'
 
     # For development with Poetry:
     poetry install
-    poetry install --with dev,docs
+    poetry install --with dev,docs --extras all
 
     # Build source and binary distributions:
     poetry build

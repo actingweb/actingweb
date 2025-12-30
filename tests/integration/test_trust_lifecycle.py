@@ -1,7 +1,8 @@
 """
 Integration tests for trust lifecycle hooks.
 
-Tests that trust approval and deletion trigger lifecycle hooks correctly.
+Tests that trust lifecycle hooks (trust_initiated, trust_request_received,
+trust_approved, trust_deleted) trigger correctly.
 """
 
 import requests
@@ -10,10 +11,66 @@ import requests
 class TestTrustLifecycle:
     """Test trust lifecycle hooks fire via HTTP API."""
 
-    def test_trust_approval_triggers_trust_approved_hook(
+    def test_trust_initiation_triggers_trust_initiated_hook(
+        self, actor_factory
+    ):
+        """Test that initiating a trust request triggers trust_initiated hook."""
+        # NOTE: This test requires hooks to be registered in the test harness
+        # For now, we verify the trust creation happens correctly via HTTP
+        # Hook verification will be added when test harness supports hook registration
+
+        actor1 = actor_factory.create("user1@example.com")
+        actor2 = actor_factory.create("user2@example.com")
+
+        # When actor1 initiates trust to actor2
+        response = requests.post(
+            f"{actor1['url']}/trust",
+            json={
+                "url": actor2["url"],
+                "relationship": "friend",
+                "desc": "Test friend",
+            },
+            auth=(actor1["creator"], actor1["passphrase"]),
+        )
+        assert response.status_code == 201, f"Trust creation failed: {response.text}"
+
+        # trust_initiated hook should fire for actor1 (initiator)
+        # In actual test with hooks, we would verify hook was called with:
+        # - actor: actor1
+        # - peer_id: actor2['id']
+        # - relationship: "friend"
+        # - trust_data: response.json()
+
+    def test_trust_reception_triggers_trust_request_received_hook(
+        self, actor_factory
+    ):
+        """Test that receiving a trust request triggers trust_request_received hook."""
+        actor1 = actor_factory.create("user1@example.com")
+        actor2 = actor_factory.create("user2@example.com")
+
+        # When actor1 initiates trust to actor2
+        response = requests.post(
+            f"{actor1['url']}/trust",
+            json={
+                "url": actor2["url"],
+                "relationship": "friend",
+                "desc": "Test friend",
+            },
+            auth=(actor1["creator"], actor1["passphrase"]),
+        )
+        assert response.status_code == 201
+
+        # trust_request_received hook should fire for actor2 (recipient)
+        # In actual test with hooks, we would verify hook was called with:
+        # - actor: actor2
+        # - peer_id: actor1['id']
+        # - relationship: "friend"
+        # - trust_data: trust record from actor2's perspective
+
+    def test_trust_approval_triggers_fully_approved_hooks(
         self, actor_factory, trust_helper
     ):
-        """Test that trust approval triggers trust_approved hook when both approve."""
+        """Test that trust approval triggers trust_fully_approved_local and trust_fully_approved_remote hooks."""
         # NOTE: This test requires hooks to be registered in the test harness
         # For now, we verify the approval happens correctly via HTTP
         # Hook verification will be added when test harness supports hook registration
@@ -53,6 +110,8 @@ class TestTrustLifecycle:
         assert response.status_code in [200, 204], f"Trust approval failed: {response.text}"
 
         # Also approve from actor1's side to establish mutual trust
+        # Expected: trust_fully_approved_local hook fires for actor1 (who just approved)
+        # Expected: trust_fully_approved_remote hook fires for actor2 (who receives notification)
         response = requests.put(
             f"{actor1['url']}/trust/friend/{peer_id}",
             json={"approved": True},
@@ -69,8 +128,9 @@ class TestTrustLifecycle:
         assert trust_data["approved"] is True
         assert trust_data["peer_approved"] is True
 
-        # Hook would fire at this point - in actual test harness with hooks,
-        # we would verify a property was set or an action was taken
+        # Hooks would fire at this point - in actual test harness with hooks:
+        # 1. trust_fully_approved_local for actor1 (they just approved locally)
+        # 2. trust_fully_approved_remote for actor2 (they receive peer approval notification)
 
     def test_trust_deletion_triggers_trust_deleted_hook(
         self, actor_factory, trust_helper
@@ -149,7 +209,7 @@ class TestTrustLifecycle:
         assert response.status_code in [200, 204]
 
     def test_hook_not_triggered_on_partial_approval(self, actor_factory):
-        """Test that trust_approved hook only fires when both sides approve."""
+        """Test that trust_fully_approved hooks only fire when both sides approve."""
         actor1 = actor_factory.create("user1@example.com")
         actor2 = actor_factory.create("user2@example.com")
 
@@ -176,15 +236,17 @@ class TestTrustLifecycle:
         assert trust_data["approved"] is True  # Actor1 approved (initiator auto-approves)
         assert trust_data["peer_approved"] is False  # Actor2 hasn't approved yet
 
-        # Hook should NOT fire until both approve
-        # In actual test with hooks, we would verify no hook property was set
+        # trust_fully_approved hooks should NOT fire until both approve
+        # In actual test with hooks, we would verify no approval hook was called
+        # (only trust_initiated and trust_request_received would have fired)
 
-    def test_bidirectional_trust_establishment(self, actor_factory):
-        """Test complete bidirectional trust establishment flow."""
+    def test_bidirectional_trust_establishment_with_all_hooks(self, actor_factory):
+        """Test complete bidirectional trust establishment flow with all lifecycle hooks."""
         actor1 = actor_factory.create("alice@example.com")
         actor2 = actor_factory.create("bob@example.com")
 
         # Step 1: Actor1 initiates trust
+        # Expected: trust_initiated hook fires for actor1
         response = requests.post(
             f"{actor1['url']}/trust",
             json={
@@ -195,6 +257,10 @@ class TestTrustLifecycle:
         )
         assert response.status_code == 201
         peer_id_from_actor1 = response.json()["peerid"]
+
+        # Hook sequence so far:
+        # 1. trust_initiated(actor1, peer_id=actor2['id'], relationship='friend')
+        # 2. trust_request_received(actor2, peer_id=actor1['id'], relationship='friend')
 
         # Step 2: Actor2 sees the incoming trust request
         response = requests.get(
@@ -224,6 +290,11 @@ class TestTrustLifecycle:
         )
         assert response.status_code in [200, 204]
 
+        # Expected: trust_fully_approved hooks fire for both actors (when both have approved)
+        # Hook sequence for approval:
+        # 3. trust_fully_approved_local(actor1, ...) - actor1 just approved locally
+        # 4. trust_fully_approved_remote(actor2, ...) - actor2 receives notification that actor1 approved
+
         # Step 4: Verify both sides now show fully approved
         response = requests.get(
             f"{actor1['url']}/trust/friend/{peer_id_from_actor1}",
@@ -241,5 +312,8 @@ class TestTrustLifecycle:
         assert actor2_trust["approved"] is True
         assert actor2_trust["peer_approved"] is True
 
-        # At this point, trust_approved hook should have fired
-        # (when hooks are implemented in test harness)
+        # In actual test harness with hooks, we would verify all hooks fired:
+        # 1. trust_initiated for actor1 (outgoing request)
+        # 2. trust_request_received for actor2 (incoming request)
+        # 3. trust_fully_approved_local for approver (who completed the approval)
+        # 4. trust_fully_approved_remote for initiator (who receives peer approval notification)

@@ -95,7 +95,7 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
 
     monkeypatch.setitem(
         __import__("sys").modules,
-        "actingweb.db_dynamodb.db_trust",
+        "actingweb.db.dynamodb.trust",
         type("M", (), {"DbTrust": FakeDbTrust}),
     )
 

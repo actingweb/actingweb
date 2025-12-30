@@ -1,5 +1,7 @@
 """Tests for config module."""
 
+import os
+
 from actingweb.config import Config
 from actingweb.constants import DatabaseType, Environment
 
@@ -14,8 +16,12 @@ class TestConfigInitialization:
         # Test basic settings
         assert config.fqdn == "demo.actingweb.io"
         assert config.proto == "https://"
-        assert config.env == "aws"  # Default dynamodb sets env to aws
-        assert config.database == "dynamodb"
+        # Database defaults to DATABASE_BACKEND env var or 'dynamodb'
+        expected_database = os.getenv("DATABASE_BACKEND", "dynamodb")
+        assert config.database == expected_database
+        # Env is set to 'aws' when database is dynamodb, empty otherwise
+        expected_env = "aws" if expected_database == "dynamodb" else ""
+        assert config.env == expected_env
         assert config.ui is True
         assert config.devtest is True
         assert config.unique_creator is False
@@ -79,8 +85,9 @@ class TestConfigMethods:
         """Test database type validation."""
         config = Config()
 
-        # Test default database type
-        assert config.database == DatabaseType.DYNAMODB.value
+        # Test default database type (from env var or dynamodb)
+        expected_database = os.getenv("DATABASE_BACKEND", "dynamodb")
+        assert config.database == expected_database
 
         # Test setting different database types
         config.database = DatabaseType.DYNAMODB.value
@@ -90,8 +97,10 @@ class TestConfigMethods:
         """Test environment type handling."""
         config = Config()
 
-        # Test default environment
-        assert config.env == "aws"  # Default dynamodb sets env to aws
+        # Test default environment (aws for dynamodb, empty otherwise)
+        expected_database = os.getenv("DATABASE_BACKEND", "dynamodb")
+        expected_env = "aws" if expected_database == "dynamodb" else ""
+        assert config.env == expected_env
 
         # Test setting environment
         config.env = Environment.AWS.value
@@ -178,7 +187,8 @@ class TestConfigValidation:
         """Test valid database types."""
         config = Config()
 
-        valid_databases = ["dynamodb"]
+        # Both dynamodb and postgresql are valid database backends
+        valid_databases = ["dynamodb", "postgresql"]
         assert config.database in valid_databases
 
     def test_config_valid_auth_types(self):

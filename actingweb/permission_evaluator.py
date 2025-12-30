@@ -377,7 +377,7 @@ class PermissionEvaluator:
             Trust type name (relationship) or None if not found
         """
         try:
-            from .db_dynamodb.db_trust import DbTrust
+            from .db.dynamodb.trust import DbTrust
 
             db_trust = DbTrust()
             trust_record = db_trust.get(actor_id=actor_id, peerid=peer_id)

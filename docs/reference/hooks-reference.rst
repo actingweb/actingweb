@@ -94,7 +94,7 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-- Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_approved``, ``trust_deleted``, ``email_verification_required``, ``email_verified``
+- Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``email_verification_required``, ``email_verified``
 
 Event Details
 -------------
@@ -116,17 +116,65 @@ Event Details
 
     **Returns**: ``False`` to reject authentication, ``True`` or ``None`` to accept
 
-``trust_approved``
-    Triggered when a trust relationship is approved.
+``trust_initiated``
+    Triggered when this actor initiates a trust request to another actor (outgoing request).
 
     **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict) -> None``
 
     **Parameters**:
 
-    - ``actor``: The ActorInterface for the current actor
+    - ``actor``: The ActorInterface for the current actor (initiator)
+    - ``peer_id``: The ID of the peer being invited
+    - ``relationship``: The type of trust relationship requested (e.g., "friend", "partner")
+    - ``trust_data``: Dictionary containing the trust relationship data
+
+    **Use Cases**: Logging, analytics, UI updates showing "request sent"
+
+``trust_request_received``
+    Triggered when this actor receives a trust request from another actor (incoming request).
+
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict) -> None``
+
+    **Parameters**:
+
+    - ``actor``: The ActorInterface for the current actor (recipient)
+    - ``peer_id``: The ID of the peer who sent the request
+    - ``relationship``: The type of trust relationship requested (e.g., "friend", "partner")
+    - ``trust_data``: Dictionary containing the trust relationship data
+
+    **Use Cases**: Real-time notifications, UI popups, approval workflows
+
+``trust_fully_approved_local``
+    Triggered when THIS actor approves a trust relationship, completing mutual approval (both sides now approved).
+
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict) -> None``
+
+    **Parameters**:
+
+    - ``actor``: The ActorInterface for the current actor (who just approved)
     - ``peer_id``: The ID of the peer in the trust relationship
     - ``relationship``: The type of trust relationship (e.g., "friend", "partner")
     - ``trust_data``: Dictionary containing the full trust relationship data
+
+    **Use Cases**: UI notification "You approved! Relationship established", analytics, triggering subscriptions
+
+    **Note**: Fires when this actor's approval completes the mutual trust (peer had already approved).
+
+``trust_fully_approved_remote``
+    Triggered when the PEER actor approves a trust relationship, completing mutual approval (both sides now approved).
+
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict) -> None``
+
+    **Parameters**:
+
+    - ``actor``: The ActorInterface for the current actor (receiving notification)
+    - ``peer_id``: The ID of the peer who just approved
+    - ``relationship``: The type of trust relationship (e.g., "friend", "partner")
+    - ``trust_data``: Dictionary containing the full trust relationship data
+
+    **Use Cases**: UI notification "They approved your request!", analytics, triggering subscriptions
+
+    **Note**: Fires when the peer's approval completes the mutual trust (this actor had already approved).
 
 ``trust_deleted``
     Triggered when a trust relationship is deleted.

@@ -11,6 +11,8 @@ from pynamodb.models import Model
     AWS Dynamodb is used as a backend.
 """
 
+logger = logging.getLogger(__name__)
+
 
 class Subscription(Model):
     class Meta:  # type: ignore[misc]
@@ -44,7 +46,7 @@ class DbSubscription:
         if not actor_id:
             return None
         if not peerid or not subid:
-            logging.debug("Attempt to get subscription without peerid or subid")
+            logger.debug("Attempt to get subscription without peerid or subid")
             return None
         try:
             # We only expect one
@@ -84,7 +86,7 @@ class DbSubscription:
         If bools are none, they will not be changed.
         """
         if not self.handle:
-            logging.debug("Attempted modification of DbSubscription without db handle")
+            logger.debug("Attempted modification of DbSubscription without db handle")
             return False
         if peerid and len(peerid) > 0:
             self.handle.peerid = peerid
@@ -144,7 +146,7 @@ class DbSubscription:
     def delete(self):
         """Deletes the subscription in the database"""
         if not self.handle:
-            logging.debug("Attempted delete of DbSubscription with no handle set.")
+            logger.debug("Attempted delete of DbSubscription with no handle set.")
             return False
         self.handle.delete()
         self.handle = None

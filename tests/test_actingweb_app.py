@@ -15,7 +15,9 @@ class TestActingWebAppInit:
             app = ActingWebApp(aw_type="urn:actingweb:test:app")
 
         assert app.aw_type == "urn:actingweb:test:app"
-        assert app.database == "dynamodb"
+        # Database defaults to "dynamodb" unless DATABASE_BACKEND env var is set
+        expected_db = os.getenv("DATABASE_BACKEND", "dynamodb")
+        assert app.database == expected_db
         assert app.proto == "https://"
 
     def test_init_with_all_params(self):

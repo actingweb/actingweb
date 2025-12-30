@@ -24,6 +24,8 @@ from .base_integration import BaseActingWebIntegration
 if TYPE_CHECKING:
     from ..app import ActingWebApp
 
+logger = logging.getLogger(__name__)
+
 
 # Pydantic Models for Type Safety
 
@@ -223,7 +225,7 @@ async def authenticate_google_oauth(
             return result  # type: ignore
         return None
     except Exception as e:
-        logging.error(f"OAuth2 authentication error: {e}")
+        logger.error(f"OAuth2 authentication error: {e}")
         return None
 
 
@@ -254,10 +256,10 @@ def create_oauth_redirect_response(
                 if clear_cookie:
                     # Clear the expired oauth_token cookie
                     redirect_response.delete_cookie("oauth_token", path="/")
-                    logging.debug("Cleared expired oauth_token cookie")
+                    logger.debug("Cleared expired oauth_token cookie")
                 return redirect_response
     except Exception as e:
-        logging.error(f"Error creating OAuth2 redirect: {e}")
+        logger.error(f"Error creating OAuth2 redirect: {e}")
 
     # Fallback to 401 if OAuth2 not configured
     response = Response(content="Authentication required", status_code=401)
@@ -278,7 +280,7 @@ def add_www_authenticate_header(response: Response, config: Any) -> None:
             www_auth = authenticator.create_www_authenticate_header()
             response.headers["WWW-Authenticate"] = www_auth
     except Exception as e:
-        logging.error(f"Error adding WWW-Authenticate header: {e}")
+        logger.error(f"Error adding WWW-Authenticate header: {e}")
         response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
 
 
@@ -307,7 +309,7 @@ async def check_authentication_and_redirect(
     # Check for OAuth token cookie (for session-based authentication)
     oauth_cookie = request.cookies.get("oauth_token")
     if oauth_cookie:
-        logging.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
+        logger.debug(f"Found oauth_token cookie with length {len(oauth_cookie)}")
 
         # First, check if this is an ActingWeb session token (SPA or /www)
         try:
@@ -317,12 +319,12 @@ async def check_authentication_and_redirect(
             token_data = session_manager.validate_access_token(oauth_cookie)
             if token_data:
                 actor_id = token_data.get("actor_id")
-                logging.debug(
+                logger.debug(
                     f"ActingWeb session token validation successful for actor {actor_id}"
                 )
                 return None  # Valid ActingWeb token
         except Exception as e:
-            logging.debug(f"ActingWeb token validation failed: {e}")
+            logger.debug(f"ActingWeb token validation failed: {e}")
 
         # Fall back to validating as OAuth provider token (legacy support)
         try:
@@ -336,14 +338,14 @@ async def check_authentication_and_redirect(
                         user_info, oauth_cookie
                     )
                     if email:
-                        logging.debug(f"OAuth cookie validation successful for {email}")
+                        logger.debug(f"OAuth cookie validation successful for {email}")
                         return None  # Valid OAuth cookie
-                logging.debug(
+                logger.debug(
                     "OAuth cookie token is expired or invalid - will redirect to fresh OAuth"
                 )
                 # Token expired/invalid - fall through to create redirect response with cookie cleanup
         except Exception as e:
-            logging.debug(
+            logger.debug(
                 f"OAuth cookie validation error: {e} - will redirect to fresh OAuth"
             )
             # Validation failed - fall through to redirect
@@ -1166,7 +1168,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
     def _create_fastapi_response(self, webobj: AWWebObj, request: Request) -> Response:
         """Convert ActingWeb response to FastAPI response."""
         if webobj.response.redirect:
-            logging.debug(
+            logger.debug(
                 f"_create_fastapi_response: Creating redirect response to {webobj.response.redirect}"
             )
             response: Response = RedirectResponse(

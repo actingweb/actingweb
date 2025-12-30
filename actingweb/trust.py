@@ -1,6 +1,8 @@
 import logging
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 
 def canonical_connection_method(method: str | None) -> str | None:
     """
@@ -25,7 +27,7 @@ def canonical_connection_method(method: str | None) -> str | None:
 
     # Validate input is a string
     if not isinstance(method, str):
-        logging.warning(
+        logger.warning(
             f"Connection method must be string, got {type(method)}: {method}"
         )
         return None
@@ -48,7 +50,7 @@ def canonical_connection_method(method: str | None) -> str | None:
         return lowered
 
     # Log unknown methods for monitoring but still return them
-    logging.debug(f"Unknown connection method: {method}")
+    logger.debug(f"Unknown connection method: {method}")
     return method
 
 
@@ -85,9 +87,9 @@ class Trust:
                     from .oauth2_server.client_registry import get_mcp_client_registry
                     registry = get_mcp_client_registry(self.config)
                     registry.delete_client(client_id, actor_id=self.actor_id)
-                    logging.info(f"Deleted OAuth2 client {client_id} as part of trust deletion")
+                    logger.info(f"Deleted OAuth2 client {client_id} as part of trust deletion")
                 except Exception as e:
-                    logging.error(f"Error deleting OAuth2 client during trust deletion: {e}")
+                    logger.error(f"Error deleting OAuth2 client during trust deletion: {e}")
                     # Continue with trust deletion even if client deletion fails
 
         self.trust = {}
@@ -151,7 +153,7 @@ class Trust:
         oauth_client_id: str | None = None,
     ) -> bool:
         if not self.handle:
-            logging.debug("Attempted modifcation of trust without handle")
+            logger.debug("Attempted modifcation of trust without handle")
             return False
         if baseuri:
             self.trust["baseuri"] = baseuri
@@ -223,7 +225,7 @@ class Trust:
             if testhandle.is_token_in_db(
                 actor_id=self.actor_id, token=self.trust["secret"]
             ):
-                logging.warning("Found a non-unique token where it should be unique")
+                logger.warning("Found a non-unique token where it should be unique")
                 return False
         self.trust["approved"] = str(approved).lower()
         self.trust["peer_approved"] = str(peer_approved).lower()
@@ -280,15 +282,15 @@ class Trust:
         self.peerid = peerid
         self.token = token
         if not actor_id or len(actor_id) == 0:
-            logging.debug("No actorid set in initialisation of trust")
+            logger.debug("No actorid set in initialisation of trust")
             return
         if not peerid and not token:
-            logging.debug(
+            logger.debug(
                 "Both peerid and token are not set in initialisation of trust. One must be set."
             )
             return
         if not token and (not peerid or len(peerid) == 0):
-            logging.debug("No peerid set in initialisation of trust")
+            logger.debug("No peerid set in initialisation of trust")
             return
         self.get()
 
@@ -311,7 +313,7 @@ class Trusts:
 
     def delete(self) -> bool:
         if not self.list:
-            logging.debug("Already deleted list in trusts")
+            logger.debug("Already deleted list in trusts")
             return False
         self.list.delete()
         return True
@@ -324,7 +326,7 @@ class Trusts:
         self.trusts = None
         self.list = None
         if not actor_id:
-            logging.debug("No actor_id in initialisation of trusts")
+            logger.debug("No actor_id in initialisation of trusts")
             return
         if self.config:
             self.list = self.config.DbTrust.DbTrustList()

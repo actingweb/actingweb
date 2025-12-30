@@ -90,6 +90,22 @@ Running Specific Tests
    # Run tests matching pattern
    poetry run pytest tests/ -k "oauth" -v
 
+Performance Benchmarks
+~~~~~~~~~~~~~~~~~~~~~~
+
+Performance benchmark tests are marked with ``@pytest.mark.benchmark`` and are **excluded from parallel test runs** in CI/CD because benchmarks require sequential execution for accurate measurements.
+
+.. code-block:: bash
+
+   # Run benchmark tests (must be run WITHOUT -n flag)
+   DATABASE_BACKEND=postgresql poetry run pytest -m benchmark -v
+
+   # Run benchmarks and save results to JSON for comparison
+   DATABASE_BACKEND=postgresql poetry run pytest -m benchmark --benchmark-json=pg_results.json
+   DATABASE_BACKEND=dynamodb poetry run pytest -m benchmark --benchmark-json=db_results.json
+
+**Note**: Benchmarks are automatically disabled when using ``pytest-xdist`` parallel execution (``-n`` flag). Always run benchmarks sequentially.
+
 Unit Testing Hooks
 ------------------
 

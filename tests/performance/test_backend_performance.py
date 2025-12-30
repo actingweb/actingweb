@@ -50,6 +50,7 @@ def sample_actor_id() -> Iterator[str]:
         db_actor.delete()
 
 
+@pytest.mark.benchmark
 class TestActorPerformance:
     """Benchmark actor operations."""
 
@@ -135,6 +136,7 @@ class TestActorPerformance:
             print(f"\n{backend_name} actor delete: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
+@pytest.mark.benchmark
 class TestPropertyPerformance:
     """Benchmark property operations."""
 
@@ -203,6 +205,7 @@ class TestPropertyPerformance:
             print(f"\n{backend_name} property list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
+@pytest.mark.benchmark
 class TestTrustPerformance:
     """Benchmark trust operations."""
 
@@ -291,6 +294,7 @@ class TestTrustPerformance:
             print(f"\n{backend_name} trust list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
+@pytest.mark.benchmark
 class TestSubscriptionPerformance:
     """Benchmark subscription operations."""
 
@@ -351,6 +355,7 @@ class TestSubscriptionPerformance:
             print(f"\n{backend_name} subscription read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
+@pytest.mark.benchmark
 class TestAttributePerformance:
     """Benchmark attribute operations (internal storage)."""
 
@@ -406,6 +411,7 @@ class TestAttributePerformance:
             print(f"\n{backend_name} attribute read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
+@pytest.mark.benchmark
 class TestBulkOperations:
     """Benchmark bulk operations."""
 
@@ -465,6 +471,7 @@ class TestBulkOperations:
 
 
 # Performance comparison summary
+@pytest.mark.benchmark
 def test_performance_summary(backend_name: str) -> None:
     """
     Print performance summary for the current backend.

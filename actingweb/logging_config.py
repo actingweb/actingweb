@@ -5,17 +5,16 @@ framework with sensible defaults for different environments.
 """
 
 import logging
-from typing import Optional
 
 
 def configure_actingweb_logging(
     level: int = logging.INFO,
     *,
-    db_level: Optional[int] = None,
-    handlers_level: Optional[int] = None,
-    interface_level: Optional[int] = None,
-    oauth_level: Optional[int] = None,
-    mcp_level: Optional[int] = None,
+    db_level: int | None = None,
+    handlers_level: int | None = None,
+    interface_level: int | None = None,
+    oauth_level: int | None = None,
+    mcp_level: int | None = None,
 ) -> None:
     """
     Configure ActingWeb logging with sensible defaults.

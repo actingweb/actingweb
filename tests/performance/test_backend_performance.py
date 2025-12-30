@@ -39,7 +39,7 @@ def sample_actor_id() -> Iterator[str]:
     actor_id = f"perf_test_actor_{int(time.time() * 1000)}"
 
     # Create actor
-    db_actor = config.DbActor()  # type: ignore[misc]
+    db_actor = config.DbActor.DbActor()  # type: ignore[misc]
     db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
 
     yield actor_id
@@ -61,7 +61,7 @@ class TestActorPerformance:
 
         def create_actor() -> bool:
             actor_id = f"perf_create_{int(time.time() * 1000000)}"
-            db_actor = config.DbActor()  # type: ignore[misc]
+            db_actor = config.DbActor.DbActor()  # type: ignore[misc]
             result = db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
 
             # Cleanup
@@ -74,8 +74,9 @@ class TestActorPerformance:
         result = benchmark(create_actor)
         assert result is True
 
-        # Print summary
-        print(f"\n{backend_name} actor create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        # Print summary (only in non-parallel mode)
+        if benchmark.stats:
+            print(f"\n{backend_name} actor create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_actor_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure actor read time."""
@@ -84,14 +85,15 @@ class TestActorPerformance:
         config = Config()
 
         def read_actor() -> dict[str, Any] | None:
-            db_actor = config.DbActor()  # type: ignore[misc]
+            db_actor = config.DbActor.DbActor()  # type: ignore[misc]
             return db_actor.get(actor_id=sample_actor_id)
 
         result = benchmark(read_actor)
         assert result is not None
         assert result["id"] == sample_actor_id
 
-        print(f"\n{backend_name} actor read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} actor read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_actor_update_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure actor update time."""
@@ -100,14 +102,15 @@ class TestActorPerformance:
         config = Config()
 
         def update_actor() -> bool:
-            db_actor = config.DbActor()  # type: ignore[misc]
+            db_actor = config.DbActor.DbActor()  # type: ignore[misc]
             db_actor.get(actor_id=sample_actor_id)
             return db_actor.modify(creator="updated@test.com")
 
         result = benchmark(update_actor)
         assert result is True
 
-        print(f"\n{backend_name} actor update: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} actor update: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_actor_delete_performance(self, benchmark: Any, backend_name: str) -> None:
         """Measure actor deletion time."""
@@ -118,7 +121,7 @@ class TestActorPerformance:
         def delete_actor() -> bool:
             # Create actor
             actor_id = f"perf_delete_{int(time.time() * 1000000)}"
-            db_actor = config.DbActor()  # type: ignore[misc]
+            db_actor = config.DbActor.DbActor()  # type: ignore[misc]
             db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
 
             # Delete actor
@@ -128,7 +131,8 @@ class TestActorPerformance:
         result = benchmark(delete_actor)
         assert result is True
 
-        print(f"\n{backend_name} actor delete: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} actor delete: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
 class TestPropertyPerformance:
@@ -146,13 +150,14 @@ class TestPropertyPerformance:
             prop_name = f"perf_prop_{prop_counter[0]}"
             prop_counter[0] += 1
 
-            db_property = config.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
             return db_property.set(actor_id=sample_actor_id, name=prop_name, value="test_value")
 
         result = benchmark(write_property)
         assert result is True
 
-        print(f"\n{backend_name} property write: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} property write: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_property_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure property read time."""
@@ -162,17 +167,18 @@ class TestPropertyPerformance:
 
         # Create test property
         prop_name = f"perf_read_prop_{int(time.time())}"
-        db_property = config.DbProperty()  # type: ignore[misc]
+        db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
         db_property.set(actor_id=sample_actor_id, name=prop_name, value="test_value")
 
         def read_property() -> str | None:
-            db_property = config.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
             return db_property.get(actor_id=sample_actor_id, name=prop_name)
 
         result = benchmark(read_property)
         assert result == "test_value"
 
-        print(f"\n{backend_name} property read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} property read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_property_list_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure property list time."""
@@ -182,17 +188,19 @@ class TestPropertyPerformance:
 
         # Create 10 test properties
         for i in range(10):
-            db_property = config.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
             db_property.set(actor_id=sample_actor_id, name=f"list_prop_{i}", value=f"value_{i}")
 
         def list_properties() -> dict[str, Any]:
-            db_property_list = config.DbPropertyList()  # type: ignore[misc]
-            return db_property_list.get_all(actor_id=sample_actor_id)
+            db_property_list = config.DbProperty.DbPropertyList()  # type: ignore[misc]
+            result = db_property_list.fetch(actor_id=sample_actor_id)
+            return result if result else {}
 
         result = benchmark(list_properties)
         assert len(result) >= 10
 
-        print(f"\n{backend_name} property list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} property list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
 class TestTrustPerformance:
@@ -209,19 +217,21 @@ class TestTrustPerformance:
             peerid = f"peer_{trust_counter[0]}"
             trust_counter[0] += 1
 
-            db_trust = config.DbTrust()  # type: ignore[misc]
+            db_trust = config.DbTrust.DbTrust()  # type: ignore[misc]
             return db_trust.create(
                 actor_id=sample_actor_id,
                 peerid=peerid,
                 baseuri="https://peer.example.com",
-                type_str="inbox",
+                peer_type="inbox",
                 relationship="friend",
+                secret=f"secret_{trust_counter[0]}",
             )
 
         result = benchmark(create_trust)
         assert result is True
 
-        print(f"\n{backend_name} trust create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} trust create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_trust_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure trust read time."""
@@ -231,24 +241,26 @@ class TestTrustPerformance:
 
         # Create test trust
         peerid = f"peer_read_{int(time.time())}"
-        db_trust = config.DbTrust()  # type: ignore[misc]
+        db_trust = config.DbTrust.DbTrust()  # type: ignore[misc]
         db_trust.create(
             actor_id=sample_actor_id,
             peerid=peerid,
             baseuri="https://peer.example.com",
-            type_str="inbox",
+            peer_type="inbox",
             relationship="friend",
+            secret=f"secret_{peerid}",
         )
 
         def read_trust() -> dict[str, Any] | None:
-            db_trust = config.DbTrust()  # type: ignore[misc]
+            db_trust = config.DbTrust.DbTrust()  # type: ignore[misc]
             return db_trust.get(actor_id=sample_actor_id, peerid=peerid)
 
         result = benchmark(read_trust)
         assert result is not None
         assert result["peerid"] == peerid
 
-        print(f"\n{backend_name} trust read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} trust read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_trust_list_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure trust list time."""
@@ -258,23 +270,25 @@ class TestTrustPerformance:
 
         # Create 5 test trusts
         for i in range(5):
-            db_trust = config.DbTrust()  # type: ignore[misc]
+            db_trust = config.DbTrust.DbTrust()  # type: ignore[misc]
             db_trust.create(
                 actor_id=sample_actor_id,
                 peerid=f"list_peer_{i}",
                 baseuri=f"https://peer{i}.example.com",
-                type_str="inbox",
+                peer_type="inbox",
                 relationship="friend",
+                secret=f"secret_list_{i}",
             )
 
         def list_trusts() -> list[dict[str, Any]]:
-            db_trust_list = config.DbTrustList()  # type: ignore[misc]
-            return db_trust_list.get_trust_list(actor_id=sample_actor_id)
+            db_trust_list = config.DbTrust.DbTrustList()  # type: ignore[misc]
+            return db_trust_list.fetch(actor_id=sample_actor_id)
 
         result = benchmark(list_trusts)
         assert len(result) >= 5
 
-        print(f"\n{backend_name} trust list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} trust list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
 class TestSubscriptionPerformance:
@@ -292,7 +306,7 @@ class TestSubscriptionPerformance:
             subid = f"sub_{sub_counter[0]}"
             sub_counter[0] += 1
 
-            db_subscription = config.DbSubscription()  # type: ignore[misc]
+            db_subscription = config.DbSubscription.DbSubscription()  # type: ignore[misc]
             return db_subscription.create(
                 actor_id=sample_actor_id,
                 peerid=peerid,
@@ -304,7 +318,8 @@ class TestSubscriptionPerformance:
         result = benchmark(create_subscription)
         assert result is True
 
-        print(f"\n{backend_name} subscription create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} subscription create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_subscription_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure subscription read time."""
@@ -315,7 +330,7 @@ class TestSubscriptionPerformance:
         # Create test subscription
         peerid = f"subpeer_read_{int(time.time())}"
         subid = f"sub_read_{int(time.time())}"
-        db_subscription = config.DbSubscription()  # type: ignore[misc]
+        db_subscription = config.DbSubscription.DbSubscription()  # type: ignore[misc]
         db_subscription.create(
             actor_id=sample_actor_id,
             peerid=peerid,
@@ -325,14 +340,15 @@ class TestSubscriptionPerformance:
         )
 
         def read_subscription() -> dict[str, Any] | None:
-            db_subscription = config.DbSubscription()  # type: ignore[misc]
+            db_subscription = config.DbSubscription.DbSubscription()  # type: ignore[misc]
             return db_subscription.get(actor_id=sample_actor_id, peerid=peerid, subid=subid)
 
         result = benchmark(read_subscription)
         assert result is not None
-        assert result["subid"] == subid
+        assert result["subscriptionid"] == subid
 
-        print(f"\n{backend_name} subscription read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} subscription read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
 class TestAttributePerformance:
@@ -349,7 +365,7 @@ class TestAttributePerformance:
             attr_name = f"attr_{attr_counter[0]}"
             attr_counter[0] += 1
 
-            return config.DbAttribute.set_attr(  # type: ignore[misc]
+            return config.DbAttribute.DbAttribute.set_attr(  # type: ignore[misc]
                 actor_id=sample_actor_id,
                 bucket="test_bucket",
                 name=attr_name,
@@ -359,7 +375,8 @@ class TestAttributePerformance:
         result = benchmark(write_attribute)
         assert result is True
 
-        print(f"\n{backend_name} attribute write: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} attribute write: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
     def test_attribute_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure attribute read time."""
@@ -369,7 +386,7 @@ class TestAttributePerformance:
 
         # Create test attribute
         attr_name = f"attr_read_{int(time.time())}"
-        config.DbAttribute.set_attr(  # type: ignore[misc]
+        config.DbAttribute.DbAttribute.set_attr(  # type: ignore[misc]
             actor_id=sample_actor_id,
             bucket="test_bucket",
             name=attr_name,
@@ -377,15 +394,16 @@ class TestAttributePerformance:
         )
 
         def read_attribute() -> dict[str, Any] | None:
-            return config.DbAttribute.get_attr(  # type: ignore[misc]
+            return config.DbAttribute.DbAttribute.get_attr(  # type: ignore[misc]
                 actor_id=sample_actor_id, bucket="test_bucket", name=attr_name
             )
 
         result = benchmark(read_attribute)
         assert result is not None
-        assert result["key"] == "value"
+        assert result["data"]["key"] == "value"
 
-        print(f"\n{backend_name} attribute read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+        if benchmark.stats:
+            print(f"\n{backend_name} attribute read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
 
 
 class TestBulkOperations:
@@ -400,7 +418,7 @@ class TestBulkOperations:
         def bulk_write_properties() -> int:
             count = 0
             for i in range(100):
-                db_property = config.DbProperty()  # type: ignore[misc]
+                db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
                 if db_property.set(actor_id=sample_actor_id, name=f"bulk_{i}", value=f"value_{i}"):
                     count += 1
             return count
@@ -408,11 +426,12 @@ class TestBulkOperations:
         result = benchmark(bulk_write_properties)
         assert result == 100
 
-        total_time = benchmark.stats.stats.mean
-        per_write = total_time / 100
-        print(
-            f"\n{backend_name} bulk write (100 props): {total_time * 1000:.2f}ms total, {per_write * 1000:.2f}ms per write"
-        )
+        if benchmark.stats:
+            total_time = benchmark.stats.stats.mean
+            per_write = total_time / 100
+            print(
+                f"\n{backend_name} bulk write (100 props): {total_time * 1000:.2f}ms total, {per_write * 1000:.2f}ms per write"
+            )
 
     def test_bulk_property_read(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
         """Measure bulk property reads (100 properties)."""
@@ -422,13 +441,13 @@ class TestBulkOperations:
 
         # Create test properties
         for i in range(100):
-            db_property = config.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
             db_property.set(actor_id=sample_actor_id, name=f"bulk_read_{i}", value=f"value_{i}")
 
         def bulk_read_properties() -> int:
             count = 0
             for i in range(100):
-                db_property = config.DbProperty()  # type: ignore[misc]
+                db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
                 value = db_property.get(actor_id=sample_actor_id, name=f"bulk_read_{i}")
                 if value:
                     count += 1
@@ -437,11 +456,12 @@ class TestBulkOperations:
         result = benchmark(bulk_read_properties)
         assert result == 100
 
-        total_time = benchmark.stats.stats.mean
-        per_read = total_time / 100
-        print(
-            f"\n{backend_name} bulk read (100 props): {total_time * 1000:.2f}ms total, {per_read * 1000:.2f}ms per read"
-        )
+        if benchmark.stats:
+            total_time = benchmark.stats.stats.mean
+            per_read = total_time / 100
+            print(
+                f"\n{backend_name} bulk read (100 props): {total_time * 1000:.2f}ms total, {per_read * 1000:.2f}ms per read"
+            )
 
 
 # Performance comparison summary

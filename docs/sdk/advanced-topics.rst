@@ -7,9 +7,13 @@ Access Core Components
 
 .. code-block:: python
 
+   # Access underlying core implementations
    core_actor = actor.core_actor
    core_props = actor.properties.core_store
-   config = app.get_config()
+
+   # Access config (choose based on context)
+   config = app.get_config()  # From app instance
+   config = actor.config       # From actor instance (v3.8+, useful in hooks)
 
 Custom Framework Integration
 ----------------------------

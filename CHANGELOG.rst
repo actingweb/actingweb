@@ -39,6 +39,7 @@ ADDED
 - ``actingweb.logging_config`` module with production/development/testing configuration helpers
 - Performance-critical logger identification for production optimization
 - Lazy log evaluation in hot paths for improved performance
+- **ActorInterface.config property**: Direct access to ActingWeb configuration object from ``ActorInterface`` instances
 - **Trust Lifecycle Hooks**: Added ``trust_initiated`` hook - fires when actor initiates trust request to peer (outgoing)
 - **Trust Lifecycle Hooks**: Added ``trust_request_received`` hook - fires when actor receives trust request from peer (incoming)
 - **Trust Lifecycle Hooks**: Added ``trust_fully_approved_local`` hook - fires when THIS actor approves, completing mutual trust

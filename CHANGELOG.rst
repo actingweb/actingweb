@@ -2,7 +2,31 @@
 CHANGELOG
 =========
 
-v3.7.6: Dec 28, 2025
+v3.8.0: Dec 30, 2025
+--------------------
+
+CHANGED
+~~~~~~~
+
+- **Database Package Structure**: Refactored ``actingweb.db_dynamodb`` to hierarchical package structure ``actingweb.db.dynamodb`` for better organization
+- **Logging Architecture**: Implemented hierarchical logging with named loggers throughout codebase using ``__name__`` pattern
+- **Logging Configuration**: Added centralized logging configuration with ``configure_actingweb_logging()`` helper functions
+- **Log Levels**: Rebalanced log levels - significant operations (actor creation, trust deletion, etc.) now use INFO instead of DEBUG
+- **Documentation**: Updated all documentation references to new database package structure
+
+ADDED
+~~~~~
+
+- ``actingweb.logging_config`` module with production/development/testing configuration helpers
+- Performance-critical logger identification for production optimization
+- Lazy log evaluation in hot paths for improved performance
+
+FIXED
+~~~~~
+
+- Database module import paths corrected from relative to absolute imports
+
+v3.7.6: Dec 30, 2025
 --------------------
 
 FIXED

@@ -18,7 +18,7 @@ Contents
    routing-overview
    security
    actingweb
-   actingweb-db-dynamodb
+   actingweb-db
 
 High-Level API
 ==============
@@ -50,7 +50,7 @@ Module Reference
 **actingweb**
    Auto-generated documentation for the actingweb package.
 
-**actingweb.db_dynamodb**
+**actingweb.db.dynamodb**
    Documentation for the DynamoDB database backend.
 
 Quick Links

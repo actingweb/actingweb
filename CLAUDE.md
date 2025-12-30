@@ -20,9 +20,18 @@ poetry run pyright actingweb tests   # Type checking - must be 0 errors
 poetry run ruff check actingweb tests # Linting - must pass
 poetry run ruff format actingweb tests # Auto-format
 
-# Testing
-make test-integration             # Run all tests (starts DynamoDB automatically)
-poetry run pytest tests/ -v       # Run tests (requires DynamoDB running)
+# Testing (Sequential)
+make test-integration             # Integration tests only (sequential, ~5 min)
+make test-integration-fast        # Skip slow tests (sequential, ~3 min)
+poetry run pytest tests/ -v       # All tests (requires DynamoDB running)
+
+# Testing (Parallel) - FASTER but may have isolation issues
+make test-parallel                # Integration tests (parallel, ~2 min)
+make test-parallel-fast           # Skip slow tests (parallel, ~1 min)
+make test-all-parallel            # ALL tests inc. unit tests (parallel, ~4 min)
+
+# Final Validation Before Committing
+make test-all-parallel            # Run ALL tests (unit + integration)
 
 # Build
 poetry build                      # Build package
@@ -61,7 +70,7 @@ actingweb/
 │   ├── hook_registry.py    # Decorator-based event handling
 │   └── integrations/   # Flask & FastAPI integrations
 ├── handlers/           # HTTP request handlers
-├── db_dynamodb/        # DynamoDB backend (PynamoDB models)
+├── db/dynamodb/        # DynamoDB backend (PynamoDB models)
 ├── actor.py           # Core actor implementation
 ├── config.py          # Configuration management
 ├── oauth2.py          # OAuth2 authentication
@@ -119,7 +128,23 @@ API clients always receive JSON. See `docs/reference/routing-overview.rst`.
 - **Type hints required** on all functions
 - **Pyright** for type checking (primary)
 - **Ruff** for linting and formatting
-- **Tests**: 474+ tests, 100% passing required
+- **Tests**: 900+ tests, 100% passing required
+
+## Testing
+
+**Before committing**: Always run `make test-all-parallel` (all 900+ tests)
+
+**Test Modes**:
+- **Parallel** (recommended for development): `make test-all-parallel` (~4 min)
+- **Sequential** (recommended for CI): `make test-integration` (~5 min)
+
+Parallel tests are 2-3x faster but may have occasional isolation issues. If parallel tests fail, re-run sequentially to verify.
+
+**Full testing guide**: See `docs/contributing/testing.rst` for:
+- Test execution modes and tradeoffs
+- Test isolation troubleshooting
+- Running specific tests
+- Known parallel execution issues
 
 ## Project Documentation System
 
@@ -134,6 +159,26 @@ thoughts/shared/
 ```
 
 Check these before starting significant work to find existing patterns and context.
+
+## Logging
+
+ActingWeb uses hierarchical logging with named loggers (`__name__`).
+
+**Quick setup**:
+```python
+from actingweb.logging_config import configure_actingweb_logging
+import logging
+
+configure_actingweb_logging(logging.DEBUG)  # Development
+configure_actingweb_logging(logging.WARNING, db_level=logging.ERROR)  # Production
+```
+
+**Convenience functions**: `configure_production_logging()`, `configure_development_logging()`, `configure_testing_logging()`
+
+**Performance-critical loggers** (use WARNING+ in production):
+- `actingweb.db.dynamodb`, `actingweb.auth`, `actingweb.handlers.properties`, `actingweb.aw_proxy`
+
+**See also**: `actingweb/logging_config.py` module docstrings for detailed configuration options.
 
 ## Security Notes
 

@@ -12,8 +12,8 @@ Quick reference for AI agents working with this repository.
 actingweb/          # Source code
 ├── interface/      # Modern API (ActingWebApp, ActorInterface)
 ├── handlers/       # HTTP handlers
-├── db_dynamodb/    # Database backend
-tests/              # pytest tests (474+)
+├── db/dynamodb/    # Database backend
+tests/              # pytest tests (900+)
 docs/               # Sphinx documentation
 ```
 
@@ -28,9 +28,13 @@ poetry run pyright actingweb tests    # Type check - 0 errors required
 poetry run ruff check actingweb tests # Lint - must pass
 poetry run ruff format actingweb tests
 
-# Test
-make test-integration                 # Full test suite with DynamoDB
-poetry run pytest tests/ -v           # Tests only (DynamoDB must be running)
+# Test (Sequential - most reliable)
+make test-integration                 # Integration tests (~5 min)
+make test-integration-fast            # Skip slow tests (~3 min)
+
+# Test (Parallel - faster, may have isolation issues)
+make test-parallel                    # Integration tests (~2 min)
+make test-all-parallel                # ALL tests - unit + integration (~4 min)
 
 # Build
 poetry build
@@ -44,11 +48,29 @@ poetry build
 
 ## Pre-commit Checklist
 
+**CRITICAL**: Run ALL tests before committing!
+
 ```bash
 poetry run pyright actingweb tests    # → 0 errors, 0 warnings
 poetry run ruff check actingweb tests # → All checks passed
-poetry run pytest tests/              # → All tests passing
+make test-all-parallel                # → ALL 900+ tests passing
 ```
+
+### Test Execution Modes
+
+**Sequential (Recommended for CI)**
+- `make test-integration` - Most reliable, ~5 min
+- Better test isolation, no parallel issues
+
+**Parallel (Recommended for Development)**
+- `make test-all-parallel` - Faster, ~4 min
+- 2-3x speed improvement
+- May have occasional isolation issues (safe to re-run)
+
+**If parallel tests fail**:
+1. Re-run with `make test-integration` (sequential mode)
+2. If sequential passes → test isolation issue (not a bug)
+3. If sequential fails → investigate the actual failure
 
 ## Version Updates
 

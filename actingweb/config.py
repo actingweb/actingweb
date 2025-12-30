@@ -37,7 +37,8 @@ class Config:
         self.fqdn = "demo.actingweb.io"
         self.proto = "https://"  # http or https
         self.env = ""
-        self.database = "dynamodb"
+        # Read database backend from environment variable if set, otherwise default to dynamodb
+        self.database = os.getenv("DATABASE_BACKEND", "dynamodb")
         # Turn on the /www path
         self.ui = True
         # Enable /devtest path for test purposes, MUST be False in production

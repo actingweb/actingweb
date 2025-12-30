@@ -26,6 +26,7 @@ Contents
    web-ui
    service-integration
    database-maintenance
+   postgresql-migration
    troubleshooting
 
 Authentication & Authorization
@@ -60,7 +61,8 @@ Integration
 Operations
 ==========
 
-- **Database Maintenance** - DynamoDB TTL configuration and cleanup Lambda setup
+- **Database Maintenance** - TTL configuration and cleanup for both DynamoDB and PostgreSQL
+- **PostgreSQL Migration** - Complete guide for migrating from DynamoDB to PostgreSQL
 
 Troubleshooting
 ===============

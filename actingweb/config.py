@@ -6,12 +6,25 @@ import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from actingweb.interface.hooks import HookRegistry
 
 
 class Config:
     # Optional hook registry, set by ActingWebApp.get_config()
     _hooks: Optional["HookRegistry"]
+
+    # Database backend modules (dynamically loaded)
+    # These are typed as ModuleType to enable IDE autocomplete while
+    # allowing dynamic loading of different backends (dynamodb, postgresql, etc.)
+    DbActor: "ModuleType"
+    DbProperty: "ModuleType"
+    DbAttribute: "ModuleType"
+    DbTrust: "ModuleType"
+    DbPeerTrustee: "ModuleType"
+    DbSubscription: "ModuleType"
+    DbSubscriptionDiff: "ModuleType"
 
     def __init__(self, **kwargs: Any) -> None:
         #########

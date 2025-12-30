@@ -70,7 +70,10 @@ actingweb/
 │   ├── hook_registry.py    # Decorator-based event handling
 │   └── integrations/   # Flask & FastAPI integrations
 ├── handlers/           # HTTP request handlers
-├── db/dynamodb/        # DynamoDB backend (PynamoDB models)
+├── db/                 # Database backends (pluggable)
+│   ├── dynamodb/      # DynamoDB backend (PynamoDB models)
+│   ├── postgresql/    # PostgreSQL backend (psycopg3 + Alembic)
+│   └── protocols.py   # Database interface protocols
 ├── actor.py           # Core actor implementation
 ├── config.py          # Configuration management
 ├── oauth2.py          # OAuth2 authentication
@@ -86,6 +89,82 @@ actingweb/
 
 See `docs/sdk/handler-architecture.rst` for detailed architecture.
 
+## Database Backends
+
+ActingWeb supports two database backends:
+
+### DynamoDB (Default)
+- **Production-ready**: AWS-managed NoSQL database
+- **Auto-scaling**: Automatic read/write capacity management
+- **Requirements**: DynamoDB Local for testing (`docker compose -f docker-compose.test.yml up dynamodb-test`)
+- **Installation**: No extra dependencies needed
+
+### PostgreSQL
+- **Production-ready**: Open-source relational database
+- **Schema management**: Alembic migrations
+- **Requirements**: PostgreSQL 12+ server
+- **Installation**: `poetry install --extras postgresql`
+
+### PostgreSQL Setup
+
+**Installation**:
+```bash
+poetry install --extras postgresql
+```
+
+**Environment Configuration**:
+```bash
+DATABASE_BACKEND=postgresql    # Select PostgreSQL backend
+PG_DB_HOST=localhost          # Database host
+PG_DB_PORT=5432               # Database port (5433 for test)
+PG_DB_NAME=actingweb          # Database name
+PG_DB_USER=actingweb          # Database user
+PG_DB_PASSWORD=yourpassword   # Database password
+PG_DB_PREFIX=                 # Optional: prefix for schema names (used in tests)
+PG_DB_SCHEMA=public           # Schema name (default: public)
+```
+
+**Run Migrations**:
+```bash
+cd actingweb/db/postgresql/migrations
+alembic upgrade head
+```
+
+**Testing with PostgreSQL**:
+```bash
+# Start PostgreSQL test container
+docker compose -f docker-compose.test.yml up postgres-test -d
+
+# Run tests with PostgreSQL backend
+DATABASE_BACKEND=postgresql \
+PG_DB_HOST=localhost \
+PG_DB_PORT=5433 \
+PG_DB_NAME=actingweb_test \
+PG_DB_USER=actingweb \
+PG_DB_PASSWORD=testpassword \
+make test-integration
+
+# Stop container when done
+docker compose -f docker-compose.test.yml down
+```
+
+**Migration Management**:
+```bash
+cd actingweb/db/postgresql/migrations
+
+# Create a new migration
+alembic revision --autogenerate -m "Description of changes"
+
+# Apply migrations
+alembic upgrade head
+
+# Rollback one migration
+alembic downgrade -1
+
+# Show current migration version
+alembic current
+```
+
 ## Critical Configuration
 
 ```python
@@ -94,7 +173,7 @@ from actingweb.interface import ActingWebApp
 app = (
     ActingWebApp(
         aw_type="urn:actingweb:example.com:myapp",
-        database="dynamodb",
+        database="dynamodb",    # or "postgresql" - can also use DATABASE_BACKEND env var
         fqdn="myapp.example.com",
         proto="https://"
     )
@@ -104,6 +183,11 @@ app = (
     .with_mcp(enable=True)
 )
 ```
+
+**Database Backend Selection**:
+- Set `database="postgresql"` in ActingWebApp, OR
+- Set `DATABASE_BACKEND=postgresql` environment variable (takes precedence)
+- Default is `"dynamodb"` if not specified
 
 See `docs/quickstart/configuration.rst` for all options.
 

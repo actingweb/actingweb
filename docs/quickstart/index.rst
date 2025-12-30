@@ -28,8 +28,8 @@ Learning Path
 
 1. **Overview** - 3-5 minute quickstart with minimal Flask/FastAPI app
 2. **Getting Started** - More detailed walkthrough of building your first app
-3. **Local Development Setup** - Install DynamoDB Local and development tools
-4. **Configuration** - Configure authentication, database, and features
+3. **Local Development Setup** - Install database backend (DynamoDB or PostgreSQL) and development tools
+4. **Configuration** - Configure authentication, database backend, and features
 5. **Deployment** - Deploy to production environments
 
 Next Steps

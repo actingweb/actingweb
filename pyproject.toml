@@ -32,6 +32,11 @@ httpx = "^0.28.0"
 typing-extensions = "^4.0.0"
 oauthlib = "^3.2.0"
 cryptography = "^46.0.3"
+# PostgreSQL backend (optional)
+psycopg = { version = "^3.1.0", extras = ["binary", "pool"], optional = true }
+sqlalchemy = { version = "^2.0.0", optional = true }
+alembic = { version = "^1.13.0", optional = true }
+# Web framework integrations (optional)
 mcp = { version = "^1.23.0", optional = true }
 flask = { version = "^3.1.1", optional = true }
 werkzeug = { version = "^3.1.3", optional = true }
@@ -41,10 +46,11 @@ pydantic = { version = "^2.0.0", optional = true }
 uvicorn = { version = "^0.38.0", optional = true }
 
 [tool.poetry.extras]
+postgresql = ["psycopg", "sqlalchemy", "alembic"]
 flask = ["flask", "werkzeug", "jinja2"]
 fastapi = ["fastapi", "pydantic", "jinja2", "uvicorn"]
 mcp = ["mcp"]
-all = ["mcp", "flask", "werkzeug", "jinja2", "fastapi", "pydantic", "uvicorn"]
+all = ["psycopg", "sqlalchemy", "alembic", "mcp", "flask", "werkzeug", "jinja2", "fastapi", "pydantic", "uvicorn"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.1"
@@ -129,7 +135,7 @@ warn_unreachable = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = ["pynamodb.*", "boto3.*", "botocore.*", "mcp.*"]
+module = ["pynamodb.*", "boto3.*", "botocore.*", "mcp.*", "psycopg.*", "sqlalchemy.*", "alembic.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
@@ -174,4 +180,6 @@ markers = [
     "slow: marks tests as slow",
     "oauth: marks tests requiring OAuth mocking",
     "mcp: marks tests for MCP endpoints",
+    "dynamodb: marks tests specific to DynamoDB backend",
+    "postgresql: marks tests specific to PostgreSQL backend",
 ]

@@ -12,7 +12,7 @@ Quick Start
 
     app = ActingWebApp(
         aw_type="urn:actingweb:example.com:myapp",
-        database="dynamodb",
+        database="postgresql",  # or "dynamodb" (default)
         fqdn="myapp.example.com",
         proto="https://"
     ).with_oauth(client_id="...", client_secret="...") \
@@ -97,22 +97,69 @@ Actors Registry
 
     app.add_actor_type("myself", factory=f"{app.proto}{app.fqdn}/", relationship="friend")
 
-Database
---------
+Database Backend
+----------------
 
-- ``database``: ``dynamodb`` (default). See ``docs/actingweb.db_dynamodb`` for module APIs.
-- AWS production: configure credentials/IAM and tables appropriately.
-- Local dev: DynamoDB Local is supported.
+ActingWeb supports two database backends:
 
-Database Setup (DynamoDB)
--------------------------
+- ``database="dynamodb"`` (default) - AWS DynamoDB with PynamoDB ORM
+- ``database="postgresql"`` - PostgreSQL with psycopg3 and Alembic migrations
+
+Backend selection is controlled by the ``database`` parameter in ``ActingWebApp()`` or via the ``DATABASE_BACKEND`` environment variable.
+
+**Choosing a Backend:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Feature
+     - DynamoDB
+     - PostgreSQL
+   * - Setup Complexity
+     - Low (auto-creates tables)
+     - Medium (requires migrations)
+   * - Local Development
+     - DynamoDB Local (Docker)
+     - PostgreSQL (Docker/native)
+   * - Scaling
+     - Automatic, serverless
+     - Manual (vertical/horizontal)
+   * - Cost Model
+     - Pay-per-request or provisioned
+     - Instance-based
+   * - Query Flexibility
+     - Limited (key-based + GSI)
+     - Full SQL with JOINs
+   * - Latency (local)
+     - Higher (network overhead)
+     - Lower (direct connection)
+   * - Production Management
+     - Fully managed (AWS)
+     - Self-managed or RDS
+   * - Multi-region
+     - Built-in global tables
+     - Manual replication setup
+
+See :doc:`../reference/database-backends` for detailed comparison and migration guide.
+
+DynamoDB Setup
+--------------
+
+Installation
+~~~~~~~~~~~~
+
+.. code-block:: bash
+
+    pip install 'actingweb[dynamodb]'
 
 Local Development (DynamoDB Local)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
     docker run -p 8000:8000 amazon/dynamodb-local
+    export DATABASE_BACKEND=dynamodb  # Optional, default
     export AWS_ACCESS_KEY_ID=local
     export AWS_SECRET_ACCESS_KEY=local
     export AWS_DEFAULT_REGION=us-east-1
@@ -123,9 +170,78 @@ Point your app to DynamoDB Local via these environment variables (no code change
 Production (AWS DynamoDB)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Configure IAM with least-privilege on the app’s tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``.
-- Ensure tables exist (actor, properties, attributes, subscriptions, trust, and related indexes) before first traffic; the library’s DB modules are under ``actingweb.db_dynamodb``.
+- Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``.
+- Ensure tables exist (actor, properties, attributes, subscriptions, trust, and related indexes) before first traffic; the library's DB modules are under ``actingweb.db.dynamodb``.
 - Set region/credentials via standard AWS mechanisms (env vars, instance roles, profiles).
+
+PostgreSQL Setup
+----------------
+
+Installation
+~~~~~~~~~~~~
+
+.. code-block:: bash
+
+    pip install 'actingweb[postgresql]'
+
+Local Development
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+    # Start PostgreSQL
+    docker run -d \
+      --name actingweb-postgres \
+      -e POSTGRES_USER=actingweb \
+      -e POSTGRES_PASSWORD=devpassword \
+      -e POSTGRES_DB=actingweb \
+      -p 5432:5432 \
+      postgres:16-alpine
+
+    # Configure environment
+    export DATABASE_BACKEND=postgresql
+    export PG_DB_HOST=localhost
+    export PG_DB_PORT=5432
+    export PG_DB_NAME=actingweb
+    export PG_DB_USER=actingweb
+    export PG_DB_PASSWORD=devpassword
+
+    # Run migrations (REQUIRED before first use)
+    cd actingweb/db/postgresql/
+    alembic upgrade head
+
+Production (Managed PostgreSQL)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Configure environment variables for your PostgreSQL instance:
+
+.. code-block:: bash
+
+    export DATABASE_BACKEND=postgresql
+    export PG_DB_HOST=postgres.example.com
+    export PG_DB_PORT=5432
+    export PG_DB_NAME=actingweb_prod
+    export PG_DB_USER=actingweb
+    export PG_DB_PASSWORD=<secure-password>
+
+    # Optional connection pool tuning
+    export PG_POOL_MIN_SIZE=2
+    export PG_POOL_MAX_SIZE=20
+    export PG_POOL_TIMEOUT=30
+
+**Migration Management:**
+
+- Run ``alembic upgrade head`` to apply migrations
+- Migrations are located in ``actingweb/db/postgresql/migrations/``
+- Check current version: ``alembic current``
+- See migration guide: :doc:`../guides/postgresql-migration`
+
+**Recommended Services:**
+
+- AWS RDS PostgreSQL
+- Google Cloud SQL for PostgreSQL
+- Azure Database for PostgreSQL
+- DigitalOcean Managed PostgreSQL
 
 Logging
 -------

@@ -5,18 +5,26 @@ Database Maintenance Guide
 Overview
 --------
 
-ActingWeb stores temporary data (tokens, sessions, auth codes) in DynamoDB's
+ActingWeb stores temporary data (tokens, sessions, auth codes) in the database's
 attribute storage. This data has defined lifetimes and should be automatically
 cleaned up to prevent unbounded database growth.
 
 This guide explains how to configure your deployment for proper data lifecycle
-management.
+management with both **DynamoDB** and **PostgreSQL** backends.
 
 .. note::
 
-   ActingWeb is designed for AWS Lambda deployments where hundreds of containers
-   may scale concurrently. **Never add cleanup logic to your serving path** as
-   this impacts cold start time and request latency.
+   ActingWeb is designed for serverless and containerized deployments where many
+   instances may scale concurrently. **Never add cleanup logic to your serving path**
+   as this impacts cold start time and request latency.
+
+Backend Selection
+-----------------
+
+Choose the appropriate section based on your database backend:
+
+- **DynamoDB**: Use DynamoDB's built-in TTL feature (zero-overhead, automatic)
+- **PostgreSQL**: Use pg_cron or scheduled cleanup scripts
 
 DynamoDB TTL Configuration
 --------------------------
@@ -333,6 +341,277 @@ Troubleshooting with CloudWatch Logs Insights
     fields @timestamp, @message
     | filter @message like /Stored access token/ or @message like /Created refresh token/
     | stats count() as token_count by bin(1h)
+
+PostgreSQL Cleanup Configuration
+---------------------------------
+
+PostgreSQL doesn't have automatic TTL deletion like DynamoDB, but ActingWeb stores
+a ``ttl_timestamp`` field that you can use for scheduled cleanup. There are three
+approaches: pg_cron extension, external cron job, or scheduled Lambda/Cloud Function.
+
+Option 1: pg_cron Extension (Recommended)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**pg_cron** is a PostgreSQL extension that runs scheduled jobs inside the database.
+
+**Installation:**
+
+.. code-block:: sql
+
+    -- Enable pg_cron extension (requires superuser)
+    CREATE EXTENSION pg_cron;
+
+**Schedule cleanup job:**
+
+.. code-block:: sql
+
+    -- Run cleanup daily at 03:00 UTC
+    SELECT cron.schedule(
+        'actingweb-ttl-cleanup',
+        '0 3 * * *',
+        $$
+        DELETE FROM attributes
+        WHERE ttl_timestamp IS NOT NULL
+          AND ttl_timestamp < EXTRACT(EPOCH FROM NOW())::BIGINT
+        $$
+    );
+
+**Verify job is scheduled:**
+
+.. code-block:: sql
+
+    SELECT * FROM cron.job WHERE jobname = 'actingweb-ttl-cleanup';
+
+**View job run history:**
+
+.. code-block:: sql
+
+    SELECT *
+    FROM cron.job_run_details
+    WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'actingweb-ttl-cleanup')
+    ORDER BY start_time DESC
+    LIMIT 10;
+
+**Notes:**
+
+- pg_cron is available on AWS RDS PostgreSQL 12.5+, Google Cloud SQL, and Azure Database
+- Runs inside the database process (zero external infrastructure)
+- Automatic retries on failure
+- Job history tracking built-in
+
+Option 2: External Cron Job
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Run a scheduled script from cron/systemd timer:
+
+**cleanup_postgres.sh:**
+
+.. code-block:: bash
+
+    #!/bin/bash
+    # cleanup_postgres.sh - Scheduled PostgreSQL cleanup
+
+    PGPASSWORD="$PG_DB_PASSWORD" psql \
+      -h "$PG_DB_HOST" \
+      -p "$PG_DB_PORT" \
+      -U "$PG_DB_USER" \
+      -d "$PG_DB_NAME" \
+      -c "DELETE FROM attributes WHERE ttl_timestamp IS NOT NULL AND ttl_timestamp < EXTRACT(EPOCH FROM NOW())::BIGINT;"
+
+    echo "Cleanup completed at $(date)"
+
+**Crontab entry:**
+
+.. code-block:: text
+
+    # Run daily at 03:00
+    0 3 * * * /path/to/cleanup_postgres.sh >> /var/log/actingweb-cleanup.log 2>&1
+
+**Systemd timer (alternative):**
+
+.. code-block:: ini
+
+    # /etc/systemd/system/actingweb-cleanup.timer
+    [Unit]
+    Description=ActingWeb PostgreSQL Cleanup Timer
+
+    [Timer]
+    OnCalendar=daily
+    OnCalendar=03:00
+    Persistent=true
+
+    [Install]
+    WantedBy=timers.target
+
+.. code-block:: ini
+
+    # /etc/systemd/system/actingweb-cleanup.service
+    [Unit]
+    Description=ActingWeb PostgreSQL Cleanup
+
+    [Service]
+    Type=oneshot
+    ExecStart=/path/to/cleanup_postgres.sh
+    User=actingweb
+    Environment="PG_DB_HOST=localhost"
+    Environment="PG_DB_PASSWORD=secretpassword"
+
+Enable: ``systemctl enable --now actingweb-cleanup.timer``
+
+Option 3: Cloud Function/Lambda
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Deploy a serverless function for PostgreSQL cleanup:
+
+**AWS Lambda Example:**
+
+.. code-block:: python
+
+    """
+    cleanup_postgres_handler.py - PostgreSQL maintenance Lambda
+    """
+
+    import os
+    import logging
+    from psycopg import connect
+
+    logger = logging.getLogger(__name__)
+
+    def handler(event, context):
+        """Clean up expired PostgreSQL attributes."""
+        conn = connect(
+            host=os.environ["PG_DB_HOST"],
+            port=int(os.environ["PG_DB_PORT"]),
+            dbname=os.environ["PG_DB_NAME"],
+            user=os.environ["PG_DB_USER"],
+            password=os.environ["PG_DB_PASSWORD"],
+        )
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM attributes
+                    WHERE ttl_timestamp IS NOT NULL
+                      AND ttl_timestamp < EXTRACT(EPOCH FROM NOW())::BIGINT
+                """)
+                deleted_count = cur.rowcount
+                conn.commit()
+
+            logger.info(f"Deleted {deleted_count} expired attributes")
+
+            return {
+                "statusCode": 200,
+                "body": {"deleted": deleted_count}
+            }
+        finally:
+            conn.close()
+
+**Serverless Framework deployment:**
+
+.. code-block:: yaml
+
+    # serverless.yml
+    functions:
+      postgresCleanup:
+        handler: cleanup_postgres_handler.handler
+        timeout: 300
+        memorySize: 256
+        events:
+          - schedule:
+              rate: cron(0 3 * * ? *)  # Daily at 03:00 UTC
+        environment:
+          PG_DB_HOST: ${env:PG_DB_HOST}
+          PG_DB_PORT: 5432
+          PG_DB_NAME: actingweb
+          PG_DB_USER: actingweb
+          PG_DB_PASSWORD: ${env:PG_DB_PASSWORD}
+
+PostgreSQL Monitoring
+~~~~~~~~~~~~~~~~~~~~~
+
+**Check for expired records awaiting cleanup:**
+
+.. code-block:: sql
+
+    SELECT COUNT(*)
+    FROM attributes
+    WHERE ttl_timestamp IS NOT NULL
+      AND ttl_timestamp < EXTRACT(EPOCH FROM NOW())::BIGINT;
+
+**Monitor table size:**
+
+.. code-block:: sql
+
+    SELECT
+        pg_size_pretty(pg_total_relation_size('attributes')) AS total_size,
+        (SELECT COUNT(*) FROM attributes) AS row_count,
+        (SELECT COUNT(*) FROM attributes WHERE ttl_timestamp IS NOT NULL) AS ttl_rows
+    FROM pg_class
+    WHERE relname = 'attributes';
+
+**Create monitoring view:**
+
+.. code-block:: sql
+
+    CREATE VIEW attribute_cleanup_status AS
+    SELECT
+        COUNT(*) FILTER (WHERE ttl_timestamp IS NULL) AS permanent_rows,
+        COUNT(*) FILTER (WHERE ttl_timestamp IS NOT NULL AND ttl_timestamp >= EXTRACT(EPOCH FROM NOW())::BIGINT) AS active_ttl_rows,
+        COUNT(*) FILTER (WHERE ttl_timestamp IS NOT NULL AND ttl_timestamp < EXTRACT(EPOCH FROM NOW())::BIGINT) AS expired_rows,
+        pg_size_pretty(pg_total_relation_size('attributes')) AS table_size
+    FROM attributes;
+
+**Query the view:**
+
+.. code-block:: sql
+
+    SELECT * FROM attribute_cleanup_status;
+
+Cleanup Script with Application Context
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For cleanup that requires application logic (OAuth sessions, MCP tokens):
+
+.. code-block:: python
+
+    """
+    cleanup_postgres_app.py - Application-aware PostgreSQL cleanup
+
+    Run via cron or cloud scheduler.
+    """
+
+    import logging
+    from actingweb.config import Config
+    from actingweb.oauth_session import OAuth2SessionManager
+    from actingweb.oauth2_server.token_manager import ActingWebTokenManager
+
+    logger = logging.getLogger(__name__)
+
+    def main():
+        # Initialize with PostgreSQL backend
+        config = Config(
+            database="postgresql",
+            # ... your config settings ...
+        )
+
+        results = {}
+
+        # Clean up OAuth sessions
+        session_mgr = OAuth2SessionManager(config)
+        results["oauth_sessions"] = session_mgr.clear_expired_sessions()
+
+        # Clean up SPA tokens
+        results["spa_tokens"] = session_mgr.cleanup_expired_tokens()
+
+        # Clean up MCP tokens
+        token_mgr = ActingWebTokenManager(config)
+        results["mcp_tokens"] = token_mgr.cleanup_expired_tokens()
+
+        logger.info(f"PostgreSQL cleanup complete: {results}")
+        return results
+
+    if __name__ == "__main__":
+        main()
 
 Data Lifecycle Reference
 ------------------------

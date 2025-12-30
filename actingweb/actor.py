@@ -105,9 +105,7 @@ class Actor:
                 "last_response_message": response.content,
                 "data": json.loads(response.content.decode("utf-8", "ignore")),
             }
-            logger.debug(
-                f"Got peer info from url({url}) with body({response.content})"
-            )
+            logger.debug(f"Got peer info from url({url}) with body({response.content})")
         except (TypeError, ValueError, KeyError):
             res = {
                 "last_response_code": 500,
@@ -340,8 +338,6 @@ class Actor:
                 hooks.execute_lifecycle_hooks("actor_created", actor_interface)
             except Exception as e:
                 # Log hook execution error but don't fail actor creation
-                import logging
-
                 logger.warning(
                     f"Actor created successfully but lifecycle hook failed: {e}"
                 )
@@ -350,9 +346,7 @@ class Actor:
 
     def modify(self, creator: str | None = None) -> bool:
         if not self.handle or not creator:
-            logger.debug(
-                "Attempted modify of actor with no handle or no param changed"
-            )
+            logger.debug("Attempted modify of actor with no handle or no param changed")
             return False
         if "@" in creator:
             creator = creator.lower()
@@ -470,9 +464,7 @@ class Actor:
                 else str(response.content)
             )
         except Exception:
-            logger.debug(
-                "Not able to delete peer actor remotely due to network issues"
-            )
+            logger.debug("Not able to delete peer actor remotely due to network issues")
             self.last_response_code = 408
             return False
         if response.status_code < 200 or response.status_code > 299:
@@ -543,9 +535,7 @@ class Actor:
                 "trustee_root": (self.config.root + self.id) if self.config else "",
             }
             data = json.dumps(params)
-            logger.debug(
-                f"Creating peer actor at factory({factory}) with data({data})"
-            )
+            logger.debug(f"Creating peer actor at factory({factory}) with data({data})")
             response = None
             try:
                 response = requests.post(
@@ -1095,9 +1085,7 @@ class Actor:
                 mod_trust.modify(peer_approved=True)
             return mod_trust.get()
         else:
-            logger.debug(
-                "Not able to create trust with peer async, deleting my trust."
-            )
+            logger.debug("Not able to create trust with peer async, deleting my trust.")
             dbtrust.delete()
             return False
 
@@ -1503,9 +1491,7 @@ class Actor:
             if response.status_code == 204:
                 return True
             else:
-                logger.debug(
-                    "Failed to delete remote subscription at url(" + url + ")"
-                )
+                logger.debug("Failed to delete remote subscription at url(" + url + ")")
                 return False
         except Exception:
             return False

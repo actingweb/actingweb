@@ -2,16 +2,6 @@
 
 A living checklist for near‑term tasks, quality gates, and release prep. Keep items small and actionable. Use commands from the repo guidelines.
 
-## Refactoring - v3.8.0
-
-- [x] Refactor `actingweb.db_dynamodb` to `actingweb.db.dynamodb` hierarchical structure
-- [x] Implement hierarchical logging with named loggers throughout codebase
-- [x] Add centralized logging configuration with `configure_actingweb_logging()`
-- [x] Rebalance log levels (significant operations → INFO instead of DEBUG)
-- [x] Update all documentation references to new database structure
-- [x] Remove LOGGING_RECOMMENDATIONS.md (consolidated into code docstrings)
-- [x] Move cache.md to docs/guides/caching.md
-
 ## Performance & Caching
 
 - [ ] Review and finalize caching strategy documented in `docs/guides/caching.md`.
@@ -19,7 +9,7 @@ A living checklist for near‑term tasks, quality gates, and release prep. Keep 
 
 ## Code TODOs
 
-### www.py Handler
+### <www.py> Handler
 **Location:** `actingweb/handlers/www.py:751`
 - [ ] Store human-readable relationship name separately if different from trust_type
 

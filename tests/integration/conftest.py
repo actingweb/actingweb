@@ -112,8 +112,20 @@ def get_worker_number(worker_id: str) -> int:
 
 
 # Test configuration
+# Database backend selection
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
+
+# DynamoDB configuration
 # Use AWS_DB_HOST from environment if set (for CI), otherwise use local default
 TEST_DYNAMODB_HOST = os.environ.get("AWS_DB_HOST", "http://localhost:8001")
+
+# PostgreSQL configuration
+TEST_POSTGRES_HOST = os.environ.get("PG_DB_HOST", "localhost")
+TEST_POSTGRES_PORT = os.environ.get("PG_DB_PORT", "5433")
+TEST_POSTGRES_DB = os.environ.get("PG_DB_NAME", "actingweb_test")
+TEST_POSTGRES_USER = os.environ.get("PG_DB_USER", "actingweb")
+TEST_POSTGRES_PASSWORD = os.environ.get("PG_DB_PASSWORD", "testpassword")
+
 TEST_APP_HOST = "localhost"
 # Base ports - will be offset by worker number for parallel execution
 BASE_APP_PORT = 5555
@@ -143,65 +155,166 @@ def worker_info(request) -> dict:
 @pytest.fixture(scope="session")
 def docker_services():
     """
-    Start DynamoDB via Docker Compose for the test session.
+    Start database services (DynamoDB or PostgreSQL) via Docker Compose.
 
-    If DynamoDB is already running (e.g., in CI), skips docker-compose setup.
-    Yields after DynamoDB is ready, cleans up on session end.
+    If services are already running (e.g., in CI), skips docker-compose setup.
+    Yields after services are ready, cleans up on session end.
 
-    Note: DynamoDB is shared across all workers for parallel execution.
-    Worker isolation is achieved through database table prefixes.
+    Note: Services are shared across all workers for parallel execution.
+    Worker isolation is achieved through database table prefixes (DynamoDB)
+    or schema prefixes (PostgreSQL).
     """
-    # Check if DynamoDB is already running
-    dynamodb_already_running = False
-    try:
-        response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
-        if response.status_code in [200, 400]:  # DynamoDB responds with 400 to /
-            print(f"DynamoDB already running at {TEST_DYNAMODB_HOST}")
-            dynamodb_already_running = True
-    except requests.exceptions.ConnectionError:
-        pass
+    # Determine which services to start based on DATABASE_BACKEND
+    services_to_start = []
+    if DATABASE_BACKEND == "dynamodb":
+        services_to_start.append("dynamodb-test")
+    elif DATABASE_BACKEND == "postgresql":
+        services_to_start.append("postgres-test")
+
+    # Check if services are already running
+    services_already_running = False
+
+    if DATABASE_BACKEND == "dynamodb":
+        try:
+            response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
+            if response.status_code in [200, 400]:  # DynamoDB responds with 400 to /
+                print(f"DynamoDB already running at {TEST_DYNAMODB_HOST}")
+                services_already_running = True
+        except requests.exceptions.ConnectionError:
+            pass
+    elif DATABASE_BACKEND == "postgresql":
+        try:
+            import psycopg
+            conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
+            with psycopg.connect(conninfo) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    print(f"PostgreSQL already running at {TEST_POSTGRES_HOST}:{TEST_POSTGRES_PORT}")
+                    services_already_running = True
+        except Exception:
+            pass
 
     started_docker_compose = False
-    if not dynamodb_already_running:
-        # Start Docker Compose
-        print(f"Starting DynamoDB via docker-compose at {TEST_DYNAMODB_HOST}")
+    if not services_already_running:
+        # Start Docker Compose with specific services
+        service_args = " ".join(services_to_start)
+        print(f"Starting {DATABASE_BACKEND} via docker-compose")
         subprocess.run(
-            ["docker-compose", "-f", "docker-compose.test.yml", "up", "-d"],
+            f"docker-compose -f docker-compose.test.yml up -d {service_args}",
+            shell=True,
             check=True,
             cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         )
         started_docker_compose = True
 
-        # Wait for DynamoDB to be ready
+        # Wait for service to be ready
         max_retries = 30
-        for _ in range(max_retries):
-            try:
-                response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
-                if response.status_code in [
-                    200,
-                    400,
-                ]:  # DynamoDB responds with 400 to /
-                    break
-            except requests.exceptions.ConnectionError:
-                pass
-            time.sleep(1)
-        else:
-            raise RuntimeError("DynamoDB failed to start within 30 seconds")
+        if DATABASE_BACKEND == "dynamodb":
+            for _ in range(max_retries):
+                try:
+                    response = requests.get(f"{TEST_DYNAMODB_HOST}/", timeout=2)
+                    if response.status_code in [200, 400]:
+                        break
+                except requests.exceptions.ConnectionError:
+                    pass
+                time.sleep(1)
+            else:
+                raise RuntimeError("DynamoDB failed to start within 30 seconds")
+        elif DATABASE_BACKEND == "postgresql":
+            for _ in range(max_retries):
+                try:
+                    import psycopg
+                    conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
+                    with psycopg.connect(conninfo) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT 1")
+                            break
+                except Exception:
+                    pass
+                time.sleep(1)
+            else:
+                raise RuntimeError("PostgreSQL failed to start within 30 seconds")
 
     yield
 
     # Cleanup: Stop Docker Compose only if we started it
     if started_docker_compose:
-        print("Stopping docker-compose services")
+        print(f"Stopping docker-compose services: {services_to_start}")
+        service_args = " ".join(services_to_start)
         subprocess.run(
-            ["docker-compose", "-f", "docker-compose.test.yml", "down", "-v"],
+            f"docker-compose -f docker-compose.test.yml down {service_args}",
+            shell=True,
             check=False,
             cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def setup_database(docker_services, worker_info):
+    """
+    Set up database for testing based on DATABASE_BACKEND.
+
+    For PostgreSQL: Runs migrations to create tables with worker-specific schema.
+    For DynamoDB: No setup needed (tables auto-created).
+    """
+    if DATABASE_BACKEND == "postgresql":
+        # Run Alembic migrations for PostgreSQL with worker-specific schema
+        schema_name = f"{worker_info['db_prefix']}public"
+
+        # Set environment for migration
+        migration_env = os.environ.copy()
+        migration_env["PG_DB_HOST"] = TEST_POSTGRES_HOST
+        migration_env["PG_DB_PORT"] = TEST_POSTGRES_PORT
+        migration_env["PG_DB_NAME"] = TEST_POSTGRES_DB
+        migration_env["PG_DB_USER"] = TEST_POSTGRES_USER
+        migration_env["PG_DB_PASSWORD"] = TEST_POSTGRES_PASSWORD
+        migration_env["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        migration_env["PG_DB_SCHEMA"] = "public"
+
+        # Run migrations
+        migrations_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "actingweb",
+            "db",
+            "postgresql",
+        )
+
+        print(f"Running Alembic migrations for worker {worker_info['worker_id']} with schema {schema_name}")
+        subprocess.run(
+            ["poetry", "run", "alembic", "upgrade", "head"],
+            cwd=migrations_dir,
+            env=migration_env,
+            check=True,
+            capture_output=True,
+        )
+
+    yield
+
+    # Cleanup PostgreSQL schemas after tests
+    if DATABASE_BACKEND == "postgresql":
+        try:
+            import psycopg
+            from psycopg import sql
+            conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
+            schema_name = f"{worker_info['db_prefix']}public"
+
+            with psycopg.connect(conninfo) as conn:
+                with conn.cursor() as cur:
+                    # Only drop non-public schemas (worker-specific schemas)
+                    if schema_name != "public":
+                        cur.execute(
+                            sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                                sql.Identifier(schema_name)
+                            )
+                        )
+                conn.commit()
+                print(f"Dropped schema {schema_name}")
+        except Exception as e:
+            print(f"Error cleaning up schema {schema_name}: {e}")
+
+
 @pytest.fixture(scope="session")
-def test_app(docker_services, worker_info):  # pylint: disable=unused-argument
+def test_app(docker_services, setup_database, worker_info):  # pylint: disable=unused-argument
     """
     Start the test harness FastAPI application for the test session.
 
@@ -218,11 +331,24 @@ def test_app(docker_services, worker_info):  # pylint: disable=unused-argument
     test_app_port = BASE_APP_PORT + worker_info["port_offset"]
     test_app_url = f"http://{TEST_APP_HOST}:{test_app_port}"
 
-    # Set environment for DynamoDB with worker-specific prefix
-    os.environ["AWS_ACCESS_KEY_ID"] = "test"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-    os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
-    os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
+    # Set environment based on database backend
+    os.environ["DATABASE_BACKEND"] = DATABASE_BACKEND
+
+    if DATABASE_BACKEND == "dynamodb":
+        # Set environment for DynamoDB with worker-specific prefix
+        os.environ["AWS_ACCESS_KEY_ID"] = "test"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
+        os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
+        os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
+    elif DATABASE_BACKEND == "postgresql":
+        # Set environment for PostgreSQL with worker-specific schema prefix
+        os.environ["PG_DB_HOST"] = TEST_POSTGRES_HOST
+        os.environ["PG_DB_PORT"] = TEST_POSTGRES_PORT
+        os.environ["PG_DB_NAME"] = TEST_POSTGRES_DB
+        os.environ["PG_DB_USER"] = TEST_POSTGRES_USER
+        os.environ["PG_DB_PASSWORD"] = TEST_POSTGRES_PASSWORD
+        os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        os.environ["PG_DB_SCHEMA"] = "public"
 
     # Create app
     fastapi_app, _ = create_test_app(
@@ -262,7 +388,7 @@ def test_app(docker_services, worker_info):  # pylint: disable=unused-argument
 
 
 @pytest.fixture(scope="session")
-def www_test_app(docker_services, worker_info):  # pylint: disable=unused-argument
+def www_test_app(docker_services, setup_database, worker_info):  # pylint: disable=unused-argument
     """
     Start a test harness FastAPI application WITHOUT OAuth for www template testing.
 
@@ -280,11 +406,22 @@ def www_test_app(docker_services, worker_info):  # pylint: disable=unused-argume
     www_test_port = BASE_WWW_PORT + worker_info["port_offset"]
     www_test_url = f"http://{TEST_APP_HOST}:{www_test_port}"
 
-    # Set environment for DynamoDB (uses same prefix as test_app for this worker)
-    os.environ["AWS_ACCESS_KEY_ID"] = "test"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-    os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
-    os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
+    # Set environment based on database backend (uses same prefix as test_app for this worker)
+    os.environ["DATABASE_BACKEND"] = DATABASE_BACKEND
+
+    if DATABASE_BACKEND == "dynamodb":
+        os.environ["AWS_ACCESS_KEY_ID"] = "test"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
+        os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
+        os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
+    elif DATABASE_BACKEND == "postgresql":
+        os.environ["PG_DB_HOST"] = TEST_POSTGRES_HOST
+        os.environ["PG_DB_PORT"] = TEST_POSTGRES_PORT
+        os.environ["PG_DB_NAME"] = TEST_POSTGRES_DB
+        os.environ["PG_DB_USER"] = TEST_POSTGRES_USER
+        os.environ["PG_DB_PASSWORD"] = TEST_POSTGRES_PASSWORD
+        os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        os.environ["PG_DB_SCHEMA"] = "public"
 
     # Create app WITHOUT OAuth
     fastapi_app, _ = create_test_app(
@@ -319,7 +456,7 @@ def www_test_app(docker_services, worker_info):  # pylint: disable=unused-argume
 
 
 @pytest.fixture(scope="session")
-def peer_app(docker_services, worker_info):  # pylint: disable=unused-argument
+def peer_app(docker_services, setup_database, worker_info):  # pylint: disable=unused-argument
     """
     Start a second test harness FastAPI application on a different port.
 
@@ -337,7 +474,8 @@ def peer_app(docker_services, worker_info):  # pylint: disable=unused-argument
     peer_app_port = BASE_PEER_PORT + worker_info["port_offset"]
     peer_app_url = f"http://{TEST_APP_HOST}:{peer_app_port}"
 
-    # Create peer app (shares same DynamoDB prefix as main app for this worker)
+    # Environment already set by test_app fixture (shares same database prefix for this worker)
+    # Create peer app
     fastapi_app, _ = create_test_app(
         fqdn=f"{TEST_APP_HOST}:{peer_app_port}",
         proto="http://",

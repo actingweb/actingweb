@@ -9,14 +9,33 @@ CHANGED
 ~~~~~~~
 
 - **Database Package Structure**: Refactored ``actingweb.db_dynamodb`` to hierarchical package structure ``actingweb.db.dynamodb`` for better organization
+- **Installation Extras**: Added optional dependency groups - ``pip install 'actingweb[postgresql]'`` or ``'actingweb[dynamodb]'`` for backend-specific installations
+- **Database Backend Selection**: Environment variable ``DATABASE_BACKEND`` (or ``database`` parameter in ``ActingWebApp()``) now supports ``"dynamodb"`` (default) or ``"postgresql"``
+- **Documentation Overhaul**: Comprehensive updates across all user-facing documentation:
+  - Updated quickstart guides to include PostgreSQL setup instructions
+  - Enhanced configuration reference with backend comparison tables
+  - Expanded database maintenance guide to cover both DynamoDB TTL and PostgreSQL pg_cron cleanup
+  - Added backend selection guidance throughout documentation
 - **Logging Architecture**: Implemented hierarchical logging with named loggers throughout codebase using ``__name__`` pattern
 - **Logging Configuration**: Added centralized logging configuration with ``configure_actingweb_logging()`` helper functions
 - **Log Levels**: Rebalanced log levels - significant operations (actor creation, trust deletion, etc.) now use INFO instead of DEBUG
-- **Documentation**: Updated all documentation references to new database package structure
 
 ADDED
 ~~~~~
 
+- **PostgreSQL Database Backend**: Full PostgreSQL support as an alternative to DynamoDB
+- ``actingweb.db.postgresql`` package with all 7 database tables (Actor, Property, Trust, PeerTrustee, Subscription, SubscriptionDiff, Attribute)
+- PostgreSQL connection pooling via psycopg3 with configurable pool sizes
+- Alembic migrations for PostgreSQL schema management (``actingweb/db/postgresql/migrations/``)
+- Database backend protocols (``actingweb.db.protocols``) for interface consistency across backends
+- Protocol compliance tests to ensure both backends implement the same interface
+- ``scripts/migrate_dynamodb_to_postgresql.py`` - Data migration tool with export, import, and validate operations
+- Performance benchmarks (``tests/performance/``) for comparing backend performance
+- Comprehensive PostgreSQL documentation:
+  - ``docs/guides/postgresql-migration.md`` - Complete migration guide from DynamoDB to PostgreSQL
+  - ``docs/reference/database-backends.rst`` - Detailed backend comparison, cost analysis, and recommendations
+- GitHub Actions matrix testing for both DynamoDB and PostgreSQL backends
+- Backend-specific pytest markers (``@pytest.mark.dynamodb``, ``@pytest.mark.postgresql``)
 - ``actingweb.logging_config`` module with production/development/testing configuration helpers
 - Performance-critical logger identification for production optimization
 - Lazy log evaluation in hot paths for improved performance

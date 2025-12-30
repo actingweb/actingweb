@@ -41,6 +41,8 @@ def _parse_timestamp(value: str | datetime | None) -> datetime:
     else:
         raise ValueError(f"Timestamp must be string or datetime, got {type(value)}")
 
+logger = logging.getLogger(__name__)
+
 
 class SecretIndex(GlobalSecondaryIndex):
     """
@@ -208,7 +210,7 @@ class DbTrust:
         If bools are none, they will not be changed.
         """
         if not self.handle:
-            logging.debug("Attempted modification of DbTrust without db handle")
+            logger.debug("Attempted modification of DbTrust without db handle")
             return False
         if baseuri and len(baseuri) > 0:
             self.handle.baseuri = baseuri
@@ -234,13 +236,13 @@ class DbTrust:
             try:
                 self.handle.created_at = _parse_timestamp(created_at)
             except ValueError as e:
-                logging.warning(f"Invalid created_at timestamp: {e}")
+                logger.warning(f"Invalid created_at timestamp: {e}")
                 # Keep existing value if parsing fails
         if last_accessed is not None:
             try:
                 self.handle.last_accessed = _parse_timestamp(last_accessed)
             except ValueError as e:
-                logging.warning(f"Invalid last_accessed timestamp: {e}")
+                logger.warning(f"Invalid last_accessed timestamp: {e}")
                 # Keep existing value if parsing fails
 
         if last_connected_via is not None:

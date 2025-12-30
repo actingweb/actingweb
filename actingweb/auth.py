@@ -13,23 +13,25 @@ from actingweb.constants import TRUSTEE_CREATOR
 # Currently only basic auth is supported. OAuth2 peer auth is automatic if an Authorization Bearer <token> header is
 # included in the http request.
 
+logger = logging.getLogger(__name__)
+
 
 def add_auth_response(appreq=None, auth_obj=None):
     """Called after authentication to set appropriate HTTP response based on auth result."""
     if not appreq or not auth_obj:
         return False
-    logging.debug(
+    logger.debug(
         "add_auth_response: "
         + str(auth_obj.response["code"])
         + ":"
         + auth_obj.response["text"]
     )
-    logging.debug(
+    logger.debug(
         f"add_auth_response: auth_obj.redirect = {getattr(auth_obj, 'redirect', None)}"
     )
     appreq.response.set_status(auth_obj.response["code"], auth_obj.response["text"])
     if auth_obj.response["code"] == 302:
-        logging.debug(f"add_auth_response: Setting redirect to {auth_obj.redirect}")
+        logger.debug(f"add_auth_response: Setting redirect to {auth_obj.redirect}")
         appreq.response.set_redirect(url=auth_obj.redirect)
     elif auth_obj.response["code"] == 401:
         if hasattr(appreq, "response") and appreq.response:
@@ -107,12 +109,12 @@ class Auth:
 
     def __check_basic_auth_creator(self, appreq):
         if self.type != "basic":
-            logging.warning("Trying to do basic auth when auth type is not basic")
+            logger.warning("Trying to do basic auth when auth type is not basic")
             self.response["code"] = 403
             self.response["text"] = "Forbidden"
             return False
         if not self.actor or not self.actor.passphrase:
-            logging.warning(
+            logger.warning(
                 "Trying to do basic auth when no passphrase value can be found."
             )
             self.response["code"] = 403
@@ -130,7 +132,7 @@ class Auth:
         if basic.lower() != "basic":
             self.response["code"] = 403
             self.response["text"] = "No basic auth in Authorization header"
-            logging.debug("No basic auth in Authorization header")
+            logger.debug("No basic auth in Authorization header")
             return False
         self.authn_done = True
         au = authz.split(" ")[1]
@@ -142,12 +144,12 @@ class Auth:
         if not self.actor or username != self.actor.creator:
             self.response["code"] = 403
             self.response["text"] = "Invalid username or password"
-            logging.debug("Wrong creator username")
+            logger.debug("Wrong creator username")
             return False
         if not self.actor or password != self.actor.passphrase:
             self.response["code"] = 403
             self.response["text"] = "Invalid username or password"
-            logging.debug(
+            logger.debug(
                 "Wrong creator passphrase("
                 + password
                 + ") correct("
@@ -205,11 +207,11 @@ class Auth:
             if "established_via" in modify_kwargs:
                 trust_record["established_via"] = modify_kwargs["established_via"]
         except (PutError, UpdateError) as e:
-            logging.warning(f"Database error recording trust usage metadata: {e}")
+            logger.warning(f"Database error recording trust usage metadata: {e}")
         except DoesNotExist:
-            logging.warning("Trust record no longer exists, skipping metadata update")
+            logger.warning("Trust record no longer exists, skipping metadata update")
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Unexpected error recording trust usage metadata: {e}", exc_info=True
             )
 
@@ -254,7 +256,7 @@ class Auth:
                     self.token = self.actor.passphrase if self.actor else None
                     return True
             else:
-                logging.warning(
+                logger.warning(
                     "Attempted trustee bearer token auth with <80 bit strength token."
                 )
         tru = trust.Trust(
@@ -264,9 +266,9 @@ class Auth:
         )
         new_trust = tru.get()
         if new_trust:
-            logging.debug("Found trust with token: (" + str(new_trust) + ")")
+            logger.debug("Found trust with token: (" + str(new_trust) + ")")
             if self.actor and new_trust["peerid"] == self.actor.id:
-                logging.error("Peer == actor!!")
+                logger.error("Peer == actor!!")
                 return False
         if new_trust and len(new_trust) > 0:
             self.acl["relationship"] = new_trust["relationship"]
@@ -291,7 +293,7 @@ class Auth:
 
             # Quick heuristic to avoid network calls for obvious trust secrets
             if not self._looks_like_oauth2_token(token):
-                logging.debug("Token doesn't look like OAuth2, skipping validation")
+                logger.debug("Token doesn't look like OAuth2, skipping validation")
                 return False
 
             from .oauth2 import create_oauth2_authenticator
@@ -329,14 +331,15 @@ class Auth:
                 self.response["code"] = 200
                 self.response["text"] = "Ok"
                 self.token = token
-                logging.debug(f"OAuth2 authentication successful for {email}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"OAuth2 authentication successful for {email}")
                 return True
             else:
                 # Email doesn't match this actor - this could be:
                 # 1. Wrong actor for this user
                 # 2. New user (actor creation flow handles this)
                 # 3. Factory endpoint (no specific actor yet)
-                logging.debug(
+                logger.debug(
                     f"OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}"
                 )
 
@@ -350,7 +353,7 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = token
-                    logging.debug(
+                    logger.debug(
                         f"OAuth2 authentication successful for {email} (no specific actor)"
                     )
                     return True
@@ -358,7 +361,7 @@ class Auth:
                 return False
 
         except Exception as e:
-            logging.error(f"Error during OAuth2 token validation: {e}")
+            logger.error(f"Error during OAuth2 token validation: {e}")
             return False
 
     def _check_spa_token(self, token):
@@ -383,7 +386,7 @@ class Auth:
 
             # Verify the token is for this actor (if we have one loaded)
             if self.actor and self.actor.id and self.actor.id != actor_id:
-                logging.debug(
+                logger.debug(
                     f"SPA token actor {actor_id} doesn't match requested actor {self.actor.id}"
                 )
                 return False
@@ -394,7 +397,7 @@ class Auth:
 
                 self.actor = actor.Actor(actor_id, config=self.config)
                 if not self.actor.id:
-                    logging.warning(f"SPA token references non-existent actor {actor_id}")
+                    logger.warning(f"SPA token references non-existent actor {actor_id}")
                     return False
 
             # SPA token is valid and for the correct actor
@@ -405,11 +408,11 @@ class Auth:
             self.response["code"] = 200
             self.response["text"] = "Ok"
             self.token = token
-            logging.debug(f"SPA token authentication successful for actor {actor_id}")
+            logger.debug(f"SPA token authentication successful for actor {actor_id}")
             return True
 
         except Exception as e:
-            logging.debug(f"SPA token check failed: {e}")
+            logger.debug(f"SPA token check failed: {e}")
             return False
 
     def _looks_like_oauth2_token(self, token: str) -> bool:
@@ -438,7 +441,8 @@ class Auth:
         # Trust secrets are typically 40 hex chars or shorter
         # If it's a short hex-only string, it's likely a trust secret
         if token_len <= 45 and all(c in "0123456789abcdef" for c in token.lower()):
-            logging.debug(f"Token looks like trust secret (hex, {token_len} chars)")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Token looks like trust secret (hex, {token_len} chars)")
             return False
 
         # GitHub tokens have distinctive prefixes
@@ -469,7 +473,7 @@ class Auth:
 
             # Quick heuristic to avoid network calls for obvious trust secrets
             if not self._looks_like_oauth2_token(token):
-                logging.debug("Token doesn't look like OAuth2, skipping validation")
+                logger.debug("Token doesn't look like OAuth2, skipping validation")
                 return False
 
             from .oauth2 import create_oauth2_authenticator
@@ -502,10 +506,11 @@ class Auth:
                 self.response["code"] = 200
                 self.response["text"] = "Ok"
                 self.token = token
-                logging.debug(f"OAuth2 async authentication successful for {email}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"OAuth2 async authentication successful for {email}")
                 return True
             else:
-                logging.debug(
+                logger.debug(
                     f"OAuth2 email {email} doesn't match actor creator {self.actor.creator if self.actor else 'None'}"
                 )
                 if not self.actor:
@@ -516,7 +521,7 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = token
-                    logging.debug(
+                    logger.debug(
                         f"OAuth2 async authentication successful for {email} (no specific actor)"
                     )
                     return True
@@ -524,7 +529,7 @@ class Auth:
                 return False
 
         except Exception as e:
-            logging.error(f"Error during async OAuth2 token validation: {e}")
+            logger.error(f"Error during async OAuth2 token validation: {e}")
             return False
 
     async def check_token_auth_async(self, appreq, via_hint: str | None = None):
@@ -566,7 +571,7 @@ class Auth:
                     self.token = self.actor.passphrase if self.actor else None
                     return True
             else:
-                logging.warning(
+                logger.warning(
                     "Attempted trustee bearer token auth with <80 bit strength token."
                 )
         tru = trust.Trust(
@@ -576,9 +581,9 @@ class Auth:
         )
         new_trust = tru.get()
         if new_trust:
-            logging.debug("Found trust with token: (" + str(new_trust) + ")")
+            logger.debug("Found trust with token: (" + str(new_trust) + ")")
             if self.actor and new_trust["peerid"] == self.actor.id:
-                logging.error("Peer == actor!!")
+                logger.error("Peer == actor!!")
                 return False
         if new_trust and len(new_trust) > 0:
             self.acl["relationship"] = new_trust["relationship"]
@@ -619,11 +624,11 @@ class Auth:
                 self.response["code"] = 302
                 self.response["text"] = "Redirecting to OAuth2"
                 self.redirect = auth_url
-                logging.debug(f"Redirecting to OAuth2: {auth_url[:100]}...")
+                logger.debug(f"Redirecting to OAuth2: {auth_url[:100]}...")
                 return True
 
         except Exception as e:
-            logging.error(f"Error creating OAuth2 redirect: {e}")
+            logger.error(f"Error creating OAuth2 redirect: {e}")
 
         return False
 
@@ -644,36 +649,36 @@ class Auth:
 
     def check_authentication(self, appreq, path):
         """Checks authentication in appreq, redirecting back to path if oauth is done."""
-        logging.debug(
+        logger.debug(
             f"Checking authentication for path: {path}, auth type: {self.type}"
         )
-        logging.debug("Checking authentication, token auth...")
+        logger.debug("Checking authentication, token auth...")
         via_hint = self._connection_hint_from_path(path)
         if self.check_token_auth(appreq, via_hint=via_hint):
-            logging.debug("Token auth succeeded")
+            logger.debug("Token auth succeeded")
             return
         elif self.type == "basic":
-            logging.debug("Auth type is 'basic', checking basic authentication...")
+            logger.debug("Auth type is 'basic', checking basic authentication...")
             if self.__check_basic_auth_creator(appreq=appreq):
-                logging.debug(
+                logger.debug(
                     "Basic auth succeeded, response code: %s", self.response["code"]
                 )
                 return
             else:
                 # Basic auth failed - mark as done and don't fall through to OAuth2
-                logging.debug(
+                logger.debug(
                     "Basic auth failed, response code: %s", self.response["code"]
                 )
                 self.authn_done = True
                 return
 
         # If all authentication methods fail, try OAuth2 redirect if configured
-        logging.debug("All auth methods failed, checking OAuth2 redirect...")
+        logger.debug("All auth methods failed, checking OAuth2 redirect...")
         if self._should_redirect_to_oauth2(appreq, path):
-            logging.debug("OAuth2 redirect triggered")
+            logger.debug("OAuth2 redirect triggered")
             return
 
-        logging.debug("Authentication done, and failed")
+        logger.debug("Authentication done, and failed")
         self.authn_done = True
         self.response["code"] = 403
         self.response["text"] = "Forbidden"
@@ -709,7 +714,7 @@ class Auth:
             and self.acl["approved"] is False
             and not (path.lower() == "trust" and method.upper() == "DELETE")
         ):
-            logging.debug(
+            logger.debug(
                 "Rejected authorization because trust relationship is not approved."
             )
             return False
@@ -726,7 +731,7 @@ class Auth:
             subpath = ""
         fullpath = path.lower() + "/" + subpath.lower()
         # ACLs: ('role', 'path', 'METHODS', 'access')
-        logging.debug(
+        logger.debug(
             "Testing access for ("
             + relationship
             + " "
@@ -761,7 +766,7 @@ class Auth:
                 if fullpath.find(acl[1]) == 0:
                     if len(acl[2]) == 0 or acl[2].find(method) != -1:
                         self.acl["rights"] = acl[3]
-                        logging.debug(
+                        logger.debug(
                             "Granted " + acl[3] + " access with ACL:" + str(acl)
                         )
                         return True

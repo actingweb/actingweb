@@ -12,6 +12,8 @@ from pynamodb.models import Model
     Google datastore for google is used as a backend.
 """
 
+logger = logging.getLogger(__name__)
+
 
 class SubscriptionDiff(Model):
     class Meta:  # type: ignore[misc]
@@ -41,7 +43,7 @@ class DbSubscriptionDiff:
         if not actor_id and not self.handle:
             return None
         if not subid and not self.handle:
-            logging.debug("Attempt to get subscriptiondiff without subid")
+            logger.debug("Attempt to get subscriptiondiff without subid")
             return None
         if not self.handle:
             if not seqnr:
@@ -76,7 +78,7 @@ class DbSubscriptionDiff:
     def create(self, actor_id=None, subid=None, diff="", seqnr=1):
         """Create a new subscription diff"""
         if not actor_id or not subid:
-            logging.debug("Attempt to create subscriptiondiff without actorid or subid")
+            logger.debug("Attempt to create subscriptiondiff without actorid or subid")
             return False
         self.handle = SubscriptionDiff(
             id=actor_id,

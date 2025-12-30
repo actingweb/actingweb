@@ -179,25 +179,25 @@ class Config:
             }
         # Dynamically load all the database modules
         self.DbActor = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_actor"
+            "actingweb.db." + self.database + ".actor"
         )
         self.DbPeerTrustee = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_peertrustee"
+            "actingweb.db." + self.database + ".peertrustee"
         )
         self.DbProperty = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_property"
+            "actingweb.db." + self.database + ".property"
         )
         self.DbAttribute = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_attribute"
+            "actingweb.db." + self.database + ".attribute"
         )
         self.DbSubscription = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_subscription"
+            "actingweb.db." + self.database + ".subscription"
         )
         self.DbSubscriptionDiff = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_subscription_diff"
+            "actingweb.db." + self.database + ".subscription_diff"
         )
         self.DbTrust = importlib.import_module(
-            "actingweb" + ".db_" + self.database + ".db_trust"
+            "actingweb.db." + self.database + ".trust"
         )
         self.module: dict[str, Any] = {}
         self.module["deferred"] = None
@@ -237,14 +237,10 @@ class Config:
         # Only touch the below if you know what you are doing
         #########
         logging.basicConfig(level=self.logLevel)
-        # Turn off debugging for pynamodb and botocore, too noisy
-        if self.logLevel == logging.DEBUG:
-            log = logging.getLogger("pynamodb")
-            log.setLevel(logging.INFO)
-            log.propagate = True
-            log = logging.getLogger("botocore")
-            log.setLevel(logging.INFO)
-            log.propagate = True
+        # Configure ActingWeb logging hierarchy
+        from .logging_config import configure_actingweb_logging
+
+        configure_actingweb_logging(level=self.logLevel)
         # root URI used to identity actor externally
         self.root = self.proto + self.fqdn + "/"
         # Authentication realm used in Basic auth

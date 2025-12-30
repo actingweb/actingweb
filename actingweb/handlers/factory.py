@@ -4,6 +4,8 @@ import logging
 from actingweb import actor
 from actingweb.handlers import base_handler
 
+logger = logging.getLogger(__name__)
+
 
 class RootFactoryHandler(base_handler.BaseHandler):
     def _wants_json(self) -> bool:
@@ -82,7 +84,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                         oauth_enabled = True
 
             except Exception as e:
-                logging.warning(f"Failed to generate OAuth URLs for JSON config: {e}")
+                logger.warning(f"Failed to generate OAuth URLs for JSON config: {e}")
 
         # Build response
         response_data = {
@@ -170,7 +172,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                                     "url": oauth_urls["google"],
                                 }
                             )
-                            logging.debug(
+                            logger.debug(
                                 f"Google OAuth URL generated: {oauth_urls['google'][:100]}..."
                             )
 
@@ -187,7 +189,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                                     "url": oauth_urls["github"],
                                 }
                             )
-                            logging.debug(
+                            logger.debug(
                                 f"GitHub OAuth URL generated: {oauth_urls['github'][:100]}..."
                             )
 
@@ -195,7 +197,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                     # Apps can extend this by checking additional config flags
 
                 except Exception as e:
-                    logging.warning(f"Failed to generate OAuth URLs: {e}")
+                    logger.warning(f"Failed to generate OAuth URLs: {e}")
 
             self.response.template_values = {
                 "oauth_urls": oauth_urls,  # Dict: {'google': url, 'github': url}
@@ -267,7 +269,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                 exists = in_db.get_by_creator(creator=creator)
                 if exists:
                     self.response.set_status(403, "Creator already exists")
-                    logging.warning(
+                    logger.warning(
                         "Creator already exists, cannot create new Actor("
                         + str(self.request.url)
                         + " "
@@ -278,7 +280,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
 
             # Generic creation failure
             self.response.set_status(400, "Not created")
-            logging.warning(
+            logger.warning(
                 "Was not able to create new Actor("
                 + str(self.request.url)
                 + " "

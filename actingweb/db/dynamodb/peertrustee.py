@@ -9,6 +9,8 @@ from pynamodb.models import Model
     Google datastore for google is used as a backend.
 """
 
+logger = logging.getLogger(__name__)
+
 
 class PeerTrustee(Model):
     class Meta:  # type: ignore[misc]
@@ -37,7 +39,7 @@ class DbPeerTrustee:
         if not actor_id:
             return None
         if not peerid and not peer_type:
-            logging.debug("Attempt to get DbPeerTrustee without peerid or type")
+            logger.debug("Attempt to get DbPeerTrustee without peerid or type")
             return None
         try:
             if not self.handle and peerid:
@@ -51,7 +53,7 @@ class DbPeerTrustee:
                     self.handle = h
                     count += 1
                 if count > 1:
-                    logging.error(
+                    logger.error(
                         "Found more than one peer of this peer trustee type("
                         + peer_type
                         + "). Unable to determine which, need peerid lookup."
@@ -78,7 +80,7 @@ class DbPeerTrustee:
     ):
         """Create a new peertrustee"""
         if not actor_id or not peerid or not peer_type:
-            logging.debug(
+            logger.debug(
                 "actor_id, peerid, and type are mandatory when creating peertrustee in db"
             )
             return False
@@ -102,7 +104,7 @@ class DbPeerTrustee:
         If bools are none, they will not be changed.
         """
         if not self.handle:
-            logging.debug("Attempted modification of DbPeerTrustee without db handle")
+            logger.debug("Attempted modification of DbPeerTrustee without db handle")
             return False
         if baseuri and len(baseuri) > 0:
             self.handle.baseuri = baseuri

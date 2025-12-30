@@ -420,7 +420,7 @@ class ActingWebTokenManager:
                 name=code, data=actor_id, ttl_seconds=MCP_AUTH_CODE_TTL + INDEX_TTL_BUFFER
             )
 
-            logger.debug(f"Successfully stored auth code for actor {actor_id}")
+            logger.info(f"Stored auth code for actor {actor_id}")
 
         except Exception as e:
             logger.error(f"Error storing auth code for actor {actor_id}: {e}")
@@ -612,7 +612,7 @@ class ActingWebTokenManager:
                 name=token, data=actor_id, ttl_seconds=MCP_ACCESS_TOKEN_TTL + INDEX_TTL_BUFFER
             )
 
-            logger.debug(f"Stored access token for actor {actor_id}")
+            logger.info(f"Stored access token for actor {actor_id}")
 
         except Exception as e:
             logger.error(f"Error storing access token for actor {actor_id}: {e}")
@@ -795,7 +795,7 @@ class ActingWebTokenManager:
                 name=token, data=actor_id, ttl_seconds=MCP_REFRESH_TOKEN_TTL + INDEX_TTL_BUFFER
             )
 
-            logger.debug(f"Stored refresh token for actor {actor_id}")
+            logger.info(f"Stored refresh token for actor {actor_id}")
 
         except Exception as e:
             logger.error(f"Error storing refresh token for actor {actor_id}: {e}")

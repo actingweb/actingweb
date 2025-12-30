@@ -8,6 +8,8 @@ import requests
 
 from actingweb import trust
 
+logger = logging.getLogger(__name__)
+
 try:
     from urllib.parse import urlencode as urllib_urlencode
 except ImportError:
@@ -108,7 +110,7 @@ class AwProxy:
         if params:
             url = url + "?" + urllib_urlencode(params)
         headers = self._bearer_headers()
-        logging.debug("Getting trust peer resource at (" + url + ")")
+        logger.info(f"Fetching peer resource from {url}")
         try:
             response = requests.get(url=url, headers=headers, timeout=(5, 10))
             # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
@@ -119,7 +121,7 @@ class AwProxy:
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
-            logging.debug("Not able to get peer resource")
+            logger.debug("Not able to get peer resource")
             self.last_response_code = 408
             return {
                 "error": {
@@ -127,18 +129,18 @@ class AwProxy:
                     "message": "Unable to communciate with trust peer service.",
                 },
             }
-        logging.debug(
+        logger.debug(
             "Get trust peer resource POST response:("
             + str(response.status_code)
             + ") "
             + str(response.content)
         )
         if response.status_code < 200 or response.status_code > 299:
-            logging.info("Not able to get trust peer resource.")
+            logger.info("Not able to get trust peer resource.")
         try:
             result = response.json()
         except (TypeError, ValueError, KeyError):
-            logging.debug(
+            logger.debug(
                 "Not able to parse response when getting resource at(" + url + ")"
             )
             result = {}
@@ -154,7 +156,7 @@ class AwProxy:
         data = json.dumps(params)
         headers = {**self._bearer_headers(), "Content-Type": "application/json"}
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logging.debug(
+        logger.debug(
             "Creating trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
@@ -168,7 +170,7 @@ class AwProxy:
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
-            logging.debug("Not able to create new peer resource")
+            logger.debug("Not able to create new peer resource")
             self.last_response_code = 408
             return {
                 "error": {
@@ -180,18 +182,18 @@ class AwProxy:
             self.last_location = response.headers["Location"]
         else:
             self.last_location = None
-        logging.debug(
+        logger.debug(
             "Create trust peer resource POST response:("
             + str(response.status_code)
             + ") "
             + str(response.content)
         )
         if response.status_code < 200 or response.status_code > 299:
-            logging.warning("Not able to create new trust peer resource.")
+            logger.warning("Not able to create new trust peer resource.")
         try:
             result = response.json()
         except (TypeError, ValueError, KeyError):
-            logging.debug(
+            logger.debug(
                 "Not able to parse response when creating resource at(" + url + ")"
             )
             result = {}
@@ -210,7 +212,7 @@ class AwProxy:
             "Content-Type": "application/json",
         }
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logging.debug(
+        logger.debug(
             "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
         )
         try:
@@ -224,7 +226,7 @@ class AwProxy:
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
-            logging.debug("Not able to change peer resource")
+            logger.debug("Not able to change peer resource")
             self.last_response_code = 408
             return {
                 "error": {
@@ -232,18 +234,18 @@ class AwProxy:
                     "message": "Unable to communciate with trust peer service.",
                 },
             }
-        logging.debug(
+        logger.debug(
             "Change trust peer resource PUT response:("
             + str(response.status_code)
             + ") "
             + str(response.content)
         )
         if response.status_code < 200 or response.status_code > 299:
-            logging.warning("Not able to change trust peer resource.")
+            logger.warning("Not able to change trust peer resource.")
         try:
             result = response.json()
         except (TypeError, ValueError, KeyError):
-            logging.debug(
+            logger.debug(
                 "Not able to parse response when changing resource at(" + url + ")"
             )
             result = {}
@@ -256,7 +258,7 @@ class AwProxy:
             return None
         headers = {"Authorization": "Bearer " + self.trust["secret"]}
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logging.debug("Deleting trust peer resource at (" + url + ")")
+        logger.info(f"Deleting peer resource at {url}")
         try:
             response = requests.delete(url=url, headers=headers, timeout=(5, 10))
             if response.status_code in (302, 401, 403):
@@ -266,7 +268,7 @@ class AwProxy:
             self.last_response_code = response.status_code
             self.last_response_message = response.content
         except Exception:
-            logging.debug("Not able to delete peer resource")
+            logger.debug("Not able to delete peer resource")
             self.last_response_code = 408
             return {
                 "error": {
@@ -327,7 +329,7 @@ class AwProxy:
         if params:
             url = url + "?" + urllib_urlencode(params)
         headers = self._bearer_headers()
-        logging.debug("Getting trust peer resource async at (" + url + ")")
+        logger.info(f"Fetching peer resource async from {url}")
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url, headers=headers)
@@ -339,7 +341,7 @@ class AwProxy:
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
         except httpx.TimeoutException:
-            logging.debug("Timeout getting peer resource async")
+            logger.debug("Timeout getting peer resource async")
             self.last_response_code = 408
             return {
                 "error": {
@@ -348,7 +350,7 @@ class AwProxy:
                 },
             }
         except httpx.ConnectError as e:
-            logging.debug(f"Connection error getting peer resource async: {e}")
+            logger.debug(f"Connection error getting peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -357,7 +359,7 @@ class AwProxy:
                 },
             }
         except httpx.NetworkError as e:
-            logging.debug(f"Network error getting peer resource async: {e}")
+            logger.debug(f"Network error getting peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -366,7 +368,7 @@ class AwProxy:
                 },
             }
         except Exception as e:
-            logging.warning(f"Unexpected error getting peer resource async: {e}")
+            logger.warning(f"Unexpected error getting peer resource async: {e}")
             self.last_response_code = 500
             return {
                 "error": {
@@ -374,18 +376,18 @@ class AwProxy:
                     "message": "Internal error communicating with trust peer service.",
                 },
             }
-        logging.debug(
+        logger.debug(
             "Get trust peer resource async response:("
             + str(response.status_code)
             + ") "
             + str(response.content)
         )
         if response.status_code < 200 or response.status_code > 299:
-            logging.info("Not able to get trust peer resource async.")
+            logger.info("Not able to get trust peer resource async.")
         try:
             result = response.json()
         except (TypeError, ValueError, KeyError):
-            logging.debug(
+            logger.debug(
                 "Not able to parse response when getting resource async at(" + url + ")"
             )
             result = {}
@@ -412,7 +414,7 @@ class AwProxy:
         data = json.dumps(params)
         headers = {**self._bearer_headers(), "Content-Type": "application/json"}
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logging.debug(
+        logger.debug(
             "Creating trust peer resource async at ("
             + url
             + ") with data("
@@ -431,7 +433,7 @@ class AwProxy:
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
         except httpx.TimeoutException:
-            logging.debug("Timeout creating peer resource async")
+            logger.debug("Timeout creating peer resource async")
             self.last_response_code = 408
             return {
                 "error": {
@@ -440,7 +442,7 @@ class AwProxy:
                 },
             }
         except httpx.ConnectError as e:
-            logging.debug(f"Connection error creating peer resource async: {e}")
+            logger.debug(f"Connection error creating peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -449,7 +451,7 @@ class AwProxy:
                 },
             }
         except httpx.NetworkError as e:
-            logging.debug(f"Network error creating peer resource async: {e}")
+            logger.debug(f"Network error creating peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -458,7 +460,7 @@ class AwProxy:
                 },
             }
         except Exception as e:
-            logging.warning(f"Unexpected error creating peer resource async: {e}")
+            logger.warning(f"Unexpected error creating peer resource async: {e}")
             self.last_response_code = 500
             return {
                 "error": {
@@ -470,18 +472,18 @@ class AwProxy:
             self.last_location = response.headers["Location"]
         else:
             self.last_location = None
-        logging.debug(
+        logger.debug(
             "Create trust peer resource async response:("
             + str(response.status_code)
             + ") "
             + str(response.content)
         )
         if response.status_code < 200 or response.status_code > 299:
-            logging.warning("Not able to create new trust peer resource async.")
+            logger.warning("Not able to create new trust peer resource async.")
         try:
             result = response.json()
         except (TypeError, ValueError, KeyError):
-            logging.debug(
+            logger.debug(
                 "Not able to parse response when creating resource async at("
                 + url
                 + ")"
@@ -513,7 +515,7 @@ class AwProxy:
             "Content-Type": "application/json",
         }
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logging.debug(
+        logger.debug(
             "Changing trust peer resource async at ("
             + url
             + ") with data("
@@ -532,7 +534,7 @@ class AwProxy:
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
         except httpx.TimeoutException:
-            logging.debug("Timeout changing peer resource async")
+            logger.debug("Timeout changing peer resource async")
             self.last_response_code = 408
             return {
                 "error": {
@@ -541,7 +543,7 @@ class AwProxy:
                 },
             }
         except httpx.ConnectError as e:
-            logging.debug(f"Connection error changing peer resource async: {e}")
+            logger.debug(f"Connection error changing peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -550,7 +552,7 @@ class AwProxy:
                 },
             }
         except httpx.NetworkError as e:
-            logging.debug(f"Network error changing peer resource async: {e}")
+            logger.debug(f"Network error changing peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -559,7 +561,7 @@ class AwProxy:
                 },
             }
         except Exception as e:
-            logging.warning(f"Unexpected error changing peer resource async: {e}")
+            logger.warning(f"Unexpected error changing peer resource async: {e}")
             self.last_response_code = 500
             return {
                 "error": {
@@ -567,18 +569,18 @@ class AwProxy:
                     "message": "Internal error communicating with trust peer service.",
                 },
             }
-        logging.debug(
+        logger.debug(
             "Change trust peer resource async response:("
             + str(response.status_code)
             + ") "
             + str(response.content)
         )
         if response.status_code < 200 or response.status_code > 299:
-            logging.warning("Not able to change trust peer resource async.")
+            logger.warning("Not able to change trust peer resource async.")
         try:
             result = response.json()
         except (TypeError, ValueError, KeyError):
-            logging.debug(
+            logger.debug(
                 "Not able to parse response when changing resource async at("
                 + url
                 + ")"
@@ -603,7 +605,7 @@ class AwProxy:
             return None
         headers = {"Authorization": "Bearer " + self.trust["secret"]}
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logging.debug("Deleting trust peer resource async at (" + url + ")")
+        logger.info(f"Deleting peer resource async at {url}")
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.delete(url, headers=headers)
@@ -614,7 +616,7 @@ class AwProxy:
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
         except httpx.TimeoutException:
-            logging.debug("Timeout deleting peer resource async")
+            logger.debug("Timeout deleting peer resource async")
             self.last_response_code = 408
             return {
                 "error": {
@@ -623,7 +625,7 @@ class AwProxy:
                 },
             }
         except httpx.ConnectError as e:
-            logging.debug(f"Connection error deleting peer resource async: {e}")
+            logger.debug(f"Connection error deleting peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -632,7 +634,7 @@ class AwProxy:
                 },
             }
         except httpx.NetworkError as e:
-            logging.debug(f"Network error deleting peer resource async: {e}")
+            logger.debug(f"Network error deleting peer resource async: {e}")
             self.last_response_code = 502
             return {
                 "error": {
@@ -641,7 +643,7 @@ class AwProxy:
                 },
             }
         except Exception as e:
-            logging.warning(f"Unexpected error deleting peer resource async: {e}")
+            logger.warning(f"Unexpected error deleting peer resource async: {e}")
             self.last_response_code = 500
             return {
                 "error": {
@@ -649,18 +651,18 @@ class AwProxy:
                     "message": "Internal error communicating with trust peer service.",
                 },
             }
-        logging.debug(
+        logger.debug(
             "Delete trust peer resource async response:("
             + str(response.status_code)
             + ") "
             + str(response.content)
         )
         if response.status_code < 200 or response.status_code > 299:
-            logging.warning("Not able to delete trust peer resource async.")
+            logger.warning("Not able to delete trust peer resource async.")
         try:
             result = response.json()
         except (TypeError, ValueError, KeyError):
-            logging.debug(
+            logger.debug(
                 "Not able to parse response when deleting resource async at("
                 + url
                 + ")"

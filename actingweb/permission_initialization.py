@@ -31,7 +31,7 @@ def initialize_permission_system(config: config_class.Config) -> None:
     """
     initialization_errors: list[str] = []
 
-    logger.debug("Initializing ActingWeb permission system...")
+    logger.info("Initializing ActingWeb permission system...")
 
     # 1. Trust Type Registry (required for trust management)
     try:
@@ -69,7 +69,7 @@ def initialize_permission_system(config: config_class.Config) -> None:
             f"ActingWeb permission system initialization failed: {error_summary}"
         )
 
-    logger.debug("ActingWeb permission system initialized successfully")
+    logger.info("ActingWeb permission system initialized successfully")
 
 
 def is_permission_component_ready(component_name: str) -> bool:

@@ -12,6 +12,8 @@ from actingweb.constants import (
 )
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
+logger = logging.getLogger(__name__)
+
 
 class ActorError(Exception):
     """Base exception class for Actor-related errors."""
@@ -96,14 +98,14 @@ class Actor:
         >>>}
         """
         try:
-            logging.debug(f"Getting peer info at url({url})")
+            logger.info(f"Fetching peer info from {url}")
             response = requests.get(url=url + "/meta", timeout=(5, 10))
             res = {
                 "last_response_code": response.status_code,
                 "last_response_message": response.content,
                 "data": json.loads(response.content.decode("utf-8", "ignore")),
             }
-            logging.debug(
+            logger.debug(
                 f"Got peer info from url({url}) with body({response.content})"
             )
         except (TypeError, ValueError, KeyError):
@@ -123,7 +125,7 @@ class Actor:
         try:
             from .aw_proxy import AwProxy
 
-            logging.debug(f"Getting peer info async at url({url})")
+            logger.info(f"Fetching peer info async from {url}")
             proxy = AwProxy(
                 peer_target={"url": url},
                 config=self.config,
@@ -142,9 +144,9 @@ class Actor:
                     "last_response_message": proxy.last_response_message,
                     "data": json_data,
                 }
-            logging.debug(f"Got peer info async from url({url})")
+            logger.debug(f"Got peer info async from url({url})")
         except Exception as e:
-            logging.error(f"Error getting peer info async from {url}: {e}")
+            logger.error(f"Error getting peer info async from {url}: {e}")
             res = {
                 "last_response_code": 500,
             }
@@ -340,7 +342,7 @@ class Actor:
                 # Log hook execution error but don't fail actor creation
                 import logging
 
-                logging.warning(
+                logger.warning(
                     f"Actor created successfully but lifecycle hook failed: {e}"
                 )
 
@@ -348,7 +350,7 @@ class Actor:
 
     def modify(self, creator: str | None = None) -> bool:
         if not self.handle or not creator:
-            logging.debug(
+            logger.debug(
                 "Attempted modify of actor with no handle or no param changed"
             )
             return False
@@ -363,7 +365,7 @@ class Actor:
     def delete(self) -> None:
         """Deletes an actor and cleans up all relevant stored data"""
         if not self.handle:
-            logging.debug("Attempted delete of actor with no handle")
+            logger.debug("Attempted delete of actor with no handle")
             return
         self.delete_peer_trustee(shorttype="*")
         if not self.property_list:
@@ -432,7 +434,7 @@ class Actor:
             and self.config.actors
             and shorttype not in self.config.actors
         ):
-            logging.error(f"Got a request to delete an unknown actor type({shorttype})")
+            logger.error(f"Got a request to delete an unknown actor type({shorttype})")
             return False
         peer_data = None
         new_peer = None
@@ -452,7 +454,7 @@ class Actor:
                 return False
         if not peer_data:
             return False
-        logging.debug(f"Deleting peer actor at baseuri({peer_data['baseuri']})")
+        logger.info(f"Deleting peer actor at {peer_data['baseuri']}")
         u_p = b"trustee:" + peer_data["passphrase"].encode("utf-8")
         headers = {
             "Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8"),
@@ -468,21 +470,21 @@ class Actor:
                 else str(response.content)
             )
         except Exception:
-            logging.debug(
+            logger.debug(
                 "Not able to delete peer actor remotely due to network issues"
             )
             self.last_response_code = 408
             return False
         if response.status_code < 200 or response.status_code > 299:
-            logging.debug("Not able to delete peer actor remotely, peer is unwilling")
+            logger.debug("Not able to delete peer actor remotely, peer is unwilling")
             return False
         # Delete trust, peer is already deleted remotely
         if peer_data and not self.delete_reciprocal_trust(
             peerid=peer_data["peerid"], delete_peer=False
         ):
-            logging.debug("Not able to delete peer actor trust in db")
+            logger.debug("Not able to delete peer actor trust in db")
         if new_peer and not new_peer.delete():
-            logging.debug("Not able to delete peer actor in db")
+            logger.debug("Not able to delete peer actor in db")
             return False
         return True
 
@@ -502,7 +504,7 @@ class Actor:
             and self.config.actors
             and shorttype not in self.config.actors
         ):
-            logging.error(f"Got a request to create an unknown actor type({shorttype})")
+            logger.error(f"Got a request to create an unknown actor type({shorttype})")
             return None
         if peerid:
             new_peer = peertrustee.PeerTrustee(
@@ -514,14 +516,14 @@ class Actor:
             )
         peer_data = new_peer.get()
         if peer_data and len(peer_data) > 0:
-            logging.debug("Found peer in getPeer, now checking existing trust...")
+            logger.debug("Found peer in getPeer, now checking existing trust...")
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=peer_data["peerid"], config=self.config
             )
             new_trust = dbtrust.get()
             if new_trust and len(new_trust) > 0:
                 return peer_data
-            logging.debug("Did not find existing trust, will create a new one")
+            logger.debug("Did not find existing trust, will create a new one")
         factory = ""
         if (
             self.config
@@ -533,7 +535,7 @@ class Actor:
         # If peer did not exist, create it as trustee
         if not peer_data or len(peer_data) == 0:
             if len(factory) == 0:
-                logging.error(
+                logger.error(
                     f"Peer actor of shorttype({shorttype}) does not have factory set."
                 )
             params = {
@@ -541,7 +543,7 @@ class Actor:
                 "trustee_root": (self.config.root + self.id) if self.config else "",
             }
             data = json.dumps(params)
-            logging.debug(
+            logger.debug(
                 f"Creating peer actor at factory({factory}) with data({data})"
             )
             response = None
@@ -560,9 +562,9 @@ class Actor:
                         else str(response.content)
                     )
             except Exception:
-                logging.debug("Not able to create new peer actor")
+                logger.debug("Not able to create new peer actor")
                 self.last_response_code = 408
-            logging.debug(f"Create peer actor POST response: {self.last_response_code}")
+            logger.info(f"Created peer actor, response code: {self.last_response_code}")
             if self.last_response_code < 200 or self.last_response_code > 299:
                 return None
             try:
@@ -576,7 +578,7 @@ class Actor:
                 else:
                     data = {}
             except (TypeError, ValueError, KeyError):
-                logging.warning(
+                logger.warning(
                     f"Not able to parse response when creating peer at factory({factory})"
                 )
                 return None
@@ -585,7 +587,7 @@ class Actor:
             elif response and "location" in response.headers:
                 baseuri = response.headers["location"]
             else:
-                logging.warning(
+                logger.warning(
                     "No location uri found in response when creating a peer as trustee"
                 )
                 baseuri = ""
@@ -602,7 +604,7 @@ class Actor:
                 or ("id" in info_peer and not info_peer["id"])
                 or ("type" in info_peer and not info_peer["type"])
             ):
-                logging.info(
+                logger.info(
                     f"Received invalid peer info when trying to create peer actor at: {factory}"
                 )
                 return None
@@ -613,7 +615,7 @@ class Actor:
                 config=self.config,
             )
             if not new_peer.create(baseuri=baseuri, passphrase=data["passphrase"]):
-                logging.error(
+                logger.error(
                     f"Failed to create in db new peer Actor({self.id}) at {baseuri}"
                 )
                 return None
@@ -637,7 +639,7 @@ class Actor:
             relationship=relationship,
         )
         if not new_trust or len(new_trust) == 0:
-            logging.warning(
+            logger.warning(
                 f"Not able to establish trust relationship with peer at factory({factory})"
             )
         else:
@@ -675,7 +677,7 @@ class Actor:
                     "Not able to approve peer actor trust remotely"
                 )
             if self.last_response_code < 200 or self.last_response_code > 299:
-                logging.debug("Not able to delete peer actor remotely")
+                logger.debug("Not able to delete peer actor remotely")
         return new_peer_data
 
     def get_trust_relationship(self, peerid=None):
@@ -768,7 +770,7 @@ class Actor:
             # Note the POST here instead of PUT. POST is used to used to notify about
             # state change in the relationship (i.e. not change the object as PUT
             # would do)
-            logging.debug(
+            logger.debug(
                 "Trust relationship has been approved, notifying peer at url("
                 + requrl
                 + ")"
@@ -784,7 +786,7 @@ class Actor:
                     else str(response.content)
                 )
             except Exception:
-                logging.debug("Not able to notify peer at url(" + requrl + ")")
+                logger.debug("Not able to notify peer at url(" + requrl + ")")
                 self.last_response_code = 500
         return result
 
@@ -846,7 +848,7 @@ class Actor:
         if approved is True and this_trust["approved"] is False:
             from .aw_proxy import AwProxy
 
-            logging.debug(
+            logger.debug(
                 f"Trust relationship approved, notifying peer async at {this_trust['baseuri']}"
             )
             try:
@@ -868,7 +870,7 @@ class Actor:
                     else str(proxy.last_response_message)
                 )
             except Exception as e:
-                logging.debug(f"Not able to notify peer async: {e}")
+                logger.debug(f"Not able to notify peer async: {e}")
                 self.last_response_code = 500
         return result
 
@@ -899,13 +901,13 @@ class Actor:
             return False
         peer = res["data"]
         if not peer["id"] or not peer["type"] or len(peer["type"]) == 0:
-            logging.info(
+            logger.info(
                 "Received invalid peer info when trying to establish trust: " + url
             )
             return False
         if len(trust_type) > 0:
             if trust_type.lower() != peer["type"].lower():
-                logging.info("Peer is of the wrong actingweb type: " + peer["type"])
+                logger.info("Peer is of the wrong actingweb type: " + peer["type"])
                 return False
         if not relationship or len(relationship) == 0:
             relationship = self.config.default_relationship if self.config else ""
@@ -922,7 +924,7 @@ class Actor:
             desc=desc,
             established_via="trust",
         ):
-            logging.warning(
+            logger.warning(
                 "Trying to establish a new Reciprocal trust when peer relationship already exists ("
                 + peer["id"]
                 + ")"
@@ -941,7 +943,7 @@ class Actor:
         }
         requrl = url + "/trust/" + relationship
         data = json.dumps(params)
-        logging.debug(
+        logger.debug(
             "Creating reciprocal trust at url("
             + requrl
             + ") and body ("
@@ -964,7 +966,7 @@ class Actor:
                 else str(response.content)
             )
         except Exception:
-            logging.debug("Not able to create trust with peer, deleting my trust.")
+            logger.debug("Not able to create trust with peer, deleting my trust.")
             dbtrust.delete()
             return False
         if self.last_response_code == 201 or self.last_response_code == 202:
@@ -974,7 +976,7 @@ class Actor:
             )
             mod_trust_data = mod_trust.get()
             if not mod_trust_data or len(mod_trust_data) == 0:
-                logging.error(
+                logger.error(
                     "Couldn't find trust relationship after peer POST and verification"
                 )
                 return False
@@ -985,7 +987,7 @@ class Actor:
                 mod_trust.modify(peer_approved=True)
             return mod_trust.get()
         else:
-            logging.debug("Not able to create trust with peer, deleting my trust.")
+            logger.debug("Not able to create trust with peer, deleting my trust.")
             dbtrust.delete()
             return False
 
@@ -1016,13 +1018,13 @@ class Actor:
             return False
         peer = res["data"]
         if not peer.get("id") or not peer.get("type") or len(peer["type"]) == 0:
-            logging.info(
+            logger.info(
                 "Received invalid peer info when trying to establish trust: " + url
             )
             return False
         if len(trust_type) > 0:
             if trust_type.lower() != peer["type"].lower():
-                logging.info("Peer is of the wrong actingweb type: " + peer["type"])
+                logger.info("Peer is of the wrong actingweb type: " + peer["type"])
                 return False
         if not relationship or len(relationship) == 0:
             relationship = self.config.default_relationship if self.config else ""
@@ -1039,7 +1041,7 @@ class Actor:
             desc=desc,
             established_via="trust",
         ):
-            logging.warning(
+            logger.warning(
                 f"Trying to establish a new Reciprocal trust when peer relationship already exists ({peer['id']})"
             )
             return False
@@ -1057,7 +1059,7 @@ class Actor:
 
         from .aw_proxy import AwProxy
 
-        logging.debug(f"Creating reciprocal trust async at {url}/trust/{relationship}")
+        logger.info(f"Creating reciprocal trust async at {url}/trust/{relationship}")
         try:
             proxy = AwProxy(peer_target={"url": url}, config=self.config)
             await proxy.create_resource_async(
@@ -1071,7 +1073,7 @@ class Actor:
                 else str(proxy.last_response_message)
             )
         except Exception as e:
-            logging.debug(
+            logger.debug(
                 f"Not able to create trust with peer async: {e}, deleting my trust."
             )
             dbtrust.delete()
@@ -1084,7 +1086,7 @@ class Actor:
             )
             mod_trust_data = mod_trust.get()
             if not mod_trust_data or len(mod_trust_data) == 0:
-                logging.error(
+                logger.error(
                     "Couldn't find trust relationship after peer POST and verification"
                 )
                 return False
@@ -1093,7 +1095,7 @@ class Actor:
                 mod_trust.modify(peer_approved=True)
             return mod_trust.get()
         else:
-            logging.debug(
+            logger.debug(
                 "Not able to create trust with peer async, deleting my trust."
             )
             dbtrust.delete()
@@ -1121,7 +1123,7 @@ class Actor:
             return False
         requrl = baseuri + "/trust/" + relationship + "/" + self.id
         if not secret or len(secret) == 0:
-            logging.debug(
+            logger.debug(
                 "No secret received from requesting peer("
                 + peerid
                 + ") at url ("
@@ -1133,7 +1135,7 @@ class Actor:
             headers = {
                 "Authorization": "Bearer " + secret,
             }
-            logging.debug(
+            logger.debug(
                 "Verifying trust at requesting peer("
                 + peerid
                 + ") at url ("
@@ -1151,7 +1153,7 @@ class Actor:
                     else str(response.content)
                 )
                 try:
-                    logging.debug(
+                    logger.debug(
                         "Verifying trust response JSON:" + str(response.content)
                     )
                     content_str = (
@@ -1165,14 +1167,14 @@ class Actor:
                     else:
                         verified = False
                 except ValueError:
-                    logging.debug(
+                    logger.debug(
                         "No json body in response when verifying trust at url("
                         + requrl
                         + ")"
                     )
                     verified = False
             except Exception:
-                logging.debug("No response when verifying trust at url" + requrl + ")")
+                logger.debug("No response when verifying trust at url" + requrl + ")")
                 verified = False
         new_trust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
         if not new_trust.create(
@@ -1224,13 +1226,13 @@ class Actor:
                     headers = {
                         "Authorization": "Bearer " + rel["secret"],
                     }
-                logging.debug("Deleting reciprocal relationship at url(" + url + ")")
+                logger.info(f"Deleting reciprocal relationship at {url}")
                 try:
                     response = requests.delete(
                         url=url, headers=headers, timeout=(5, 10)
                     )
                 except Exception:
-                    logging.debug(
+                    logger.debug(
                         "Failed to delete reciprocal relationship at url(" + url + ")"
                     )
                     failed_once = True
@@ -1238,7 +1240,7 @@ class Actor:
                 if (
                     response.status_code < 200 or response.status_code > 299
                 ) and response.status_code != 404:
-                    logging.debug(
+                    logger.debug(
                         "Failed to delete reciprocal relationship at url(" + url + ")"
                     )
                     failed_once = True
@@ -1252,7 +1254,7 @@ class Actor:
                     if is_oauth2_trust
                     else "self-deletion detected"
                 )
-                logging.debug(
+                logger.debug(
                     f"Skipping remote delete for {reason}; deleting locally only"
                 )
                 success_once = True
@@ -1264,7 +1266,7 @@ class Actor:
             if self.subs_list:
                 for sub in self.subs_list:
                     if sub["peerid"] == rel["peerid"]:
-                        logging.debug(
+                        logger.debug(
                             "Deleting subscription("
                             + sub["subscriptionid"]
                             + ") as part of trust deletion."
@@ -1284,7 +1286,7 @@ class Actor:
                     permission_store = TrustPermissionStore(self.config)
                     permission_store.delete_permissions(self.id, rel["peerid"])
             except Exception as e:
-                logging.warning(
+                logger.warning(
                     f"Failed to delete trust permissions for {rel['peerid']}: {e}"
                 )
             dbtrust = trust.Trust(
@@ -1347,7 +1349,7 @@ class Actor:
             "Content-Type": "application/json",
         }
         try:
-            logging.debug(
+            logger.debug(
                 "Creating remote subscription at url("
                 + requrl
                 + ") with body ("
@@ -1366,7 +1368,7 @@ class Actor:
         except Exception:
             return None
         try:
-            logging.debug(
+            logger.debug(
                 "Created remote subscription at url("
                 + requrl
                 + ") and got JSON response ("
@@ -1490,7 +1492,7 @@ class Actor:
             "Authorization": "Bearer " + trust_rel["secret"],
         }
         try:
-            logging.debug("Deleting remote subscription at url(" + url + ")")
+            logger.info(f"Deleting remote subscription at {url}")
             response = requests.delete(url=url, headers=headers, timeout=(5, 10))
             self.last_response_code = response.status_code
             self.last_response_message = (
@@ -1501,7 +1503,7 @@ class Actor:
             if response.status_code == 204:
                 return True
             else:
-                logging.debug(
+                logger.debug(
                     "Failed to delete remote subscription at url(" + url + ")"
                 )
                 return False
@@ -1525,7 +1527,7 @@ class Actor:
         self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
     ):
         if not peerid or not diff or not sub or not blob:
-            logging.warning("Missing parameters in callbackSubscription")
+            logger.warning("Missing parameters in callbackSubscription")
             return
         if "granularity" in sub and sub["granularity"] == "none":
             return
@@ -1591,7 +1593,7 @@ class Actor:
             import httpx
 
             try:
-                logging.debug(
+                logger.debug(
                     "Doing async callback on subscription at url("
                     + requrl
                     + ") with body("
@@ -1612,11 +1614,11 @@ class Actor:
                 )
                 if response.status_code == 204 and sub["granularity"] == "high":
                     if not sub_obj:
-                        logging.warning("About to clear diff without having subobj set")
+                        logger.warning("About to clear diff without having subobj set")
                     else:
                         sub_obj.clear_diff(diff["sequence"])
             except Exception as e:
-                logging.debug(f"Peer did not respond to callback on url({requrl}): {e}")
+                logger.debug(f"Peer did not respond to callback on url({requrl}): {e}")
                 self.last_response_code = 0
                 self.last_response_message = (
                     "No response from peer for subscription callback"
@@ -1629,10 +1631,10 @@ class Actor:
             loop = asyncio.get_running_loop()
             # We're in an async context - create a background task
             loop.create_task(_send_callback_async())
-            logging.debug("Scheduled async callback task")
+            logger.info("Scheduled async callback task")
         except RuntimeError:
             # No running event loop - fall back to sync request
-            logging.debug("No async loop, falling back to sync callback")
+            logger.debug("No async loop, falling back to sync callback")
             try:
                 response = requests.post(
                     url=requrl,
@@ -1648,11 +1650,11 @@ class Actor:
                 )
                 if response.status_code == 204 and sub["granularity"] == "high":
                     if not sub_obj:
-                        logging.warning("About to clear diff without having subobj set")
+                        logger.warning("About to clear diff without having subobj set")
                     else:
                         sub_obj.clear_diff(diff["sequence"])
             except Exception:
-                logging.debug("Peer did not respond to callback on url(" + requrl + ")")
+                logger.debug("Peer did not respond to callback on url(" + requrl + ")")
                 self.last_response_code = 0
                 self.last_response_message = (
                     "No response from peer for subscription callback"
@@ -1747,12 +1749,12 @@ class Actor:
         """
         try:
             if not self.config or not self.id:
-                logging.warning("Missing config or actor ID for subscription filtering")
+                logger.warning("Missing config or actor ID for subscription filtering")
                 return None  # Fail-closed
 
             evaluator = get_permission_evaluator(self.config)
             if not evaluator:
-                logging.warning(
+                logger.warning(
                     f"Permission evaluator not available for subscription filtering to {peerid}"
                 )
                 return None  # Fail-closed
@@ -1766,7 +1768,7 @@ class Actor:
                 data = blob
 
             if not isinstance(data, dict):
-                logging.debug(f"Cannot filter non-dict subscription data: {type(data)}")
+                logger.debug(f"Cannot filter non-dict subscription data: {type(data)}")
                 return blob if isinstance(blob, str) else json.dumps(blob)
 
             filtered_data = {}
@@ -1789,19 +1791,19 @@ class Actor:
                 if result == PermissionResult.ALLOWED:
                     filtered_data[property_name] = value
                 else:
-                    logging.debug(
+                    logger.debug(
                         f"Filtered property {property_path} from subscription callback to {peerid}"
                     )
 
             if not filtered_data:
-                logging.debug(
+                logger.debug(
                     f"No permitted properties in callback to {peerid}, skipping"
                 )
                 return None
 
             return json.dumps(filtered_data)
         except Exception as e:
-            logging.error(f"Permission filtering failed for subscription callback: {e}")
+            logger.error(f"Permission filtering failed for subscription callback: {e}")
             return None  # Fail-closed: don't send data on error
 
     def register_diffs(self, target=None, subtarget=None, resource=None, blob=None):
@@ -1819,7 +1821,7 @@ class Actor:
         if not subs:
             subs = []
         if subtarget and resource:
-            logging.debug(
+            logger.debug(
                 "register_diffs() - blob("
                 + blob
                 + "), target("
@@ -1833,7 +1835,7 @@ class Actor:
                 + ")"
             )
         elif subtarget:
-            logging.debug(
+            logger.debug(
                 "register_diffs() - blob("
                 + blob
                 + "), target("
@@ -1845,7 +1847,7 @@ class Actor:
                 + ")"
             )
         else:
-            logging.debug(
+            logger.debug(
                 "register_diffs() - blob("
                 + blob
                 + "), target("
@@ -1857,11 +1859,11 @@ class Actor:
         for sub in subs:
             # Skip the ones without correct subtarget
             if subtarget and sub["subtarget"] and sub["subtarget"] != subtarget:
-                logging.debug("     - no match on subtarget, skipping...")
+                logger.debug("     - no match on subtarget, skipping...")
                 continue
             # Skip the ones without correct resource
             if resource and sub["resource"] and sub["resource"] != resource:
-                logging.debug("     - no match on resource, skipping...")
+                logger.debug("     - no match on resource, skipping...")
                 continue
             sub_obj = self.get_subscription_obj(
                 peerid=sub["peerid"], subid=sub["subscriptionid"]
@@ -1869,7 +1871,7 @@ class Actor:
             if not sub_obj:
                 continue
             sub_obj_data = sub_obj.get()
-            logging.debug(
+            logger.debug(
                 "     - processing subscription("
                 + sub["subscriptionid"]
                 + ") for peer("
@@ -1902,13 +1904,13 @@ class Actor:
                         subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
                 except (TypeError, ValueError, KeyError):
                     # The diff does not contain the resource
-                    logging.debug(
+                    logger.debug(
                         "         - subscription has resource("
                         + sub_obj_data["resource"]
                         + "), no matching blob found in diff"
                     )
                     continue
-                logging.debug(
+                logger.debug(
                     "         - subscription has resource("
                     + sub_obj_data["resource"]
                     + "), adding diff("
@@ -1937,7 +1939,7 @@ class Actor:
                     else:
                         upblob[resource] = blob
                 finblob = json.dumps(upblob)
-                logging.debug(
+                logger.debug(
                     "         - diff has resource("
                     + resource
                     + "), subscription has not, adding diff("
@@ -1955,7 +1957,7 @@ class Actor:
                 except (TypeError, ValueError, KeyError):
                     # The diff blob does not contain the subtarget
                     pass
-                logging.debug(
+                logger.debug(
                     "         - subscription has subtarget("
                     + sub_obj_data["subtarget"]
                     + "), adding diff("
@@ -1975,7 +1977,7 @@ class Actor:
                 except (TypeError, ValueError, KeyError):
                     upblob[subtarget] = blob
                 finblob = json.dumps(upblob)
-                logging.debug(
+                logger.debug(
                     "         - diff has subtarget("
                     + subtarget
                     + "), subscription has not, adding diff("
@@ -1984,7 +1986,7 @@ class Actor:
                 )
             else:
                 # The diff is correct for the subscription
-                logging.debug(
+                logger.debug(
                     "         - exact target/subtarget match, adding diff(" + blob + ")"
                 )
                 finblob = blob
@@ -1993,7 +1995,7 @@ class Actor:
             else:
                 diff = None
             if not diff:
-                logging.warning(
+                logger.warning(
                     "Failed when registering a diff to subscription ("
                     + sub["subscriptionid"]
                     + "). Will not send callback."

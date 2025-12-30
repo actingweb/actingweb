@@ -128,6 +128,8 @@ class TrustRelationship:
         """Convert to dictionary."""
         return self._data.copy()
 
+logger = logging.getLogger(__name__)
+
 
 class TrustManager:
     """
@@ -177,9 +179,9 @@ class TrustManager:
                 relationship=relationship,
                 trust_data=trust_data or {},
             )
-            logging.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
+            logger.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
         except Exception as e:
-            logging.error(f"Error executing lifecycle hook '{event}': {e}")
+            logger.error(f"Error executing lifecycle hook '{event}': {e}")
 
     @property
     def relationships(self) -> list[TrustRelationship]:
@@ -398,12 +400,12 @@ class TrustManager:
                     if tt_fb:
                         trust_type = fallback
         except RuntimeError:
-            logging.debug(
+            logger.debug(
                 "Trust type registry not initialized - using provided trust_type as-is"
             )
             pass
         except Exception as e:
-            logging.debug(f"Error accessing trust type registry: {e}")
+            logger.debug(f"Error accessing trust type registry: {e}")
             pass
 
         # Standardize peer id and check existing
@@ -432,7 +434,7 @@ class TrustManager:
             # Legacy format for backward compatibility
             peer_id = self._standardize_peer_id(source, email)
 
-        logging.debug(
+        logger.debug(
             f"Creating/updating OAuth trust: email={email}, trust_type={trust_type}, established_via={established_via}, source={source}, client_id={client_id}, peer_id={peer_id}"
         )
         existing = self.get_relationship(peer_id)
@@ -447,7 +449,7 @@ class TrustManager:
         if existing:
             # Update last accessed and established_via via DB layer without notifying peers
             try:
-                from ..db_dynamodb.db_trust import DbTrust
+                from ..db.dynamodb.trust import DbTrust
 
                 db = DbTrust()
                 if db.get(actor_id=self._core_actor.id, peerid=peer_id):
@@ -484,7 +486,7 @@ class TrustManager:
                             modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
 
                     db.modify(**modify_kwargs)
-                    logging.debug(
+                    logger.debug(
                         f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                     )
             except Exception:
@@ -492,7 +494,7 @@ class TrustManager:
         else:
             # Create a local trust record directly via DbTrust (no remote handshake)
             try:
-                from ..db_dynamodb.db_trust import DbTrust
+                from ..db.dynamodb.trust import DbTrust
 
                 db = DbTrust()
                 secret = (
@@ -560,16 +562,16 @@ class TrustManager:
                     **client_metadata,  # Include client metadata in the trust relationship
                 )
                 if created:
-                    logging.info(
+                    logger.info(
                         f"Successfully created OAuth trust relationship: peer_id={peer_id}, trust_type={trust_type}, source={source}"
                     )
                 else:
-                    logging.error(
+                    logger.error(
                         f"Failed to create OAuth trust relationship in database: peer_id={peer_id}"
                     )
                     return False
             except Exception as e:
-                logging.error(f"Exception creating OAuth trust relationship: {e}")
+                logger.error(f"Exception creating OAuth trust relationship: {e}")
                 return False
 
         # Store tokens in a consistent internal attribute namespace

@@ -1,5 +1,7 @@
 import logging
 
+logger = logging.getLogger(__name__)
+
 
 class PeerTrustee:
     def get(self):
@@ -20,12 +22,12 @@ class PeerTrustee:
             else:
                 return False
         if not self.actor_id or not self.peerid:
-            logging.debug(
+            logger.debug(
                 "Attempt to create new peer trustee without actor_id or peerid set"
             )
             return False
         if not self.peer_type or len(self.peer_type) == 0:
-            logging.debug("Attempt to create peer trustee without peer_type set.")
+            logger.debug("Attempt to create peer trustee without peer_type set.")
             return False
         return self.handle.create(
             actor_id=self.actor_id,
@@ -37,7 +39,7 @@ class PeerTrustee:
 
     def delete(self):
         if not self.handle:
-            logging.debug("Attempt to delete peertrustee without db handle")
+            logger.debug("Attempt to delete peertrustee without db handle")
             return False
         return self.handle.delete()
 
@@ -52,7 +54,7 @@ class PeerTrustee:
         self.peertrustee = {}
         self.peer_type = None
         if not actor_id or len(actor_id) == 0:
-            logging.debug("No actorid set in initialisation of peertrust")
+            logger.debug("No actorid set in initialisation of peertrust")
             return
         if peer_type:
             self.peer_type = peer_type
@@ -62,7 +64,7 @@ class PeerTrustee:
                 or not self.config.actors
                 or short_type not in self.config.actors
             ):
-                logging.error(
+                logger.error(
                     "Got request to initialise peer trustee with unknown shortpeer_type("
                     + (peer_type or "None")
                     + ")"
@@ -70,7 +72,7 @@ class PeerTrustee:
                 return
             self.peer_type = self.config.actors[short_type]["type"]
         elif not peerid:
-            logging.debug(
+            logger.debug(
                 "Peerid and short_type are not set in initialisation of peertrustee. One is required"
             )
             return

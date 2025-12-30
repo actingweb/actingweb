@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from ..config import Config
     from .hooks import HookRegistry
 
+logger = logging.getLogger(__name__)
+
 
 class PropertyStore:
     """
@@ -64,7 +66,7 @@ class PropertyStore:
             )
             return result if result is not None else value
         except Exception as e:
-            logging.warning(f"Error executing property hook for {key}: {e}")
+            logger.warning(f"Error executing property hook for {key}: {e}")
             return value
 
     def _register_diff(self, key: str, value: Any, resource: str = "") -> None:
@@ -81,7 +83,7 @@ class PropertyStore:
                 blob=blob,
             )
         except Exception as e:
-            logging.warning(f"Error registering diff for {key}: {e}")
+            logger.warning(f"Error registering diff for {key}: {e}")
 
     def __getitem__(self, key: str) -> Any:
         """Get property value by key."""
@@ -269,7 +271,7 @@ class NotifyingListProperty:
                 blob=json.dumps(diff_info),
             )
         except Exception as e:
-            logging.warning(f"Error registering diff for list {self._list_name}: {e}")
+            logger.warning(f"Error registering diff for list {self._list_name}: {e}")
 
     # Read-only operations - delegate directly
     def __len__(self) -> int:

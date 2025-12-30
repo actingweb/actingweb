@@ -4,6 +4,8 @@ import logging
 from actingweb import auth
 from actingweb.handlers import base_handler
 
+logger = logging.getLogger(__name__)
+
 
 class CallbacksHandler(base_handler.BaseHandler):
     def get(self, actor_id, name):
@@ -135,7 +137,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if sub_info:
                 # Convert to dict for hook compatibility
                 sub = sub_info.to_dict()
-                logging.debug("Found subscription (" + str(sub) + ")")
+                logger.debug("Found subscription (" + str(sub) + ")")
                 if not check or not check.check_authorisation(
                     path="callbacks",
                     subpath="subscriptions",

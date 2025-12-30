@@ -667,7 +667,7 @@ class WwwHandler(base_handler.BaseHandler):
             return available_types
 
         except Exception as e:
-            logging.error(f"Error accessing trust type registry: {e}")
+            logger.error(f"Error accessing trust type registry: {e}")
             # No fallback - this is a configuration error that should be fixed
             return []
 
@@ -696,7 +696,7 @@ class WwwHandler(base_handler.BaseHandler):
             return processed_clients
 
         except Exception as e:
-            logging.error(f"Error getting OAuth2 clients for actor {actor_id}: {e}")
+            logger.error(f"Error getting OAuth2 clients for actor {actor_id}: {e}")
             return []
 
     def _handle_new_trust_relationship(self, myself, actor_id: str) -> None:
@@ -762,7 +762,7 @@ class WwwHandler(base_handler.BaseHandler):
                 )
 
         except Exception as e:
-            logging.error(f"Error creating trust relationship: {e}")
+            logger.error(f"Error creating trust relationship: {e}")
             self.response.set_status(500, "Internal Server Error")
             self.response.write(f"Error: {str(e)}")
 

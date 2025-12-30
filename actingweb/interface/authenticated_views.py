@@ -23,6 +23,8 @@ class PermissionError(Exception):
 
     pass
 
+logger = logging.getLogger(__name__)
+
 
 class AuthContext:
     """Authentication context for permission evaluation."""
@@ -99,7 +101,7 @@ class AuthenticatedPropertyStore:
             raise
         except Exception as e:
             # Fail closed on permission system errors (security best practice)
-            logging.error(
+            logger.error(
                 f"Permission system error for {operation} on '{key}': {e}. "
                 f"Denying access as security precaution."
             )
@@ -221,7 +223,7 @@ class AuthenticatedPropertyListStore:
             raise
         except Exception as e:
             # Fail closed on permission system errors (security best practice)
-            logging.error(
+            logger.error(
                 f"Permission system error for {operation} on list '{list_name}': {e}. "
                 f"Denying access as security precaution."
             )
@@ -299,7 +301,7 @@ class AuthenticatedSubscriptionManager:
             raise
         except Exception as e:
             # Fail closed on permission system errors (security best practice)
-            logging.error(
+            logger.error(
                 f"Subscription permission check error for {target}: {e}. "
                 f"Denying access as security precaution."
             )

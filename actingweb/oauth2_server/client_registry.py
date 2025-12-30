@@ -294,7 +294,7 @@ class MCPClientRegistry:
                 f"Storing client {client_id} in mcp_clients bucket for actor {actor_id}"
             )
             bucket.set_attr(name=client_id, data=client_data)
-            logger.debug("Successfully stored client data")
+            logger.info(f"Stored OAuth2 client {client_id}")
 
         except Exception as e:
             logger.error(f"Error storing client {client_id} for actor {actor_id}: {e}")

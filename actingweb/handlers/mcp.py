@@ -258,7 +258,7 @@ class MCPHandler(BaseHandler):
             # Store in a global cache keyed by IP or other identifier
             # This will be retrieved during OAuth2 flow to store permanently
             self._store_mcp_client_info_temporarily(client_info)
-            logging.debug(f"Stored MCP client info: {client_info}")
+            logger.info(f"Stored MCP client info: {client_info['name']}")
 
             # ALSO try to store immediately if we have an authenticated actor
             try:
@@ -989,7 +989,7 @@ class MCPHandler(BaseHandler):
         # This is a notification that the client has finished initialization
         # According to MCP spec, this is a notification (no response expected)
         # However, some clients may send it as a request, so we respond
-        logger.debug("MCP client initialization completed")
+        logger.info("MCP client initialization completed")
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 

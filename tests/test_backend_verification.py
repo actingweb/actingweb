@@ -93,10 +93,16 @@ def test_backend_actually_connects():
             # DynamoDB-specific: verify table name has correct prefix
             from actingweb.db.dynamodb.actor import Actor
 
+            # Note: Actor.Meta.table_name is set at module import time
+            # In parallel test runs, the env var may have worker-specific prefix (e.g., test_w3_)
+            # but the table_name was set with the base prefix at import time
+            # So we check for either the base prefix or worker-specific prefix
             expected_prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
+            # Strip worker-specific suffix (e.g., _w3) to get base prefix
+            base_prefix = expected_prefix.split("_w")[0] if "_w" in expected_prefix else expected_prefix
             assert Actor.Meta.table_name.startswith(
-                expected_prefix
-            ), f"DynamoDB table should start with {expected_prefix}"
+                base_prefix
+            ), f"DynamoDB table should start with {base_prefix} (table_name={Actor.Meta.table_name}, env prefix={expected_prefix})"
 
     finally:
         # Clean up

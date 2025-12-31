@@ -10,7 +10,6 @@ NOTE: These tests require the database backend to be available:
 """
 
 import importlib
-import os
 
 import pytest
 
@@ -31,41 +30,9 @@ from actingweb.db.protocols import (
     DbTrustProtocol,
 )
 
-
-@pytest.fixture(scope="module")
-def setup_dynamodb_env():
-    """
-    Set up environment for DynamoDB tests.
-
-    NOTE: This fixture is no longer autouse to prevent environment pollution
-    across test modules. Tests that need this specific environment should
-    request this fixture explicitly or rely on the global conftest.py settings.
-    """
-    # Save original environment variables
-    original_env = {
-        "AWS_DB_HOST": os.environ.get("AWS_DB_HOST"),
-        "AWS_DB_PREFIX": os.environ.get("AWS_DB_PREFIX"),
-        "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID"),
-        "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY"),
-        "AWS_DEFAULT_REGION": os.environ.get("AWS_DEFAULT_REGION"),
-    }
-
-    # Set environment variables for DynamoDB local
-    os.environ["AWS_DB_HOST"] = "http://localhost:8001"
-    os.environ["AWS_DB_PREFIX"] = "protocol_test"
-    os.environ["AWS_ACCESS_KEY_ID"] = "test"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-    os.environ["AWS_DEFAULT_REGION"] = "us-west-1"
-
-    yield
-
-    # Restore original environment variables
-    for key, value in original_env.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-
+# Note: This file previously had a setup_dynamodb_env fixture that set
+# AWS_DB_PREFIX="protocol_test", but it was unused by any tests.
+# All tests rely on the global conftest.py environment setup instead.
 
 # Actor and Property implemented for both backends
 @pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])

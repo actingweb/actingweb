@@ -10,7 +10,6 @@ NOTE: These tests require the database backend to be available:
 """
 
 import importlib
-import os
 
 import pytest
 
@@ -31,19 +30,9 @@ from actingweb.db.protocols import (
     DbTrustProtocol,
 )
 
-
-@pytest.fixture(scope="module", autouse=True)
-def setup_dynamodb_env():
-    """Set up environment for DynamoDB tests."""
-    # Set environment variables for DynamoDB local
-    os.environ["AWS_DB_HOST"] = "http://localhost:8001"
-    os.environ["AWS_DB_PREFIX"] = "protocol_test"
-    os.environ["AWS_ACCESS_KEY_ID"] = "test"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-    os.environ["AWS_DEFAULT_REGION"] = "us-west-1"
-    yield
-    # Cleanup would happen here if needed
-
+# Note: This file previously had a setup_dynamodb_env fixture that set
+# AWS_DB_PREFIX="protocol_test", but it was unused by any tests.
+# All tests rely on the global conftest.py environment setup instead.
 
 # Actor and Property implemented for both backends
 @pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])

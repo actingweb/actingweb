@@ -55,14 +55,14 @@ Notes:
 - The library auto-creates tables on first access through its PynamoDB models.
 - For production, configure IAM and real AWS hosts (do not set ``AWS_DB_HOST``).
 
-Option 2: PostgreSQL
-~~~~~~~~~~~~~~~~~~~~
+Option 2: PostgreSQL (Recommended for New Projects)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Launch PostgreSQL and run migrations:
+**Quick Start (Complete Setup)**
 
 .. code-block:: bash
 
-   # Start PostgreSQL (Docker)
+   # 1. Start PostgreSQL (Docker)
    docker run -d \
      --name actingweb-postgres \
      -e POSTGRES_USER=actingweb \
@@ -71,23 +71,67 @@ Launch PostgreSQL and run migrations:
      -p 5432:5432 \
      postgres:16-alpine
 
-   # Configure environment
-   export DATABASE_BACKEND=postgresql
-   export PG_DB_HOST=localhost
-   export PG_DB_PORT=5432
-   export PG_DB_NAME=actingweb
-   export PG_DB_USER=actingweb
-   export PG_DB_PASSWORD=devpassword
+   # 2. Create .env file in your project root
+   cat > .env << 'EOF'
+   DATABASE_BACKEND=postgresql
+   PG_DB_HOST=localhost
+   PG_DB_PORT=5432
+   PG_DB_NAME=actingweb
+   PG_DB_USER=actingweb
+   PG_DB_PASSWORD=devpassword
+   EOF
 
-   # Run database migrations
-   cd actingweb/db/postgresql/
-   alembic upgrade head
+   # 3. Download migration helper script (one-time setup)
+   mkdir -p scripts
+   curl -o scripts/migrate_db.py https://raw.githubusercontent.com/actingweb/actingweb/main/scripts/migrate_db.py
 
-Notes:
+   # 4. Run migrations (REQUIRED before first use)
+   python scripts/migrate_db.py upgrade head
 
-- PostgreSQL requires running Alembic migrations before first use (unlike DynamoDB which auto-creates tables).
-- For native PostgreSQL installation: ``brew install postgresql`` (macOS) or ``apt install postgresql`` (Ubuntu).
-- Connection pooling is built-in (psycopg3 pool with configurable min/max connections).
+   # 5. Verify setup
+   python scripts/migrate_db.py current
+
+**Why PostgreSQL?**
+
+- Lower latency (no network overhead for local development)
+- Full SQL support with JOINs and complex queries
+- Built-in ACID transactions
+- Mature ecosystem (pg_dump, psql, GUI tools)
+- Lower cost for read-heavy workloads
+
+**Migration Helper Script Benefits:**
+
+The ``scripts/migrate_db.py`` helper script:
+
+- Automatically loads your ``.env`` file
+- Validates all required environment variables
+- Finds ``alembic.ini`` in your installed actingweb package
+- Provides simple commands: ``upgrade``, ``downgrade``, ``current``, ``history``
+- Works with both pip and poetry installations
+
+**Common Migration Commands:**
+
+.. code-block:: bash
+
+   python scripts/migrate_db.py upgrade head    # Apply all pending migrations
+   python scripts/migrate_db.py current         # Show current version
+   python scripts/migrate_db.py downgrade -1    # Rollback one migration
+   python scripts/migrate_db.py history         # Show migration history
+
+**Alternative: Manual Migration (Not Recommended)**
+
+If you prefer to run alembic directly without the helper script:
+
+.. code-block:: bash
+
+   python -c "import actingweb; from pathlib import Path; print(Path(actingweb.__file__).parent / 'db' / 'postgresql')" | xargs -I{} alembic -c {}/alembic.ini upgrade head
+
+**Notes:**
+
+- PostgreSQL requires running Alembic migrations before first use (unlike DynamoDB which auto-creates tables)
+- For native PostgreSQL: ``brew install postgresql`` (macOS) or ``apt install postgresql`` (Ubuntu)
+- Connection pooling is automatic (psycopg3 with configurable min/max connections)
+- Use Docker Compose for multi-service setups (see :doc:`../guides/postgresql-migration`)
 
 Choosing a Framework
 --------------------

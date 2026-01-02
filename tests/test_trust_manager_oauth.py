@@ -6,6 +6,9 @@ from actingweb.interface.trust_manager import TrustManager
 class FakeConfig:
     def __init__(self) -> None:
         self.root = "https://example.com/"
+        # Mock DbTrust module structure (config.DbTrust.DbTrust)
+        # This will be set up in the test with the FakeDbTrust class
+        self.DbTrust: Any = None
 
     def new_token(self) -> str:
         return "secret-token"
@@ -98,6 +101,10 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
         "actingweb.db.dynamodb.trust",
         type("M", (), {"DbTrust": FakeDbTrust}),
     )
+
+    # Set up actor.config.DbTrust to mimic the real config structure
+    # where config.DbTrust is a module with a DbTrust class
+    actor.config.DbTrust = type("DbTrustModule", (), {"DbTrust": FakeDbTrust})
 
     oauth_tokens = {
         "access_token": "at",

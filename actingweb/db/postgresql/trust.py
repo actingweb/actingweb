@@ -81,7 +81,7 @@ class DbTrust:
                         # Query by actor_id and peerid (primary key)
                         cur.execute(
                             """
-                            SELECT id, peerid, baseuri, type, relationship, secret, desc,
+                            SELECT id, peerid, baseuri, type, relationship, secret, "desc",
                                    approved, peer_approved, verified, verification_token,
                                    peer_identifier, established_via, created_at, last_accessed,
                                    last_connected_via, client_name, client_version, client_platform,
@@ -95,7 +95,7 @@ class DbTrust:
                         # Query by actor_id and secret (using secret index)
                         cur.execute(
                             """
-                            SELECT id, peerid, baseuri, type, relationship, secret, desc,
+                            SELECT id, peerid, baseuri, type, relationship, secret, "desc",
                                    approved, peer_approved, verified, verification_token,
                                    peer_identifier, established_via, created_at, last_accessed,
                                    last_connected_via, client_name, client_version, client_platform,
@@ -247,7 +247,7 @@ class DbTrust:
                     cur.execute(
                         """
                         INSERT INTO trusts (
-                            id, peerid, baseuri, type, relationship, secret, desc,
+                            id, peerid, baseuri, type, relationship, secret, "desc",
                             approved, peer_approved, verified, verification_token,
                             peer_identifier, established_via, created_at, last_accessed,
                             last_connected_via, client_name, client_version, client_platform,
@@ -397,7 +397,7 @@ class DbTrust:
             self.handle["secret"] = secret
 
         if desc and len(desc) > 0:
-            updates.append("desc = %s")
+            updates.append('"desc" = %s')
             params.append(desc)
             self.handle["desc"] = desc
 
@@ -611,7 +611,7 @@ class DbTrustList:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT id, peerid, baseuri, type, relationship, secret, desc,
+                        SELECT id, peerid, baseuri, type, relationship, secret, "desc",
                                approved, peer_approved, verified, verification_token,
                                peer_identifier, established_via, created_at, last_accessed,
                                last_connected_via, client_name, client_version, client_platform,

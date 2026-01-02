@@ -245,6 +245,9 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(500, "Unable to create new subscription")
             return
+
+        # Invalidate subscription cache so register_diffs() sees the new subscription
+        myself.subs_list = None
         if self.response:
             self.response.headers["Location"] = str(
                 self.config.root

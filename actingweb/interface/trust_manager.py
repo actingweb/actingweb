@@ -449,9 +449,10 @@ class TrustManager:
         if existing:
             # Update last accessed and established_via via DB layer without notifying peers
             try:
-                from ..db.dynamodb.trust import DbTrust
-
-                db = DbTrust()
+                # Use the configured database backend
+                db = self._core_actor.config.DbTrust.DbTrust() if self._core_actor.config else None
+                if not db:
+                    return False
                 if db.get(actor_id=self._core_actor.id, peerid=peer_id):
                     now_iso = datetime.utcnow().isoformat()
 
@@ -494,9 +495,10 @@ class TrustManager:
         else:
             # Create a local trust record directly via DbTrust (no remote handshake)
             try:
-                from ..db.dynamodb.trust import DbTrust
-
-                db = DbTrust()
+                # Use the configured database backend
+                db = self._core_actor.config.DbTrust.DbTrust() if self._core_actor.config else None
+                if not db:
+                    return False
                 secret = (
                     self._core_actor.config.new_token()
                     if self._core_actor.config

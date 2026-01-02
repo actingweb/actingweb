@@ -2,6 +2,31 @@
 CHANGELOG
 =========
 
+v3.8.1: Jan 2, 2026
+--------------------
+
+FIXED
+~~~~~
+
+- **Subscription Cache Invalidation**: Fixed subscription handler to invalidate ``subs_list`` cache after creating new subscription, ensuring ``register_diffs()`` immediately sees newly created subscriptions for callback delivery
+- **Trust Deletion Error Handling**: Fixed DELETE handler for trust relationships to return 404 (instead of 403) when relationship doesn't exist, enabling proper cleanup of orphaned trust relationships during ``delete_reciprocal_trust()`` flow
+- **PostgreSQL Backend**: Fixed SQL queries to quote ``desc`` column as reserved keyword (PostgreSQL compatibility)
+- **PostgreSQL Backend**: Fixed ``Attributes`` class to handle None values from PostgreSQL for non-existent attribute buckets
+- **Database Backend Abstraction**: Removed hardcoded DynamoDB imports in ``TrustManager`` and ``PermissionEvaluator`` to use configured database backend dynamically
+- **Test Fixtures**: Fixed ``test_trust_manager_oauth`` mock to properly structure ``DbTrust`` module for compatibility with backend abstraction
+
+ADDED
+~~~~~
+
+- **Migration Helper**: Added ``scripts/migrate_db.py`` helper script for simplified PostgreSQL migrations with automatic .env loading and environment validation
+
+CHANGED
+~~~~~~~
+
+- **Documentation**: Enhanced PostgreSQL setup documentation in quickstart guides with migration helper script usage, troubleshooting guide, and step-by-step setup instructions
+- **TODO**: Added task for implementing ``TrustManager.create_relationship_async()`` method to avoid blocking event loop in async contexts
+
+
 v3.8.0: Dec 31, 2025
 --------------------
 

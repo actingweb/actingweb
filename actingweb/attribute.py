@@ -60,6 +60,9 @@ class Attributes:
                 self.data = self.dbprop.get_bucket(
                     actor_id=self.actor_id, bucket=self.bucket
                 )
+                # PostgreSQL backend returns None for non-existent buckets
+                if self.data is None:
+                    self.data = {}
             else:
                 self.data = {}
         return self.data
@@ -68,6 +71,9 @@ class Attributes:
         """Retrieves a single attribute"""
         if not name:
             return None
+        # Ensure self.data is initialized (defensive check)
+        if self.data is None:
+            self.data = {}
         if name not in self.data:
             if self.dbprop:
                 self.data[name] = self.dbprop.get_attr(
@@ -95,6 +101,9 @@ class Attributes:
         """
         if not self.actor_id or not self.bucket:
             return False
+        # Ensure self.data is initialized (defensive check)
+        if self.data is None:
+            self.data = {}
         if name not in self.data or self.data[name] is None:
             self.data[name] = {}
         self.data[name]["data"] = data

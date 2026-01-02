@@ -94,7 +94,12 @@ def run_alembic(alembic_ini, args):
         alembic_main(argv=alembic_args)
         print("\n✅ Migration completed successfully")
     except Exception as e:
+        import traceback
         print(f"\n❌ Migration failed: {e}")
+        print("\n" + "="*60)
+        print("Full error traceback:")
+        print("="*60)
+        traceback.print_exc()
         sys.exit(1)
 
 

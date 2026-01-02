@@ -378,7 +378,13 @@ class PermissionEvaluator:
         """
         try:
             # Use the configured database backend
+            if not self.config or not hasattr(self.config, 'DbTrust'):
+                logger.error("Database backend (DbTrust) not configured")
+                return None
             db_trust = self.config.DbTrust.DbTrust()
+            if not db_trust:
+                logger.error("Failed to instantiate database backend")
+                return None
             trust_record = db_trust.get(actor_id=actor_id, peerid=peer_id)
 
             # DbTrust.get() returns a dict; support both dicts and objects defensively

@@ -182,14 +182,20 @@ Installation
 
 .. code-block:: bash
 
+    # pip installation
     pip install 'actingweb[postgresql]'
 
-Local Development
-~~~~~~~~~~~~~~~~~
+    # poetry installation
+    poetry add 'actingweb[postgresql]'
+
+Local Development (Complete Setup)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Step 1: Start PostgreSQL**
 
 .. code-block:: bash
 
-    # Start PostgreSQL
+    # Using Docker (recommended)
     docker run -d \
       --name actingweb-postgres \
       -e POSTGRES_USER=actingweb \
@@ -198,22 +204,65 @@ Local Development
       -p 5432:5432 \
       postgres:16-alpine
 
-    # Configure environment
-    export DATABASE_BACKEND=postgresql
-    export PG_DB_HOST=localhost
-    export PG_DB_PORT=5432
-    export PG_DB_NAME=actingweb
-    export PG_DB_USER=actingweb
-    export PG_DB_PASSWORD=devpassword
+**Step 2: Configure Environment**
 
-    # Run migrations (REQUIRED before first use)
-    cd actingweb/db/postgresql/
-    alembic upgrade head
+Create a ``.env`` file in your project root:
+
+.. code-block:: bash
+
+    DATABASE_BACKEND=postgresql
+    PG_DB_HOST=localhost
+    PG_DB_PORT=5432
+    PG_DB_NAME=actingweb
+    PG_DB_USER=actingweb
+    PG_DB_PASSWORD=devpassword
+
+**Step 3: Setup Migration Helper (Recommended)**
+
+.. code-block:: bash
+
+    # Download migration helper script (one-time)
+    mkdir -p scripts
+    curl -o scripts/migrate_db.py https://raw.githubusercontent.com/actingweb/actingweb/main/scripts/migrate_db.py
+
+The helper script automatically:
+
+- Loads ``.env`` file
+- Validates required environment variables
+- Finds ``alembic.ini`` in installed actingweb package
+- Provides simple migration commands
+
+**Step 4: Run Migrations (REQUIRED)**
+
+.. code-block:: bash
+
+    # Apply all migrations
+    python scripts/migrate_db.py upgrade head
+
+    # Verify current version
+    python scripts/migrate_db.py current
+
+**Common Migration Commands:**
+
+.. code-block:: bash
+
+    python scripts/migrate_db.py upgrade head    # Apply all pending migrations
+    python scripts/migrate_db.py current         # Show current version
+    python scripts/migrate_db.py downgrade -1    # Rollback one migration
+    python scripts/migrate_db.py history         # Show migration history
+
+**Alternative: Direct Alembic (Advanced Users)**
+
+If you prefer not to use the helper script:
+
+.. code-block:: bash
+
+    python -c "import actingweb; from pathlib import Path; print(Path(actingweb.__file__).parent / 'db' / 'postgresql')" | xargs -I{} alembic -c {}/alembic.ini upgrade head
 
 Production (Managed PostgreSQL)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Configure environment variables for your PostgreSQL instance:
+**Environment Configuration:**
 
 .. code-block:: bash
 
@@ -224,24 +273,104 @@ Configure environment variables for your PostgreSQL instance:
     export PG_DB_USER=actingweb
     export PG_DB_PASSWORD=<secure-password>
 
-    # Optional connection pool tuning
-    export PG_POOL_MIN_SIZE=2
-    export PG_POOL_MAX_SIZE=20
-    export PG_POOL_TIMEOUT=30
+    # Optional: Connection pool tuning
+    export PG_POOL_MIN_SIZE=2       # Minimum pool connections
+    export PG_POOL_MAX_SIZE=20      # Maximum pool connections
+    export PG_POOL_TIMEOUT=30       # Connection timeout (seconds)
 
-**Migration Management:**
+**Migrations in Production:**
 
-- Run ``alembic upgrade head`` to apply migrations
-- Migrations are located in ``actingweb/db/postgresql/migrations/``
-- Check current version: ``alembic current``
-- See migration guide: :doc:`../guides/postgresql-migration`
+Use the same migration helper script or CI/CD-friendly one-liner:
 
-**Recommended Services:**
+.. code-block:: bash
 
-- AWS RDS PostgreSQL
-- Google Cloud SQL for PostgreSQL
-- Azure Database for PostgreSQL
-- DigitalOcean Managed PostgreSQL
+    # Using helper script
+    python scripts/migrate_db.py upgrade head
+
+    # CI/CD one-liner (no .env file)
+    python -c "import actingweb; from pathlib import Path; print(Path(actingweb.__file__).parent / 'db' / 'postgresql')" | xargs -I{} alembic -c {}/alembic.ini upgrade head
+
+**Recommended Managed Services:**
+
+- **AWS RDS PostgreSQL** - Fully managed, automatic backups, Multi-AZ
+- **Google Cloud SQL** - Managed PostgreSQL with high availability
+- **Azure Database for PostgreSQL** - Enterprise-grade managed service
+- **DigitalOcean Managed PostgreSQL** - Simple, affordable managed database
+
+**Docker Compose Example:**
+
+.. code-block:: yaml
+
+    services:
+      app:
+        environment:
+          - DATABASE_BACKEND=postgresql
+          - PG_DB_HOST=postgres
+          - PG_DB_PORT=5432
+          - PG_DB_NAME=actingweb
+          - PG_DB_USER=actingweb
+          - PG_DB_PASSWORD=devpassword
+        depends_on:
+          postgres:
+            condition: service_healthy
+
+      postgres:
+        image: postgres:16-alpine
+        environment:
+          POSTGRES_USER: actingweb
+          POSTGRES_PASSWORD: devpassword
+          POSTGRES_DB: actingweb
+        ports:
+          - "5432:5432"
+        volumes:
+          - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+          test: ["CMD-SHELL", "pg_isready -U actingweb"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+    volumes:
+      postgres_data:
+
+**Common Issues and Solutions:**
+
+**1. "Connection refused" error**
+
+.. code-block:: bash
+
+    # Check PostgreSQL is running
+    docker ps | grep postgres
+    # Or for native installations
+    pg_isready -h localhost -p 5432
+
+**2. "relation does not exist" error**
+
+This means migrations haven't been run yet:
+
+.. code-block:: bash
+
+    python scripts/migrate_db.py upgrade head
+
+**3. "permission denied" errors in queries**
+
+Check your PostgreSQL user has proper permissions:
+
+.. code-block:: sql
+
+    psql -U postgres
+    GRANT ALL PRIVILEGES ON DATABASE actingweb TO actingweb;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO actingweb;
+
+**4. "password authentication failed"**
+
+Verify your PG_DB_PASSWORD matches what you set when creating the database:
+
+.. code-block:: bash
+
+    # Reset password
+    psql -U postgres -c "ALTER USER actingweb WITH PASSWORD 'newpassword';"
+    # Update .env file with new password
 
 Logging
 -------

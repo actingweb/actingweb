@@ -716,17 +716,64 @@ class TrustPeerHandler(base_handler.BaseHandler):
         auth_result = self.authenticate_actor(
             actor_id, "trust", subpath=relationship, add_response=False
         )
-        if (
-            not auth_result.actor
-            or not auth_result.auth_obj
+
+        # Special handling: if authentication failed but actor was loaded,
+        # check if relationship exists. If not, return 404 instead of auth error.
+        # This allows cleanup of orphaned relationships during delete_reciprocal_trust.
+        if auth_result.actor and (
+            not auth_result.auth_obj
             or (
                 auth_result.auth_obj.response["code"] != 200
                 and auth_result.auth_obj.response["code"] != 401
             )
         ):
+            # Actor loaded but auth failed - check if relationship exists
+            relationships = auth_result.actor.get_trust_relationships(
+                relationship=relationship, peerid=peerid
+            )
+            logger.debug(
+                f"DELETE trust auth failed, checking relationship: actor={actor_id}, "
+                f"peerid={peerid}, found={len(relationships) if relationships else 0}"
+            )
+            if not relationships or len(relationships) == 0:
+                # Relationship doesn't exist - return 404 (expected by delete_reciprocal_trust)
+                logger.info(
+                    f"Trust relationship not found after auth failure: actor={actor_id}, "
+                    f"peerid={peerid}, returning 404"
+                )
+                if self.response:
+                    self.response.set_status(404, "Not found")
+                return
+            # Relationship exists but auth failed - return auth error
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
+
+        # Actor not loaded or other error
+        if not auth_result.actor or not auth_result.auth_obj:
+            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
+            return
+
         myself = auth_result.actor
+
+        # Check if relationship exists BEFORE authorization
+        # This ensures we return 404 (not 403) when peer tries to delete non-existent relationship
+        # The delete_reciprocal_trust flow expects 404 for missing relationships
+        relationships = myself.get_trust_relationships(
+            relationship=relationship, peerid=peerid
+        )
+        logger.debug(
+            f"DELETE trust check: actor={actor_id}, peerid={peerid}, "
+            f"relationship={relationship}, found={len(relationships) if relationships else 0} relationships"
+        )
+        if not relationships or len(relationships) == 0:
+            logger.info(
+                f"Trust relationship not found for deletion: actor={actor_id}, peerid={peerid}, "
+                f"returning 404"
+            )
+            if self.response:
+                self.response.set_status(404, "Not found")
+            return
+
         # We allow non-approved peers to delete even if we haven't approved the relationship yet
         if not auth_result.auth_obj.check_authorisation(
             path="trust",
@@ -759,13 +806,6 @@ class TrustPeerHandler(base_handler.BaseHandler):
             peer_get = self.request.get("peer").lower()
             if peer_get.lower() == "true":
                 is_peer = True
-        relationships = myself.get_trust_relationships(
-            relationship=relationship, peerid=peerid
-        )
-        if not relationships or len(relationships) == 0:
-            if self.response:
-                self.response.set_status(404, "Not found")
-            return
 
         # Use developer API - ActorInterface with TrustManager
         actor_interface = self._get_actor_interface(myself)

@@ -439,19 +439,17 @@ class TrustManager:
         )
         existing = self.get_relationship(peer_id)
 
-        try:
-            import time
-
-            int(time.time())
-        except Exception:
-            pass
-
         if existing:
             # Update last accessed and established_via via DB layer without notifying peers
             try:
-                from ..db.dynamodb.trust import DbTrust
-
-                db = DbTrust()
+                # Use the configured database backend
+                if not self._core_actor.config or not hasattr(self._core_actor.config, 'DbTrust'):
+                    logger.error("Database backend (DbTrust) not configured")
+                    return False
+                db = self._core_actor.config.DbTrust.DbTrust()
+                if not db:
+                    logger.error("Failed to instantiate database backend")
+                    return False
                 if db.get(actor_id=self._core_actor.id, peerid=peer_id):
                     now_iso = datetime.utcnow().isoformat()
 
@@ -489,14 +487,22 @@ class TrustManager:
                     logger.debug(
                         f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(
+                    f"Failed to update OAuth trust relationship: peer_id={peer_id}, error={e}"
+                )
+                return False
         else:
             # Create a local trust record directly via DbTrust (no remote handshake)
             try:
-                from ..db.dynamodb.trust import DbTrust
-
-                db = DbTrust()
+                # Use the configured database backend
+                if not self._core_actor.config or not hasattr(self._core_actor.config, 'DbTrust'):
+                    logger.error("Database backend (DbTrust) not configured")
+                    return False
+                db = self._core_actor.config.DbTrust.DbTrust()
+                if not db:
+                    logger.error("Failed to instantiate database backend")
+                    return False
                 secret = (
                     self._core_actor.config.new_token()
                     if self._core_actor.config
@@ -589,8 +595,11 @@ class TrustManager:
                         "expires_at": oauth_tokens.get("expires_at", 0),
                         "token_type": oauth_tokens.get("token_type", "Bearer"),
                     }
-            except Exception:
-                pass
+                    logger.debug(f"Stored OAuth tokens for peer_id={peer_id}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to store OAuth tokens for peer_id={peer_id}: {e}"
+                )
 
         return True
 

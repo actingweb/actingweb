@@ -9,6 +9,12 @@ A living checklist for near‑term tasks, quality gates, and release prep. Keep 
 
 ## Code TODOs
 
+### TrustManager async methods
+**Location:** `actingweb/interface/trust_manager.py:212`
+- [ ] Add `create_relationship_async()` method following the pattern of `approve_relationship_async()` and `delete_relationship_async()`
+- **Impact:** Currently blocking HTTP calls in `create_relationship()` require `run_in_executor` wrapper in async contexts (e.g., FastAPI endpoints)
+- **Note:** Method makes reciprocal HTTP requests to peer actor, should not block event loop
+
 ### <www.py> Handler
 **Location:** `actingweb/handlers/www.py:751`
 - [ ] Store human-readable relationship name separately if different from trust_type

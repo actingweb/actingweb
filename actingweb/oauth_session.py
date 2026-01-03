@@ -487,6 +487,77 @@ class OAuth2SessionManager:
         logger.debug("Marked refresh token as used")
         return True
 
+    def try_mark_refresh_token_used(self, token: str) -> tuple[bool, dict[str, Any] | None]:
+        """
+        Atomically check if refresh token is unused and mark it as used.
+
+        This provides race-free token rotation using atomic compare-and-swap.
+        Only the first concurrent request will succeed in marking the token.
+
+        Args:
+            token: The refresh token to mark as used
+
+        Returns:
+            Tuple of (success, token_data):
+            - (True, token_data) if token was unused and successfully marked
+            - (False, token_data) if token was already used (includes used_at timestamp)
+            - (False, None) if token doesn't exist or is expired
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR
+
+        if not token:
+            return (False, None)
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
+        )
+        token_attr = bucket.get_attr(name=token)
+
+        if not token_attr or "data" not in token_attr:
+            return (False, None)
+
+        token_data = token_attr["data"]
+
+        # Check if already used
+        if token_data.get("used"):
+            return (False, token_data)
+
+        # Check expiration
+        expires_at = token_data.get("expires_at", 0)
+        if int(time.time()) > expires_at:
+            # Token expired, clean it up
+            bucket.delete_attr(name=token)
+            return (False, None)
+
+        # Atomically update: only succeed if current data has used=False (or no used field)
+        old_data = token_data.copy()
+        new_data = token_data.copy()
+        new_data["used"] = True
+        new_data["used_at"] = int(time.time())
+
+        # Try atomic compare-and-swap
+        success = bucket.conditional_update_attr(name=token, old_data=old_data, new_data=new_data)
+
+        if success:
+            logger.debug("Atomically marked refresh token as used")
+            return (True, new_data)
+        else:
+            # Another request beat us to it - token is now used
+            # Re-read to get current state with used_at timestamp
+            # Create fresh bucket instance to bypass cache
+            fresh_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=_REFRESH_TOKEN_BUCKET,
+                config=self.config,
+            )
+            token_attr = fresh_bucket.get_attr(name=token)
+            if token_attr and "data" in token_attr:
+                return (False, token_attr["data"])
+            return (False, None)
+
     def revoke_refresh_token(self, token: str) -> bool:
         """
         Revoke a refresh token.

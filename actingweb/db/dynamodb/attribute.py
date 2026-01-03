@@ -1,5 +1,6 @@
 import os
 import time
+from collections.abc import Sequence
 
 from pynamodb.attributes import (
     JSONAttribute,
@@ -136,6 +137,72 @@ class DbAttribute:
     def delete_attr(self, actor_id=None, bucket=None, name=None):
         """Deletes an attribute in a bucket"""
         return self.set_attr(actor_id=actor_id, bucket=bucket, name=name, data=None)
+
+    @staticmethod
+    def conditional_update_attr(
+        actor_id=None, bucket=None, name=None, old_data=None, new_data=None, timestamp=None
+    ):  # type: ignore[misc]
+        """Conditionally update an attribute only if current data matches old_data.
+
+        This provides atomic compare-and-swap functionality for race-free updates.
+
+        JSON comparison is order-independent - dict key ordering does not affect equality.
+        If the caller's old_data has different key ordering than stored data, we normalize
+        both sides for comparison and use the stored ordering for the atomic update.
+
+        Args:
+            actor_id: The actor ID
+            bucket: The bucket name
+            name: The attribute name
+            old_data: Expected current data value (for comparison)
+            new_data: New data to set if current matches old_data
+            timestamp: Optional timestamp
+
+        Returns:
+            True if update succeeded (current matched old_data), False otherwise
+        """
+        import json
+
+        if not actor_id or not bucket or not name:
+            return False
+
+        bucket_name = bucket + ":" + name
+
+        try:
+            # Get current item with consistent read
+            item = Attribute.get(actor_id, bucket_name, consistent_read=True)
+
+            # Normalize JSON for order-independent comparison
+            # This ensures {"a": 1, "b": 2} == {"b": 2, "a": 1}
+            def normalize_json(data):
+                """Normalize JSON data by serializing with sorted keys."""
+                if data is None:
+                    return None
+                return json.loads(json.dumps(data, sort_keys=True))
+
+            old_data_normalized = normalize_json(old_data)
+            current_data_normalized = normalize_json(item.data)
+
+            # Check if current data matches old_data (order-independent)
+            if old_data_normalized != current_data_normalized:
+                return False
+
+            # Data matches semantically - perform atomic update
+            # Use the ACTUAL stored data for DynamoDB's condition to ensure atomicity
+            # This handles the case where old_data has different key ordering
+            actions: Sequence[object] = [Attribute.data.set(new_data)]
+            if timestamp:
+                actions = list(actions) + [Attribute.timestamp.set(timestamp)]
+
+            item.update(
+                actions=actions,  # type: ignore[arg-type]
+                condition=(Attribute.data == item.data),  # Atomic check against current value
+            )
+            return True
+
+        except Exception:
+            # Item doesn't exist or condition check failed (race condition)
+            return False
 
     @staticmethod
     def delete_bucket(actor_id=None, bucket=None):

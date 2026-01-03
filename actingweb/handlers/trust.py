@@ -717,6 +717,16 @@ class TrustPeerHandler(base_handler.BaseHandler):
             actor_id, "trust", subpath=relationship, add_response=False
         )
 
+        # Special case: if actor doesn't exist, return 404 for delete_reciprocal_trust cleanup
+        # This allows the peer to clean up orphaned relationships when the remote actor no longer exists
+        if not auth_result.actor:
+            logger.info(
+                f"DELETE trust: actor {actor_id} not found, returning 404 for cleanup"
+            )
+            if self.response:
+                self.response.set_status(404, "Not found")
+            return
+
         # Special handling: if authentication failed but actor was loaded,
         # check if relationship exists. If not, return 404 instead of auth error.
         # This allows cleanup of orphaned relationships during delete_reciprocal_trust.
@@ -748,9 +758,13 @@ class TrustPeerHandler(base_handler.BaseHandler):
             auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
             return
 
-        # Actor not loaded or other error
-        if not auth_result.actor or not auth_result.auth_obj:
-            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
+        # Actor loaded but auth_obj missing (should not happen, but handle gracefully)
+        if not auth_result.auth_obj:
+            logger.warning(
+                f"DELETE trust: actor {actor_id} loaded but auth_obj missing"
+            )
+            if self.response:
+                self.response.set_status(500, "Internal server error")
             return
 
         myself = auth_result.actor

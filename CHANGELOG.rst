@@ -2,6 +2,21 @@
 CHANGELOG
 =========
 
+v3.8.2: Jan 3, 2026
+--------------------
+
+FIXED
+~~~~~
+
+- **Trust Deletion Error Handling**: Enhanced DELETE handler to return 404 when the remote actor doesn't exist (not just when relationship doesn't exist), enabling complete cleanup of orphaned trust relationships during ``delete_reciprocal_trust()`` flow when the remote actor has been deleted
+- **OAuth Refresh Token Race Condition**: Fixed race condition in refresh token rotation that could cause false token theft detection and forced re-login when concurrent requests use the same refresh token. The check-and-mark-as-used operation is now atomic using database-level compare-and-swap, preventing multiple requests from successfully using the same token
+
+ADDED
+~~~~~
+
+- **Atomic Attribute Updates**: Added ``conditional_update_attr()`` method to both DynamoDB and PostgreSQL backends for atomic compare-and-swap operations, enabling race-free token rotation and other concurrent update scenarios
+- **Atomic Token Marking**: Added ``try_mark_refresh_token_used()`` method in ``OAuth2SessionManager`` that atomically checks and marks refresh tokens as used in a single database operation
+
 v3.8.1: Jan 2, 2026
 --------------------
 

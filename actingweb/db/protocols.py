@@ -740,6 +740,33 @@ class DbAttributeProtocol(Protocol):
         ...
 
     @staticmethod
+    def conditional_update_attr(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        old_data: Any = None,
+        new_data: Any = None,
+        timestamp: datetime | None = None,
+    ) -> bool:
+        """
+        Conditionally update an attribute only if current data matches old_data.
+
+        This provides atomic compare-and-swap functionality for race-free updates.
+
+        Args:
+            actor_id: The actor ID
+            bucket: Bucket name
+            name: Attribute name
+            old_data: Expected current data value (for comparison)
+            new_data: New data to set if current matches old_data
+            timestamp: Optional timestamp
+
+        Returns:
+            True if update succeeded (current matched old_data), False otherwise
+        """
+        ...
+
+    @staticmethod
     def delete_bucket(actor_id: str | None = None, bucket: str | None = None) -> bool:
         """
         Delete entire bucket.

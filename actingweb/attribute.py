@@ -119,6 +119,52 @@ class Attributes:
             )
         return False
 
+    def conditional_update_attr(
+        self,
+        name: str | None = None,
+        old_data: Any | None = None,
+        new_data: Any | None = None,
+        timestamp: Any | None = None,
+    ) -> bool:
+        """Conditionally update an attribute only if current data matches old_data.
+
+        This provides atomic compare-and-swap functionality for race-free updates.
+
+        Args:
+            name: Attribute name
+            old_data: Expected current data value (for comparison)
+            new_data: New data to set if current matches old_data
+            timestamp: Optional timestamp
+
+        Returns:
+            True if update succeeded (current matched old_data), False otherwise
+        """
+        if not self.actor_id or not self.bucket or not name:
+            return False
+        if not self.dbprop:
+            return False
+
+        # Use the database backend's atomic conditional update
+        success = self.dbprop.conditional_update_attr(
+            actor_id=self.actor_id,
+            bucket=self.bucket,
+            name=name,
+            old_data=old_data,
+            new_data=new_data,
+            timestamp=timestamp,
+        )
+
+        # Update local cache only if successful
+        if success:
+            if self.data is None:
+                self.data = {}
+            if name not in self.data or self.data[name] is None:
+                self.data[name] = {}
+            self.data[name]["data"] = new_data
+            self.data[name]["timestamp"] = timestamp
+
+        return success
+
     def delete_attr(self, name: str | None = None) -> bool:
         if not name:
             return False

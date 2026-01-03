@@ -1047,14 +1047,30 @@ If using client-managed PKCE, ensure the code verifier is stored and sent correc
 "Refresh token already used"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This indicates refresh token reuse, which could mean:
+This error indicates refresh token reuse detection. There are two common causes:
 
-1. Concurrent refresh requests - serialize refresh calls
-2. Token theft - all tokens were revoked for security
+1. **Concurrent refresh requests** - Multiple requests attempting to use the same refresh token
+2. **Token theft** - A legitimate security concern that triggers token revocation
+
+**Server-Side Protection (v3.8.2+)**
+
+ActingWeb v3.8.2+ handles concurrent refresh requests gracefully using atomic compare-and-swap
+operations. When multiple requests attempt to use the same refresh token simultaneously:
+
+- Only the first request succeeds in marking the token as used
+- Subsequent requests within the 2-second grace period receive new tokens without error
+- Requests outside the grace period trigger theft detection and revoke all tokens
+
+This means the server automatically handles most race conditions without client-side coordination.
+
+**Client-Side Best Practice (Optional)**
+
+While server-side protection prevents false positives, serializing refresh calls is still
+recommended for efficiency to avoid unnecessary retry logic:
 
 .. code-block:: javascript
 
-   // Serialize refresh requests
+   // Serialize refresh requests (recommended but not required)
    let refreshPromise = null;
 
    async function safeRefresh() {
@@ -1067,6 +1083,13 @@ This indicates refresh token reuse, which could mean:
            refreshPromise = null;
        }
    }
+
+**When Tokens Are Revoked**
+
+If you see this error AND all tokens are revoked (401 on subsequent requests), it indicates:
+
+- Genuine token theft detected (reuse > 2 seconds apart)
+- User must re-authenticate for security
 
 "CORS error"
 ~~~~~~~~~~~~

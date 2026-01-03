@@ -222,6 +222,60 @@ class DbAttribute:
         return self.set_attr(actor_id=actor_id, bucket=bucket, name=name, data=None)
 
     @staticmethod
+    def conditional_update_attr(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        old_data: Any = None,
+        new_data: Any = None,
+        timestamp: datetime | None = None,
+    ) -> bool:
+        """
+        Conditionally update an attribute only if current data matches old_data.
+
+        This provides atomic compare-and-swap functionality for race-free updates.
+
+        Args:
+            actor_id: The actor ID
+            bucket: The bucket name
+            name: The attribute name
+            old_data: Expected current data value (for comparison)
+            new_data: New data to set if current matches old_data
+            timestamp: Optional timestamp
+
+        Returns:
+            True if update succeeded (current matched old_data), False otherwise
+        """
+        if not actor_id or not bucket or not name:
+            return False
+
+        bucket_name = bucket + ":" + name
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Update only if current data matches old_data
+                    cur.execute(
+                        """
+                        UPDATE attributes
+                        SET data = %s, timestamp = %s
+                        WHERE id = %s AND bucket_name = %s AND data = %s::jsonb
+                        """,
+                        (json.dumps(new_data), timestamp, actor_id, bucket_name, json.dumps(old_data)),
+                    )
+                    rows_updated = cur.rowcount
+                conn.commit()
+
+                # Return True if exactly one row was updated
+                return rows_updated == 1
+
+        except Exception as e:
+            logger.error(
+                f"Error conditionally updating attribute {actor_id}/{bucket}/{name}: {e}"
+            )
+            return False
+
+    @staticmethod
     def delete_bucket(actor_id: str | None = None, bucket: str | None = None) -> bool:
         """
         Delete an entire bucket.

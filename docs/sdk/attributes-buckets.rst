@@ -49,6 +49,68 @@ Global Storage
    )
    global_config.set_attr(name="maintenance_mode", data=False)
 
+Atomic Operations (v3.8.2+)
+---------------------------
+
+For concurrent access scenarios, use ``conditional_update_attr()`` to perform atomic
+compare-and-swap operations. This is essential for race-free updates when multiple
+requests might modify the same attribute simultaneously.
+
+.. code-block:: python
+
+   from actingweb import attribute
+
+   # Example: Atomic token rotation
+   tokens = attribute.Attributes(
+       actor_id=OAUTH2_SYSTEM_ACTOR,
+       bucket="spa_refresh_tokens",
+       config=config
+   )
+
+   # Get current token data
+   token_attr = tokens.get_attr(name=refresh_token)
+   if not token_attr:
+       return False
+
+   old_data = token_attr["data"]
+
+   # Only update if token hasn't been marked as used
+   if old_data.get("used"):
+       return False  # Already used by another request
+
+   # Prepare new data with used flag
+   new_data = old_data.copy()
+   new_data["used"] = True
+   new_data["used_at"] = int(time.time())
+
+   # Atomic update - only succeeds if current data still matches old_data
+   success = tokens.conditional_update_attr(
+       name=refresh_token,
+       old_data=old_data,
+       new_data=new_data
+   )
+
+   if success:
+       # This request won the race - token is now marked as used
+       return True
+   else:
+       # Another request modified the token first
+       return False
+
+**How It Works:**
+
+- **PostgreSQL**: Uses ``UPDATE ... WHERE data = old_data`` for atomic compare-and-swap
+- **DynamoDB**: Uses conditional update expressions with ``condition=(Attribute.data == old_data)``
+- Returns ``True`` only if the current database value exactly matches ``old_data``
+- Returns ``False`` if value was modified by another request (no update performed)
+
+**Use Cases:**
+
+- OAuth refresh token rotation (prevents concurrent reuse)
+- Distributed counters and rate limiting
+- Session management with concurrent requests
+- Any scenario requiring optimistic locking
+
 Complete Bucket Reference
 -------------------------
 

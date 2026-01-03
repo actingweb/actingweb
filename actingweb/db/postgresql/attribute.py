@@ -255,10 +255,12 @@ class DbAttribute:
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     # Update only if current data matches old_data
+                    # Use JSONB comparison for reliability - PostgreSQL normalizes JSONB values
+                    # so key ordering and whitespace differences don't affect equality
                     cur.execute(
                         """
                         UPDATE attributes
-                        SET data = %s, timestamp = %s
+                        SET data = %s::jsonb, timestamp = %s
                         WHERE id = %s AND bucket_name = %s AND data = %s::jsonb
                         """,
                         (json.dumps(new_data), timestamp, actor_id, bucket_name, json.dumps(old_data)),

@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Sequence
+from collections.abc import Sequence
 
 from pynamodb.attributes import (
     JSONAttribute,

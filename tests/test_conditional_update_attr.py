@@ -475,7 +475,7 @@ class TestTryMarkRefreshTokenUsed:
 
         bucket = Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket="refresh_tokens",
+            bucket="spa_refresh_tokens",
             config=self.config,
         )
         success = bucket.set_attr(name=token, data=token_data)
@@ -510,7 +510,7 @@ class TestTryMarkRefreshTokenUsed:
         # Store the token
         bucket = Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket="refresh_tokens",
+            bucket="spa_refresh_tokens",
             config=self.config,
         )
         success = bucket.set_attr(name=token, data=token_data)
@@ -560,7 +560,7 @@ class TestTryMarkRefreshTokenUsed:
 
         bucket = Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket="refresh_tokens",
+            bucket="spa_refresh_tokens",
             config=self.config,
         )
         bucket.set_attr(name=token, data=token_data)
@@ -571,8 +571,13 @@ class TestTryMarkRefreshTokenUsed:
         assert marked is False, "Should fail for expired token"
         assert returned_data is None, "Should return None for expired token"
 
-        # Verify the token was deleted
-        token_attr = bucket.get_attr(name=token)
+        # Verify the token was deleted - create fresh bucket to avoid cached data
+        fresh_bucket = Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket="spa_refresh_tokens",
+            config=self.config,
+        )
+        token_attr = fresh_bucket.get_attr(name=token)
         assert token_attr is None, "Expired token should be cleaned up"
 
     def test_empty_token_fails(self):
@@ -635,7 +640,7 @@ class TestTryMarkRefreshTokenUsedConcurrency:
 
         bucket = Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket="refresh_tokens",
+            bucket="spa_refresh_tokens",
             config=self.config,
         )
         success = bucket.set_attr(name=token, data=token_data)
@@ -693,7 +698,7 @@ class TestTryMarkRefreshTokenUsedConcurrency:
 
         bucket = Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket="refresh_tokens",
+            bucket="spa_refresh_tokens",
             config=self.config,
         )
         success = bucket.set_attr(name=token, data=token_data)

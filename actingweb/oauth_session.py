@@ -547,7 +547,13 @@ class OAuth2SessionManager:
         else:
             # Another request beat us to it - token is now used
             # Re-read to get current state with used_at timestamp
-            token_attr = bucket.get_attr(name=token)
+            # Create fresh bucket instance to bypass cache
+            fresh_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=_REFRESH_TOKEN_BUCKET,
+                config=self.config,
+            )
+            token_attr = fresh_bucket.get_attr(name=token)
             if token_attr and "data" in token_attr:
                 return (False, token_attr["data"])
             return (False, None)

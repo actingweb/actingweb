@@ -1104,7 +1104,10 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Copy cookies from handler response (e.g., for logout)
         if hasattr(webobj.response, "cookies"):
             for cookie in webobj.response.cookies:
-                json_response.set_cookie(**cookie)
+                # Extract name as positional arg (Flask expects name as first param, not kwarg)
+                cookie_data = cookie.copy()
+                name = cookie_data.pop("name")
+                json_response.set_cookie(name, **cookie_data)
 
         # Add CORS headers for OAuth2 endpoints
         # Logout needs SPA CORS (echo origin + credentials) for cookie clearing to work
@@ -1174,7 +1177,10 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Copy cookies from handler response
         if hasattr(webobj.response, "cookies"):
             for cookie in webobj.response.cookies:
-                json_response.set_cookie(**cookie)
+                # Extract name as positional arg (Flask expects name as first param, not kwarg)
+                cookie_data = cookie.copy()
+                name = cookie_data.pop("name")
+                json_response.set_cookie(name, **cookie_data)
 
         # Add CORS headers for SPA endpoints
         origin = req_data["headers"].get("Origin", "*")

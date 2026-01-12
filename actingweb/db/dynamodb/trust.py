@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
@@ -158,10 +158,18 @@ class DbTrust:
             result["established_via"] = t.established_via
         created_at_iso = None
         if hasattr(t, "created_at") and t.created_at:
-            created_at_iso = t.created_at.isoformat()
+            # Ensure timezone info is included in ISO string
+            dt = t.created_at
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            created_at_iso = dt.isoformat()
             result["created_at"] = created_at_iso
         if hasattr(t, "last_accessed") and t.last_accessed:
-            last_accessed_iso = t.last_accessed.isoformat()
+            # Ensure timezone info is included in ISO string
+            dt = t.last_accessed
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            last_accessed_iso = dt.isoformat()
             result["last_accessed"] = last_accessed_iso
             result["last_connected_at"] = last_accessed_iso
         elif created_at_iso:
@@ -417,10 +425,18 @@ class DbTrustList:
                     result["established_via"] = t.established_via
                 created_at_iso = None
                 if hasattr(t, "created_at") and t.created_at:
-                    created_at_iso = t.created_at.isoformat()
+                    # Ensure timezone info is included in ISO string
+                    dt = t.created_at
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=UTC)
+                    created_at_iso = dt.isoformat()
                     result["created_at"] = created_at_iso
                 if hasattr(t, "last_accessed") and t.last_accessed:
-                    last_accessed_iso = t.last_accessed.isoformat()
+                    # Ensure timezone info is included in ISO string
+                    dt = t.last_accessed
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=UTC)
+                    last_accessed_iso = dt.isoformat()
                     result["last_accessed"] = last_accessed_iso
                     result["last_connected_at"] = last_accessed_iso
                 elif created_at_iso:

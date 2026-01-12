@@ -535,29 +535,70 @@ class OAuth2SPAHandler(BaseHandler):
         if not actor_id:
             return self._json_error(401, "Invalid refresh token data")
 
-        # If token was already used, check grace period
+        # If token was already used, check grace period with three tiers
         if not success:
             used_at = token_data.get("used_at", 0)
-            grace_period = 2  # seconds
             time_since_use = int(time.time()) - used_at
 
-            if time_since_use > grace_period:
-                # Token reuse outside grace period - potential theft
+            # Three-tier grace period strategy:
+            # 0-10s: Immediate concurrent requests - full token rotation
+            # 10-60s: Delayed concurrent requests - only new access token (no refresh rotation)
+            # >60s: Potential token theft - revoke all tokens
+
+            if time_since_use <= 10:
+                # Within short grace period - full token rotation
+                # This handles rapid concurrent requests (normal case)
+                logger.debug(
+                    f"Refresh token reuse within {time_since_use}s for actor {actor_id} "
+                    f"(concurrent request) - issuing new tokens with rotation"
+                )
+            elif time_since_use <= 60:
+                # Within extended grace period - only issue access token
+                # This handles edge cases with network delays or slow processing
+                logger.info(
+                    f"Refresh token reuse after {time_since_use}s for actor {actor_id} "
+                    f"(delayed concurrent request) - issuing new access token only"
+                )
+                # Issue new access token but DON'T rotate refresh token
+                new_access_token = self._generate_actingweb_token(actor_id, identifier or "")
+
+                expires_in = 3600  # 1 hour for access token
+
+                response_data: dict[str, Any] = {
+                    "success": True,
+                    "actor_id": actor_id,
+                    "email": identifier,
+                    "expires_in": expires_in,
+                    "expires_at": int(time.time()) + expires_in,
+                }
+
+                if token_delivery == "json":
+                    response_data["access_token"] = new_access_token
+                    response_data["token_type"] = "Bearer"
+                    # Note: No refresh_token in response for delayed concurrent requests
+                elif token_delivery == "cookie":
+                    self._set_token_cookies(
+                        new_access_token, None, expires_in, httponly=True
+                    )
+                    response_data["token_delivery"] = "cookie"
+                elif token_delivery == "hybrid":
+                    response_data["access_token"] = new_access_token
+                    response_data["token_type"] = "Bearer"
+                    response_data["token_delivery"] = "hybrid"
+                    # Note: No refresh token cookie update
+
+                logger.debug(f"Issued access token for delayed concurrent request (actor {actor_id})")
+                return response_data
+            else:
+                # Token reuse after extended grace period - potential theft
                 logger.warning(
                     f"Refresh token reuse detected for actor {actor_id} "
-                    f"({time_since_use}s after first use) - potential token theft"
+                    f"({time_since_use}s after first use) - potential token theft, revoking all tokens"
                 )
                 # Revoke all tokens for this actor
                 session_manager.revoke_all_tokens(actor_id)
                 return self._json_error(
                     401, "Refresh token already used - all tokens revoked for security"
-                )
-            else:
-                # Within grace period - issue new tokens (don't treat as theft)
-                # This handles rapid page refreshes where access token is lost from memory
-                logger.debug(
-                    f"Refresh token reuse within grace period for actor {actor_id} "
-                    f"({time_since_use}s) - issuing new tokens"
                 )
 
         # Generate new tokens (rotation)

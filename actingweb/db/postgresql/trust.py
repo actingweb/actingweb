@@ -1,7 +1,7 @@
 """PostgreSQL implementation of trust database operations."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from actingweb.db.postgresql.connection import get_connection
@@ -137,11 +137,21 @@ class DbTrust:
 
                     created_at_iso = None
                     if row[13]:  # created_at
-                        created_at_iso = row[13].isoformat()
+                        # Ensure timezone info is included in ISO string
+                        dt = row[13]
+                        if dt.tzinfo is None:
+                            # Assume UTC if no timezone
+                            dt = dt.replace(tzinfo=UTC)
+                        created_at_iso = dt.isoformat()
                         result["created_at"] = created_at_iso
 
                     if row[14]:  # last_accessed
-                        last_accessed_iso = row[14].isoformat()
+                        # Ensure timezone info is included in ISO string
+                        dt = row[14]
+                        if dt.tzinfo is None:
+                            # Assume UTC if no timezone
+                            dt = dt.replace(tzinfo=UTC)
+                        last_accessed_iso = dt.isoformat()
                         result["last_accessed"] = last_accessed_iso
                         result["last_connected_at"] = last_accessed_iso
                     elif created_at_iso:
@@ -647,11 +657,21 @@ class DbTrustList:
 
                         created_at_iso = None
                         if row[13]:  # created_at
-                            created_at_iso = row[13].isoformat()
+                            # Ensure timezone info is included in ISO string
+                            dt = row[13]
+                            if dt.tzinfo is None:
+                                # Assume UTC if no timezone
+                                dt = dt.replace(tzinfo=UTC)
+                            created_at_iso = dt.isoformat()
                             result["created_at"] = created_at_iso
 
                         if row[14]:  # last_accessed
-                            last_accessed_iso = row[14].isoformat()
+                            # Ensure timezone info is included in ISO string
+                            dt = row[14]
+                            if dt.tzinfo is None:
+                                # Assume UTC if no timezone
+                                dt = dt.replace(tzinfo=UTC)
+                            last_accessed_iso = dt.isoformat()
                             result["last_accessed"] = last_accessed_iso
                             result["last_connected_at"] = last_accessed_iso
                         elif created_at_iso:

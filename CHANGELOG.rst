@@ -2,6 +2,22 @@
 CHANGELOG
 =========
 
+v3.8.3: Jan 12, 2026
+--------------------
+
+FIXED
+~~~~~
+
+- Fixed Flask integration ``TypeError`` in cookie handling by extracting cookie name as positional argument instead of kwarg
+- Fixed missing subscription callbacks when deleting properties via WWW handler with ``?_method=DELETE``
+- Fixed trust relationship timestamps to always include timezone info in ISO format strings (both DynamoDB and PostgreSQL)
+- Fixed property list metadata to avoid auto-saving default metadata on first access
+
+CHANGED
+~~~~~~~
+
+- Enhanced OAuth2 refresh token reuse handling with three-tier grace period (0-10s: full rotation, 10-60s: access token only, >60s: revoke all)
+
 v3.8.2: Jan 3, 2026
 --------------------
 

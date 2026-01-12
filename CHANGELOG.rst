@@ -13,6 +13,11 @@ FIXED
 - Fixed trust relationship timestamps to always include timezone info in ISO format strings (both DynamoDB and PostgreSQL)
 - Fixed property list metadata to avoid auto-saving default metadata on first access
 
+ADDED
+~~~~~
+
+- **Rich Metadata for Methods/Actions**: ``GET /<actor_id>/methods`` and ``GET /<actor_id>/actions`` now return metadata (description, input/output schemas, annotations) with auto-generation from TypedDict type hints
+
 CHANGED
 ~~~~~~~
 

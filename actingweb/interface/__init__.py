@@ -16,10 +16,12 @@ from .authenticated_views import (
     PermissionError,
 )
 from .hooks import (
+    HookMetadata,
     HookRegistry,
     action_hook,
     app_callback_hook,
     callback_hook,
+    get_hook_metadata,
     method_hook,
     property_hook,
     subscription_hook,
@@ -35,6 +37,8 @@ __all__ = [
     "TrustManager",
     "SubscriptionManager",
     "HookRegistry",
+    "HookMetadata",
+    "get_hook_metadata",
     "property_hook",
     "callback_hook",
     "app_callback_hook",

@@ -29,8 +29,8 @@ Core Actor Routes
 - `/<actor_id>/meta`: Discovery metadata
 - `/<actor_id>/properties`: Get/update/delete properties
 - `/<actor_id>/resources`: Fetch external resources (read-only)
-- `/<actor_id>/methods`: RPC-style methods
-- `/<actor_id>/actions`: Side-effecting actions
+- `/<actor_id>/methods`: RPC-style methods (GET returns metadata, POST invokes)
+- `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
 - `/<actor_id>/trust`: Trust relationships and permissions
 - `/<actor_id>/subscriptions`: Subscriptions to peer updates
 - `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks)

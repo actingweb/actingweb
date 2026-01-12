@@ -122,8 +122,8 @@ class MethodsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 if not name:
-                    # Return list of available methods
-                    result = {"methods": list(self.hooks._method_hooks.keys())}
+                    # Return list of available methods with metadata
+                    result = {"methods": self.hooks.get_method_metadata_list()}
                 else:
                     auth_context = self._create_auth_context(check)
                     result = self.hooks.execute_method_hooks(

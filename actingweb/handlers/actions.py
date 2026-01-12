@@ -122,8 +122,8 @@ class ActionsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 if not name:
-                    # Return list of available actions
-                    result = {"actions": list(self.hooks._action_hooks.keys())}
+                    # Return list of available actions with metadata
+                    result = {"actions": self.hooks.get_action_metadata_list()}
                 else:
                     auth_context = self._create_auth_context(check)
                     result = self.hooks.execute_action_hooks(

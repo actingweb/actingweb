@@ -1,10 +1,11 @@
 """PostgreSQL implementation of trust database operations."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from actingweb.db.postgresql.connection import get_connection
+from actingweb.db.utils import ensure_timezone_aware_iso
 from actingweb.trust import canonical_connection_method
 
 logger = logging.getLogger(__name__)
@@ -137,28 +138,20 @@ class DbTrust:
 
                     created_at_iso = None
                     if row[13]:  # created_at
-                        # Ensure timezone info is included in ISO string
-                        dt = row[13]
-                        if dt.tzinfo is None:
-                            # Assume UTC if no timezone
-                            dt = dt.replace(tzinfo=UTC)
-                        created_at_iso = dt.isoformat()
+                        created_at_iso = ensure_timezone_aware_iso(row[13])
                         result["created_at"] = created_at_iso
 
                     if row[14]:  # last_accessed
-                        # Ensure timezone info is included in ISO string
-                        dt = row[14]
-                        if dt.tzinfo is None:
-                            # Assume UTC if no timezone
-                            dt = dt.replace(tzinfo=UTC)
-                        last_accessed_iso = dt.isoformat()
+                        last_accessed_iso = ensure_timezone_aware_iso(row[14])
                         result["last_accessed"] = last_accessed_iso
                         result["last_connected_at"] = last_accessed_iso
                     elif created_at_iso:
                         result["last_connected_at"] = created_at_iso
 
                     if row[15]:  # last_connected_via
-                        result["last_connected_via"] = canonical_connection_method(row[15])
+                        result["last_connected_via"] = canonical_connection_method(
+                            row[15]
+                        )
 
                     # Add client metadata for OAuth2 clients if they exist
                     if row[16]:  # client_name
@@ -247,7 +240,9 @@ class DbTrust:
         # Normalize connection method
         normalized_last_connected_via = None
         if last_connected_via:
-            normalized_last_connected_via = canonical_connection_method(last_connected_via)
+            normalized_last_connected_via = canonical_connection_method(
+                last_connected_via
+            )
         elif established_via:
             normalized_last_connected_via = canonical_connection_method(established_via)
 
@@ -500,7 +495,7 @@ class DbTrust:
                     cur.execute(
                         f"""
                         UPDATE trusts
-                        SET {', '.join(updates)}
+                        SET {", ".join(updates)}
                         WHERE id = %s AND peerid = %s
                         """,
                         tuple(params),
@@ -657,21 +652,11 @@ class DbTrustList:
 
                         created_at_iso = None
                         if row[13]:  # created_at
-                            # Ensure timezone info is included in ISO string
-                            dt = row[13]
-                            if dt.tzinfo is None:
-                                # Assume UTC if no timezone
-                                dt = dt.replace(tzinfo=UTC)
-                            created_at_iso = dt.isoformat()
+                            created_at_iso = ensure_timezone_aware_iso(row[13])
                             result["created_at"] = created_at_iso
 
                         if row[14]:  # last_accessed
-                            # Ensure timezone info is included in ISO string
-                            dt = row[14]
-                            if dt.tzinfo is None:
-                                # Assume UTC if no timezone
-                                dt = dt.replace(tzinfo=UTC)
-                            last_accessed_iso = dt.isoformat()
+                            last_accessed_iso = ensure_timezone_aware_iso(row[14])
                             result["last_accessed"] = last_accessed_iso
                             result["last_connected_at"] = last_accessed_iso
                         elif created_at_iso:

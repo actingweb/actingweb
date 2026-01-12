@@ -43,6 +43,12 @@ PKCE_VERIFIER_CHARSET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 )
 
+# Token refresh grace period constants (in seconds)
+# These handle concurrent refresh token requests from SPAs
+GRACE_PERIOD_IMMEDIATE = 10  # Normal concurrent requests (common in SPAs)
+GRACE_PERIOD_EXTENDED = 60  # Network delays or slow processing
+# Beyond GRACE_PERIOD_EXTENDED is considered potential token theft
+
 
 def generate_pkce_pair() -> tuple[str, str]:
     """
@@ -120,9 +126,7 @@ class OAuth2SPAHandler(BaseHandler):
                     0
                 ]
 
-            self.response.headers["Access-Control-Allow-Methods"] = (
-                "GET, POST, OPTIONS"
-            )
+            self.response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             self.response.headers["Access-Control-Allow-Headers"] = (
                 "Authorization, Content-Type, Accept"
             )
@@ -366,7 +370,9 @@ class OAuth2SPAHandler(BaseHandler):
                 return self._json_error(400, f"Unknown OAuth provider: {provider}")
 
             if not authenticator.is_enabled():
-                return self._json_error(400, f"OAuth provider {provider} is not enabled")
+                return self._json_error(
+                    400, f"OAuth provider {provider} is not enabled"
+                )
 
         except Exception as e:
             logger.error(f"Failed to create authenticator: {e}")
@@ -385,9 +391,7 @@ class OAuth2SPAHandler(BaseHandler):
             code_challenge_method = params.get("code_challenge_method", "S256")
 
             if not code_challenge:
-                return self._json_error(
-                    400, "code_challenge required when pkce=client"
-                )
+                return self._json_error(400, "code_challenge required when pkce=client")
             if code_challenge_method != "S256":
                 return self._json_error(
                     400, "Only S256 code_challenge_method is supported"
@@ -541,18 +545,18 @@ class OAuth2SPAHandler(BaseHandler):
             time_since_use = int(time.time()) - used_at
 
             # Three-tier grace period strategy:
-            # 0-10s: Immediate concurrent requests - full token rotation
-            # 10-60s: Delayed concurrent requests - only new access token (no refresh rotation)
-            # >60s: Potential token theft - revoke all tokens
+            # 0-GRACE_PERIOD_IMMEDIATE: Immediate concurrent requests - full token rotation
+            # GRACE_PERIOD_IMMEDIATE-GRACE_PERIOD_EXTENDED: Delayed concurrent requests - only new access token (no refresh rotation)
+            # >GRACE_PERIOD_EXTENDED: Potential token theft - revoke all tokens
 
-            if time_since_use <= 10:
+            if time_since_use <= GRACE_PERIOD_IMMEDIATE:
                 # Within short grace period - full token rotation
                 # This handles rapid concurrent requests (normal case)
                 logger.debug(
                     f"Refresh token reuse within {time_since_use}s for actor {actor_id} "
                     f"(concurrent request) - issuing new tokens with rotation"
                 )
-            elif time_since_use <= 60:
+            elif time_since_use <= GRACE_PERIOD_EXTENDED:
                 # Within extended grace period - only issue access token
                 # This handles edge cases with network delays or slow processing
                 logger.info(
@@ -560,7 +564,9 @@ class OAuth2SPAHandler(BaseHandler):
                     f"(delayed concurrent request) - issuing new access token only"
                 )
                 # Issue new access token but DON'T rotate refresh token
-                new_access_token = self._generate_actingweb_token(actor_id, identifier or "")
+                new_access_token = self._generate_actingweb_token(
+                    actor_id, identifier or ""
+                )
 
                 expires_in = 3600  # 1 hour for access token
 
@@ -587,7 +593,9 @@ class OAuth2SPAHandler(BaseHandler):
                     response_data["token_delivery"] = "hybrid"
                     # Note: No refresh token cookie update
 
-                logger.debug(f"Issued access token for delayed concurrent request (actor {actor_id})")
+                logger.debug(
+                    f"Issued access token for delayed concurrent request (actor {actor_id})"
+                )
                 return response_data
             else:
                 # Token reuse after extended grace period - potential theft
@@ -715,7 +723,9 @@ class OAuth2SPAHandler(BaseHandler):
         if not token:
             # Try cookie
             if self.request.cookies:
-                token = self.request.cookies.get("access_token") or self.request.cookies.get("oauth_token")
+                token = self.request.cookies.get(
+                    "access_token"
+                ) or self.request.cookies.get("oauth_token")
 
         if not token:
             return self._json_error(400, "No token provided")
@@ -770,7 +780,9 @@ class OAuth2SPAHandler(BaseHandler):
             token = auth_header[7:]
 
         if not token and self.request.cookies:
-            token = self.request.cookies.get("access_token") or self.request.cookies.get("oauth_token")
+            token = self.request.cookies.get(
+                "access_token"
+            ) or self.request.cookies.get("oauth_token")
 
         # Revoke tokens if we have one
         if token:
@@ -832,7 +844,9 @@ class OAuth2SPAHandler(BaseHandler):
 
         # Check cookies
         if not token and self.request.cookies:
-            token = self.request.cookies.get("access_token") or self.request.cookies.get("oauth_token")
+            token = self.request.cookies.get(
+                "access_token"
+            ) or self.request.cookies.get("oauth_token")
 
         if not token:
             return {

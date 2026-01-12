@@ -75,8 +75,9 @@ class ListProperty:
 
         if meta_str is None:
             # No metadata exists, create default
+            # Don't save yet - let the caller save via set_description/set_explanation
             meta = self._create_default_metadata()
-            self._save_metadata(meta)
+            self._meta_cache = meta  # Cache it for subsequent calls within this instance
             return meta
 
         try:

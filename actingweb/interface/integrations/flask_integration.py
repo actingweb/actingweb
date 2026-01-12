@@ -1104,7 +1104,13 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Copy cookies from handler response (e.g., for logout)
         if hasattr(webobj.response, "cookies"):
             for cookie in webobj.response.cookies:
-                json_response.set_cookie(**cookie)
+                # Extract name as positional arg (Flask expects name as first param, not kwarg)
+                cookie_data = cookie.copy()
+                name = cookie_data.pop("name", None)
+                if name:
+                    json_response.set_cookie(name, **cookie_data)
+                else:
+                    logger.warning("Cookie missing 'name' field, skipping")
 
         # Add CORS headers for OAuth2 endpoints
         # Logout needs SPA CORS (echo origin + credentials) for cookie clearing to work
@@ -1117,18 +1123,14 @@ class FlaskIntegration(BaseActingWebIntegration):
             json_response.headers["Access-Control-Allow-Origin"] = (
                 origin if origin else "*"
             )
-            json_response.headers["Access-Control-Allow-Methods"] = (
-                "GET, POST, OPTIONS"
-            )
+            json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             json_response.headers["Access-Control-Allow-Headers"] = (
                 "Authorization, Content-Type, Accept"
             )
             json_response.headers["Access-Control-Allow-Credentials"] = "true"
         else:
             json_response.headers["Access-Control-Allow-Origin"] = "*"
-            json_response.headers["Access-Control-Allow-Methods"] = (
-                "GET, POST, OPTIONS"
-            )
+            json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             json_response.headers["Access-Control-Allow-Headers"] = (
                 "Authorization, Content-Type, mcp-protocol-version"
             )
@@ -1174,7 +1176,13 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Copy cookies from handler response
         if hasattr(webobj.response, "cookies"):
             for cookie in webobj.response.cookies:
-                json_response.set_cookie(**cookie)
+                # Extract name as positional arg (Flask expects name as first param, not kwarg)
+                cookie_data = cookie.copy()
+                name = cookie_data.pop("name", None)
+                if name:
+                    json_response.set_cookie(name, **cookie_data)
+                else:
+                    logger.warning("Cookie missing 'name' field, skipping")
 
         # Add CORS headers for SPA endpoints
         origin = req_data["headers"].get("Origin", "*")
@@ -1518,10 +1526,15 @@ class FlaskIntegration(BaseActingWebIntegration):
                     return Response(
                         render_template("aw-actor-www-trust.html", **template_values)
                     )
-                elif hasattr(webobj.response, "template_name") and webobj.response.template_name:
+                elif (
+                    hasattr(webobj.response, "template_name")
+                    and webobj.response.template_name
+                ):
                     # Custom template from callback hook
                     return Response(
-                        render_template(webobj.response.template_name, **template_values)
+                        render_template(
+                            webobj.response.template_name, **template_values
+                        )
                     )
             except Exception as e:
                 logger.debug(f"Template rendering failed for www/{path}: {e}")

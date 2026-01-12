@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from ..config import Config
-from .hooks import HookRegistry
+from .hooks import HookMetadata, HookRegistry
 
 if TYPE_CHECKING:
     from .integrations.fastapi_integration import FastAPIIntegration
@@ -302,19 +302,67 @@ class ActingWebApp:
 
         return decorator
 
-    def method_hook(self, method_name: str = "*") -> Callable[..., Any]:
-        """Decorator to register method hooks."""
+    def method_hook(
+        self,
+        method_name: str = "*",
+        description: str = "",
+        input_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None,
+        annotations: dict[str, Any] | None = None,
+    ) -> Callable[..., Any]:
+        """Decorator to register method hooks with optional metadata.
+
+        Args:
+            method_name: Name of method to hook ("*" for all methods)
+            description: Human-readable description of what the method does
+            input_schema: JSON schema describing expected input parameters
+            output_schema: JSON schema describing the expected return value
+            annotations: Safety/behavior hints (e.g., readOnlyHint, idempotentHint)
+        """
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            # Store metadata on function
+            metadata = HookMetadata(
+                description=description,
+                input_schema=input_schema,
+                output_schema=output_schema,
+                annotations=annotations,
+            )
+            setattr(func, "_hook_metadata", metadata)  # noqa: B010
+
             self.hooks.register_method_hook(method_name, func)
             return func
 
         return decorator
 
-    def action_hook(self, action_name: str = "*") -> Callable[..., Any]:
-        """Decorator to register action hooks."""
+    def action_hook(
+        self,
+        action_name: str = "*",
+        description: str = "",
+        input_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None,
+        annotations: dict[str, Any] | None = None,
+    ) -> Callable[..., Any]:
+        """Decorator to register action hooks with optional metadata.
+
+        Args:
+            action_name: Name of action to hook ("*" for all actions)
+            description: Human-readable description of what the action does
+            input_schema: JSON schema describing expected input parameters
+            output_schema: JSON schema describing the expected return value
+            annotations: Safety/behavior hints (e.g., destructiveHint, readOnlyHint)
+        """
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            # Store metadata on function
+            metadata = HookMetadata(
+                description=description,
+                input_schema=input_schema,
+                output_schema=output_schema,
+                annotations=annotations,
+            )
+            setattr(func, "_hook_metadata", metadata)  # noqa: B010
+
             self.hooks.register_action_hook(action_name, func)
             return func
 

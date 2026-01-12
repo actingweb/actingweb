@@ -119,7 +119,15 @@ Basic MCP Application
 MCP Tools Implementation
 ------------------------
 
-Create reusable MCP tools in ``shared_mcp/tools.py`` using the correct decorators:
+Create reusable MCP tools in ``shared_mcp/tools.py`` using the correct decorators.
+
+.. note::
+
+   MCP metadata (description, input_schema, annotations) is also exposed via the HTTP API.
+   Clients can discover available tools by calling ``GET /<actor_id>/actions``, which returns
+   metadata for all registered action hooks. If a hook has both ``@mcp_tool`` metadata and
+   explicit ``@action_hook`` metadata, the action_hook metadata takes precedence for the
+   HTTP API response, while MCP clients continue to see the MCP-specific metadata.
 
 .. code-block:: python
 

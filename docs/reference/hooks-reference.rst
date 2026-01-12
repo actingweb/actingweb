@@ -231,20 +231,142 @@ Event Details
 Method Hooks
 ============
 
-Decorator: ``app.method_hook(name: str = "*")``
+Decorator: ``app.method_hook(name, description="", input_schema=None, output_schema=None, annotations=None)``
 
 Signature: ``func(actor, method_name: str, data: dict) -> Any``
 
 - Implements RPC-style methods under ``/methods``; first non-None return wins
+- Metadata is exposed via ``GET /<actor_id>/methods`` for API discovery
+
+**Metadata Parameters**:
+
+- ``description``: Human-readable description of what the method does
+- ``input_schema``: JSON schema describing expected input parameters
+- ``output_schema``: JSON schema describing the expected return value
+- ``annotations``: Safety/behavior hints (e.g., ``readOnlyHint``, ``idempotentHint``)
+
+**Example with Metadata**:
+
+.. code-block:: python
+
+    @app.method_hook(
+        "calculate",
+        description="Perform a mathematical calculation",
+        input_schema={
+            "type": "object",
+            "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+            "required": ["x", "y"]
+        },
+        output_schema={"type": "object", "properties": {"result": {"type": "number"}}},
+        annotations={"readOnlyHint": True, "idempotentHint": True}
+    )
+    def handle_calculate(actor, method_name, data):
+        return {"result": data["x"] + data["y"]}
+
+**Auto-Generated Schemas from TypedDict**:
+
+If you don't provide ``input_schema`` or ``output_schema`` explicitly, they can be
+auto-generated from TypedDict type hints on your function:
+
+.. code-block:: python
+
+    from typing import TypedDict
+
+    class CalculateInput(TypedDict):
+        x: int
+        y: int
+
+    class CalculateOutput(TypedDict):
+        result: int
+
+    @app.method_hook("calculate", description="Add two numbers")
+    def handle_calculate(actor, method_name, data: CalculateInput) -> CalculateOutput:
+        return {"result": data["x"] + data["y"]}
+
+The above automatically generates:
+
+- ``input_schema`` from the ``data`` parameter's TypedDict annotation
+- ``output_schema`` from the return type annotation
+
+Explicit schemas always take precedence over auto-generated ones. Supported types
+include ``str``, ``int``, ``float``, ``bool``, ``list``, ``dict``, ``None``,
+``Optional[...]``, and nested TypedDict classes.
 
 Action Hooks
 ============
 
-Decorator: ``app.action_hook(name: str = "*")``
+Decorator: ``app.action_hook(name, description="", input_schema=None, output_schema=None, annotations=None)``
 
 Signature: ``func(actor, action_name: str, data: dict) -> Any``
 
 - Implements side-effecting operations under ``/actions``; first non-None return wins
+- Metadata is exposed via ``GET /<actor_id>/actions`` for API discovery
+
+**Metadata Parameters**:
+
+- ``description``: Human-readable description of what the action does
+- ``input_schema``: JSON schema describing expected input parameters
+- ``output_schema``: JSON schema describing the expected return value
+- ``annotations``: Safety/behavior hints (e.g., ``destructiveHint``, ``readOnlyHint``)
+
+**Example with Metadata**:
+
+.. code-block:: python
+
+    @app.action_hook(
+        "delete_record",
+        description="Permanently delete a record from the database",
+        input_schema={
+            "type": "object",
+            "properties": {"record_id": {"type": "string"}},
+            "required": ["record_id"]
+        },
+        annotations={"destructiveHint": True, "readOnlyHint": False}
+    )
+    def handle_delete(actor, action_name, data):
+        delete_from_database(data["record_id"])
+        return {"status": "deleted"}
+
+**Auto-Generated Schemas from TypedDict**:
+
+Action hooks also support auto-schema generation from TypedDict type hints:
+
+.. code-block:: python
+
+    from typing import TypedDict
+
+    class DeleteInput(TypedDict):
+        record_id: str
+
+    class DeleteOutput(TypedDict):
+        status: str
+
+    @app.action_hook("delete_record", description="Delete a record")
+    def handle_delete(actor, action_name, data: DeleteInput) -> DeleteOutput:
+        delete_from_database(data["record_id"])
+        return {"status": "deleted"}
+
+API Discovery
+=============
+
+The ``GET /<actor_id>/methods`` and ``GET /<actor_id>/actions`` endpoints return
+metadata for all registered hooks, enabling API discovery:
+
+.. code-block:: json
+
+    {
+      "methods": [
+        {
+          "name": "calculate",
+          "description": "Perform a mathematical calculation",
+          "input_schema": {"type": "object", "properties": {...}},
+          "output_schema": {"type": "object", "properties": {...}},
+          "annotations": {"readOnlyHint": true}
+        }
+      ]
+    }
+
+Hooks without metadata return default values (empty description, null schemas).
 
 Matching & Ordering
 ===================

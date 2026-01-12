@@ -29,21 +29,114 @@ Property Hooks
 Method Hooks
 ------------
 
+Method hooks implement RPC-style functions. You can add metadata for API discovery:
+
 .. code-block:: python
 
+   # Simple method hook
    @app.method_hook("get_profile")
    def get_profile(actor, method_name, data):
        return {"email": actor.properties.get("email")}
 
+   # Method hook with metadata for API discovery
+   @app.method_hook(
+       "calculate",
+       description="Perform a mathematical calculation",
+       input_schema={
+           "type": "object",
+           "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+           "required": ["x", "y"]
+       },
+       annotations={"readOnlyHint": True}
+   )
+   def calculate(actor, method_name, data):
+       return {"result": data["x"] + data["y"]}
+
+   # Method hook with auto-generated schemas from TypedDict
+   from typing import TypedDict
+
+   class ProfileInput(TypedDict):
+       include_email: bool
+
+   class ProfileOutput(TypedDict):
+       name: str
+       email: str | None
+
+   @app.method_hook("get_profile_detailed", description="Get user profile")
+   def get_profile_detailed(actor, method_name, data: ProfileInput) -> ProfileOutput:
+       return {
+           "name": actor.properties.get("name"),
+           "email": actor.properties.get("email") if data.get("include_email") else None
+       }
+
 Action Hooks
 ------------
 
+Action hooks implement side-effecting operations. You can add metadata for API discovery:
+
 .. code-block:: python
 
+   # Simple action hook
    @app.action_hook("send_notification")
    def send_notification(actor, action_name, data):
        # send side‑effecting notification
        return {"status": "sent"}
+
+   # Action hook with metadata for API discovery
+   @app.action_hook(
+       "delete_item",
+       description="Permanently delete an item",
+       input_schema={"type": "object", "properties": {"item_id": {"type": "string"}}},
+       annotations={"destructiveHint": True}
+   )
+   def delete_item(actor, action_name, data):
+       delete_from_database(data["item_id"])
+       return {"status": "deleted"}
+
+   # Action hook with auto-generated schemas from TypedDict
+   from typing import TypedDict
+
+   class CreateNoteInput(TypedDict):
+       title: str
+       content: str
+
+   class CreateNoteOutput(TypedDict):
+       note_id: str
+       created_at: str
+
+   @app.action_hook("create_note", description="Create a new note")
+   def create_note(actor, action_name, data: CreateNoteInput) -> CreateNoteOutput:
+       note_id = save_note(data["title"], data["content"])
+       return {"note_id": note_id, "created_at": datetime.now().isoformat()}
+
+Discovering Methods and Actions
+-------------------------------
+
+Clients can discover available methods and actions via GET requests:
+
+.. code-block:: bash
+
+   # Discover available methods
+   curl https://myapp.example.com/<actor_id>/methods
+
+   # Discover available actions
+   curl https://myapp.example.com/<actor_id>/actions
+
+The response includes metadata for each hook:
+
+.. code-block:: json
+
+   {
+     "methods": [
+       {
+         "name": "calculate",
+         "description": "Perform a mathematical calculation",
+         "input_schema": {"type": "object", "properties": {...}},
+         "output_schema": null,
+         "annotations": {"readOnlyHint": true}
+       }
+     ]
+   }
 
 Lifecycle Hooks
 ---------------

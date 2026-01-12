@@ -6,6 +6,7 @@ from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeA
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
+from actingweb.db.utils import ensure_timezone_aware_iso
 from actingweb.trust import canonical_connection_method
 
 """
@@ -40,6 +41,7 @@ def _parse_timestamp(value: str | datetime | None) -> datetime:
         return value
     else:
         raise ValueError(f"Timestamp must be string or datetime, got {type(value)}")
+
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +160,10 @@ class DbTrust:
             result["established_via"] = t.established_via
         created_at_iso = None
         if hasattr(t, "created_at") and t.created_at:
-            created_at_iso = t.created_at.isoformat()
+            created_at_iso = ensure_timezone_aware_iso(t.created_at)
             result["created_at"] = created_at_iso
         if hasattr(t, "last_accessed") and t.last_accessed:
-            last_accessed_iso = t.last_accessed.isoformat()
+            last_accessed_iso = ensure_timezone_aware_iso(t.last_accessed)
             result["last_accessed"] = last_accessed_iso
             result["last_connected_at"] = last_accessed_iso
         elif created_at_iso:
@@ -417,10 +419,10 @@ class DbTrustList:
                     result["established_via"] = t.established_via
                 created_at_iso = None
                 if hasattr(t, "created_at") and t.created_at:
-                    created_at_iso = t.created_at.isoformat()
+                    created_at_iso = ensure_timezone_aware_iso(t.created_at)
                     result["created_at"] = created_at_iso
                 if hasattr(t, "last_accessed") and t.last_accessed:
-                    last_accessed_iso = t.last_accessed.isoformat()
+                    last_accessed_iso = ensure_timezone_aware_iso(t.last_accessed)
                     result["last_accessed"] = last_accessed_iso
                     result["last_connected_at"] = last_accessed_iso
                 elif created_at_iso:

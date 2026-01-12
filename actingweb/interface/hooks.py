@@ -5,10 +5,20 @@ Provides a clean decorator-based system for registering hooks that respond
 to various ActingWeb events.
 """
 
+import inspect
 import logging
+import types
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import (
+    Any,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+    is_typeddict,
+)
 
 # Import permission system for transparent permission checking
 try:
@@ -20,6 +30,167 @@ except ImportError:
     get_permission_evaluator = None
     PermissionResult = None
     PERMISSION_SYSTEM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
+
+
+def _python_type_to_json_schema(python_type: Any) -> dict[str, Any]:
+    """Convert a Python type annotation to JSON schema.
+
+    Args:
+        python_type: A Python type or type annotation (int, str, list, TypedDict,
+                    Union types, etc.)
+
+    Returns:
+        JSON schema dict representing the type
+    """
+    # Handle None type
+    if python_type is type(None):
+        return {"type": "null"}
+
+    # Handle basic types
+    type_mapping: dict[type, dict[str, Any]] = {
+        str: {"type": "string"},
+        int: {"type": "integer"},
+        float: {"type": "number"},
+        bool: {"type": "boolean"},
+        list: {"type": "array"},
+        dict: {"type": "object"},
+    }
+
+    if python_type in type_mapping:
+        return type_mapping[python_type]
+
+    # Handle generic types (list[str], dict[str, int], etc.)
+    origin = get_origin(python_type)
+    args = get_args(python_type)
+
+    # Handle Union types (including X | None for Optional)
+    # Note: types.UnionType is used for X | Y syntax in Python 3.10+
+    if origin is Union or isinstance(python_type, types.UnionType):
+        # Check if it's Optional (Union with None)
+        non_none_types = [t for t in args if t is not type(None)]
+        has_none = len(non_none_types) < len(args)
+
+        if len(non_none_types) == 1:
+            # Simple Optional[X] case
+            schema = _python_type_to_json_schema(non_none_types[0])
+            if has_none:
+                # Make nullable
+                if "type" in schema:
+                    current_type = schema["type"]
+                    if isinstance(current_type, list):
+                        if "null" not in current_type:
+                            schema["type"] = current_type + ["null"]
+                    else:
+                        schema["type"] = [current_type, "null"]
+            return schema
+        else:
+            # Multiple types - use anyOf
+            schemas = [_python_type_to_json_schema(t) for t in args]
+            return {"anyOf": schemas}
+
+    # Handle list[X]
+    if origin is list:
+        schema: dict[str, Any] = {"type": "array"}
+        if args:
+            schema["items"] = _python_type_to_json_schema(args[0])
+        return schema
+
+    # Handle dict[K, V]
+    if origin is dict:
+        schema = {"type": "object"}
+        if len(args) >= 2:
+            schema["additionalProperties"] = _python_type_to_json_schema(args[1])
+        return schema
+
+    # Handle TypedDict
+    if is_typeddict(python_type):
+        return _typeddict_to_json_schema(python_type)
+
+    # Default fallback
+    return {"type": "object"}
+
+
+def _typeddict_to_json_schema(typed_dict_class: type) -> dict[str, Any]:
+    """Convert a TypedDict class to JSON schema.
+
+    Args:
+        typed_dict_class: A TypedDict class
+
+    Returns:
+        JSON schema dict representing the TypedDict structure
+    """
+    try:
+        hints = get_type_hints(typed_dict_class)
+    except Exception:
+        return {"type": "object"}
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    # Get required keys - TypedDict has __required_keys__ and __optional_keys__
+    required_keys = getattr(typed_dict_class, "__required_keys__", frozenset())
+    optional_keys = getattr(typed_dict_class, "__optional_keys__", frozenset())
+
+    for field_name, field_type in hints.items():
+        properties[field_name] = _python_type_to_json_schema(field_type)
+
+        # Determine if field is required
+        if required_keys and field_name in required_keys:
+            required.append(field_name)
+        elif not optional_keys or field_name not in optional_keys:
+            # If no explicit optional/required info, assume required (total=True default)
+            if not optional_keys and not required_keys:
+                required.append(field_name)
+
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+
+    return schema
+
+
+def _get_auto_schemas(func: Callable[..., Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Extract input and output schemas from function type hints.
+
+    Inspects the function's type hints to auto-generate JSON schemas:
+    - input_schema: From the 'data' parameter if it's a TypedDict
+    - output_schema: From the return type if it's a TypedDict
+
+    Args:
+        func: The hook function to inspect
+
+    Returns:
+        Tuple of (input_schema, output_schema), either may be None
+    """
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+
+    try:
+        hints = get_type_hints(func)
+    except Exception:
+        # Type hints may fail to resolve in some cases
+        return None, None
+
+    # Check the 'data' parameter for input schema
+    # Hook signature is: func(actor, method_name, data) or func(actor, action_name, data)
+    sig = inspect.signature(func)
+    params = list(sig.parameters.keys())
+
+    # The data parameter is typically the 3rd parameter
+    if len(params) >= 3:
+        data_param = params[2]  # Usually 'data'
+        if data_param in hints:
+            data_type = hints[data_param]
+            if is_typeddict(data_type):
+                input_schema = _typeddict_to_json_schema(data_type)
+
+    # Check return type for output schema
+    if "return" in hints:
+        return_type = hints["return"]
+        if is_typeddict(return_type):
+            output_schema = _typeddict_to_json_schema(return_type)
+
+    return input_schema, output_schema
 
 
 class HookType(Enum):
@@ -50,6 +221,75 @@ class LifecycleEvent(Enum):
     OAUTH_SUCCESS = "oauth_success"
     TRUST_APPROVED = "trust_approved"
     TRUST_DELETED = "trust_deleted"
+
+
+@dataclass
+class HookMetadata:
+    """Metadata for method/action hooks.
+
+    This metadata is used to describe hooks for API discovery via
+    GET /<actor_id>/methods and GET /<actor_id>/actions endpoints.
+
+    Attributes:
+        description: Human-readable description of what the hook does
+        input_schema: JSON schema describing expected input parameters
+        output_schema: JSON schema describing the expected return value
+        annotations: Safety/behavior hints (e.g., readOnlyHint, destructiveHint)
+    """
+
+    description: str = ""
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    annotations: dict[str, Any] | None = None
+
+
+def get_hook_metadata(func: Callable[..., Any]) -> HookMetadata:
+    """Get hook metadata from a decorated function.
+
+    Priority order:
+    1. Explicit _hook_metadata (from decorator parameters)
+    2. MCP metadata (_mcp_metadata from @mcp_tool decorator)
+    3. Auto-generated schemas from TypedDict type hints
+
+    For each source, if input_schema or output_schema is not provided,
+    attempts to auto-generate from function type hints (TypedDict only).
+
+    Args:
+        func: The hook function to get metadata from
+
+    Returns:
+        HookMetadata instance with the function's metadata
+    """
+    # Get auto-generated schemas from type hints (used as fallback)
+    auto_input, auto_output = _get_auto_schemas(func)
+
+    # Check for explicit hook metadata
+    if hasattr(func, "_hook_metadata"):
+        metadata: HookMetadata = getattr(func, "_hook_metadata")  # noqa: B009
+        # Fill in auto-generated schemas if not explicitly provided
+        return HookMetadata(
+            description=metadata.description,
+            input_schema=metadata.input_schema if metadata.input_schema is not None else auto_input,
+            output_schema=metadata.output_schema if metadata.output_schema is not None else auto_output,
+            annotations=metadata.annotations,
+        )
+
+    # Fall back to MCP metadata if available
+    if hasattr(func, "_mcp_metadata"):
+        mcp_meta = getattr(func, "_mcp_metadata")  # noqa: B009
+        return HookMetadata(
+            description=mcp_meta.get("description", "") or "",
+            input_schema=mcp_meta.get("input_schema") or auto_input,
+            output_schema=mcp_meta.get("output_schema") or auto_output,
+            annotations=mcp_meta.get("annotations"),
+        )
+
+    # Return defaults with auto-generated schemas
+    return HookMetadata(
+        input_schema=auto_input,
+        output_schema=auto_output,
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -486,6 +726,58 @@ class HookRegistry:
 
         return result
 
+    def get_method_metadata_list(self) -> list[dict[str, Any]]:
+        """Get list of all registered methods with their metadata.
+
+        Returns a list of dictionaries containing name and metadata for each method.
+        Wildcard (*) hooks are excluded from listing.
+
+        Returns:
+            List of dicts with name, description, input_schema, output_schema, annotations
+        """
+        result = []
+        for method_name, hook_list in self._method_hooks.items():
+            if method_name == "*":
+                continue  # Don't list wildcard hooks
+
+            # Get metadata from first hook (primary hook)
+            if hook_list:
+                metadata = get_hook_metadata(hook_list[0])
+                result.append({
+                    "name": method_name,
+                    "description": metadata.description,
+                    "input_schema": metadata.input_schema,
+                    "output_schema": metadata.output_schema,
+                    "annotations": metadata.annotations,
+                })
+        return result
+
+    def get_action_metadata_list(self) -> list[dict[str, Any]]:
+        """Get list of all registered actions with their metadata.
+
+        Returns a list of dictionaries containing name and metadata for each action.
+        Wildcard (*) hooks are excluded from listing.
+
+        Returns:
+            List of dicts with name, description, input_schema, output_schema, annotations
+        """
+        result = []
+        for action_name, hook_list in self._action_hooks.items():
+            if action_name == "*":
+                continue  # Don't list wildcard hooks
+
+            # Get metadata from first hook (primary hook)
+            if hook_list:
+                metadata = get_hook_metadata(hook_list[0])
+                result.append({
+                    "name": action_name,
+                    "description": metadata.description,
+                    "input_schema": metadata.input_schema,
+                    "output_schema": metadata.output_schema,
+                    "annotations": metadata.annotations,
+                })
+        return result
+
 
 # Global hook registry instance
 _hook_registry = HookRegistry()
@@ -606,17 +898,36 @@ def lifecycle_hook(event: str) -> Callable[..., Any]:
     return decorator
 
 
-def method_hook(method_name: str = "*") -> Callable[..., Any]:
+def method_hook(
+    method_name: str = "*",
+    description: str = "",
+    input_schema: dict[str, Any] | None = None,
+    output_schema: dict[str, Any] | None = None,
+    annotations: dict[str, Any] | None = None,
+) -> Callable[..., Any]:
     """
-    Decorator for registering method hooks.
+    Decorator for registering method hooks with optional metadata.
 
     Args:
         method_name: Name of method to hook ("*" for all methods)
+        description: Human-readable description of what the method does
+        input_schema: JSON schema describing expected input parameters
+        output_schema: JSON schema describing the expected return value
+        annotations: Safety/behavior hints (e.g., readOnlyHint, idempotentHint)
 
     Example:
         .. code-block:: python
 
-            @method_hook("calculate")
+            @method_hook(
+                "calculate",
+                description="Perform a mathematical calculation",
+                input_schema={
+                    "type": "object",
+                    "properties": {"x": {"type": "number"}},
+                    "required": ["x"]
+                },
+                annotations={"readOnlyHint": True}
+            )
             def handle_calculate_method(actor, method_name, data):
                 # Execute RPC-style method
                 result = perform_calculation(data)
@@ -624,30 +935,67 @@ def method_hook(method_name: str = "*") -> Callable[..., Any]:
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
+        # Store metadata on function
+        metadata = HookMetadata(
+            description=description,
+            input_schema=input_schema,
+            output_schema=output_schema,
+            annotations=annotations,
+        )
+        setattr(func, "_hook_metadata", metadata)  # noqa: B010
+
         _hook_registry.register_method_hook(method_name, func)
         return func
 
     return decorator
 
 
-def action_hook(action_name: str = "*") -> Callable[..., Any]:
+def action_hook(
+    action_name: str = "*",
+    description: str = "",
+    input_schema: dict[str, Any] | None = None,
+    output_schema: dict[str, Any] | None = None,
+    annotations: dict[str, Any] | None = None,
+) -> Callable[..., Any]:
     """
-    Decorator for registering action hooks.
+    Decorator for registering action hooks with optional metadata.
 
     Args:
         action_name: Name of action to hook ("*" for all actions)
+        description: Human-readable description of what the action does
+        input_schema: JSON schema describing expected input parameters
+        output_schema: JSON schema describing the expected return value
+        annotations: Safety/behavior hints (e.g., destructiveHint, readOnlyHint)
 
     Example:
         .. code-block:: python
 
-            @action_hook("send_notification")
-            def handle_send_notification(actor, action_name, data):
+            @action_hook(
+                "delete_record",
+                description="Permanently delete a record",
+                input_schema={
+                    "type": "object",
+                    "properties": {"record_id": {"type": "string"}},
+                    "required": ["record_id"]
+                },
+                annotations={"destructiveHint": True, "readOnlyHint": False}
+            )
+            def handle_delete(actor, action_name, data):
                 # Execute trigger-based action
-                send_notification(data.get("message"))
-                return {"status": "sent"}
+                delete_record(data.get("record_id"))
+                return {"status": "deleted"}
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
+        # Store metadata on function
+        metadata = HookMetadata(
+            description=description,
+            input_schema=input_schema,
+            output_schema=output_schema,
+            annotations=annotations,
+        )
+        setattr(func, "_hook_metadata", metadata)  # noqa: B010
+
         _hook_registry.register_action_hook(action_name, func)
         return func
 

@@ -9,6 +9,7 @@ from .actor import Actor, CreatorIndex, DbActor, DbActorList
 from .attribute import Attribute, DbAttribute, DbAttributeBucketList
 from .peertrustee import DbPeerTrustee, DbPeerTrusteeList, PeerTrustee
 from .property import DbProperty, DbPropertyList, Property
+from .property_lookup import DbPropertyLookup, PropertyLookup
 from .subscription import DbSubscription, DbSubscriptionList, Subscription
 from .subscription_diff import (
     DbSubscriptionDiff,
@@ -35,6 +36,9 @@ __all__ = [
     "Property",
     "DbProperty",
     "DbPropertyList",
+    # PropertyLookup
+    "PropertyLookup",
+    "DbPropertyLookup",
     # Subscription
     "Subscription",
     "DbSubscription",

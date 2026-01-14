@@ -17,6 +17,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    ForeignKeyConstraint,
     Index,
     Integer,
     PrimaryKeyConstraint,
@@ -52,6 +53,26 @@ class Property(Base):
     id = Column(String(255), nullable=False)  # actor_id
     name = Column(String(255), nullable=False)
     value = Column(Text, nullable=False)
+
+
+class PropertyLookup(Base):
+    """Property lookup table - reverse index for property values → actor_id."""
+
+    __tablename__ = "property_lookup"
+    __table_args__ = (
+        PrimaryKeyConstraint("property_name", "value"),
+        Index("idx_property_lookup_actor_id", "actor_id"),
+        ForeignKeyConstraint(
+            ["actor_id"],
+            ["actors.id"],
+            name="fk_property_lookup_actor",
+            ondelete="CASCADE",
+        ),
+    )
+
+    property_name = Column(String(255), nullable=False)
+    value = Column(Text, nullable=False)  # No size limit!
+    actor_id = Column(String(255), nullable=False)
 
 
 class Trust(Base):

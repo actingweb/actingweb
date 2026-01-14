@@ -71,6 +71,19 @@ class DbProperty:
         if not Property.exists():
             Property.create_table(wait=True)
 
+    def _should_index_property(self, name: str) -> bool:
+        """
+        Check if property should be indexed in lookup table.
+
+        Returns True if:
+        1. Lookup table mode is enabled (config.use_lookup_table)
+        2. Property name is in configured indexed_properties list
+        """
+        from actingweb.config import Config
+
+        config = Config()
+        return config.use_lookup_table and name in config.indexed_properties
+
     def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
         """Retrieves the property from the database"""
         if not actor_id or not name:
@@ -90,17 +103,55 @@ class DbProperty:
     def get_actor_id_from_property(
         self, name: str | None = None, value: str | None = None
     ) -> str | None:
-        """Retrives an actor_id based on the value of a property."""
+        """
+        Reverse lookup: find actor by property value.
+
+        Uses lookup table if configured, otherwise falls back to GSI.
+
+        Args:
+            name: Property name (e.g., "oauthId")
+            value: Property value to search for
+
+        Returns:
+            Actor ID if found, None otherwise
+        """
         if not name or not value:
             return None
-        results = Property.property_index.query(value)
-        self.handle = None
-        for res in results:
-            self.handle = res
-            break
-        if not self.handle:
-            return None
-        return str(self.handle.id) if self.handle.id else None
+
+        from actingweb.config import Config
+
+        config = Config()
+
+        if config.use_lookup_table and name in config.indexed_properties:
+            # Use new lookup table approach
+            from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
+
+            lookup = DbPropertyLookup()
+            actor_id = lookup.get(property_name=name, value=value)
+
+            if actor_id:
+                # Load the property into self.handle for subsequent operations
+                try:
+                    self.handle = Property.get(actor_id, name, consistent_read=True)
+                except Exception:
+                    logger.warning(
+                        f"Lookup found actor {actor_id} but property {name} doesn't exist"
+                    )
+                    return None
+
+            return actor_id
+        else:
+            # Fall back to legacy GSI approach
+            results = Property.property_index.query(value)
+            self.handle = None
+            for res in results:
+                self.handle = res
+                break
+
+            if not self.handle:
+                return None
+
+            return str(self.handle.id) if self.handle.id else None
 
     def set(
         self, actor_id: str | None = None, name: str | None = None, value: Any = None
@@ -118,25 +169,110 @@ class DbProperty:
             except (TypeError, ValueError):
                 value = str(value)
 
+        # Handle empty value (deletion)
         if not value or (hasattr(value, "__len__") and len(value) == 0):
             if self.get(actor_id=actor_id, name=name):
-                self.delete()
+                self.delete()  # This will also delete lookup entry
             return True
+
+        # Get old value before updating (for lookup sync)
+        old_value = None
+        if self._should_index_property(name):
+            if self.handle and self.handle.value:
+                old_value = str(self.handle.value)
+
+        # Save property
         if not self.handle:
             if not actor_id:
                 return False
             self.handle = Property(id=actor_id, name=name, value=value)
         else:
             self.handle.value = value
+
         self.handle.save()
+
+        # Update lookup table if property is indexed
+        if self._should_index_property(name):
+            # Use handle.id which is guaranteed to be set after save()
+            handle_actor_id = str(self.handle.id) if self.handle.id else actor_id
+            if handle_actor_id:
+                self._update_lookup_entry(handle_actor_id, name, old_value, value)
+
         return True
+
+    def _update_lookup_entry(
+        self, actor_id: str, name: str, old_value: str | None, new_value: str
+    ) -> None:
+        """
+        Update lookup table entry (delete old, create new).
+
+        Best-effort update - logs errors but doesn't fail property write.
+        """
+        try:
+            from actingweb.db.dynamodb.property_lookup import PropertyLookup
+
+            # Delete old lookup entry if exists
+            if old_value and old_value != new_value:
+                try:
+                    lookup = PropertyLookup.get(name, old_value)
+                    if str(lookup.actor_id) == actor_id:  # Verify it's ours
+                        lookup.delete()
+                except Exception:
+                    pass  # Entry doesn't exist or already deleted
+
+            # Create new lookup entry (skip if value unchanged)
+            if not old_value or old_value != new_value:
+                lookup = PropertyLookup(
+                    property_name=name, value=new_value, actor_id=actor_id
+                )
+                lookup.save()
+
+        except Exception as e:
+            logger.error(
+                f"LOOKUP_TABLE_SYNC_FAILED: actor={actor_id} property={name} "
+                f"old_value_len={len(old_value) if old_value else 0} "
+                f"new_value_len={len(new_value)} error={e}"
+            )
+            # Don't fail the property write - accept eventual consistency
+
+    def _delete_lookup_entry(self, actor_id: str | None, name: str, value: str) -> None:
+        """
+        Delete lookup table entry.
+
+        Best-effort deletion - logs errors but doesn't fail property delete.
+        """
+        try:
+            from actingweb.db.dynamodb.property_lookup import PropertyLookup
+
+            lookup = PropertyLookup.get(name, value)
+            # Verify it belongs to the same actor before deleting
+            if str(lookup.actor_id) == actor_id:
+                lookup.delete()
+        except Exception as e:
+            logger.warning(
+                f"LOOKUP_DELETE_FAILED: actor={actor_id} property={name} "
+                f"value_len={len(value)} error={e}"
+            )
+            # Don't fail the property delete
 
     def delete(self) -> bool:
         """Deletes the property in the database after a get()"""
         if not self.handle:
             return False
+
+        # Save values before deletion
+        actor_id = str(self.handle.id) if self.handle.id else None
+        name = str(self.handle.name) if self.handle.name else None
+        value = str(self.handle.value) if self.handle.value else None
+
+        # Delete property
         self.handle.delete()
         self.handle = None
+
+        # Delete lookup entry if property is indexed
+        if name and value and self._should_index_property(name):
+            self._delete_lookup_entry(actor_id, name, value)
+
         return True
 
 
@@ -190,10 +326,39 @@ class DbPropertyList:
         """Deletes all the properties in the database"""
         if not self.actor_id:
             return False
+
+        # Collect indexed properties before deletion
+        indexed_props: list[tuple[str, str]] = []
+
+        from actingweb.config import Config
+
+        config = Config()
+
+        if config.use_lookup_table:
+            # Scan properties to find indexed ones
+            self.handle = Property.scan(Property.id == self.actor_id)
+            for p in self.handle:
+                if str(p.name) in config.indexed_properties:
+                    indexed_props.append((str(p.name), str(p.value)))
+
+        # Delete all properties
         self.handle = Property.scan(Property.id == self.actor_id)
         if not self.handle:
             return False
+
         for p in self.handle:
             p.delete()
+
+        # Delete lookup entries
+        if indexed_props:
+            from actingweb.db.dynamodb.property_lookup import PropertyLookup
+
+            for name, value in indexed_props:
+                try:
+                    lookup = PropertyLookup.get(name, value)
+                    lookup.delete()
+                except Exception as e:
+                    logger.warning(f"Failed to delete lookup entry {name}={value}: {e}")
+
         self.handle = None
         return True

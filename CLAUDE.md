@@ -205,6 +205,30 @@ The `with_web_ui()` setting controls browser redirects:
 
 API clients always receive JSON. See `docs/reference/routing-overview.rst`.
 
+## Property Reverse Lookup
+
+ActingWeb supports reverse lookups (find actor by property value) via lookup tables:
+
+```python
+app.with_indexed_properties(["oauthId", "email", "externalUserId"])
+app.with_legacy_property_index(enable=False)  # Recommended for new deployments
+```
+
+**Key Points:**
+- **Default**: Lookup table mode disabled (`USE_PROPERTY_LOOKUP_TABLE=false`) for backward compatibility
+- **Legacy mode**: Uses DynamoDB GSI (2048-byte limit) or PostgreSQL index
+- **Lookup table mode**: No size limits, better performance for indexed properties
+- **Migration**: Dual-mode support for gradual transition
+- **Cleanup**: Automatic when properties/actors deleted
+
+**Environment Variables:**
+```bash
+export USE_PROPERTY_LOOKUP_TABLE=true                    # Enable lookup tables
+export INDEXED_PROPERTIES=oauthId,email,externalUserId  # Configure indexed properties
+```
+
+See `docs/quickstart/configuration.rst` for full migration guide and best practices.
+
 ## Quality Standards
 
 **Zero-tolerance policy**: All code must pass with 0 errors, 0 warnings.

@@ -372,6 +372,152 @@ Verify your PG_DB_PASSWORD matches what you set when creating the database:
     psql -U postgres -c "ALTER USER actingweb WITH PASSWORD 'newpassword';"
     # Update .env file with new password
 
+Property Reverse Lookup
+------------------------
+
+ActingWeb supports efficient reverse lookups (find actor by property value) using a dedicated lookup table. This is particularly useful for OAuth authentication where you need to find an actor by their OAuth provider ID.
+
+**Why Use Lookup Tables?**
+
+By default, ActingWeb uses database indexes for reverse lookups:
+
+- **DynamoDB**: Global Secondary Index (GSI) on the ``value`` field - limited to 2048 bytes
+- **PostgreSQL**: Index on the ``value`` column - works but less efficient for large values
+
+The lookup table approach removes size limits and improves query performance for configured properties.
+
+Configuration
+~~~~~~~~~~~~~
+
+Enable lookup tables via API or environment variables:
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_indexed_properties(["oauthId", "email", "externalUserId"])
+
+    # Enable lookup table mode (disable legacy indexes)
+    app.with_legacy_property_index(enable=False)  # Recommended for new deployments
+
+**Environment Variables:**
+
+.. code-block:: bash
+
+    export USE_PROPERTY_LOOKUP_TABLE=true                           # Enable lookup table
+    export INDEXED_PROPERTIES=oauthId,email,externalUserId         # Which properties to index
+
+**Default Configuration:**
+
+- ``USE_PROPERTY_LOOKUP_TABLE``: ``false`` (uses legacy GSI/index for backward compatibility)
+- ``INDEXED_PROPERTIES``: ``["oauthId", "email", "externalUserId"]``
+
+Usage Example
+~~~~~~~~~~~~~
+
+Finding an actor by OAuth ID:
+
+.. code-block:: python
+
+    from actingweb.db import get_db
+
+    # Get property database interface
+    db_property = get_db().DbProperty()
+
+    # Reverse lookup: find actor by OAuth ID
+    actor_id = db_property.get_actor_id_from_property(
+        name="oauthId",
+        value="github:12345"
+    )
+
+    if actor_id:
+        print(f"Found actor: {actor_id}")
+
+The lookup happens automatically when you set indexed properties:
+
+.. code-block:: python
+
+    # Setting an indexed property creates lookup entry automatically
+    db_property.set(
+        actor_id="actor-123",
+        name="oauthId",
+        value="github:12345"
+    )
+
+    # Lookup table entry is created behind the scenes
+    # You can now find the actor by this OAuth ID
+
+Migration Guide
+~~~~~~~~~~~~~~~
+
+**New Deployments:** Enable lookup tables from the start:
+
+.. code-block:: python
+
+    app.with_legacy_property_index(enable=False)
+
+**Existing Deployments:** Use dual-mode for gradual migration:
+
+1. **Phase 1 - Deploy with Lookup Table Support:**
+
+   .. code-block:: python
+
+       # Keep legacy mode enabled (default)
+       app = ActingWebApp(...)  # use_lookup_table defaults to False
+
+   Deploy this version. Both legacy and lookup table code paths are available.
+
+2. **Phase 2 - Enable Lookup Tables:**
+
+   .. code-block:: bash
+
+       export USE_PROPERTY_LOOKUP_TABLE=true
+
+   Restart the application. New writes will populate lookup tables. Legacy GSI/index still used for reads.
+
+3. **Phase 3 - Backfill Existing Data (Optional):**
+
+   Run a backfill script to populate lookup tables for existing actors (implementation depends on your deployment).
+
+4. **Phase 4 - Disable Legacy Index:**
+
+   Once backfill is complete and you've verified lookup tables work correctly, you can disable the legacy GSI/index at the database level.
+
+**Rollback:** Set ``USE_PROPERTY_LOOKUP_TABLE=false`` to revert to legacy GSI/index mode.
+
+Size Limits
+~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Configuration
+     - DynamoDB Limit
+     - PostgreSQL Limit
+   * - Legacy GSI/Index
+     - 2048 bytes
+     - 8191 bytes (btree index)
+   * - Lookup Table
+     - No limit (400KB item)
+     - No limit (TEXT column)
+
+**Recommendation:** Use lookup tables if you need to store OAuth tokens, long external IDs, or any property values exceeding 2KB.
+
+Best Practices
+~~~~~~~~~~~~~~
+
+1. **Choose Indexed Properties Carefully:** Only index properties you need for reverse lookups (e.g., ``oauthId``, ``email``). Each indexed property creates lookup table entries.
+
+2. **Test Configuration Changes:** Property lookup configuration requires restart. Test in staging before production.
+
+3. **Monitor Lookup Table Size:** For DynamoDB, monitor lookup table size and provision adequate capacity. For PostgreSQL, normal table monitoring applies.
+
+4. **Cleanup:** Lookup entries are automatically deleted when properties or actors are deleted. No manual cleanup needed.
+
 Logging
 -------
 

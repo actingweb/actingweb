@@ -65,6 +65,12 @@ class ActingWebApp:
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
 
+        # Property lookup configuration
+        self._indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
+        self._use_lookup_table: bool = (
+            False  # False by default for backward compatibility
+        )
+
         # Hook registry
         self.hooks = HookRegistry()
 
@@ -108,6 +114,11 @@ class ActingWebApp:
             self._config.actors = dict(self._actors_config)
         if self._enable_bot:
             self._config.bot = dict(self._bot_config or {})
+        # Property lookup configuration
+        if hasattr(self, "_indexed_properties"):
+            self._config.indexed_properties = self._indexed_properties
+        if hasattr(self, "_use_lookup_table"):
+            self._config.use_lookup_table = self._use_lookup_table
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -147,6 +158,62 @@ class ActingWebApp:
     def with_devtest(self, enable: bool = True) -> "ActingWebApp":
         """Enable or disable development/testing endpoints."""
         self._enable_devtest = enable
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_indexed_properties(
+        self, properties: list[str] | None = None
+    ) -> "ActingWebApp":
+        """
+        Configure which properties support reverse lookups via lookup table.
+
+        Properties specified here will have their values indexed in a separate
+        lookup table, enabling reverse lookups (value → actor_id) without the
+        2048-byte size limit imposed by DynamoDB Global Secondary Indexes.
+
+        Args:
+            properties: List of property names to index.
+                       Default: ["oauthId", "email", "externalUserId"]
+                       Set to empty list [] to disable all reverse lookups.
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            app = (
+                ActingWebApp(...)
+                .with_indexed_properties(["oauthId", "email", "customUserId"])
+            )
+
+        Note:
+            - Only properties listed here can be used with Actor.get_from_property()
+            - Changes require application restart to take effect
+            - Use environment variable INDEXED_PROPERTIES for runtime override
+        """
+        if properties is not None:
+            self._indexed_properties = properties
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_legacy_property_index(self, enable: bool = False) -> "ActingWebApp":
+        """
+        Enable legacy GSI/index-based property reverse lookup (for migration).
+
+        When False (default), uses new lookup table approach which supports
+        property values larger than 2048 bytes. When True, uses legacy DynamoDB
+        GSI or PostgreSQL index on value field (limited to 2048 bytes).
+
+        Args:
+            enable: True to use legacy GSI/index, False for new lookup table
+
+        Returns:
+            Self for method chaining
+
+        Note:
+            Set this to True during migration from legacy systems. Once all
+            properties are migrated to lookup table, set back to False (default).
+        """
+        self._use_lookup_table = not enable
         self._apply_runtime_changes_to_config()
         return self
 
@@ -392,6 +459,8 @@ class ActingWebApp:
                 bot=self._bot_config or {},
                 oauth=self._oauth_config or {},
                 mcp=self._enable_mcp,
+                indexed_properties=self._indexed_properties,
+                use_lookup_table=self._use_lookup_table,
             )
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them

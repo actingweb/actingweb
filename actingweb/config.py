@@ -52,6 +52,13 @@ class Config:
         self.logLevel = logging.DEBUG
         # Change to WARN for production, DEBUG for debugging, and INFO for normal testing
         #########
+        # Property lookup configuration (backward compatible defaults)
+        #########
+        self.indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
+        self.use_lookup_table: bool = (
+            False  # False = use old GSI/index (backward compatible)
+        )
+        #########
         # Configurable ActingWeb settings for this app
         #########
         # The app type this actor implements
@@ -174,6 +181,17 @@ class Config:
         # Pick up the config variables
         for k, v in kwargs.items():
             self.__setattr__(k, v)
+
+        # Environment variable overrides for property lookup configuration
+        if os.getenv("INDEXED_PROPERTIES"):
+            env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
+            self.indexed_properties = [p.strip() for p in env_props if p.strip()]
+
+        if os.getenv("USE_PROPERTY_LOOKUP_TABLE"):
+            self.use_lookup_table = (
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "false").lower() == "true"
+            )
+
         if self.database == "dynamodb":
             self.env = "aws"
         if str(self.logLevel) == "DEBUG":

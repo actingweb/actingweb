@@ -94,9 +94,7 @@ class TestAuthenticatedAccess:
         assert response.status_code == 200
         assert "collaborative_value" in response.text
 
-    def test_peer_can_only_read_permitted_properties(
-        self, actor_factory, trust_helper
-    ):
+    def test_peer_can_only_read_permitted_properties(self, actor_factory, trust_helper):
         """Test that GET with peer auth only returns accessible properties."""
         actor1 = actor_factory.create("owner@example.com")
         actor2 = actor_factory.create("peer@example.com")

@@ -124,7 +124,9 @@ class FakeCoreActor:
             "granularity": granularity,
         }
 
-    def get_subscription_obj(self, peerid: str, subid: str, callback: bool = False) -> FakeCoreSubscription | None:
+    def get_subscription_obj(
+        self, peerid: str, subid: str, callback: bool = False
+    ) -> FakeCoreSubscription | None:
         """Mock get_subscription_obj."""
         # For callback subscriptions, check if the stored sub has callback=True
         sub = self._subscriptions.get((peerid, subid))
@@ -136,7 +138,9 @@ class FakeCoreActor:
                 return sub
         return None
 
-    def get_subscription(self, peerid: str, subid: str, callback: bool = False) -> dict[str, Any] | None:
+    def get_subscription(
+        self, peerid: str, subid: str, callback: bool = False
+    ) -> dict[str, Any] | None:
         """Mock get_subscription - returns dict."""
         sub = self.get_subscription_obj(peerid=peerid, subid=subid, callback=callback)
         if sub:
@@ -145,7 +149,9 @@ class FakeCoreActor:
             return data
         return None
 
-    def delete_subscription(self, peerid: str, subid: str, callback: bool = False) -> bool:
+    def delete_subscription(
+        self, peerid: str, subid: str, callback: bool = False
+    ) -> bool:
         """Mock delete_subscription."""
         key = (peerid, subid)
         if key in self._subscriptions:
@@ -458,7 +464,9 @@ class TestSubscriptionManagerIntegration:
         # Simulate adding diffs (in real code, property changes would do this)
         core_sub = actor.get_subscription_obj(peerid="peer_1", subid=subid)
         assert core_sub is not None
-        core_sub._diffs.append({"seqnr": 1, "target": "properties", "blob": {"key": "value"}})
+        core_sub._diffs.append(
+            {"seqnr": 1, "target": "properties", "blob": {"key": "value"}}
+        )
 
         # Get diffs
         diffs = sub_with_diffs.get_diffs()
@@ -494,7 +502,9 @@ class TestSubscriptionManagerCallbackMethods:
         def mock_get_subscription(peerid, subid, callback=False):
             if callback and peerid == "peer_1" and subid == "sub_callback_1":
                 return sub_data
-            return original_get_sub(peerid, subid) if callable(original_get_sub) else None
+            return (
+                original_get_sub(peerid, subid) if callable(original_get_sub) else None
+            )
 
         actor.get_subscription = mock_get_subscription  # type: ignore[assignment]
 
@@ -572,9 +582,7 @@ class TestSubscriptionManagerCallbackMethods:
 
         manager = SubscriptionManager(actor)  # type: ignore[arg-type]
 
-        manager.delete_callback_subscription(
-            peer_id="peer_1", subscription_id="sub_1"
-        )
+        manager.delete_callback_subscription(peer_id="peer_1", subscription_id="sub_1")
 
         # Verify it called delete_subscription with callback=True
         assert delete_params["callback"] is True

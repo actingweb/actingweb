@@ -672,7 +672,9 @@ class TestOAuth2ClientTokenRevocation:
 
             # Verify token1 is revoked but token2 is still valid
             assert token_manager.validate_access_token(token1) is None
-            assert token_manager.validate_access_token(token2) is not None  # Still valid!
+            assert (
+                token_manager.validate_access_token(token2) is not None
+            )  # Still valid!
 
         finally:
             actor.delete()
@@ -737,8 +739,10 @@ class TestOAuth2ClientTokenRevocation:
             )
 
             token_manager = get_actingweb_token_manager(config)
+            assert actor.id is not None
             revoked_count = token_manager.revoke_client_tokens(
-                actor.id, client_id  # type: ignore[arg-type]
+                actor.id,
+                client_id,
             )
 
             # Should have revoked 2 access tokens

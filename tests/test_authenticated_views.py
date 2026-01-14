@@ -20,7 +20,9 @@ class TestAuthContext:
 
     def test_peer_context(self):
         """Test peer authentication context."""
-        ctx = AuthContext(peer_id="peer123", trust_relationship={"relationship": "friend"})
+        ctx = AuthContext(
+            peer_id="peer123", trust_relationship={"relationship": "friend"}
+        )
         assert ctx.peer_id == "peer123"
         assert ctx.accessor_id == "peer123"
         assert ctx.is_peer is True
@@ -28,7 +30,9 @@ class TestAuthContext:
 
     def test_client_context(self):
         """Test client authentication context."""
-        ctx = AuthContext(client_id="client123", trust_relationship={"client_name": "MCP"})
+        ctx = AuthContext(
+            client_id="client123", trust_relationship={"client_name": "MCP"}
+        )
         assert ctx.client_id == "client123"
         assert ctx.accessor_id == "client123"
         assert ctx.is_peer is False
@@ -181,7 +185,9 @@ class TestAuthenticatedPropertyStore:
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
             mock_evaluator = Mock()
-            mock_evaluator.evaluate_property_access = Mock(return_value=PermissionResult.ALLOWED)
+            mock_evaluator.evaluate_property_access = Mock(
+                return_value=PermissionResult.ALLOWED
+            )
             mock_get_evaluator.return_value = mock_evaluator
 
             auth_store = AuthenticatedPropertyStore(
@@ -207,7 +213,9 @@ class TestAuthenticatedPropertyStore:
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
             mock_evaluator = Mock()
-            mock_evaluator.evaluate_property_access = Mock(return_value=PermissionResult.ALLOWED)
+            mock_evaluator.evaluate_property_access = Mock(
+                return_value=PermissionResult.ALLOWED
+            )
             mock_get_evaluator.return_value = mock_evaluator
 
             auth_store = AuthenticatedPropertyStore(
@@ -233,7 +241,9 @@ class TestAuthenticatedPropertyStore:
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
             mock_evaluator = Mock()
-            mock_evaluator.evaluate_property_access = Mock(return_value=PermissionResult.ALLOWED)
+            mock_evaluator.evaluate_property_access = Mock(
+                return_value=PermissionResult.ALLOWED
+            )
             mock_get_evaluator.return_value = mock_evaluator
 
             auth_store = AuthenticatedPropertyStore(
@@ -258,7 +268,9 @@ class TestAuthenticatedPropertyStore:
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
             mock_evaluator = Mock()
-            mock_evaluator.evaluate_property_access = Mock(return_value=PermissionResult.DENIED)
+            mock_evaluator.evaluate_property_access = Mock(
+                return_value=PermissionResult.DENIED
+            )
             mock_get_evaluator.return_value = mock_evaluator
 
             auth_store = AuthenticatedPropertyStore(
@@ -297,7 +309,9 @@ class TestAuthenticatedPropertyStore:
     def test_authenticated_view_filters_iterable_properties(self):
         """Test that __iter__ filters properties to accessible ones."""
         mock_store = Mock()
-        mock_store.__iter__ = Mock(return_value=iter(["public_key", "private_key", "config"]))
+        mock_store.__iter__ = Mock(
+            return_value=iter(["public_key", "private_key", "config"])
+        )
 
         auth_context = AuthContext(peer_id="peer123")
         mock_config = Mock()
@@ -306,13 +320,16 @@ class TestAuthenticatedPropertyStore:
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
             mock_evaluator = Mock()
+
             # Allow public_key and config, deny private_key
             def evaluate_side_effect(actor_id, accessor_id, key, operation):
                 if key == "private_key":
                     return PermissionResult.DENIED
                 return PermissionResult.ALLOWED
 
-            mock_evaluator.evaluate_property_access = Mock(side_effect=evaluate_side_effect)
+            mock_evaluator.evaluate_property_access = Mock(
+                side_effect=evaluate_side_effect
+            )
             mock_get_evaluator.return_value = mock_evaluator
 
             auth_store = AuthenticatedPropertyStore(

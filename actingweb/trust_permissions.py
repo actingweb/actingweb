@@ -318,7 +318,11 @@ def merge_permissions(
                 # Deep merge dictionaries
                 merged_category = merged[category].copy()
                 for key, value in overrides.items():
-                    if merge_base and key in UNION_MERGE_FIELDS and isinstance(value, list):
+                    if (
+                        merge_base
+                        and key in UNION_MERGE_FIELDS
+                        and isinstance(value, list)
+                    ):
                         # Union merge: combine arrays, preserving base values
                         # - Empty override arrays preserve base values (fail-safe)
                         # - To clear base values entirely, use merge_base=False

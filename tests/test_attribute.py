@@ -15,7 +15,9 @@ class TestAttributesInitialization:
         mock_db_attr.get_bucket.return_value = {}
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
 
         assert attrs.actor_id == "test_actor"
         assert attrs.bucket == "test_bucket"
@@ -55,7 +57,9 @@ class TestAttributesGetBucket:
         mock_db_attr.get_bucket.return_value = mock_bucket_data
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
         result = attrs.get_bucket()
 
         assert result == mock_bucket_data
@@ -98,7 +102,9 @@ class TestAttributesGetAttr:
         mock_db_attr.get_attr.return_value = {"data": "db_value"}
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
         attrs.data = {}  # Clear cache
         result = attrs.get_attr(name="new_key")
 
@@ -135,7 +141,9 @@ class TestAttributesSetAttr:
         mock_db_attr.set_attr.return_value = True
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
         result = attrs.set_attr(name="key", data="value", timestamp="2023-01-01")
 
         assert result is True
@@ -158,7 +166,9 @@ class TestAttributesSetAttr:
         mock_db_attr.set_attr.return_value = True
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
         result = attrs.set_attr(name="key", data="value", ttl_seconds=3600)
 
         assert result is True
@@ -191,7 +201,9 @@ class TestAttributesDeleteAttr:
         mock_db_attr.delete_attr.return_value = True
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
         result = attrs.delete_attr(name="key_to_delete")
 
         assert result is True
@@ -219,7 +231,9 @@ class TestAttributesDeleteBucket:
         mock_db_attr.delete_bucket.return_value = True
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
         result = attrs.delete_bucket()
 
         assert result is True
@@ -236,7 +250,9 @@ class TestAttributesDeleteBucket:
         mock_db_attr.delete_bucket.return_value = False
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        attrs = Attributes(actor_id="test_actor", bucket="test_bucket", config=mock_config)
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
         result = attrs.delete_bucket()
 
         assert result is False
@@ -367,7 +383,9 @@ class TestInternalStoreInitialization:
         mock_db_attr.get_bucket.return_value = {}
         mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
 
-        store = InternalStore(actor_id="test_actor", config=mock_config, bucket="custom")
+        store = InternalStore(
+            actor_id="test_actor", config=mock_config, bucket="custom"
+        )
 
         assert store._db.bucket == "custom"
 

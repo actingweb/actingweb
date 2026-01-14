@@ -128,6 +128,7 @@ class TrustRelationship:
         """Convert to dictionary."""
         return self._data.copy()
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -443,7 +444,9 @@ class TrustManager:
             # Update last accessed and established_via via DB layer without notifying peers
             try:
                 # Use the configured database backend
-                if not self._core_actor.config or not hasattr(self._core_actor.config, 'DbTrust'):
+                if not self._core_actor.config or not hasattr(
+                    self._core_actor.config, "DbTrust"
+                ):
                     logger.error("Database backend (DbTrust) not configured")
                     return False
                 db = self._core_actor.config.DbTrust.DbTrust()
@@ -496,7 +499,9 @@ class TrustManager:
             # Create a local trust record directly via DbTrust (no remote handshake)
             try:
                 # Use the configured database backend
-                if not self._core_actor.config or not hasattr(self._core_actor.config, 'DbTrust'):
+                if not self._core_actor.config or not hasattr(
+                    self._core_actor.config, "DbTrust"
+                ):
                     logger.error("Database backend (DbTrust) not configured")
                     return False
                 db = self._core_actor.config.DbTrust.DbTrust()

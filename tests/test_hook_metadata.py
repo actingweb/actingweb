@@ -27,12 +27,21 @@ class TestHookMetadata:
         metadata = HookMetadata(
             description="Test description",
             input_schema={"type": "object", "properties": {"x": {"type": "number"}}},
-            output_schema={"type": "object", "properties": {"result": {"type": "number"}}},
+            output_schema={
+                "type": "object",
+                "properties": {"result": {"type": "number"}},
+            },
             annotations={"readOnlyHint": True, "idempotentHint": True},
         )
         assert metadata.description == "Test description"
-        assert metadata.input_schema == {"type": "object", "properties": {"x": {"type": "number"}}}
-        assert metadata.output_schema == {"type": "object", "properties": {"result": {"type": "number"}}}
+        assert metadata.input_schema == {
+            "type": "object",
+            "properties": {"x": {"type": "number"}},
+        }
+        assert metadata.output_schema == {
+            "type": "object",
+            "properties": {"result": {"type": "number"}},
+        }
         assert metadata.annotations == {"readOnlyHint": True, "idempotentHint": True}
 
     def test_partial_values(self) -> None:
@@ -49,6 +58,7 @@ class TestGetHookMetadata:
 
     def test_with_hook_metadata(self) -> None:
         """Test get_hook_metadata returns _hook_metadata when present."""
+
         def sample_hook(actor, name, data):
             return {"result": "ok"}
 
@@ -66,12 +76,16 @@ class TestGetHookMetadata:
 
     def test_fallback_to_mcp_metadata(self) -> None:
         """Test get_hook_metadata falls back to _mcp_metadata."""
+
         def sample_hook(actor, name, data):
             return {"result": "ok"}
 
         mcp_metadata = {
             "description": "MCP description",
-            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            },
             "output_schema": {"type": "array"},
             "annotations": {"destructiveHint": False},
         }
@@ -79,12 +93,16 @@ class TestGetHookMetadata:
 
         result = get_hook_metadata(sample_hook)
         assert result.description == "MCP description"
-        assert result.input_schema == {"type": "object", "properties": {"query": {"type": "string"}}}
+        assert result.input_schema == {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        }
         assert result.output_schema == {"type": "array"}
         assert result.annotations == {"destructiveHint": False}
 
     def test_hook_metadata_takes_precedence_over_mcp(self) -> None:
         """Test _hook_metadata takes precedence over _mcp_metadata."""
+
         def sample_hook(actor, name, data):
             return {"result": "ok"}
 
@@ -98,6 +116,7 @@ class TestGetHookMetadata:
 
     def test_returns_default_when_no_metadata(self) -> None:
         """Test get_hook_metadata returns defaults when no metadata."""
+
         def sample_hook(actor, name, data):
             return {"result": "ok"}
 
@@ -109,6 +128,7 @@ class TestGetHookMetadata:
 
     def test_mcp_metadata_none_description(self) -> None:
         """Test MCP metadata with None description converts to empty string."""
+
         def sample_hook(actor, name, data):
             return {"result": "ok"}
 
@@ -147,7 +167,11 @@ class TestHookRegistryMetadataLists:
         def method2(actor, name, data):
             return {"result": 2}
 
-        method1._hook_metadata = HookMetadata(description="Method 1 description", input_schema={"type": "object"}, annotations={"readOnlyHint": True})
+        method1._hook_metadata = HookMetadata(
+            description="Method 1 description",
+            input_schema={"type": "object"},
+            annotations={"readOnlyHint": True},
+        )
         method2._hook_metadata = HookMetadata(description="Method 2 description")
 
         registry.register_method_hook("method1", method1)
@@ -174,7 +198,9 @@ class TestHookRegistryMetadataLists:
         def action1(actor, name, data):
             return {"status": "ok"}
 
-        action1._hook_metadata = HookMetadata(description="Action 1 description", annotations={"destructiveHint": True})
+        action1._hook_metadata = HookMetadata(
+            description="Action 1 description", annotations={"destructiveHint": True}
+        )
 
         registry.register_action_hook("action1", action1)
 
@@ -390,12 +416,16 @@ class TestAutoSchemaGeneration:
             return {"result": "ok"}
 
         # Set explicit schema that differs from type hint
-        explicit_schema = {"type": "object", "properties": {"explicit_field": {"type": "number"}}}
+        explicit_schema = {
+            "type": "object",
+            "properties": {"explicit_field": {"type": "number"}},
+        }
         my_method._hook_metadata = HookMetadata(input_schema=explicit_schema)
 
         metadata = get_hook_metadata(my_method)
 
         # Should use explicit, not auto-generated
+        assert metadata.input_schema is not None
         assert metadata.input_schema == explicit_schema
         assert "explicit_field" in metadata.input_schema["properties"]
 

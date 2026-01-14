@@ -140,7 +140,12 @@ class DbAttribute:
 
     @staticmethod
     def conditional_update_attr(
-        actor_id=None, bucket=None, name=None, old_data=None, new_data=None, timestamp=None
+        actor_id=None,
+        bucket=None,
+        name=None,
+        old_data=None,
+        new_data=None,
+        timestamp=None,
     ):  # type: ignore[misc]
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -196,7 +201,9 @@ class DbAttribute:
 
             item.update(
                 actions=actions,  # type: ignore[arg-type]
-                condition=(Attribute.data == item.data),  # Atomic check against current value
+                condition=(
+                    Attribute.data == item.data
+                ),  # Atomic check against current value
             )
             return True
 

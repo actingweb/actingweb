@@ -661,7 +661,9 @@ class TrustPeerHandler(base_handler.BaseHandler):
                             f"trust_fully_approved_local hook triggered for {actor_id} <-> {peerid}"
                         )
             except Exception as e:
-                logger.error(f"Error triggering trust_fully_approved_local hook in PUT handler: {e}")
+                logger.error(
+                    f"Error triggering trust_fully_approved_local hook in PUT handler: {e}"
+                )
 
         # Update permissions if provided
         permissions_updated = True

@@ -21,6 +21,7 @@ Contents
    subscriptions
    property-lists
    hooks
+   async-hooks-migration
    mcp-quickstart
    mcp-applications
    web-ui
@@ -49,6 +50,7 @@ Data Management
 
 - **Property Lists** - Working with list-type properties and metadata
 - **Hooks** - Implementing lifecycle hooks for custom business logic
+- **Async/Await Hooks Migration** - Migrating to async hooks for better performance with FastAPI
 
 Integration
 ===========

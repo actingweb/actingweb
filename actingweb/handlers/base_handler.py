@@ -83,7 +83,9 @@ class BaseHandler:
 
         # Get or create ActorInterface
         registry = getattr(self.config, "service_registry", None)
-        actor_interface = ActorInterface(actor, service_registry=registry, hooks=self.hooks)
+        actor_interface = ActorInterface(
+            actor, service_registry=registry, hooks=self.hooks
+        )
 
         return AuthenticatedActorView(actor_interface, auth_context, self.hooks)
 

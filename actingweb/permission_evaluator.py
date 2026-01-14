@@ -378,7 +378,7 @@ class PermissionEvaluator:
         """
         try:
             # Use the configured database backend
-            if not self.config or not hasattr(self.config, 'DbTrust'):
+            if not self.config or not hasattr(self.config, "DbTrust"):
                 logger.error("Database backend (DbTrust) not configured")
                 return None
             db_trust = self.config.DbTrust.DbTrust()
@@ -419,7 +419,9 @@ class PermissionEvaluator:
 
         3. Mixed format (combines both approaches)
         """
-        logger.debug(f"Evaluating rules: target='{target}', operation='{operation}', rules={permission_rules}")
+        logger.debug(
+            f"Evaluating rules: target='{target}', operation='{operation}', rules={permission_rules}"
+        )
 
         # Check explicit denied patterns first (highest priority)
         if "denied" in permission_rules:
@@ -440,11 +442,15 @@ class PermissionEvaluator:
             patterns = permission_rules["patterns"]
             operations = permission_rules["operations"]
 
-            logger.debug(f"Pattern-based check: patterns={patterns}, operations={operations}")
+            logger.debug(
+                f"Pattern-based check: patterns={patterns}, operations={operations}"
+            )
 
             # Check if operation is allowed
             if operation not in operations:
-                logger.debug(f"Operation '{operation}' not in allowed operations {operations}")
+                logger.debug(
+                    f"Operation '{operation}' not in allowed operations {operations}"
+                )
                 return PermissionResult.DENIED
 
             # Check if target matches allowed patterns
@@ -454,7 +460,9 @@ class PermissionEvaluator:
                 if excluded and self._matches_any_pattern(target, excluded):
                     logger.debug(f"Target '{target}' matched excluded pattern")
                     return PermissionResult.DENIED
-                logger.debug(f"Target '{target}' matched pattern, operation '{operation}' allowed")
+                logger.debug(
+                    f"Target '{target}' matched pattern, operation '{operation}' allowed"
+                )
                 return PermissionResult.ALLOWED
             else:
                 # When patterns are explicitly defined, non-match means DENIED
@@ -465,11 +473,15 @@ class PermissionEvaluator:
                         f"Empty target with patterns {patterns} - allowing listing (filter at response level)"
                     )
                     return PermissionResult.NOT_FOUND
-                logger.debug(f"Target '{target}' did not match any patterns {patterns} - denying access")
+                logger.debug(
+                    f"Target '{target}' did not match any patterns {patterns} - denying access"
+                )
                 return PermissionResult.DENIED
 
         # No matching rule found (no patterns/operations configured at all)
-        logger.debug(f"No matching rule found for target='{target}', operation='{operation}'")
+        logger.debug(
+            f"No matching rule found for target='{target}', operation='{operation}'"
+        )
         return PermissionResult.NOT_FOUND
 
     def _matches_any_pattern(self, target: str, patterns: list[str]) -> bool:

@@ -614,9 +614,7 @@ class OAuth2CallbackHandler(BaseHandler):
         # Generate ActingWeb access token and store it
         www_access_token = self.config.new_token()
         actor_id_str = actor_instance.id or ""
-        session_manager.store_access_token(
-            www_access_token, actor_id_str, identifier
-        )
+        session_manager.store_access_token(www_access_token, actor_id_str, identifier)
 
         # Set session cookie with ActingWeb token (not Google token)
         cookie_max_age = 3600  # 1 hour - matches token TTL in session manager
@@ -736,15 +734,20 @@ class OAuth2CallbackHandler(BaseHandler):
         if not self.authenticator:
             logger.error("SPA OAuth: Authenticator not configured")
             parsed = urlparse(spa_redirect_url)
-            params = {"error": "server_error", "error_description": "OAuth not configured"}
-            spa_error_url = urlunparse((
-                parsed.scheme or "",
-                parsed.netloc or "",
-                parsed.path,
-                parsed.params,
-                urlencode(params),
-                parsed.fragment
-            ))
+            params = {
+                "error": "server_error",
+                "error_description": "OAuth not configured",
+            }
+            spa_error_url = urlunparse(
+                (
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    urlencode(params),
+                    parsed.fragment,
+                )
+            )
             self.response.set_status(302, "Found")
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
@@ -758,26 +761,37 @@ class OAuth2CallbackHandler(BaseHandler):
             pkce_session = session_manager.get_session(pkce_session_id)
             if pkce_session:
                 code_verifier = pkce_session.get("pkce_verifier")
-                logger.debug(f"Retrieved PKCE code verifier from session {pkce_session_id[:8]}...")
+                logger.debug(
+                    f"Retrieved PKCE code verifier from session {pkce_session_id[:8]}..."
+                )
                 # PKCE session will expire naturally (short TTL)
             else:
-                logger.warning(f"PKCE session {pkce_session_id[:8]}... not found or expired")
+                logger.warning(
+                    f"PKCE session {pkce_session_id[:8]}... not found or expired"
+                )
 
         # Exchange code for tokens NOW (single-use code)
-        token_data = self.authenticator.exchange_code_for_token(code, state, code_verifier=code_verifier)
+        token_data = self.authenticator.exchange_code_for_token(
+            code, state, code_verifier=code_verifier
+        )
         if not token_data or "access_token" not in token_data:
             logger.error("SPA OAuth: Failed to exchange authorization code")
             # Redirect to SPA with error
             parsed = urlparse(spa_redirect_url)
-            params = {"error": "token_exchange_failed", "error_description": "Failed to exchange authorization code"}
-            spa_error_url = urlunparse((
-                parsed.scheme or "",
-                parsed.netloc or "",
-                parsed.path,
-                parsed.params,
-                urlencode(params),
-                parsed.fragment
-            ))
+            params = {
+                "error": "token_exchange_failed",
+                "error_description": "Failed to exchange authorization code",
+            }
+            spa_error_url = urlunparse(
+                (
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    urlencode(params),
+                    parsed.fragment,
+                )
+            )
             self.response.set_status(302, "Found")
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
@@ -791,15 +805,20 @@ class OAuth2CallbackHandler(BaseHandler):
         if not user_info:
             logger.error("SPA OAuth: Failed to validate token")
             parsed = urlparse(spa_redirect_url)
-            params = {"error": "validation_failed", "error_description": "Token validation failed"}
-            spa_error_url = urlunparse((
-                parsed.scheme or "",
-                parsed.netloc or "",
-                parsed.path,
-                parsed.params,
-                urlencode(params),
-                parsed.fragment
-            ))
+            params = {
+                "error": "validation_failed",
+                "error_description": "Token validation failed",
+            }
+            spa_error_url = urlunparse(
+                (
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    urlencode(params),
+                    parsed.fragment,
+                )
+            )
             self.response.set_status(302, "Found")
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
@@ -817,15 +836,20 @@ class OAuth2CallbackHandler(BaseHandler):
         if not identifier:
             logger.error("SPA OAuth: Failed to extract identifier")
             parsed = urlparse(spa_redirect_url)
-            params = {"error": "identifier_failed", "error_description": "Could not extract user identifier"}
-            spa_error_url = urlunparse((
-                parsed.scheme or "",
-                parsed.netloc or "",
-                parsed.path,
-                parsed.params,
-                urlencode(params),
-                parsed.fragment
-            ))
+            params = {
+                "error": "identifier_failed",
+                "error_description": "Could not extract user identifier",
+            }
+            spa_error_url = urlunparse(
+                (
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    urlencode(params),
+                    parsed.fragment,
+                )
+            )
             self.response.set_status(302, "Found")
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
@@ -837,15 +861,20 @@ class OAuth2CallbackHandler(BaseHandler):
         if not actor_instance:
             logger.error("SPA OAuth: Failed to create actor")
             parsed = urlparse(spa_redirect_url)
-            params = {"error": "actor_failed", "error_description": "Failed to create user account"}
-            spa_error_url = urlunparse((
-                parsed.scheme or "",
-                parsed.netloc or "",
-                parsed.path,
-                parsed.params,
-                urlencode(params),
-                parsed.fragment
-            ))
+            params = {
+                "error": "actor_failed",
+                "error_description": "Failed to create user account",
+            }
+            spa_error_url = urlunparse(
+                (
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    urlencode(params),
+                    parsed.fragment,
+                )
+            )
             self.response.set_status(302, "Found")
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
@@ -888,15 +917,20 @@ class OAuth2CallbackHandler(BaseHandler):
                     f"SPA OAuth success hook rejected authentication for {identifier}"
                 )
                 parsed = urlparse(spa_redirect_url)
-                params = {"error": "auth_rejected", "error_description": "Authentication rejected by application"}
-                spa_error_url = urlunparse((
-                    parsed.scheme or "",
-                    parsed.netloc or "",
-                    parsed.path,
-                    parsed.params,
-                    urlencode(params),
-                    parsed.fragment
-                ))
+                params = {
+                    "error": "auth_rejected",
+                    "error_description": "Authentication rejected by application",
+                }
+                spa_error_url = urlunparse(
+                    (
+                        parsed.scheme or "",
+                        parsed.netloc or "",
+                        parsed.path,
+                        parsed.params,
+                        urlencode(params),
+                        parsed.fragment,
+                    )
+                )
                 self.response.set_status(302, "Found")
                 self.response.set_redirect(spa_error_url)
                 return {"redirect_required": True, "redirect_url": spa_error_url}
@@ -906,7 +940,9 @@ class OAuth2CallbackHandler(BaseHandler):
         actor_id_str = actor_instance.id or ""
         session_manager.store_access_token(spa_access_token, actor_id_str, identifier)
 
-        spa_refresh_token = session_manager.create_refresh_token(actor_id_str, identifier)
+        spa_refresh_token = session_manager.create_refresh_token(
+            actor_id_str, identifier
+        )
 
         # Build return path
         return_path = state_extras.get("return_path", "/app")
@@ -947,14 +983,16 @@ class OAuth2CallbackHandler(BaseHandler):
         # Redirect to SPA callback with session token
         parsed = urlparse(spa_redirect_url)
         params = {"session": pending_session_id}
-        spa_callback_url = urlunparse((
-            parsed.scheme or "",
-            parsed.netloc or "",
-            parsed.path,
-            parsed.params,
-            urlencode(params),
-            parsed.fragment
-        ))
+        spa_callback_url = urlunparse(
+            (
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode(params),
+                parsed.fragment,
+            )
+        )
 
         logger.debug(f"SPA OAuth completed, redirecting to: {spa_callback_url}")
         self.response.set_status(302, "Found")

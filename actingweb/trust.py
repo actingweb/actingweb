@@ -85,11 +85,16 @@ class Trust:
                     # Pass the trust's actor_id to ensure tokens are revoked in the correct actor
                     # (the client registry lookup might return a different actor_id)
                     from .oauth2_server.client_registry import get_mcp_client_registry
+
                     registry = get_mcp_client_registry(self.config)
                     registry.delete_client(client_id, actor_id=self.actor_id)
-                    logger.info(f"Deleted OAuth2 client {client_id} as part of trust deletion")
+                    logger.info(
+                        f"Deleted OAuth2 client {client_id} as part of trust deletion"
+                    )
                 except Exception as e:
-                    logger.error(f"Error deleting OAuth2 client during trust deletion: {e}")
+                    logger.error(
+                        f"Error deleting OAuth2 client during trust deletion: {e}"
+                    )
                     # Continue with trust deletion even if client deletion fails
 
         self.trust = {}
@@ -106,9 +111,9 @@ class Trust:
 
         # Check if this is an OAuth2 client trust based on peer_id format or metadata
         return (
-            str(peerid).startswith("oauth2_client:") or
-            established_via == "oauth2_client" or
-            trust_type in ("oauth2_client", "mcp_client")
+            str(peerid).startswith("oauth2_client:")
+            or established_via == "oauth2_client"
+            or trust_type in ("oauth2_client", "mcp_client")
         )
 
     def _extract_client_id_from_peerid(self) -> str | None:

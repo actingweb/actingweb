@@ -214,7 +214,9 @@ class TestGetResource:
         mock_response.content = b"{}"
         mock_response.json.return_value = {}
 
-        with patch("actingweb.aw_proxy.requests.get", return_value=mock_response) as mock_get:
+        with patch(
+            "actingweb.aw_proxy.requests.get", return_value=mock_response
+        ) as mock_get:
             proxy.get_resource(path="search", params={"q": "test"})
 
         # Verify URL includes query params
@@ -225,7 +227,9 @@ class TestGetResource:
         """Test get_resource returns error dict on exception."""
         proxy = self._create_proxy_with_trust()
 
-        with patch("actingweb.aw_proxy.requests.get", side_effect=Exception("Network error")):
+        with patch(
+            "actingweb.aw_proxy.requests.get", side_effect=Exception("Network error")
+        ):
             result = proxy.get_resource(path="some/path")
 
         assert result is not None
@@ -398,7 +402,9 @@ class TestDeleteResource:
         mock_response.status_code = 204
         mock_response.content = b""
 
-        with patch("actingweb.aw_proxy.requests.delete", return_value=mock_response) as mock_delete:
+        with patch(
+            "actingweb.aw_proxy.requests.delete", return_value=mock_response
+        ) as mock_delete:
             proxy.delete_resource(path="items/123")
 
         mock_delete.assert_called_once()
@@ -434,7 +440,9 @@ class TestMaybeRetryWithBasic:
         mock_response = Mock()
         mock_response.status_code = 200
 
-        with patch("actingweb.aw_proxy.requests.get", return_value=mock_response) as mock_get:
+        with patch(
+            "actingweb.aw_proxy.requests.get", return_value=mock_response
+        ) as mock_get:
             result = proxy._maybe_retry_with_basic("GET", "https://example.com/path")
 
         assert result == mock_response
@@ -447,7 +455,9 @@ class TestMaybeRetryWithBasic:
         mock_response = Mock()
         mock_response.status_code = 201
 
-        with patch("actingweb.aw_proxy.requests.post", return_value=mock_response) as mock_post:
+        with patch(
+            "actingweb.aw_proxy.requests.post", return_value=mock_response
+        ) as mock_post:
             result = proxy._maybe_retry_with_basic(
                 "POST", "https://example.com/path", data='{"key": "value"}'
             )
@@ -488,7 +498,9 @@ class TestURLConstruction:
         mock_response.content = b"{}"
         mock_response.json.return_value = {}
 
-        with patch("actingweb.aw_proxy.requests.get", return_value=mock_response) as mock_get:
+        with patch(
+            "actingweb.aw_proxy.requests.get", return_value=mock_response
+        ) as mock_get:
             proxy.get_resource(path="/path/to/resource/")
 
         call_args = mock_get.call_args
@@ -506,7 +518,9 @@ class TestURLConstruction:
         mock_response.content = b"{}"
         mock_response.json.return_value = {}
 
-        with patch("actingweb.aw_proxy.requests.get", return_value=mock_response) as mock_get:
+        with patch(
+            "actingweb.aw_proxy.requests.get", return_value=mock_response
+        ) as mock_get:
             proxy.get_resource(path="path/to/resource")
 
         call_args = mock_get.call_args

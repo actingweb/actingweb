@@ -245,7 +245,9 @@ class TestHookDecorators:
 
             @app.property_hook("notes")
             def handle_notes(
-                actor, name, data  # noqa: ARG001  # pylint: disable=unused-argument
+                actor,
+                name,
+                data,  # noqa: ARG001  # pylint: disable=unused-argument
             ):
                 return {"status": "ok"}
 
@@ -261,7 +263,9 @@ class TestHookDecorators:
 
             @app.callback_hook("ping")
             def handle_ping(
-                actor, name, data  # noqa: ARG001  # pylint: disable=unused-argument
+                actor,
+                name,
+                data,  # noqa: ARG001  # pylint: disable=unused-argument
             ):
                 return {"status": "pong"}
 
@@ -293,7 +297,9 @@ class TestHookDecorators:
 
             @app.method_hook("custom_method")
             def handle_custom_method(
-                actor, name, data  # noqa: ARG001  # pylint: disable=unused-argument
+                actor,
+                name,
+                data,  # noqa: ARG001  # pylint: disable=unused-argument
             ):
                 return {"result": "done"}
 
@@ -309,7 +315,9 @@ class TestHookDecorators:
 
             @app.action_hook("search")
             def handle_search(
-                actor, name, data  # noqa: ARG001  # pylint: disable=unused-argument
+                actor,
+                name,
+                data,  # noqa: ARG001  # pylint: disable=unused-argument
             ):
                 return []
 

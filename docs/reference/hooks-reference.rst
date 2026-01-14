@@ -346,6 +346,149 @@ Action hooks also support auto-schema generation from TypedDict type hints:
         delete_from_database(data["record_id"])
         return {"status": "deleted"}
 
+Async/Await Support
+===================
+
+**New in v3.9.0**: All ActingWeb hooks now support native async/await syntax. This enables efficient handling of I/O-bound operations without blocking the event loop in async frameworks like FastAPI.
+
+When to Use Async Hooks
+------------------------
+
+Use ``async def`` for hooks that need to call async services:
+
+- **Async HTTP clients** (aiohttp, httpx)
+- **Async database operations** (asyncpg, motor)
+- **Async AWS services** (aioboto3, async AWS Bedrock)
+- **Async AwProxy methods** (``send_message_async()``, ``fetch_property_async()``)
+- **Any async I/O operations**
+
+Performance Benefits
+--------------------
+
+**FastAPI**: Async hooks execute natively without thread pool overhead, allowing true concurrent execution.
+
+**Flask**: Async hooks are executed via ``asyncio.run()``, providing compatibility with async libraries.
+
+Async Method Hooks
+------------------
+
+.. code-block:: python
+
+    import aiohttp
+
+    @app.method_hook("fetch_data")
+    async def async_fetch(actor, method_name, data):
+        """Async method hook using aiohttp."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(data["url"]) as response:
+                content = await response.text()
+        return {"content": content, "status": response.status}
+
+Async Action Hooks
+------------------
+
+.. code-block:: python
+
+    from actingweb.interface import AwProxy
+
+    @app.action_hook("send_notification")
+    async def async_notify(actor, action_name, data):
+        """Async action hook using AwProxy."""
+        proxy = AwProxy(config)
+
+        # Use async methods for peer communication
+        result = await proxy.send_message_async(
+            peer_url=data["peer_url"],
+            message=data["message"],
+            secret=actor.get_trust_secret(data["peer_id"])
+        )
+
+        return {"sent": result is not None}
+
+Async Property Hooks
+--------------------
+
+.. code-block:: python
+
+    import asyncpg
+
+    @app.property_hook("user_profile")
+    async def async_property(actor, operation, value, path):
+        """Async property hook with database access."""
+        if operation == "get":
+            # Fetch from async database
+            conn = await asyncpg.connect("postgresql://...")
+            profile = await conn.fetchrow(
+                "SELECT * FROM profiles WHERE actor_id = $1",
+                actor.id
+            )
+            await conn.close()
+            return dict(profile) if profile else None
+
+        return value
+
+Async Lifecycle Hooks
+----------------------
+
+.. code-block:: python
+
+    @app.lifecycle_hook("actor_created")
+    async def async_onCreate(actor, **kwargs):
+        """Async lifecycle hook for actor creation."""
+        # Initialize with async service
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                "https://analytics.example.com/events",
+                json={"event": "actor_created", "actor_id": actor.id}
+            )
+
+Mixed Sync and Async Hooks
+---------------------------
+
+You can use both synchronous and asynchronous hooks in the same application:
+
+.. code-block:: python
+
+    @app.method_hook("quick_calc")
+    def sync_method(actor, method_name, data):
+        """Synchronous CPU-bound operation."""
+        return {"result": data["x"] + data["y"]}
+
+    @app.method_hook("fetch_data")
+    async def async_method(actor, method_name, data):
+        """Asynchronous I/O-bound operation."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(data["url"]) as resp:
+                return {"data": await resp.text()}
+
+The framework automatically detects whether a hook is sync or async and handles execution appropriately.
+
+Framework-Specific Behavior
+----------------------------
+
+**FastAPI**:
+  - Async hooks are executed natively without thread pool
+  - Optimal for concurrent request handling
+  - Uses ``AsyncMethodsHandler`` and ``AsyncActionsHandler`` automatically
+
+**Flask**:
+  - Async hooks are executed via ``asyncio.run()``
+  - Compatible with async libraries but not truly concurrent
+  - Falls back to standard ``MethodsHandler`` and ``ActionsHandler``
+
+Best Practices
+--------------
+
+1. **Use async for I/O**: Network requests, database queries, file operations
+2. **Use sync for CPU**: Calculations, data transformations, quick operations
+3. **Don't mix unnecessarily**: If all operations are sync, keep hooks sync
+4. **Test both paths**: Ensure hooks work in both FastAPI and Flask contexts
+
+Backward Compatibility
+----------------------
+
+All existing synchronous hooks continue to work without changes. The async support is opt-in via ``async def`` syntax.
+
 API Discovery
 =============
 

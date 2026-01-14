@@ -448,7 +448,9 @@ class OAuth2Authenticator:
         try:
             import httpx
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0)
+            ) as client:
                 response = await client.get(
                     url=self.provider.userinfo_uri,
                     headers=headers,

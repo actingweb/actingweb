@@ -29,7 +29,9 @@ class TestPropertyNotifications:
             },
             auth=(actor1["creator"], actor1["passphrase"]),
         )
-        assert response.status_code in [200, 201, 204], f"Subscription failed: {response.text}"
+        assert response.status_code in [200, 201, 204], (
+            f"Subscription failed: {response.text}"
+        )
 
         # Get subscription ID from response or Location header
         if response.status_code in [200, 201]:
@@ -55,7 +57,9 @@ class TestPropertyNotifications:
             get_url,
             headers={"Authorization": f"Bearer {trust['secret']}"},
         )
-        assert response.status_code == 200, f"Failed to get subscription from {get_url}: {response.text}"
+        assert response.status_code == 200, (
+            f"Failed to get subscription from {get_url}: {response.text}"
+        )
         subscription_data = response.json()
         diffs = subscription_data.get("data", [])
 
@@ -63,9 +67,13 @@ class TestPropertyNotifications:
         # Check the diff data contains the property update
         diff_data = diffs[0]["data"]
         assert "status" in diff_data, f"Expected 'status' in diff data: {diff_data}"
-        assert diff_data["status"] == "active", f"Expected 'active', got {diff_data['status']}"
+        assert diff_data["status"] == "active", (
+            f"Expected 'active', got {diff_data['status']}"
+        )
 
-    def test_delete_property_triggers_subscription_diff(self, actor_factory, trust_helper):
+    def test_delete_property_triggers_subscription_diff(
+        self, actor_factory, trust_helper
+    ):
         """Test that DELETE /{actor_id}/properties/{name} triggers subscription diff."""
         # Create two actors
         actor1 = actor_factory.create("subscriber@example.com")
@@ -128,7 +136,9 @@ class TestPropertyNotifications:
         diff_data = diffs[0]["data"]
         assert "temp_data" in diff_data, f"Expected 'temp_data' in diff: {diff_data}"
 
-    def test_post_properties_triggers_subscription_diff(self, actor_factory, trust_helper):
+    def test_post_properties_triggers_subscription_diff(
+        self, actor_factory, trust_helper
+    ):
         """Test that POST /{actor_id}/properties triggers subscription diff."""
         # Create two actors
         actor1 = actor_factory.create("subscriber@example.com")
@@ -185,7 +195,9 @@ class TestPropertyNotifications:
         assert "key1" in all_diff_data
         assert "key2" in all_diff_data
 
-    def test_diff_contains_correct_subtarget_and_blob(self, actor_factory, trust_helper):
+    def test_diff_contains_correct_subtarget_and_blob(
+        self, actor_factory, trust_helper
+    ):
         """Test that diff contains correct subtarget and blob content."""
         actor1 = actor_factory.create("subscriber@example.com")
         actor2 = actor_factory.create("publisher@example.com")

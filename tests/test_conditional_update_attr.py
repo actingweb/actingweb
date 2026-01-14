@@ -111,7 +111,9 @@ class TestConditionalUpdateAttrBasic:
             new_data=new_data,
         )
 
-        assert result is False, "Conditional update should fail when old_data doesn't match"
+        assert result is False, (
+            "Conditional update should fail when old_data doesn't match"
+        )
 
         # Verify the data was NOT updated
         retrieved = db_attr.get_attr(
@@ -177,7 +179,9 @@ class TestConditionalUpdateAttrBasic:
             new_data={"value": "new"},
         )
 
-        assert result is False, "Conditional update should fail for non-existent attribute"
+        assert result is False, (
+            "Conditional update should fail for non-existent attribute"
+        )
 
     def test_conditional_update_invalid_params(self):
         """Test conditional update fails with invalid parameters."""
@@ -535,7 +539,9 @@ class TestTryMarkRefreshTokenUsed:
         session_mgr = OAuth2SessionManager(config=self.config)
 
         # Try to mark a token that doesn't exist
-        marked, returned_data = session_mgr.try_mark_refresh_token_used("nonexistent_token")
+        marked, returned_data = session_mgr.try_mark_refresh_token_used(
+            "nonexistent_token"
+        )
 
         assert marked is False, "Should fail for non-existent token"
         assert returned_data is None, "Should return None for non-existent token"

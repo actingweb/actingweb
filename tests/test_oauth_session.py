@@ -38,11 +38,23 @@ class TestOAuth2SessionManager:
                 bucket_data = test_self.storage.get(key, {})
                 return bucket_data.get(name)
 
-            def set_attr(test_self, actor_id, bucket, name, data, timestamp=None, ttl_seconds=None):  # type: ignore
+            def set_attr(
+                test_self,
+                actor_id,
+                bucket,
+                name,
+                data,
+                timestamp=None,
+                ttl_seconds=None,
+            ):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 if key not in test_self.storage:
                     test_self.storage[key] = {}
-                test_self.storage[key][name] = {"data": data, "timestamp": timestamp, "ttl_seconds": ttl_seconds}
+                test_self.storage[key][name] = {
+                    "data": data,
+                    "timestamp": timestamp,
+                    "ttl_seconds": ttl_seconds,
+                }
                 return True
 
             def delete_attr(test_self, actor_id, bucket, name):  # type: ignore

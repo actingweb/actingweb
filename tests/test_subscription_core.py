@@ -179,12 +179,17 @@ class TestSubscriptionCRUD:
         """Test subscription.delete() removes subscription."""
         mock_config = Mock()
         mock_db_subscription = Mock()
-        mock_db_subscription.get.return_value = {"id": "test_actor", "subscriptionid": "sub456"}
+        mock_db_subscription.get.return_value = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+        }
         mock_db_subscription.delete.return_value = True
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         mock_diff_list = Mock()
-        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = mock_diff_list
+        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = (
+            mock_diff_list
+        )
 
         sub = Subscription(
             actor_id="test_actor",
@@ -263,7 +268,10 @@ class TestSubscriptionDiffs:
         """Test add_diff returns False without blob."""
         mock_config = Mock()
         mock_db_subscription = Mock()
-        mock_db_subscription.get.return_value = {"id": "test_actor", "subscriptionid": "sub456"}
+        mock_db_subscription.get.return_value = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+        }
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         sub = Subscription(
@@ -281,7 +289,10 @@ class TestSubscriptionDiffs:
         """Test get_diff retrieves specific diff by seqnr."""
         mock_config = Mock()
         mock_db_subscription = Mock()
-        mock_db_subscription.get.return_value = {"id": "test_actor", "subscriptionid": "sub456"}
+        mock_db_subscription.get.return_value = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+        }
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         mock_diff = Mock()
@@ -304,7 +315,10 @@ class TestSubscriptionDiffs:
         """Test get_diff returns None for seqnr=0."""
         mock_config = Mock()
         mock_db_subscription = Mock()
-        mock_db_subscription.get.return_value = {"id": "test_actor", "subscriptionid": "sub456"}
+        mock_db_subscription.get.return_value = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+        }
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         sub = Subscription(
@@ -322,7 +336,10 @@ class TestSubscriptionDiffs:
         """Test get_diffs retrieves all diffs for subscription."""
         mock_config = Mock()
         mock_db_subscription = Mock()
-        mock_db_subscription.get.return_value = {"id": "test_actor", "subscriptionid": "sub456"}
+        mock_db_subscription.get.return_value = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+        }
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         mock_diff_list = Mock()
@@ -332,7 +349,9 @@ class TestSubscriptionDiffs:
             {"seqnr": 3, "diff": "diff3"},
         ]
         mock_diff_list.fetch.return_value = mock_diffs
-        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = mock_diff_list
+        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = (
+            mock_diff_list
+        )
 
         sub = Subscription(
             actor_id="test_actor",
@@ -350,7 +369,10 @@ class TestSubscriptionDiffs:
         """Test clear_diff removes specific diff."""
         mock_config = Mock()
         mock_db_subscription = Mock()
-        mock_db_subscription.get.return_value = {"id": "test_actor", "subscriptionid": "sub456"}
+        mock_db_subscription.get.return_value = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+        }
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         mock_diff = Mock()
@@ -373,11 +395,16 @@ class TestSubscriptionDiffs:
         """Test clear_diffs removes all diffs up to seqnr."""
         mock_config = Mock()
         mock_db_subscription = Mock()
-        mock_db_subscription.get.return_value = {"id": "test_actor", "subscriptionid": "sub456"}
+        mock_db_subscription.get.return_value = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+        }
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         mock_diff_list = Mock()
-        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = mock_diff_list
+        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = (
+            mock_diff_list
+        )
 
         sub = Subscription(
             actor_id="test_actor",
@@ -444,7 +471,9 @@ class TestSubscriptionsCollection:
         mock_config.DbSubscription.DbSubscriptionList.return_value = mock_db_sub_list
 
         mock_diff_list = Mock()
-        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = mock_diff_list
+        mock_config.DbSubscriptionDiff.DbSubscriptionDiffList.return_value = (
+            mock_diff_list
+        )
 
         subs = Subscriptions(actor_id="test_actor", config=mock_config)
         result = subs.delete()

@@ -71,11 +71,15 @@ class MCPClientRegistry:
         }
 
         # Store client in actor properties
-        logger.debug(f"register_client: storing client_id={client_id} for actor_id={actor_id}")
+        logger.debug(
+            f"register_client: storing client_id={client_id} for actor_id={actor_id}"
+        )
         self._store_client(actor_id, client_id, client_data)
 
         # Update global index
-        logger.debug(f"register_client: updating global index client_id={client_id} -> actor_id={actor_id}")
+        logger.debug(
+            f"register_client: updating global index client_id={client_id} -> actor_id={actor_id}"
+        )
         self._update_global_index(client_id, actor_id)
 
         # Create corresponding trust relationship for this OAuth2 client
@@ -244,6 +248,7 @@ class MCPClientRegistry:
 
             # Revoke all tokens for this client to terminate access immediately
             from .token_manager import get_actingweb_token_manager
+
             token_manager = get_actingweb_token_manager(self.config)
             revoked_count = token_manager.revoke_client_tokens(actor_id, client_id)
             logger.info(f"Revoked {revoked_count} tokens for client {client_id}")
@@ -358,11 +363,15 @@ class MCPClientRegistry:
             # Get the actor ID for this client
             actor_id_attr = global_bucket.get_attr(name=client_id)
             if not actor_id_attr or "data" not in actor_id_attr:
-                logger.debug(f"_load_from_global_index: client_id={client_id} not found in global index")
+                logger.debug(
+                    f"_load_from_global_index: client_id={client_id} not found in global index"
+                )
                 return None
 
             actor_id = actor_id_attr["data"]
-            logger.debug(f"_load_from_global_index: client_id={client_id} -> actor_id={actor_id} from global index")
+            logger.debug(
+                f"_load_from_global_index: client_id={client_id} -> actor_id={actor_id} from global index"
+            )
             if not actor_id:
                 return None
 
@@ -375,7 +384,9 @@ class MCPClientRegistry:
                 return None
 
             client_data: dict[str, Any] = client_attr["data"]
-            logger.debug(f"_load_from_global_index: loaded client_data for {client_id}, client_data.actor_id={client_data.get('actor_id')}")
+            logger.debug(
+                f"_load_from_global_index: loaded client_data for {client_id}, client_data.actor_id={client_data.get('actor_id')}"
+            )
 
             return client_data
 

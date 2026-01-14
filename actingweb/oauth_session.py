@@ -99,7 +99,9 @@ class OAuth2SessionManager:
             bucket=OAUTH_SESSION_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=session_id, data=session_data, ttl_seconds=OAUTH_SESSION_TTL)
+        bucket.set_attr(
+            name=session_id, data=session_data, ttl_seconds=OAUTH_SESSION_TTL
+        )
 
         logger.debug(
             f"Stored OAuth session {session_id[:8]}... for provider {provider}"
@@ -487,7 +489,9 @@ class OAuth2SessionManager:
         logger.debug("Marked refresh token as used")
         return True
 
-    def try_mark_refresh_token_used(self, token: str) -> tuple[bool, dict[str, Any] | None]:
+    def try_mark_refresh_token_used(
+        self, token: str
+    ) -> tuple[bool, dict[str, Any] | None]:
         """
         Atomically check if refresh token is unused and mark it as used.
 
@@ -539,7 +543,9 @@ class OAuth2SessionManager:
         new_data["used_at"] = int(time.time())
 
         # Try atomic compare-and-swap
-        success = bucket.conditional_update_attr(name=token, old_data=old_data, new_data=new_data)
+        success = bucket.conditional_update_attr(
+            name=token, old_data=old_data, new_data=new_data
+        )
 
         if success:
             logger.debug("Atomically marked refresh token as used")

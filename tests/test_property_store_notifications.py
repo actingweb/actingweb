@@ -17,7 +17,9 @@ class TestPropertyStoreNotifications:
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=None, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=None, config=None
+        )
         store["test_key"] = "test_value"
 
         # Verify register_diffs was called
@@ -34,7 +36,9 @@ class TestPropertyStoreNotifications:
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=None, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=None, config=None
+        )
         del store["test_key"]
 
         # Verify register_diffs was called with JSON-encoded empty string (deletion)
@@ -51,7 +55,9 @@ class TestPropertyStoreNotifications:
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=None, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=None, config=None
+        )
         store.set("test_key", "test_value")
 
         # Verify register_diffs was called
@@ -65,7 +71,9 @@ class TestPropertyStoreNotifications:
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=None, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=None, config=None
+        )
 
         # Mock __contains__ to return True
         with patch.object(store, "__contains__", return_value=True):
@@ -82,7 +90,9 @@ class TestPropertyStoreNotifications:
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=None, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=None, config=None
+        )
         store.update({"key1": "value1", "key2": "value2"})
 
         # Verify register_diffs was called twice (once per key)
@@ -92,11 +102,15 @@ class TestPropertyStoreNotifications:
         """Test that clear() calls register_diffs."""
         mock_core_store = Mock()
         mock_core_store.__setitem__ = Mock()
-        mock_core_store.get_all = Mock(return_value={"key1": "value1", "key2": "value2"})
+        mock_core_store.get_all = Mock(
+            return_value={"key1": "value1", "key2": "value2"}
+        )
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=None, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=None, config=None
+        )
         store.clear()
 
         # Should call register_diffs for each key + one for "clear all"
@@ -109,7 +123,9 @@ class TestPropertyStoreNotifications:
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=None, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=None, config=None
+        )
         store.set_without_notification("test_key", "test_value")
 
         # Verify register_diffs was NOT called
@@ -129,7 +145,9 @@ class TestPropertyStoreNotifications:
         # Mock hook execution to return transformed value
         mock_hooks.execute_property_hooks = Mock(return_value="transformed_value")
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=mock_hooks, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=mock_hooks, config=None
+        )
         store["test_key"] = "original_value"
 
         # Verify hook was called before storage
@@ -142,7 +160,9 @@ class TestPropertyStoreNotifications:
         assert call_args[0][4] == ["test_key"]  # path
 
         # Verify transformed value was stored
-        mock_core_store.__setitem__.assert_called_once_with("test_key", "transformed_value")
+        mock_core_store.__setitem__.assert_called_once_with(
+            "test_key", "transformed_value"
+        )
 
     def test_hook_can_transform_value(self):
         """Test that hooks can transform values before storage."""
@@ -158,7 +178,9 @@ class TestPropertyStoreNotifications:
 
         mock_hooks.execute_property_hooks = Mock(side_effect=transform_hook)
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=mock_hooks, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=mock_hooks, config=None
+        )
         store["test_key"] = "lowercase"
 
         # Verify uppercase value was stored
@@ -175,8 +197,12 @@ class TestPropertyStoreNotifications:
         # Hook returns None (should store original value per current implementation)
         mock_hooks.execute_property_hooks = Mock(return_value=None)
 
-        store = PropertyStore(mock_core_store, actor=mock_actor, hooks=mock_hooks, config=None)
+        store = PropertyStore(
+            mock_core_store, actor=mock_actor, hooks=mock_hooks, config=None
+        )
         store["test_key"] = "original_value"
 
         # Current implementation stores original value when hook returns None
-        mock_core_store.__setitem__.assert_called_once_with("test_key", "original_value")
+        mock_core_store.__setitem__.assert_called_once_with(
+            "test_key", "original_value"
+        )

@@ -63,9 +63,7 @@ class TestAsyncOperations:
             auth=(actor2["creator"], actor2["passphrase"]),
         )
 
-    def test_subscription_to_peer_completes_within_timeout(
-        self, test_app, peer_app
-    ):
+    def test_subscription_to_peer_completes_within_timeout(self, test_app, peer_app):
         """Test that creating subscription to peer completes within timeout."""
         # Create actors
         response = requests.post(
@@ -141,7 +139,9 @@ class TestAsyncOperations:
         elapsed = time.time() - start_time
 
         # Subscription creation should succeed
-        assert response.status_code in [200, 201, 202, 204], f"Subscription failed: {response.text}"
+        assert response.status_code in [200, 201, 202, 204], (
+            f"Subscription failed: {response.text}"
+        )
 
         # Should complete within 10 seconds
         assert elapsed < 10.0, f"Subscription took {elapsed}s, expected < 10s"
@@ -255,9 +255,7 @@ class TestAsyncOperations:
         for elapsed in results:
             assert elapsed < 5.0, f"Individual request took {elapsed}s"
 
-    def test_two_actor_trust_handshake_completes(
-        self, test_app, peer_app
-    ):
+    def test_two_actor_trust_handshake_completes(self, test_app, peer_app):
         """Test complete bidirectional trust establishment between two servers."""
         # Create actor on test_app
         response = requests.post(

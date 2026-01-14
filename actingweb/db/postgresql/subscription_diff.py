@@ -121,7 +121,9 @@ class DbSubscriptionDiff:
                     }
 
         except Exception as e:
-            logger.error(f"Error retrieving subscription diff {actor_id}/{subid}/{seqnr}: {e}")
+            logger.error(
+                f"Error retrieving subscription diff {actor_id}/{subid}/{seqnr}: {e}"
+            )
             return None
 
     def create(
@@ -177,7 +179,9 @@ class DbSubscriptionDiff:
             return True
 
         except Exception as e:
-            logger.error(f"Error creating subscription diff {actor_id}/{subid}/{seqnr}: {e}")
+            logger.error(
+                f"Error creating subscription diff {actor_id}/{subid}/{seqnr}: {e}"
+            )
             return False
 
     def delete(self) -> bool:
@@ -216,7 +220,9 @@ class DbSubscriptionDiff:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting subscription diff {actor_id}/{subid_seqnr}: {e}")
+            logger.error(
+                f"Error deleting subscription diff {actor_id}/{subid_seqnr}: {e}"
+            )
             return False
 
 
@@ -370,5 +376,7 @@ class DbSubscriptionDiffList:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting subscription diffs for actor {self.actor_id}: {e}")
+            logger.error(
+                f"Error deleting subscription diffs for actor {self.actor_id}: {e}"
+            )
             return False

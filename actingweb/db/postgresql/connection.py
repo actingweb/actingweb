@@ -50,7 +50,9 @@ def get_connection_string() -> str:
 
     # Build connection string
     if password:
-        conninfo = f"host={host} port={port} dbname={database} user={user} password={password}"
+        conninfo = (
+            f"host={host} port={port} dbname={database} user={user} password={password}"
+        )
     else:
         conninfo = f"host={host} port={port} dbname={database} user={user}"
 

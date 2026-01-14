@@ -397,7 +397,9 @@ class Auth:
 
                 self.actor = actor.Actor(actor_id, config=self.config)
                 if not self.actor.id:
-                    logger.warning(f"SPA token references non-existent actor {actor_id}")
+                    logger.warning(
+                        f"SPA token references non-existent actor {actor_id}"
+                    )
                     return False
 
             # SPA token is valid and for the correct actor
@@ -484,7 +486,9 @@ class Auth:
                 return False
 
             # Use async validation for non-blocking network request
-            user_info = await authenticator.validate_token_and_get_user_info_async(token)
+            user_info = await authenticator.validate_token_and_get_user_info_async(
+                token
+            )
             if not user_info:
                 return False
 

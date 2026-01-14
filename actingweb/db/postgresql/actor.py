@@ -214,7 +214,7 @@ class DbActor:
                     cur.execute(
                         f"""
                         UPDATE actors
-                        SET {', '.join(updates)}
+                        SET {", ".join(updates)}
                         WHERE id = %s
                         """,
                         tuple(params),

@@ -229,7 +229,10 @@ class DbTrustProtocol(Protocol):
     handle: Any | None
 
     def get(
-        self, actor_id: str | None = None, peerid: str | None = None, token: str | None = None
+        self,
+        actor_id: str | None = None,
+        peerid: str | None = None,
+        token: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Retrieve trust from database.
@@ -729,7 +732,10 @@ class DbAttributeProtocol(Protocol):
         ...
 
     def delete_attr(
-        self, actor_id: str | None = None, bucket: str | None = None, name: str | None = None
+        self,
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
     ) -> bool:
         """
         Delete single attribute.
@@ -786,7 +792,9 @@ class DbAttributeBucketListProtocol(Protocol):
     """Protocol for attribute bucket list operations."""
 
     @staticmethod
-    def fetch(actor_id: str | None = None) -> dict[str, dict[str, dict[str, Any]]] | None:
+    def fetch(
+        actor_id: str | None = None,
+    ) -> dict[str, dict[str, dict[str, Any]]] | None:
         """
         Retrieve all attributes for an actor grouped by bucket.
 

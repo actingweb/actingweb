@@ -100,9 +100,7 @@ class FakeCoreActor:
 
         return True
 
-    def delete_reciprocal_trust(
-        self, peerid: str, delete_peer: bool = True
-    ) -> bool:
+    def delete_reciprocal_trust(self, peerid: str, delete_peer: bool = True) -> bool:
         """Mock delete_reciprocal_trust for testing."""
         if peerid in self._trusts:
             del self._trusts[peerid]
@@ -215,9 +213,7 @@ class TestTrustManagerModifyAndNotify:
         }
 
         manager = TrustManager(actor)  # type: ignore[arg-type]
-        result = manager.modify_and_notify(
-            peer_id="peer_1", relationship="friend"
-        )
+        result = manager.modify_and_notify(peer_id="peer_1", relationship="friend")
 
         assert result is True
         assert actor._trusts["peer_1"]["relationship"] == "friend"
@@ -331,9 +327,7 @@ class TestTrustManagerModifyAndNotify:
         actor = FakeCoreActor()
         manager = TrustManager(actor)  # type: ignore[arg-type]
 
-        result = manager.modify_and_notify(
-            peer_id="peer_999", relationship="friend"
-        )
+        result = manager.modify_and_notify(peer_id="peer_999", relationship="friend")
 
         assert result is False
 
@@ -538,9 +532,7 @@ class TestTrustManagerIntegration:
         )
 
         # First modification
-        manager.modify_and_notify(
-            peer_id="peer_1", relationship="acquaintance"
-        )
+        manager.modify_and_notify(peer_id="peer_1", relationship="acquaintance")
         assert actor._trusts["peer_1"]["relationship"] == "acquaintance"
 
         # Second modification

@@ -407,7 +407,9 @@ class ActingWebTokenManager:
                 actor_id=actor_id, bucket=self.auth_codes_bucket, config=self.config
             )
             # Auth codes expire in 10 minutes
-            auth_bucket.set_attr(name=code, data=auth_data, ttl_seconds=MCP_AUTH_CODE_TTL)
+            auth_bucket.set_attr(
+                name=code, data=auth_data, ttl_seconds=MCP_AUTH_CODE_TTL
+            )
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
@@ -417,7 +419,9 @@ class ActingWebTokenManager:
             )
             # Index entry gets slightly longer TTL
             index_bucket.set_attr(
-                name=code, data=actor_id, ttl_seconds=MCP_AUTH_CODE_TTL + INDEX_TTL_BUFFER
+                name=code,
+                data=actor_id,
+                ttl_seconds=MCP_AUTH_CODE_TTL + INDEX_TTL_BUFFER,
             )
 
             logger.info(f"Stored auth code for actor {actor_id}")
@@ -599,7 +603,9 @@ class ActingWebTokenManager:
                 actor_id=actor_id, bucket=self.tokens_bucket, config=self.config
             )
             # Access tokens expire in 1 hour
-            tokens_bucket.set_attr(name=token, data=token_data, ttl_seconds=MCP_ACCESS_TOKEN_TTL)
+            tokens_bucket.set_attr(
+                name=token, data=token_data, ttl_seconds=MCP_ACCESS_TOKEN_TTL
+            )
 
             # Also store in global index for efficient lookup
             index_bucket = attribute.Attributes(
@@ -609,7 +615,9 @@ class ActingWebTokenManager:
             )
             # Index entry gets slightly longer TTL
             index_bucket.set_attr(
-                name=token, data=actor_id, ttl_seconds=MCP_ACCESS_TOKEN_TTL + INDEX_TTL_BUFFER
+                name=token,
+                data=actor_id,
+                ttl_seconds=MCP_ACCESS_TOKEN_TTL + INDEX_TTL_BUFFER,
             )
 
             logger.info(f"Stored access token for actor {actor_id}")
@@ -792,7 +800,9 @@ class ActingWebTokenManager:
             )
             # Index entry gets slightly longer TTL
             index_bucket.set_attr(
-                name=token, data=actor_id, ttl_seconds=MCP_REFRESH_TOKEN_TTL + INDEX_TTL_BUFFER
+                name=token,
+                data=actor_id,
+                ttl_seconds=MCP_REFRESH_TOKEN_TTL + INDEX_TTL_BUFFER,
             )
 
             logger.info(f"Stored refresh token for actor {actor_id}")
@@ -1020,11 +1030,16 @@ class ActingWebTokenManager:
                 for token_name, token_attr in access_tokens_data.items():
                     if token_attr and "data" in token_attr:
                         token_data = token_attr["data"]
-                        if isinstance(token_data, dict) and token_data.get("client_id") == client_id:
+                        if (
+                            isinstance(token_data, dict)
+                            and token_data.get("client_id") == client_id
+                        ):
                             # Revoke this access token
                             self._remove_access_token(token_name)
                             revoked_count += 1
-                            logger.debug(f"Revoked access token {token_name} for client {client_id}")
+                            logger.debug(
+                                f"Revoked access token {token_name} for client {client_id}"
+                            )
 
             # Revoke all refresh tokens for this client
             refresh_bucket = attribute.Attributes(
@@ -1036,11 +1051,16 @@ class ActingWebTokenManager:
                 for token_name, token_attr in refresh_tokens_data.items():
                     if token_attr and "data" in token_attr:
                         token_data = token_attr["data"]
-                        if isinstance(token_data, dict) and token_data.get("client_id") == client_id:
+                        if (
+                            isinstance(token_data, dict)
+                            and token_data.get("client_id") == client_id
+                        ):
                             # Revoke this refresh token
                             self._remove_refresh_token(token_name)
                             revoked_count += 1
-                            logger.debug(f"Revoked refresh token {token_name} for client {client_id}")
+                            logger.debug(
+                                f"Revoked refresh token {token_name} for client {client_id}"
+                            )
 
             if revoked_count > 0:
                 logger.info(

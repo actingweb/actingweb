@@ -131,7 +131,9 @@ class TestMergePermissionsFunction:
                 "operations": ["read"],
             }
         }
-        override = {"properties": {"patterns": ["memory_*"], "operations": ["read", "write"]}}
+        override = {
+            "properties": {"patterns": ["memory_*"], "operations": ["read", "write"]}
+        }
 
         result = merge_permissions(base, override)
 
@@ -213,7 +215,9 @@ class TestMergePermissionsFunction:
                 "operations": ["read"],
             }
         }
-        override = {"properties": {"patterns": ["memory_*"], "operations": ["read", "write"]}}
+        override = {
+            "properties": {"patterns": ["memory_*"], "operations": ["read", "write"]}
+        }
 
         result = merge_permissions(base, override, merge_base=False)
 
@@ -290,7 +294,9 @@ class TestMergePermissionsFunction:
         """
         from actingweb.trust_permissions import merge_permissions
 
-        base = {"properties": {"patterns": ["public/*"], "excluded_patterns": ["private/*"]}}
+        base = {
+            "properties": {"patterns": ["public/*"], "excluded_patterns": ["private/*"]}
+        }
 
         result = merge_permissions(base, None)
 

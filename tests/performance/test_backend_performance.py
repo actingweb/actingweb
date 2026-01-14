@@ -63,7 +63,9 @@ class TestActorPerformance:
         def create_actor() -> bool:
             actor_id = f"perf_create_{int(time.time() * 1000000)}"
             db_actor = config.DbActor.DbActor()  # type: ignore[misc]
-            result = db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
+            result = db_actor.create(
+                actor_id=actor_id, creator="perf@test.com", passphrase="test123"
+            )
 
             # Cleanup
             db_actor.get(actor_id=actor_id)
@@ -77,9 +79,13 @@ class TestActorPerformance:
 
         # Print summary (only in non-parallel mode)
         if benchmark.stats:
-            print(f"\n{backend_name} actor create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} actor create: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_actor_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_actor_read_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure actor read time."""
         from actingweb.config import Config
 
@@ -94,9 +100,13 @@ class TestActorPerformance:
         assert result["id"] == sample_actor_id
 
         if benchmark.stats:
-            print(f"\n{backend_name} actor read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} actor read: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_actor_update_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_actor_update_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure actor update time."""
         from actingweb.config import Config
 
@@ -111,7 +121,9 @@ class TestActorPerformance:
         assert result is True
 
         if benchmark.stats:
-            print(f"\n{backend_name} actor update: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} actor update: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
     def test_actor_delete_performance(self, benchmark: Any, backend_name: str) -> None:
         """Measure actor deletion time."""
@@ -123,7 +135,9 @@ class TestActorPerformance:
             # Create actor
             actor_id = f"perf_delete_{int(time.time() * 1000000)}"
             db_actor = config.DbActor.DbActor()  # type: ignore[misc]
-            db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
+            db_actor.create(
+                actor_id=actor_id, creator="perf@test.com", passphrase="test123"
+            )
 
             # Delete actor
             db_actor.get(actor_id=actor_id)
@@ -133,14 +147,18 @@ class TestActorPerformance:
         assert result is True
 
         if benchmark.stats:
-            print(f"\n{backend_name} actor delete: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} actor delete: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
 
 @pytest.mark.benchmark
 class TestPropertyPerformance:
     """Benchmark property operations."""
 
-    def test_property_write_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_property_write_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure property write time."""
         from actingweb.config import Config
 
@@ -153,15 +171,21 @@ class TestPropertyPerformance:
             prop_counter[0] += 1
 
             db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
-            return db_property.set(actor_id=sample_actor_id, name=prop_name, value="test_value")
+            return db_property.set(
+                actor_id=sample_actor_id, name=prop_name, value="test_value"
+            )
 
         result = benchmark(write_property)
         assert result is True
 
         if benchmark.stats:
-            print(f"\n{backend_name} property write: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} property write: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_property_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_property_read_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure property read time."""
         from actingweb.config import Config
 
@@ -180,9 +204,13 @@ class TestPropertyPerformance:
         assert result == "test_value"
 
         if benchmark.stats:
-            print(f"\n{backend_name} property read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} property read: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_property_list_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_property_list_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure property list time."""
         from actingweb.config import Config
 
@@ -191,7 +219,9 @@ class TestPropertyPerformance:
         # Create 10 test properties
         for i in range(10):
             db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
-            db_property.set(actor_id=sample_actor_id, name=f"list_prop_{i}", value=f"value_{i}")
+            db_property.set(
+                actor_id=sample_actor_id, name=f"list_prop_{i}", value=f"value_{i}"
+            )
 
         def list_properties() -> dict[str, Any]:
             db_property_list = config.DbProperty.DbPropertyList()  # type: ignore[misc]
@@ -202,14 +232,18 @@ class TestPropertyPerformance:
         assert len(result) >= 10
 
         if benchmark.stats:
-            print(f"\n{backend_name} property list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} property list: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
 
 @pytest.mark.benchmark
 class TestTrustPerformance:
     """Benchmark trust operations."""
 
-    def test_trust_create_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_trust_create_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure trust creation time."""
         from actingweb.config import Config
 
@@ -234,9 +268,13 @@ class TestTrustPerformance:
         assert result is True
 
         if benchmark.stats:
-            print(f"\n{backend_name} trust create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} trust create: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_trust_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_trust_read_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure trust read time."""
         from actingweb.config import Config
 
@@ -263,9 +301,13 @@ class TestTrustPerformance:
         assert result["peerid"] == peerid
 
         if benchmark.stats:
-            print(f"\n{backend_name} trust read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} trust read: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_trust_list_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_trust_list_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure trust list time."""
         from actingweb.config import Config
 
@@ -291,14 +333,18 @@ class TestTrustPerformance:
         assert len(result) >= 5
 
         if benchmark.stats:
-            print(f"\n{backend_name} trust list: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} trust list: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
 
 @pytest.mark.benchmark
 class TestSubscriptionPerformance:
     """Benchmark subscription operations."""
 
-    def test_subscription_create_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_subscription_create_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure subscription creation time."""
         from actingweb.config import Config
 
@@ -323,9 +369,13 @@ class TestSubscriptionPerformance:
         assert result is True
 
         if benchmark.stats:
-            print(f"\n{backend_name} subscription create: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} subscription create: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_subscription_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_subscription_read_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure subscription read time."""
         from actingweb.config import Config
 
@@ -345,21 +395,27 @@ class TestSubscriptionPerformance:
 
         def read_subscription() -> dict[str, Any] | None:
             db_subscription = config.DbSubscription.DbSubscription()  # type: ignore[misc]
-            return db_subscription.get(actor_id=sample_actor_id, peerid=peerid, subid=subid)
+            return db_subscription.get(
+                actor_id=sample_actor_id, peerid=peerid, subid=subid
+            )
 
         result = benchmark(read_subscription)
         assert result is not None
         assert result["subscriptionid"] == subid
 
         if benchmark.stats:
-            print(f"\n{backend_name} subscription read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} subscription read: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
 
 @pytest.mark.benchmark
 class TestAttributePerformance:
     """Benchmark attribute operations (internal storage)."""
 
-    def test_attribute_write_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_attribute_write_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure attribute write time."""
         from actingweb.config import Config
 
@@ -381,9 +437,13 @@ class TestAttributePerformance:
         assert result is True
 
         if benchmark.stats:
-            print(f"\n{backend_name} attribute write: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} attribute write: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
-    def test_attribute_read_performance(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_attribute_read_performance(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure attribute read time."""
         from actingweb.config import Config
 
@@ -408,14 +468,18 @@ class TestAttributePerformance:
         assert result["data"]["key"] == "value"
 
         if benchmark.stats:
-            print(f"\n{backend_name} attribute read: {benchmark.stats.stats.mean * 1000:.2f}ms avg")
+            print(
+                f"\n{backend_name} attribute read: {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
 
 
 @pytest.mark.benchmark
 class TestBulkOperations:
     """Benchmark bulk operations."""
 
-    def test_bulk_property_write(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_bulk_property_write(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure bulk property writes (100 properties)."""
         from actingweb.config import Config
 
@@ -425,7 +489,9 @@ class TestBulkOperations:
             count = 0
             for i in range(100):
                 db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
-                if db_property.set(actor_id=sample_actor_id, name=f"bulk_{i}", value=f"value_{i}"):
+                if db_property.set(
+                    actor_id=sample_actor_id, name=f"bulk_{i}", value=f"value_{i}"
+                ):
                     count += 1
             return count
 
@@ -439,7 +505,9 @@ class TestBulkOperations:
                 f"\n{backend_name} bulk write (100 props): {total_time * 1000:.2f}ms total, {per_write * 1000:.2f}ms per write"
             )
 
-    def test_bulk_property_read(self, benchmark: Any, backend_name: str, sample_actor_id: str) -> None:
+    def test_bulk_property_read(
+        self, benchmark: Any, backend_name: str, sample_actor_id: str
+    ) -> None:
         """Measure bulk property reads (100 properties)."""
         from actingweb.config import Config
 
@@ -448,7 +516,9 @@ class TestBulkOperations:
         # Create test properties
         for i in range(100):
             db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
-            db_property.set(actor_id=sample_actor_id, name=f"bulk_read_{i}", value=f"value_{i}")
+            db_property.set(
+                actor_id=sample_actor_id, name=f"bulk_read_{i}", value=f"value_{i}"
+            )
 
         def bulk_read_properties() -> int:
             count = 0
@@ -486,7 +556,9 @@ def test_performance_summary(backend_name: str) -> None:
     print(f"{'=' * 60}")
     print("\nRun pytest with -v flag to see detailed timing for each test")
     print("\nFor JSON output with statistics:")
-    print(f"  DATABASE_BACKEND={backend_name} pytest tests/performance/ --benchmark-json={backend_name}_results.json")
+    print(
+        f"  DATABASE_BACKEND={backend_name} pytest tests/performance/ --benchmark-json={backend_name}_results.json"
+    )
     print("\nFor side-by-side comparison:")
     print("  poetry add pytest-benchmark")
     print("  pytest tests/performance/ --benchmark-compare")

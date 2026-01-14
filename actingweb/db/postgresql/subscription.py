@@ -82,7 +82,9 @@ class DbSubscription:
                     return result
 
         except Exception as e:
-            logger.error(f"Error retrieving subscription {actor_id}/{peerid}/{subid}: {e}")
+            logger.error(
+                f"Error retrieving subscription {actor_id}/{peerid}/{subid}: {e}"
+            )
             return None
 
     def create(
@@ -166,7 +168,9 @@ class DbSubscription:
             return True
 
         except Exception as e:
-            logger.error(f"Error creating subscription {actor_id}/{peerid}/{subid}: {e}")
+            logger.error(
+                f"Error creating subscription {actor_id}/{peerid}/{subid}: {e}"
+            )
             return False
 
     def modify(
@@ -266,7 +270,7 @@ class DbSubscription:
                     cur.execute(
                         f"""
                         UPDATE subscriptions
-                        SET {', '.join(updates)}
+                        SET {", ".join(updates)}
                         WHERE id = %s AND peer_sub_id = %s
                         """,
                         tuple(params),

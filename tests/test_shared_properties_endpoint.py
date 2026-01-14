@@ -38,20 +38,23 @@ class TestSharedPropertiesEndpoint:
         mock_auth_result.auth_obj.acl = {"peerid": "peer-123"}
 
         # Mock trust relationship
-        mock_actor.get_trust_relationship = Mock(return_value={
-            "peerid": "peer-123",
-            "relationship": "friend"
-        })
+        mock_actor.get_trust_relationship = Mock(
+            return_value={"peerid": "peer-123", "relationship": "friend"}
+        )
 
         # Mock properties
-        mock_actor.get_properties = Mock(return_value={
-            "data_public": {"info": "public"},
-            "data_private": {"info": "private"},
-            "config_settings": {"theme": "dark"},
-        })
+        mock_actor.get_properties = Mock(
+            return_value={
+                "data_public": {"info": "public"},
+                "data_private": {"info": "private"},
+                "config_settings": {"theme": "dark"},
+            }
+        )
 
         with patch.object(handler, "authenticate_actor", return_value=mock_auth_result):
-            with patch("actingweb.handlers.trust.get_permission_evaluator") as mock_get_eval:
+            with patch(
+                "actingweb.handlers.trust.get_permission_evaluator"
+            ) as mock_get_eval:
                 mock_evaluator = Mock()
                 mock_get_eval.return_value = mock_evaluator
 
@@ -61,7 +64,9 @@ class TestSharedPropertiesEndpoint:
                         return PermissionResult.ALLOWED
                     return PermissionResult.DENIED
 
-                mock_evaluator.evaluate_property_access.side_effect = permission_side_effect
+                mock_evaluator.evaluate_property_access.side_effect = (
+                    permission_side_effect
+                )
 
                 # Call the handler
                 handler.get("actor-123", "friend", "peer-123")
@@ -156,7 +161,9 @@ class TestSharedPropertiesEndpoint:
         mock_actor.get_trust_relationship = Mock(return_value={"peerid": "peer-123"})
 
         with patch.object(handler, "authenticate_actor", return_value=mock_auth_result):
-            with patch("actingweb.handlers.trust.get_permission_evaluator") as mock_get_eval:
+            with patch(
+                "actingweb.handlers.trust.get_permission_evaluator"
+            ) as mock_get_eval:
                 mock_get_eval.return_value = None  # No evaluator
 
                 handler.get("actor-123", "friend", "peer-123")
@@ -185,15 +192,19 @@ class TestSharedPropertiesEndpoint:
         mock_actor.get_trust_relationship = Mock(return_value={"peerid": "peer-123"})
 
         # Mock multiple properties
-        mock_actor.get_properties = Mock(return_value={
-            "allowed_prop1": {},
-            "allowed_prop2": {},
-            "denied_prop1": {},
-            "denied_prop2": {},
-        })
+        mock_actor.get_properties = Mock(
+            return_value={
+                "allowed_prop1": {},
+                "allowed_prop2": {},
+                "denied_prop1": {},
+                "denied_prop2": {},
+            }
+        )
 
         with patch.object(handler, "authenticate_actor", return_value=mock_auth_result):
-            with patch("actingweb.handlers.trust.get_permission_evaluator") as mock_get_eval:
+            with patch(
+                "actingweb.handlers.trust.get_permission_evaluator"
+            ) as mock_get_eval:
                 mock_evaluator = Mock()
                 mock_get_eval.return_value = mock_evaluator
 
@@ -203,7 +214,9 @@ class TestSharedPropertiesEndpoint:
                         return PermissionResult.ALLOWED
                     return PermissionResult.DENIED
 
-                mock_evaluator.evaluate_property_access.side_effect = permission_side_effect
+                mock_evaluator.evaluate_property_access.side_effect = (
+                    permission_side_effect
+                )
 
                 handler.get("actor-123", "friend", "peer-123")
 

@@ -5,6 +5,7 @@ Provides a clean decorator-based system for registering hooks that respond
 to various ActingWeb events.
 """
 
+import asyncio
 import inspect
 import logging
 import types
@@ -149,7 +150,9 @@ def _typeddict_to_json_schema(typed_dict_class: type) -> dict[str, Any]:
     return schema
 
 
-def _get_auto_schemas(func: Callable[..., Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def _get_auto_schemas(
+    func: Callable[..., Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Extract input and output schemas from function type hints.
 
     Inspects the function's type hints to auto-generate JSON schemas:
@@ -269,8 +272,12 @@ def get_hook_metadata(func: Callable[..., Any]) -> HookMetadata:
         # Fill in auto-generated schemas if not explicitly provided
         return HookMetadata(
             description=metadata.description,
-            input_schema=metadata.input_schema if metadata.input_schema is not None else auto_input,
-            output_schema=metadata.output_schema if metadata.output_schema is not None else auto_output,
+            input_schema=metadata.input_schema
+            if metadata.input_schema is not None
+            else auto_input,
+            output_schema=metadata.output_schema
+            if metadata.output_schema is not None
+            else auto_output,
             annotations=metadata.annotations,
         )
 
@@ -506,6 +513,46 @@ class HookRegistry:
             self._action_hooks[action_name] = []
         self._action_hooks[action_name].append(func)
 
+    def _execute_hook_in_sync_context(
+        self, hook: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
+        """Execute a hook in sync context, handling both sync and async hooks.
+
+        For use in sync contexts only. In async contexts, use the _async methods.
+
+        - Sync hooks: Called directly
+        - Async hooks: Executed via asyncio.run() if no event loop exists,
+                       or via thread pool if already in an async context
+
+        Args:
+            hook: The hook function to execute
+            *args: Positional arguments to pass to the hook
+            **kwargs: Keyword arguments to pass to the hook
+
+        Returns:
+            Result from the hook execution
+        """
+        if inspect.iscoroutinefunction(hook):
+            try:
+                # Check if we're already in an async context
+                asyncio.get_running_loop()
+                # We're in an async context - caller should use _async variant
+                logger.warning(
+                    f"Async hook {hook.__name__} called from sync method in async context. "
+                    "Consider using execute_*_hooks_async() for better performance."
+                )
+                # Run in a thread pool to avoid event loop conflicts
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(asyncio.run, hook(*args, **kwargs))
+                    return future.result()
+            except RuntimeError:
+                # No running loop - safe to create one
+                return asyncio.run(hook(*args, **kwargs))
+        else:
+            return hook(*args, **kwargs)
+
     def execute_property_hooks(
         self,
         property_name: str,
@@ -655,7 +702,13 @@ class HookRegistry:
         data: Any,
         auth_context: dict[str, Any] | None = None,
     ) -> Any:
-        """Execute method hooks with transparent permission checking."""
+        """Execute method hooks with transparent permission checking.
+
+        Note: If you have async hooks and are in an async context,
+        use execute_method_hooks_async() instead for proper async execution.
+        Async hooks in this method will be executed via asyncio.run() which
+        may cause issues if already in an event loop.
+        """
         # Check permission before executing hooks
         if not self._check_hook_permission("method", method_name, actor, auth_context):
             logger.debug(f"Method hook permission denied for {method_name}")
@@ -667,7 +720,9 @@ class HookRegistry:
         if method_name in self._method_hooks:
             for hook in self._method_hooks[method_name]:
                 try:
-                    hook_result = hook(actor, method_name, data)
+                    hook_result = self._execute_hook_in_sync_context(
+                        hook, actor, method_name, data
+                    )
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
@@ -678,7 +733,9 @@ class HookRegistry:
         if result is None and "*" in self._method_hooks:
             for hook in self._method_hooks["*"]:
                 try:
-                    hook_result = hook(actor, method_name, data)
+                    hook_result = self._execute_hook_in_sync_context(
+                        hook, actor, method_name, data
+                    )
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
@@ -694,7 +751,13 @@ class HookRegistry:
         data: Any,
         auth_context: dict[str, Any] | None = None,
     ) -> Any:
-        """Execute action hooks with transparent permission checking."""
+        """Execute action hooks with transparent permission checking.
+
+        Note: If you have async hooks and are in an async context,
+        use execute_action_hooks_async() instead for proper async execution.
+        Async hooks in this method will be executed via asyncio.run() which
+        may cause issues if already in an event loop.
+        """
         # Check permission before executing hooks
         if not self._check_hook_permission("action", action_name, actor, auth_context):
             logger.debug(f"Action hook permission denied for {action_name}")
@@ -706,7 +769,9 @@ class HookRegistry:
         if action_name in self._action_hooks:
             for hook in self._action_hooks[action_name]:
                 try:
-                    hook_result = hook(actor, action_name, data)
+                    hook_result = self._execute_hook_in_sync_context(
+                        hook, actor, action_name, data
+                    )
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
@@ -717,12 +782,354 @@ class HookRegistry:
         if result is None and "*" in self._action_hooks:
             for hook in self._action_hooks["*"]:
                 try:
-                    hook_result = hook(actor, action_name, data)
+                    hook_result = self._execute_hook_in_sync_context(
+                        hook, actor, action_name, data
+                    )
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
                 except Exception as e:
                     logger.error(f"Error in wildcard action hook: {e}")
+
+        return result
+
+    # Async execution methods for native async/await support
+
+    async def execute_method_hooks_async(
+        self,
+        method_name: str,
+        actor: Any,
+        data: Any,
+        auth_context: dict[str, Any] | None = None,
+    ) -> Any:
+        """Execute method hooks with native async support.
+
+        Use this method when calling from an async context (FastAPI handlers).
+        Supports both sync and async hooks:
+        - Async hooks are awaited directly
+        - Sync hooks are called directly (sync-compatible)
+
+        Args:
+            method_name: Name of the method hook to execute
+            actor: ActorInterface instance
+            data: Request data/parameters
+            auth_context: Optional authentication context
+
+        Returns:
+            Result from the first successful hook, or None
+        """
+        # Permission check (sync - fast operation)
+        if not self._check_hook_permission("method", method_name, actor, auth_context):
+            logger.debug(f"Method hook permission denied for {method_name}")
+            return None
+
+        result = None
+
+        # Execute hooks for specific method
+        if method_name in self._method_hooks:
+            for hook in self._method_hooks[method_name]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(actor, method_name, data)
+                    else:
+                        hook_result = hook(actor, method_name, data)
+
+                    if hook_result is not None:
+                        result = hook_result
+                        break  # First successful hook wins
+                except Exception as e:
+                    logger.error(f"Error in method hook for {method_name}: {e}")
+
+        # Execute wildcard hooks if no specific hook handled it
+        if result is None and "*" in self._method_hooks:
+            for hook in self._method_hooks["*"]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(actor, method_name, data)
+                    else:
+                        hook_result = hook(actor, method_name, data)
+
+                    if hook_result is not None:
+                        result = hook_result
+                        break
+                except Exception as e:
+                    logger.error(f"Error in wildcard method hook: {e}")
+
+        return result
+
+    async def execute_action_hooks_async(
+        self,
+        action_name: str,
+        actor: Any,
+        data: Any,
+        auth_context: dict[str, Any] | None = None,
+    ) -> Any:
+        """Execute action hooks with native async support.
+
+        See execute_method_hooks_async for details.
+
+        Args:
+            action_name: Name of the action hook to execute
+            actor: ActorInterface instance
+            data: Request data/parameters
+            auth_context: Optional authentication context
+
+        Returns:
+            Result from the first successful hook, or None
+        """
+        if not self._check_hook_permission("action", action_name, actor, auth_context):
+            logger.debug(f"Action hook permission denied for {action_name}")
+            return None
+
+        result = None
+
+        if action_name in self._action_hooks:
+            for hook in self._action_hooks[action_name]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(actor, action_name, data)
+                    else:
+                        hook_result = hook(actor, action_name, data)
+
+                    if hook_result is not None:
+                        result = hook_result
+                        break
+                except Exception as e:
+                    logger.error(f"Error in action hook for {action_name}: {e}")
+
+        if result is None and "*" in self._action_hooks:
+            for hook in self._action_hooks["*"]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(actor, action_name, data)
+                    else:
+                        hook_result = hook(actor, action_name, data)
+
+                    if hook_result is not None:
+                        result = hook_result
+                        break
+                except Exception as e:
+                    logger.error(f"Error in wildcard action hook: {e}")
+
+        return result
+
+    async def execute_property_hooks_async(
+        self,
+        property_name: str,
+        operation: str,
+        actor: Any,
+        value: Any,
+        path: list[str] | None = None,
+        auth_context: dict[str, Any] | None = None,
+    ) -> Any:
+        """Execute property hooks asynchronously with transparent permission checking.
+
+        Args:
+            property_name: Name of the property
+            operation: Operation being performed (get, put, post, delete)
+            actor: ActorInterface instance
+            value: Property value
+            path: Optional path components for nested properties
+            auth_context: Optional authentication context
+
+        Returns:
+            Modified property value or None if operation was rejected
+        """
+        path = path or []
+
+        # Check permission before executing hooks
+        if auth_context:
+            auth_context["operation"] = operation  # Add operation to context
+
+        property_path = "/".join([property_name] + (path or []))
+        if not self._check_hook_permission(
+            "property", property_path, actor, auth_context
+        ):
+            logger.debug(f"Property hook permission denied for {property_path}")
+            return None if operation in ["put", "post"] else value
+
+        # Execute hooks for specific property
+        if property_name in self._property_hooks:
+            hooks = self._property_hooks[property_name].get(operation, [])
+            for hook in hooks:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        value = await hook(actor, operation, value, path)
+                    else:
+                        value = hook(actor, operation, value, path)
+
+                    if value is None and operation in ["put", "post"]:
+                        # Hook rejected the operation
+                        return None
+                except Exception as e:
+                    logger.error(f"Error in property hook for {property_name}: {e}")
+                    if operation in ["put", "post"]:
+                        return None
+
+        # Execute hooks for all properties
+        if "*" in self._property_hooks:
+            hooks = self._property_hooks["*"].get(operation, [])
+            for hook in hooks:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        value = await hook(actor, operation, value, path)
+                    else:
+                        value = hook(actor, operation, value, path)
+
+                    if value is None and operation in ["put", "post"]:
+                        return None
+                except Exception as e:
+                    logger.error(f"Error in wildcard property hook: {e}")
+                    if operation in ["put", "post"]:
+                        return None
+
+        return value
+
+    async def execute_callback_hooks_async(
+        self, callback_name: str, actor: Any, data: Any
+    ) -> bool | dict[str, Any]:
+        """Execute callback hooks asynchronously.
+
+        Args:
+            callback_name: Name of the callback
+            actor: ActorInterface instance
+            data: Callback data
+
+        Returns:
+            True if processed, or result data dict
+        """
+        processed = False
+        result_data: dict[str, Any] | None = None
+
+        # Execute hooks for specific callback
+        if callback_name in self._callback_hooks:
+            for hook in self._callback_hooks[callback_name]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(actor, callback_name, data)
+                    else:
+                        hook_result = hook(actor, callback_name, data)
+
+                    if hook_result:
+                        processed = True
+                        if isinstance(hook_result, dict):
+                            result_data = hook_result
+                except Exception as e:
+                    logger.error(f"Error in callback hook for {callback_name}: {e}")
+
+        # Execute hooks for all callbacks
+        if "*" in self._callback_hooks:
+            for hook in self._callback_hooks["*"]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(actor, callback_name, data)
+                    else:
+                        hook_result = hook(actor, callback_name, data)
+
+                    if hook_result:
+                        processed = True
+                        if isinstance(hook_result, dict):
+                            result_data = hook_result
+                except Exception as e:
+                    logger.error(f"Error in wildcard callback hook: {e}")
+
+        # Return result data if available, otherwise return processed status
+        if result_data is not None:
+            return result_data
+        return processed
+
+    async def execute_app_callback_hooks_async(
+        self, callback_name: str, data: Any
+    ) -> bool | dict[str, Any]:
+        """Execute application-level callback hooks asynchronously (no actor context).
+
+        Args:
+            callback_name: Name of the callback
+            data: Callback data
+
+        Returns:
+            True if processed, or result data dict
+        """
+        processed = False
+        result_data: dict[str, Any] | None = None
+
+        # Execute hooks for specific callback
+        if callback_name in self._app_callback_hooks:
+            for hook in self._app_callback_hooks[callback_name]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(data)
+                    else:
+                        hook_result = hook(data)
+
+                    if hook_result:
+                        processed = True
+                        if isinstance(hook_result, dict):
+                            result_data = hook_result
+                except Exception as e:
+                    logger.error(f"Error in app callback hook '{callback_name}': {e}")
+
+        # Return result data if available, otherwise return processed status
+        if result_data is not None:
+            return result_data
+        return processed
+
+    async def execute_subscription_hooks_async(
+        self, actor: Any, subscription: dict[str, Any], peer_id: str, data: Any
+    ) -> bool:
+        """Execute subscription hooks asynchronously.
+
+        Args:
+            actor: ActorInterface instance
+            subscription: Subscription information
+            peer_id: ID of the peer sending the subscription event
+            data: Event data
+
+        Returns:
+            True if subscription was processed
+        """
+        processed = False
+
+        for hook in self._subscription_hooks:
+            try:
+                if inspect.iscoroutinefunction(hook):
+                    if await hook(actor, subscription, peer_id, data):
+                        processed = True
+                else:
+                    if hook(actor, subscription, peer_id, data):
+                        processed = True
+            except Exception as e:
+                logger.error(f"Error in subscription hook: {e}")
+
+        return processed
+
+    async def execute_lifecycle_hooks_async(
+        self, event: str, actor: Any, **kwargs: Any
+    ) -> Any:
+        """Execute lifecycle hooks asynchronously.
+
+        Args:
+            event: Lifecycle event name
+            actor: ActorInterface instance
+            **kwargs: Additional event-specific arguments
+
+        Returns:
+            Result from the last hook, or None
+        """
+        result = None
+
+        if event in self._lifecycle_hooks:
+            for hook in self._lifecycle_hooks[event]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        hook_result = await hook(actor, **kwargs)
+                    else:
+                        hook_result = hook(actor, **kwargs)
+
+                    if hook_result is not None:
+                        result = hook_result
+                except Exception as e:
+                    logger.error(f"Error in lifecycle hook for {event}: {e}")
 
         return result
 
@@ -743,13 +1150,15 @@ class HookRegistry:
             # Get metadata from first hook (primary hook)
             if hook_list:
                 metadata = get_hook_metadata(hook_list[0])
-                result.append({
-                    "name": method_name,
-                    "description": metadata.description,
-                    "input_schema": metadata.input_schema,
-                    "output_schema": metadata.output_schema,
-                    "annotations": metadata.annotations,
-                })
+                result.append(
+                    {
+                        "name": method_name,
+                        "description": metadata.description,
+                        "input_schema": metadata.input_schema,
+                        "output_schema": metadata.output_schema,
+                        "annotations": metadata.annotations,
+                    }
+                )
         return result
 
     def get_action_metadata_list(self) -> list[dict[str, Any]]:
@@ -769,13 +1178,15 @@ class HookRegistry:
             # Get metadata from first hook (primary hook)
             if hook_list:
                 metadata = get_hook_metadata(hook_list[0])
-                result.append({
-                    "name": action_name,
-                    "description": metadata.description,
-                    "input_schema": metadata.input_schema,
-                    "output_schema": metadata.output_schema,
-                    "annotations": metadata.annotations,
-                })
+                result.append(
+                    {
+                        "name": action_name,
+                        "description": metadata.description,
+                        "input_schema": metadata.input_schema,
+                        "output_schema": metadata.output_schema,
+                        "annotations": metadata.annotations,
+                    }
+                )
         return result
 
 

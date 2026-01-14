@@ -185,11 +185,14 @@ def docker_services():
     elif DATABASE_BACKEND == "postgresql":
         try:
             import psycopg
+
             conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
             with psycopg.connect(conninfo) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
-                    print(f"PostgreSQL already running at {TEST_POSTGRES_HOST}:{TEST_POSTGRES_PORT}")
+                    print(
+                        f"PostgreSQL already running at {TEST_POSTGRES_HOST}:{TEST_POSTGRES_PORT}"
+                    )
                     services_already_running = True
         except Exception:
             pass
@@ -224,6 +227,7 @@ def docker_services():
             for _ in range(max_retries):
                 try:
                     import psycopg
+
                     conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
                     with psycopg.connect(conninfo) as conn:
                         with conn.cursor() as cur:
@@ -279,7 +283,9 @@ def setup_database(docker_services, worker_info):
             "postgresql",
         )
 
-        print(f"Running Alembic migrations for worker {worker_info['worker_id']} with schema {schema_name}")
+        print(
+            f"Running Alembic migrations for worker {worker_info['worker_id']} with schema {schema_name}"
+        )
         subprocess.run(
             ["poetry", "run", "alembic", "upgrade", "head"],
             cwd=migrations_dir,
@@ -295,6 +301,7 @@ def setup_database(docker_services, worker_info):
         try:
             import psycopg
             from psycopg import sql
+
             conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
             schema_name = f"{worker_info['db_prefix']}public"
 
@@ -382,7 +389,9 @@ def test_app(docker_services, setup_database, worker_info):  # pylint: disable=u
             pass
         time.sleep(1)
     else:
-        raise RuntimeError(f"Test app failed to start on port {test_app_port} within 30 seconds")
+        raise RuntimeError(
+            f"Test app failed to start on port {test_app_port} within 30 seconds"
+        )
 
     return test_app_url
 
@@ -450,7 +459,9 @@ def www_test_app(docker_services, setup_database, worker_info):  # pylint: disab
             pass
         time.sleep(1)
     else:
-        raise RuntimeError(f"WWW test app failed to start on port {www_test_port} within 30 seconds")
+        raise RuntimeError(
+            f"WWW test app failed to start on port {www_test_port} within 30 seconds"
+        )
 
     return www_test_url
 
@@ -502,7 +513,9 @@ def peer_app(docker_services, setup_database, worker_info):  # pylint: disable=u
             pass
         time.sleep(1)
     else:
-        raise RuntimeError(f"Peer app failed to start on port {peer_app_port} within 30 seconds")
+        raise RuntimeError(
+            f"Peer app failed to start on port {peer_app_port} within 30 seconds"
+        )
 
     return peer_app_url
 
@@ -548,7 +561,9 @@ class ActorManager:
             # Add worker ID and counter for uniqueness
             unique_id = uuid.uuid4().hex[:8]
             self._counter += 1
-            unique_creator = f"{local}_{self.worker_id}_{self._counter}_{unique_id}@{domain}"
+            unique_creator = (
+                f"{local}_{self.worker_id}_{self._counter}_{unique_id}@{domain}"
+            )
         else:
             # Already has unique identifier or not an email
             unique_creator = creator

@@ -264,7 +264,9 @@ class WwwHandler(base_handler.BaseHandler):
                         list_prop.delete()  # Delete entire list including metadata
 
                         # Register diff for subscription callbacks
-                        myself.register_diffs(target="properties", subtarget=prop_name, blob="")
+                        myself.register_diffs(
+                            target="properties", subtarget=prop_name, blob=""
+                        )
                         deleted = True
                     except Exception as e:
                         logger.error(f"Error deleting list property '{prop_name}': {e}")
@@ -277,7 +279,9 @@ class WwwHandler(base_handler.BaseHandler):
                     # This is a regular property
                     myself.property[prop_name] = None
                     # Register diff for subscription callbacks
-                    myself.register_diffs(target="properties", subtarget=prop_name, blob="")
+                    myself.register_diffs(
+                        target="properties", subtarget=prop_name, blob=""
+                    )
                     deleted = True
 
                 if deleted:

@@ -75,7 +75,9 @@ class TestGetHandlerClass:
         """Test properties list items endpoint returns PropertyListItemsHandler."""
         integration, webobj, config = self._create_integration()
 
-        handler = integration.get_handler_class("properties", webobj, config, items=True)
+        handler = integration.get_handler_class(
+            "properties", webobj, config, items=True
+        )
 
         assert handler is not None
         assert "PropertyListItemsHandler" in type(handler).__name__
@@ -263,7 +265,10 @@ class TestStaticMethods:
         result = BaseActingWebIntegration.get_oauth_discovery_metadata(mock_config)
 
         assert result["issuer"] == "https://test.example.com"
-        assert result["authorization_endpoint"] == "https://test.example.com/oauth/authorize"
+        assert (
+            result["authorization_endpoint"]
+            == "https://test.example.com/oauth/authorize"
+        )
         assert result["token_endpoint"] == "https://test.example.com/oauth/token"
         assert "code" in result["response_types_supported"]
         assert "authorization_code" in result["grant_types_supported"]
@@ -305,6 +310,8 @@ class TestStaticMethods:
 
     def test_extract_path_params(self):
         """Test extract_path_params returns empty dict (placeholder)."""
-        result = BaseActingWebIntegration.extract_path_params("/test/path", "/test/{id}")
+        result = BaseActingWebIntegration.extract_path_params(
+            "/test/path", "/test/{id}"
+        )
 
         assert result == {}

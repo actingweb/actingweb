@@ -487,7 +487,9 @@ class TestTrustTypeACLRules:
         custom_rule = ("priority_test", "custom/path", "GET", "a")
         idx = config.access.index(custom_rule)
         # Should be in the first few entries (before default rules)
-        assert idx < 5, f"Custom ACL rule should be near beginning, found at index {idx}"
+        assert idx < 5, (
+            f"Custom ACL rule should be near beginning, found at index {idx}"
+        )
 
 
 class TestTrustTypeUsage:

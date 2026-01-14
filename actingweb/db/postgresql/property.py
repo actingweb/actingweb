@@ -303,9 +303,7 @@ class DbPropertyList:
                     else:
                         return None
         except Exception as e:
-            logger.error(
-                f"Error fetching all properties for actor {actor_id}: {e}"
-            )
+            logger.error(f"Error fetching all properties for actor {actor_id}: {e}")
             return None
 
     def delete(self) -> bool:

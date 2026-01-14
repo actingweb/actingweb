@@ -110,12 +110,12 @@ class TestOAuth2LifecycleHooks:
 
         # Verify authenticator's config has hooks accessible
         hooks_from_authenticator = getattr(authenticator.config, "_hooks", None)
-        assert (
-            hooks_from_authenticator is not None
-        ), "OAuth2Authenticator.config should have _hooks"
-        assert (
-            hooks_from_authenticator == app.hooks
-        ), "Authenticator should see the same hooks"
+        assert hooks_from_authenticator is not None, (
+            "OAuth2Authenticator.config should have _hooks"
+        )
+        assert hooks_from_authenticator == app.hooks, (
+            "Authenticator should see the same hooks"
+        )
 
         # Note: We can't easily test actual actor creation in unit tests
         # without mocking the database, but we've verified the critical

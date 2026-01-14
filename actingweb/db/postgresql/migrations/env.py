@@ -92,7 +92,9 @@ def run_migrations_online() -> None:
         if not schema.replace("_", "").replace("-", "").isalnum():
             raise ValueError(f"Invalid schema name: {schema}")
         # Create schema in a separate autocommit connection
-        with connectable.connect().execution_options(isolation_level="AUTOCOMMIT") as schema_conn:
+        with connectable.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as schema_conn:
             schema_conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
 
     with connectable.begin() as connection:

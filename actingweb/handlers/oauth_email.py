@@ -63,9 +63,7 @@ class OAuth2EmailHandler(BaseHandler):
                 self.response.headers["Access-Control-Allow-Origin"] = origin
             else:
                 self.response.headers["Access-Control-Allow-Origin"] = "*"
-            self.response.headers["Access-Control-Allow-Methods"] = (
-                "GET, POST, OPTIONS"
-            )
+            self.response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             self.response.headers["Access-Control-Allow-Headers"] = (
                 "Authorization, Content-Type, Accept"
             )

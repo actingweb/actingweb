@@ -72,7 +72,9 @@ class TestTrustClassInitialization:
         mock_db_trust.get.return_value = {}
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
-        trust = Trust(actor_id="test_actor", token="secret_token_123", config=mock_config)
+        trust = Trust(
+            actor_id="test_actor", token="secret_token_123", config=mock_config
+        )
 
         assert trust.actor_id == "test_actor"
         assert trust.token == "secret_token_123"
@@ -201,9 +203,7 @@ class TestTrustCRUD:
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
         trust = Trust(actor_id="test_actor", peerid="peer123", config=mock_config)
-        result = trust.modify(
-            baseuri="https://new.example.com/peer123", approved=True
-        )
+        result = trust.modify(baseuri="https://new.example.com/peer123", approved=True)
 
         assert result is True
         mock_db_trust.modify.assert_called_once()
@@ -222,7 +222,9 @@ class TestTrustCRUD:
         mock_db_trust.get.return_value = mock_trust_data
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
-        trust = Trust(actor_id="test_actor", token="secret_token_xyz", config=mock_config)
+        trust = Trust(
+            actor_id="test_actor", token="secret_token_xyz", config=mock_config
+        )
         result = trust.get()
 
         assert result is not None
@@ -243,10 +245,16 @@ class TestTrustCRUD:
         mock_db_trust.delete.return_value = True
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
-        trust = Trust(actor_id="test_actor", peerid="oauth2_client:user@example.com:mcp_client_abc123", config=mock_config)
+        trust = Trust(
+            actor_id="test_actor",
+            peerid="oauth2_client:user@example.com:mcp_client_abc123",
+            config=mock_config,
+        )
 
         # Mock OAuth2 client registry - patch it at the location it's imported in the trust module
-        with patch("actingweb.oauth2_server.client_registry.get_mcp_client_registry") as mock_get_registry:
+        with patch(
+            "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
+        ) as mock_get_registry:
             mock_registry = Mock()
             mock_get_registry.return_value = mock_registry
 
@@ -320,7 +328,11 @@ class TestTrustApproval:
         """Test approving a trust updates its status."""
         mock_config = Mock()
         mock_db_trust = Mock()
-        mock_trust_data = {"peerid": "peer123", "relationship": "friend", "approved": "false"}
+        mock_trust_data = {
+            "peerid": "peer123",
+            "relationship": "friend",
+            "approved": "false",
+        }
         mock_db_trust.get.return_value = mock_trust_data
         mock_db_trust.modify.return_value = True
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
@@ -393,7 +405,11 @@ class TestTrustOAuth2Detection:
         mock_db_trust.get.return_value = mock_trust_data
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
-        trust = Trust(actor_id="test_actor", peerid="oauth2_client:user@example.com:mcp_client_123", config=mock_config)
+        trust = Trust(
+            actor_id="test_actor",
+            peerid="oauth2_client:user@example.com:mcp_client_123",
+            config=mock_config,
+        )
 
         assert trust._is_oauth2_client_trust() is True
 
@@ -442,7 +458,11 @@ class TestTrustOAuth2Detection:
         mock_db_trust.get.return_value = mock_trust_data
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
-        trust = Trust(actor_id="test_actor", peerid="oauth2_client:user@example.com:mcp_client_abc123", config=mock_config)
+        trust = Trust(
+            actor_id="test_actor",
+            peerid="oauth2_client:user@example.com:mcp_client_abc123",
+            config=mock_config,
+        )
 
         client_id = trust._extract_client_id_from_peerid()
         assert client_id == "mcp_client_abc123"

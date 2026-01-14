@@ -21,11 +21,13 @@ class TestSubscriptionPermissionFiltering:
         actor = Actor(config=self.mock_config)
         actor.id = "test-actor-id"
 
-        blob = json.dumps({
-            "data_public": {"info": "public data"},
-            "data_private": {"info": "private data"},
-            "data_work": {"info": "work data"},
-        })
+        blob = json.dumps(
+            {
+                "data_public": {"info": "public data"},
+                "data_private": {"info": "private data"},
+                "data_work": {"info": "work data"},
+            }
+        )
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_evaluator = Mock()
@@ -61,7 +63,9 @@ class TestSubscriptionPermissionFiltering:
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_evaluator = Mock()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_property_access.return_value = PermissionResult.DENIED
+            mock_evaluator.evaluate_property_access.return_value = (
+                PermissionResult.DENIED
+            )
 
             result = actor._filter_subscription_data_by_permissions(
                 peerid="peer-123",
@@ -116,7 +120,9 @@ class TestSubscriptionPermissionFiltering:
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_evaluator = Mock()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_property_access.return_value = PermissionResult.ALLOWED
+            mock_evaluator.evaluate_property_access.return_value = (
+                PermissionResult.ALLOWED
+            )
 
             actor._filter_subscription_data_by_permissions(
                 peerid="peer-123",
@@ -176,9 +182,15 @@ class TestSubscriptionPermissionFiltering:
         actor.id = "test-actor-id"
 
         # Blob contains property list key with 'list:' prefix (as sent by property_list)
-        blob = json.dumps({
-            "list:memory_news": {"list": "memory_news", "operation": "append", "length": 3}
-        })
+        blob = json.dumps(
+            {
+                "list:memory_news": {
+                    "list": "memory_news",
+                    "operation": "append",
+                    "length": 3,
+                }
+            }
+        )
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_evaluator = Mock()
@@ -240,7 +252,9 @@ class TestCallbackSubscriptionFiltering:
             }
 
             # Mock the filter method
-            with patch.object(actor, "_filter_subscription_data_by_permissions") as mock_filter:
+            with patch.object(
+                actor, "_filter_subscription_data_by_permissions"
+            ) as mock_filter:
                 mock_filter.return_value = None  # Simulate all data filtered out
 
                 # Mock requests.post to verify it's not called
@@ -248,7 +262,13 @@ class TestCallbackSubscriptionFiltering:
                     actor.callback_subscription(
                         peerid="peer-123",
                         sub_obj=Mock(),
-                        sub={"target": "properties", "subscriptionid": "sub-1", "granularity": "high", "subtarget": None, "resource": None},
+                        sub={
+                            "target": "properties",
+                            "subscriptionid": "sub-1",
+                            "granularity": "high",
+                            "subtarget": None,
+                            "resource": None,
+                        },
                         diff={"sequence": 1, "timestamp": "2024-01-01T00:00:00Z"},
                         blob='{"data_private": {}}',
                     )
@@ -271,14 +291,22 @@ class TestCallbackSubscriptionFiltering:
                 "secret": "secret123",
             }
 
-            with patch.object(actor, "_filter_subscription_data_by_permissions") as mock_filter:
+            with patch.object(
+                actor, "_filter_subscription_data_by_permissions"
+            ) as mock_filter:
                 with patch("actingweb.actor.requests.post") as mock_post:
                     mock_post.return_value = Mock(status_code=204)
 
                     actor.callback_subscription(
                         peerid="peer-123",
                         sub_obj=Mock(),
-                        sub={"target": "trust", "subscriptionid": "sub-1", "granularity": "high", "subtarget": None, "resource": None},
+                        sub={
+                            "target": "trust",
+                            "subscriptionid": "sub-1",
+                            "granularity": "high",
+                            "subtarget": None,
+                            "resource": None,
+                        },
                         diff={"sequence": 1, "timestamp": "2024-01-01T00:00:00Z"},
                         blob='{"data": "trust change"}',
                     )
@@ -303,7 +331,9 @@ class TestCallbackSubscriptionFiltering:
 
             filtered_data = '{"data_public": {"info": "public"}}'
 
-            with patch.object(actor, "_filter_subscription_data_by_permissions") as mock_filter:
+            with patch.object(
+                actor, "_filter_subscription_data_by_permissions"
+            ) as mock_filter:
                 mock_filter.return_value = filtered_data
 
                 with patch("actingweb.actor.requests.post") as mock_post:
@@ -312,7 +342,13 @@ class TestCallbackSubscriptionFiltering:
                     actor.callback_subscription(
                         peerid="peer-123",
                         sub_obj=Mock(),
-                        sub={"target": "properties", "subscriptionid": "sub-1", "granularity": "high", "subtarget": None, "resource": None},
+                        sub={
+                            "target": "properties",
+                            "subscriptionid": "sub-1",
+                            "granularity": "high",
+                            "subtarget": None,
+                            "resource": None,
+                        },
                         diff={"sequence": 1, "timestamp": "2024-01-01T00:00:00Z"},
                         blob='{"data_public": {"info": "public"}, "data_private": {"info": "private"}}',
                     )
@@ -320,6 +356,6 @@ class TestCallbackSubscriptionFiltering:
                     # Verify the POST was called with filtered data
                     assert mock_post.called
                     call_args = mock_post.call_args
-                    posted_data = json.loads(call_args.kwargs['data'])
+                    posted_data = json.loads(call_args.kwargs["data"])
                     # The posted data should contain the filtered blob
-                    assert posted_data['data'] == json.loads(filtered_data)
+                    assert posted_data["data"] == json.loads(filtered_data)

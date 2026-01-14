@@ -8,6 +8,7 @@ with async support.
 import asyncio
 import base64
 import concurrent.futures
+import inspect
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -413,6 +414,18 @@ class FastAPIIntegration(BaseActingWebIntegration):
             max_workers=10, thread_name_prefix="aw-handler"
         )
 
+    def _prefer_async_handlers(self) -> bool:
+        """Override to indicate FastAPI should use async handlers.
+
+        This tells the handler factory to create AsyncMethodsHandler and
+        AsyncActionsHandler instead of the sync variants, enabling native
+        async execution without thread pool overhead.
+
+        Returns:
+            True to use async handlers
+        """
+        return True
+
     def shutdown(self) -> None:
         """Shutdown the thread pool executor."""
         if hasattr(self, "executor"):
@@ -549,6 +562,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             Uses SPA CORS (echo origin + credentials) because logout clears cookies
             and cross-origin SPAs need credentialed CORS for Set-Cookie to work.
             """
+
             # Helper to get SPA CORS headers (echo origin + credentials)
             def get_spa_cors_headers() -> dict[str, str]:
                 origin = request.headers.get("origin", "")
@@ -677,7 +691,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
             return await self._handle_oauth2_spa_endpoint(request, "session")
 
         @self.fastapi_app.get("/oauth/spa/session/{session_id}")
-        async def oauth2_spa_session_retrieve(request: Request, session_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
+        async def oauth2_spa_session_retrieve(
+            request: Request, session_id: str
+        ) -> Response:  # pyright: ignore[reportUnusedFunction]
             """Retrieve pending SPA session data after OAuth callback."""
             return await self._handle_spa_session_retrieve(request, session_id)
 
@@ -753,9 +769,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 if not basic_auth and not bearer_token and not oauth_cookie:
                     # Unauthenticated browser - redirect to login page
                     config = self.aw_app.get_config()
-                    return RedirectResponse(
-                        url=f"{config.root}login", status_code=302
-                    )
+                    return RedirectResponse(url=f"{config.root}login", status_code=302)
 
             # For API requests or authenticated browsers, use normal auth flow
             auth_redirect = await check_authentication_and_redirect(
@@ -869,18 +883,18 @@ class FastAPIIntegration(BaseActingWebIntegration):
                                         "name": "memory_personal",
                                         "display_name": "Memory Personal",
                                         "item_count": 42,
-                                        "operations": ["read", "subscribe"]
+                                        "operations": ["read", "subscribe"],
                                     }
                                 ],
-                                "excluded_properties": ["memory_private"]
+                                "excluded_properties": ["memory_private"],
                             }
                         }
-                    }
+                    },
                 },
                 403: {"description": "Permission denied or wrong peer"},
                 404: {"description": "Trust relationship not found"},
-                503: {"description": "Permission system not available"}
-            }
+                503: {"description": "Permission system not available"},
+            },
         )
         async def app_trust_shared_properties(  # pyright: ignore[reportUnusedFunction]
             actor_id: str,
@@ -2261,16 +2275,34 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         if k in ["code", "state", "error"] and v is not None
                     }
 
-            # Run the synchronous handler in a thread pool to avoid blocking the event loop
+            # Check for async handler method variant (e.g., post_async)
+            async_method_name = f"{method_name}_async"
+            async_handler_method = getattr(handler, async_method_name, None)
+
             try:
-                loop = asyncio.get_running_loop()
-                if extra_kwargs:
-                    # For services endpoint, pass extra kwargs
-                    await loop.run_in_executor(
-                        self.executor, lambda: handler_method(*args, **extra_kwargs)
+                if (
+                    async_handler_method
+                    and callable(async_handler_method)
+                    and inspect.iscoroutinefunction(async_handler_method)
+                ):
+                    # Use native async handler - no thread pool overhead
+                    self.logger.debug(
+                        f"Using async handler {async_method_name} for {endpoint}"
                     )
+                    if extra_kwargs:
+                        await async_handler_method(*args, **extra_kwargs)  # type: ignore
+                    else:
+                        await async_handler_method(*args)  # type: ignore
                 else:
-                    await loop.run_in_executor(self.executor, handler_method, *args)
+                    # Fall back to sync handler in thread pool
+                    loop = asyncio.get_running_loop()
+                    if extra_kwargs:
+                        # For services endpoint, pass extra kwargs
+                        await loop.run_in_executor(
+                            self.executor, lambda: handler_method(*args, **extra_kwargs)
+                        )
+                    else:
+                        await loop.run_in_executor(self.executor, handler_method, *args)
             except (KeyboardInterrupt, SystemExit):
                 # Don't catch system signals
                 raise
@@ -2324,7 +2356,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 template_name = "aw-actor-www-property.html"
 
             # Check for custom template name from callback hook
-            if not template_name and hasattr(webobj.response, "template_name") and webobj.response.template_name:
+            if (
+                not template_name
+                and hasattr(webobj.response, "template_name")
+                and webobj.response.template_name
+            ):
                 template_name = webobj.response.template_name
 
             if template_name:

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.8.3"
+version = "3.9.0"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@greger.io>"]
 maintainers = ["Greger Wedel <support@greger.io>"]
@@ -64,6 +64,7 @@ mypy = "^1.0.0"
 ruff = "^0.14.2"
 pyright = "^1.1.406"
 pre-commit = "^4.2.0"
+pytest-asyncio = "^1.3.0"
 
 [tool.poetry.group.docs.dependencies]
 sphinx = "^8.2.3"
@@ -170,6 +171,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+asyncio_mode = "auto"
 addopts = [
     "--cov=actingweb",
     "--cov-report=term-missing",

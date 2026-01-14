@@ -11,9 +11,7 @@ import requests
 class TestTrustLifecycle:
     """Test trust lifecycle hooks fire via HTTP API."""
 
-    def test_trust_initiation_triggers_trust_initiated_hook(
-        self, actor_factory
-    ):
+    def test_trust_initiation_triggers_trust_initiated_hook(self, actor_factory):
         """Test that initiating a trust request triggers trust_initiated hook."""
         # NOTE: This test requires hooks to be registered in the test harness
         # For now, we verify the trust creation happens correctly via HTTP
@@ -41,9 +39,7 @@ class TestTrustLifecycle:
         # - relationship: "friend"
         # - trust_data: response.json()
 
-    def test_trust_reception_triggers_trust_request_received_hook(
-        self, actor_factory
-    ):
+    def test_trust_reception_triggers_trust_request_received_hook(self, actor_factory):
         """Test that receiving a trust request triggers trust_request_received hook."""
         actor1 = actor_factory.create("user1@example.com")
         actor2 = actor_factory.create("user2@example.com")
@@ -107,7 +103,9 @@ class TestTrustLifecycle:
             json={"approved": True},
             auth=(actor2["creator"], actor2["passphrase"]),
         )
-        assert response.status_code in [200, 204], f"Trust approval failed: {response.text}"
+        assert response.status_code in [200, 204], (
+            f"Trust approval failed: {response.text}"
+        )
 
         # Also approve from actor1's side to establish mutual trust
         # Expected: trust_fully_approved_local hook fires for actor1 (who just approved)
@@ -147,7 +145,9 @@ class TestTrustLifecycle:
             f"{actor1['url']}/trust/friend/{trust['peerid']}",
             auth=(actor1["creator"], actor1["passphrase"]),
         )
-        assert response.status_code in [200, 204], f"Trust deletion failed: {response.text}"
+        assert response.status_code in [200, 204], (
+            f"Trust deletion failed: {response.text}"
+        )
 
         # Verify trust is deleted
         response = requests.get(
@@ -233,7 +233,9 @@ class TestTrustLifecycle:
         )
         trust_data = response.json()
 
-        assert trust_data["approved"] is True  # Actor1 approved (initiator auto-approves)
+        assert (
+            trust_data["approved"] is True
+        )  # Actor1 approved (initiator auto-approves)
         assert trust_data["peer_approved"] is False  # Actor2 hasn't approved yet
 
         # trust_fully_approved hooks should NOT fire until both approve

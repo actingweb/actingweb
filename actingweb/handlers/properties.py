@@ -45,6 +45,7 @@ def delete_dict(d1, path):
             return False
     return False
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -354,9 +355,15 @@ class PropertiesHandler(base_handler.BaseHandler):
         if include_metadata:
             list_names = set()
             # Use actor_interface for consistent property list access
-            if actor_interface and hasattr(actor_interface, "property_lists") and actor_interface.property_lists is not None:
+            if (
+                actor_interface
+                and hasattr(actor_interface, "property_lists")
+                and actor_interface.property_lists is not None
+            ):
                 all_list_names = set(actor_interface.property_lists.list_all() or [])
-                logger.debug(f"Found {len(all_list_names)} list properties: {all_list_names}")
+                logger.debug(
+                    f"Found {len(all_list_names)} list properties: {all_list_names}"
+                )
 
                 # Filter list properties based on peer permissions
                 if peer_id and actor_interface and actor_interface.id:
@@ -366,11 +373,16 @@ class PropertiesHandler(base_handler.BaseHandler):
                             result = evaluator.evaluate_property_access(
                                 actor_interface.id, peer_id, list_name, "read"
                             )
-                            if result == PermissionResult.ALLOWED or result == PermissionResult.NOT_FOUND:
+                            if (
+                                result == PermissionResult.ALLOWED
+                                or result == PermissionResult.NOT_FOUND
+                            ):
                                 list_names.add(list_name)
                             # DENIED list properties are excluded
                     except Exception as e:
-                        logger.error(f"Error filtering list properties by permission: {e}")
+                        logger.error(
+                            f"Error filtering list properties by permission: {e}"
+                        )
                         # On error, exclude all list properties for security
                         list_names = set()
                 else:
@@ -454,7 +466,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                         "put",
                         actor_interface,
                         new_body,
-                        path[1:],  # Exclude property name from path (already in property_name)
+                        path[
+                            1:
+                        ],  # Exclude property name from path (already in property_name)
                         auth_context,
                     )
                     if transformed is not None:
@@ -919,7 +933,11 @@ class PropertiesHandler(base_handler.BaseHandler):
             # Execute property delete hook if available
             if self.hooks:
                 result = self.hooks.execute_property_hooks(
-                    "*", "delete", actor_interface, actor_interface.properties.to_dict(), path
+                    "*",
+                    "delete",
+                    actor_interface,
+                    actor_interface.properties.to_dict(),
+                    path,
                 )
                 if result is None:
                     self.response.set_status(403)
@@ -1426,7 +1444,9 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 myself.register_diffs(
                     target="properties",
                     subtarget=name,
-                    blob=json.dumps({"action": "update", "index": index, "value": item_value}),
+                    blob=json.dumps(
+                        {"action": "update", "index": index, "value": item_value}
+                    ),
                 )
 
                 if self.response:

@@ -400,7 +400,12 @@ class TestAuthorisation:
             ("creator", "properties/", "GET,POST,PUT,DELETE", "a"),
             ("friend", "properties/", "GET", "r"),
             ("any", "meta/", "GET", "r"),
-            ("", "trust/", "DELETE", "a"),  # Allow any authenticated user to delete trust
+            (
+                "",
+                "trust/",
+                "DELETE",
+                "a",
+            ),  # Allow any authenticated user to delete trust
         ]
 
         with patch("actingweb.auth.actor.Actor") as mock_actor_class:

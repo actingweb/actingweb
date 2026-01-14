@@ -64,16 +64,7 @@ def mcp_tool(
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         setattr(func, "_mcp_type", "tool")  # noqa: B010
-        setattr(func, "_mcp_metadata", {  # noqa: B010
-            "name": name,
-            "description": description,
-            "input_schema": input_schema,
-            "allowed_clients": allowed_clients,
-            "client_descriptions": client_descriptions or {},
-            "title": title,
-            "output_schema": output_schema,
-            "annotations": annotations,
-        })
+        func._mcp_metadata = {"name": name, "description": description, "input_schema": input_schema, "allowed_clients": allowed_clients, "client_descriptions": client_descriptions or {}, "title": title, "output_schema": output_schema, "annotations": annotations}
         return func
 
     return decorator
@@ -103,12 +94,7 @@ def mcp_resource(
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         setattr(func, "_mcp_type", "resource")  # noqa: B010
-        setattr(func, "_mcp_metadata", {  # noqa: B010
-            "uri_template": uri_template,
-            "name": name,
-            "description": description,
-            "mime_type": mime_type,
-        })
+        func._mcp_metadata = {"uri_template": uri_template, "name": name, "description": description, "mime_type": mime_type}
         return func
 
     return decorator
@@ -142,11 +128,7 @@ def mcp_prompt(
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         setattr(func, "_mcp_type", "prompt")  # noqa: B010
-        setattr(func, "_mcp_metadata", {  # noqa: B010
-            "name": name,
-            "description": description,
-            "arguments": arguments or [],
-        })
+        func._mcp_metadata = {"name": name, "description": description, "arguments": arguments or []}
         return func
 
     return decorator

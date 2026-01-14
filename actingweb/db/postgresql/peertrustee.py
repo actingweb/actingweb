@@ -107,7 +107,9 @@ class DbPeerTrustee:
                         return self.handle
 
         except Exception as e:
-            logger.error(f"Error retrieving peertrustee {actor_id}/{peerid or peer_type}: {e}")
+            logger.error(
+                f"Error retrieving peertrustee {actor_id}/{peerid or peer_type}: {e}"
+            )
             return None
 
     def create(
@@ -227,7 +229,7 @@ class DbPeerTrustee:
                     cur.execute(
                         f"""
                         UPDATE peertrustees
-                        SET {', '.join(updates)}
+                        SET {", ".join(updates)}
                         WHERE id = %s AND peerid = %s
                         """,
                         tuple(params),

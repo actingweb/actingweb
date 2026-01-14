@@ -31,10 +31,14 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
 
         # Use SubscriptionManager to get subscriptions
         if peerid:
-            subscription_infos = actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+            subscription_infos = (
+                actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+            )
         elif target:
-            subscription_infos = actor_interface.subscriptions.get_subscriptions_for_target(
-                target, subtarget or "", resource or ""
+            subscription_infos = (
+                actor_interface.subscriptions.get_subscriptions_for_target(
+                    target, subtarget or "", resource or ""
+                )
             )
         else:
             subscription_infos = actor_interface.subscriptions.all_subscriptions
@@ -151,13 +155,19 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
 
         # Use SubscriptionManager to get subscriptions for peer
         if target:
-            subscription_infos = actor_interface.subscriptions.get_subscriptions_for_target(
-                target, subtarget or "", resource or ""
+            subscription_infos = (
+                actor_interface.subscriptions.get_subscriptions_for_target(
+                    target, subtarget or "", resource or ""
+                )
             )
             # Filter to only this peer's subscriptions
-            subscription_infos = [sub for sub in subscription_infos if sub.peer_id == peerid]
+            subscription_infos = [
+                sub for sub in subscription_infos if sub.peer_id == peerid
+            ]
         else:
-            subscription_infos = actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+            subscription_infos = (
+                actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+            )
 
         # Convert SubscriptionInfo objects to dicts for JSON response
         subscriptions = [sub.to_dict() for sub in subscription_infos]

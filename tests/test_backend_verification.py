@@ -75,9 +75,9 @@ def test_backend_actually_connects():
 
         assert result is not None, f"Failed to read test actor from {backend} backend"
         assert result["id"] == test_id, f"Wrong actor ID returned from {backend}"
-        assert (
-            result["creator"] == "backend_test@example.com"
-        ), f"Wrong creator returned from {backend}"
+        assert result["creator"] == "backend_test@example.com", (
+            f"Wrong creator returned from {backend}"
+        )
 
         # Verify we're actually using the expected backend by checking module names
         if backend == "postgresql":
@@ -99,10 +99,14 @@ def test_backend_actually_connects():
             # So we check for either the base prefix or worker-specific prefix
             expected_prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
             # Strip worker-specific suffix (e.g., _w3) to get base prefix
-            base_prefix = expected_prefix.split("_w")[0] if "_w" in expected_prefix else expected_prefix
-            assert Actor.Meta.table_name.startswith(
-                base_prefix
-            ), f"DynamoDB table should start with {base_prefix} (table_name={Actor.Meta.table_name}, env prefix={expected_prefix})"
+            base_prefix = (
+                expected_prefix.split("_w")[0]
+                if "_w" in expected_prefix
+                else expected_prefix
+            )
+            assert Actor.Meta.table_name.startswith(base_prefix), (
+                f"DynamoDB table should start with {base_prefix} (table_name={Actor.Meta.table_name}, env prefix={expected_prefix})"
+            )
 
     finally:
         # Clean up
@@ -139,9 +143,9 @@ def test_postgresql_exclusive_features():
             cur.execute("SELECT version()")
             result = cur.fetchone()
             assert result is not None, "Should be able to query PostgreSQL version"
-            assert (
-                "PostgreSQL" in result[0]
-            ), f"Version should contain 'PostgreSQL', got: {result[0]}"
+            assert "PostgreSQL" in result[0], (
+                f"Version should contain 'PostgreSQL', got: {result[0]}"
+            )
 
 
 @pytest.mark.integration
@@ -160,9 +164,7 @@ def test_dynamodb_exclusive_features():
     # Verify DynamoDB table exists and has expected structure
     assert hasattr(Actor, "Meta"), "DynamoDB model should have Meta class"
     assert hasattr(Actor.Meta, "table_name"), "DynamoDB Meta should have table_name"
-    assert hasattr(
-        Actor.Meta, "region"
-    ), "DynamoDB Meta should have region configured"
+    assert hasattr(Actor.Meta, "region"), "DynamoDB Meta should have region configured"
 
     # Verify we can describe the table (confirms it exists in DynamoDB)
     try:
@@ -210,15 +212,15 @@ def test_backend_isolation():
         db_actor_check = config.DbActor.DbActor()  # type: ignore
         result = db_actor_check.get(actor_id=test_id)
         assert result is not None, f"Should find actor in {backend}"
-        assert (
-            result["creator"] == f"isolation_{backend}@example.com"
-        ), "Should get correct creator"
+        assert result["creator"] == f"isolation_{backend}@example.com", (
+            "Should get correct creator"
+        )
 
         # Verify the module path confirms we're using the right backend
         module_path = config.DbActor.__name__
-        assert (
-            backend in module_path
-        ), f"Module path {module_path} should contain backend name {backend}"
+        assert backend in module_path, (
+            f"Module path {module_path} should contain backend name {backend}"
+        )
 
     finally:
         # Clean up

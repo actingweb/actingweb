@@ -41,7 +41,9 @@ class TestTrustManagerHooks:
         def get_relationship_side_effect(peerid):
             return approved_relationship
 
-        mock_actor.get_trust_relationship = Mock(side_effect=get_relationship_side_effect)
+        mock_actor.get_trust_relationship = Mock(
+            side_effect=get_relationship_side_effect
+        )
 
         result = manager.approve_relationship("peer123")
 

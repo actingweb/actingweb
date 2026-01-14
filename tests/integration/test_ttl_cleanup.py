@@ -14,7 +14,10 @@ class TestTTLAttributePersistence:
     """Test that TTL timestamps are correctly persisted in DynamoDB."""
 
     def test_attribute_with_ttl_has_timestamp(
-        self, test_app, actor_factory, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        actor_factory,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify TTL timestamp is set when storing attributes with ttl_seconds."""
         import os
@@ -39,7 +42,9 @@ class TestTTLAttributePersistence:
         attrs = attribute.Attributes(
             actor_id=actor_id, bucket="test_ttl_bucket", config=config
         )
-        attrs.set_attr(name="ttl_test_key", data={"test": "data"}, ttl_seconds=ttl_seconds)
+        attrs.set_attr(
+            name="ttl_test_key", data={"test": "data"}, ttl_seconds=ttl_seconds
+        )
 
         # Verify TTL timestamp in DynamoDB directly
         db_item = Attribute.get(actor_id, "test_ttl_bucket:ttl_test_key")
@@ -53,7 +58,10 @@ class TestTTLAttributePersistence:
         assert abs(db_item.ttl_timestamp - expected_ttl) < 10
 
     def test_attribute_without_ttl_has_no_timestamp(
-        self, test_app, actor_factory, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        actor_factory,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify TTL timestamp is None when no ttl_seconds provided."""
         import os
@@ -84,7 +92,10 @@ class TestTTLAttributePersistence:
         assert db_item.ttl_timestamp is None
 
     def test_short_ttl_has_correct_timestamp(
-        self, test_app, actor_factory, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        actor_factory,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify short TTL values still get clock skew buffer."""
         import os
@@ -120,7 +131,10 @@ class TestCleanupExpiredTokens:
     """Test cleanup_expired_tokens() method with actual data."""
 
     def test_cleanup_removes_expired_access_tokens(
-        self, test_app, actor_factory, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        actor_factory,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify cleanup removes expired access tokens and their indexes."""
         import os
@@ -178,7 +192,10 @@ class TestCleanupExpiredTokens:
         assert results["access_tokens"] >= 1 or results["index_entries"] >= 1
 
     def test_cleanup_preserves_valid_tokens(
-        self, test_app, actor_factory, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        actor_factory,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify cleanup does not remove valid (non-expired) tokens."""
         import os
@@ -241,7 +258,10 @@ class TestOrphanedIndexCleanup:
     """Test cleanup of orphaned index entries."""
 
     def test_cleanup_removes_orphaned_index_entries(
-        self, test_app, actor_factory, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        actor_factory,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify cleanup removes index entries that point to non-existent tokens."""
         import os
@@ -292,7 +312,9 @@ class TestOrphanedIndexCleanup:
         assert fresh_index_bucket.get_attr(orphaned_token) is None
 
     def test_cleanup_handles_malformed_index_entries(
-        self, test_app, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify cleanup handles index entries with missing data gracefully."""
         import os
@@ -325,14 +347,19 @@ class TestOrphanedIndexCleanup:
         results = token_manager.cleanup_expired_tokens()
 
         # Malformed entry should be cleaned up
-        assert results["index_entries"] >= 0  # May or may not find it depending on timing
+        assert (
+            results["index_entries"] >= 0
+        )  # May or may not find it depending on timing
 
 
 class TestMCPTokenTTL:
     """Test TTL on MCP tokens created through the token manager."""
 
     def test_mcp_access_token_has_ttl(
-        self, test_app, actor_factory, worker_info  # pylint: disable=unused-argument
+        self,
+        test_app,
+        actor_factory,
+        worker_info,  # pylint: disable=unused-argument
     ):
         """Verify MCP access tokens are created with TTL."""
         import os

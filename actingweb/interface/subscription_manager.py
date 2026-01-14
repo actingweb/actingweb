@@ -314,9 +314,7 @@ class SubscriptionManager:
             return SubscriptionInfo(sub_data)
         return None
 
-    def delete_callback_subscription(
-        self, peer_id: str, subscription_id: str
-    ) -> bool:
+    def delete_callback_subscription(self, peer_id: str, subscription_id: str) -> bool:
         """
         Delete a callback subscription (local only, no peer notification).
 

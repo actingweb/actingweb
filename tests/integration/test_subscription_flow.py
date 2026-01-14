@@ -213,7 +213,9 @@ class TestSubscriptionActorFlow:
             pytest.skip("Trust relationship not established (earlier test failed)")
         assert response.status_code in [200, 201, 204]
 
-    def test_005c_subscription_succeeds_regardless_of_property_permissions(self, http_client):
+    def test_005c_subscription_succeeds_regardless_of_property_permissions(
+        self, http_client
+    ):
         """
         Subscription creation succeeds regardless of property permission patterns.
 

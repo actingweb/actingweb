@@ -58,6 +58,14 @@ class BaseActingWebIntegration:
             www,
         )
 
+        # Check if we should use async handlers (for FastAPI)
+        # Subclasses can override _prefer_async_handlers() to return True
+        prefer_async = getattr(self, "_prefer_async_handlers", lambda: False)()
+
+        # Import async handlers if preferred
+        if prefer_async:
+            from ...handlers import async_actions, async_methods
+
         # Create handler dictionary - most endpoints map directly to handlers
         handlers = {
             "root": lambda: root.RootHandler(webobj, config, hooks=self.aw_app.hooks),
@@ -75,11 +83,19 @@ class BaseActingWebIntegration:
             "devtest": lambda: devtest.DevtestHandler(
                 webobj, config, hooks=self.aw_app.hooks
             ),
-            "methods": lambda: methods.MethodsHandler(
-                webobj, config, hooks=self.aw_app.hooks
+            "methods": lambda: (
+                async_methods.AsyncMethodsHandler(
+                    webobj, config, hooks=self.aw_app.hooks
+                )
+                if prefer_async
+                else methods.MethodsHandler(webobj, config, hooks=self.aw_app.hooks)
             ),
-            "actions": lambda: actions.ActionsHandler(
-                webobj, config, hooks=self.aw_app.hooks
+            "actions": lambda: (
+                async_actions.AsyncActionsHandler(
+                    webobj, config, hooks=self.aw_app.hooks
+                )
+                if prefer_async
+                else actions.ActionsHandler(webobj, config, hooks=self.aw_app.hooks)
             ),
         }
 
@@ -140,9 +156,7 @@ class BaseActingWebIntegration:
 
         # Check for permissions endpoint
         if kwargs.get("permissions"):
-            return trust.TrustPermissionHandler(
-                webobj, config, hooks=self.aw_app.hooks
-            )
+            return trust.TrustPermissionHandler(webobj, config, hooks=self.aw_app.hooks)
 
         # Check for _method override (used by UI forms for DELETE/PUT)
         # When present, a single path segment should be treated as a peer ID

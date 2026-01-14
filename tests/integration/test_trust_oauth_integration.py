@@ -351,7 +351,7 @@ class TestTrustDeletionOnClientDeletion:
                 client_id=client_id,
                 scope="mcp",
                 trust_type="mcp_client",
-                grant_type="client_credentials"
+                grant_type="client_credentials",
             )
             assert token_response is not None
             access_token = token_response["access_token"]
@@ -394,7 +394,9 @@ class TestTrustDeletionOnClientDeletion:
 
             # Verify token is revoked
             token_validation_after = token_manager.validate_access_token(access_token)
-            assert token_validation_after is None, "Token should be revoked after trust deletion"
+            assert token_validation_after is None, (
+                "Token should be revoked after trust deletion"
+            )
         finally:
             actor.delete()
 

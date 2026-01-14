@@ -34,6 +34,7 @@ from actingweb.db.protocols import (
 # AWS_DB_PREFIX="protocol_test", but it was unused by any tests.
 # All tests rely on the global conftest.py environment setup instead.
 
+
 # Actor and Property implemented for both backends
 @pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])
 class TestPhase2ProtocolCompliance:

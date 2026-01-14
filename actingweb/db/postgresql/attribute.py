@@ -159,7 +159,9 @@ class DbAttribute:
                     conn.commit()
                 return True
             except Exception as e:
-                logger.error(f"Error deleting attribute {actor_id}/{bucket}/{name}: {e}")
+                logger.error(
+                    f"Error deleting attribute {actor_id}/{bucket}/{name}: {e}"
+                )
                 return False
 
         # Calculate TTL timestamp if provided
@@ -196,7 +198,15 @@ class DbAttribute:
                             timestamp = EXCLUDED.timestamp,
                             ttl_timestamp = EXCLUDED.ttl_timestamp
                         """,
-                        (actor_id, bucket_name, bucket, name, json.dumps(data_json), timestamp, ttl_timestamp),
+                        (
+                            actor_id,
+                            bucket_name,
+                            bucket,
+                            name,
+                            json.dumps(data_json),
+                            timestamp,
+                            ttl_timestamp,
+                        ),
                     )
                 conn.commit()
             return True
@@ -206,7 +216,10 @@ class DbAttribute:
             return False
 
     def delete_attr(
-        self, actor_id: str | None = None, bucket: str | None = None, name: str | None = None
+        self,
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
     ) -> bool:
         """
         Delete an attribute in a bucket.
@@ -263,7 +276,13 @@ class DbAttribute:
                         SET data = %s::jsonb, timestamp = %s
                         WHERE id = %s AND bucket_name = %s AND data = %s::jsonb
                         """,
-                        (json.dumps(new_data), timestamp, actor_id, bucket_name, json.dumps(old_data)),
+                        (
+                            json.dumps(new_data),
+                            timestamp,
+                            actor_id,
+                            bucket_name,
+                            json.dumps(old_data),
+                        ),
                     )
                     rows_updated = cur.rowcount
                 conn.commit()

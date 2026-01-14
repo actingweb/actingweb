@@ -50,7 +50,9 @@ class TestPropertyListNotifications:
 
     def test_insert_calls_register_diffs_with_item_and_index(self):
         """Test that insert() calls register_diffs with item and index."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.__len__ = Mock(return_value=4)
 
         notifying_list.insert(1, "inserted_value")
@@ -64,7 +66,9 @@ class TestPropertyListNotifications:
 
     def test_setitem_calls_register_diffs_with_item_and_index(self):
         """Test that __setitem__ calls register_diffs with updated item and index."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.__len__ = Mock(return_value=3)
         mock_list_prop.__setitem__ = Mock()
 
@@ -79,7 +83,9 @@ class TestPropertyListNotifications:
 
     def test_delitem_calls_register_diffs_with_index(self):
         """Test that __delitem__ calls register_diffs with deleted index."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.__len__ = Mock(return_value=2)
         mock_list_prop.__delitem__ = Mock()
 
@@ -94,7 +100,9 @@ class TestPropertyListNotifications:
 
     def test_pop_calls_register_diffs_with_index(self):
         """Test that pop() calls register_diffs with popped index."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.__len__ = Mock(return_value=2)
         mock_list_prop.pop = Mock(return_value="popped_value")
 
@@ -109,7 +117,9 @@ class TestPropertyListNotifications:
 
     def test_pop_default_index(self):
         """Test that pop() without index uses -1."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.__len__ = Mock(return_value=2)
         mock_list_prop.pop = Mock(return_value="last_value")
 
@@ -135,7 +145,9 @@ class TestPropertyListNotifications:
 
     def test_clear_calls_register_diffs(self):
         """Test that clear() calls register_diffs."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.__len__ = Mock(return_value=0)
         mock_list_prop.clear = Mock()
 
@@ -150,7 +162,9 @@ class TestPropertyListNotifications:
 
     def test_delete_calls_register_diffs_without_length_query(self):
         """Test that delete() calls register_diffs without querying length."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.delete = Mock()
         # __len__ should NOT be called for delete_all
 
@@ -163,7 +177,9 @@ class TestPropertyListNotifications:
 
     def test_remove_calls_register_diffs(self):
         """Test that remove() calls register_diffs."""
-        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2, 3])
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, 2, 3]
+        )
         mock_list_prop.__len__ = Mock(return_value=2)
         mock_list_prop.remove = Mock()
 

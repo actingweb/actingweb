@@ -2,6 +2,29 @@
 CHANGELOG
 =========
 
+v3.9.0: Jan 14, 2026
+--------------------
+
+ADDED
+~~~~~
+
+- **Native Async/Await Hook Support**: ActingWeb hooks now support both synchronous and asynchronous (async/await) function definitions with automatic detection
+
+  - New async execution methods: ``execute_method_hooks_async()``, ``execute_action_hooks_async()``, ``execute_property_hooks_async()``, ``execute_callback_hooks_async()``, ``execute_app_callback_hooks_async()``, ``execute_subscription_hooks_async()``, and ``execute_lifecycle_hooks_async()``
+  - Async handler variants: ``AsyncMethodsHandler`` and ``AsyncActionsHandler`` with ``*_async()`` method variants (``get_async()``, ``post_async()``, ``put_async()``, ``delete_async()``)
+  - FastAPI integration automatically detects and uses async handlers for optimal performance without thread pool overhead
+  - Backward compatible: Existing synchronous hooks continue to work without changes
+  - Mixed support: Applications can use both sync and async hooks in the same application
+  - Sync context support: Async hooks are executed via ``asyncio.run()`` when called from synchronous contexts (Flask)
+  - Use ``async def`` for hooks that need to call async services (AWS Bedrock, async HTTP clients, async database operations, AwProxy async methods)
+
+CHANGED
+~~~~~~~
+
+- FastAPI integration now preferentially uses async handler variants (``AsyncMethodsHandler``, ``AsyncActionsHandler``) for methods and actions endpoints
+- Synchronous hook execution methods (``execute_*_hooks()``) now support async hooks via ``asyncio.run()`` fallback
+- Handler factory (``get_handler_class()``) now supports creating async handler variants based on framework preference
+
 v3.8.3: Jan 12, 2026
 --------------------
 

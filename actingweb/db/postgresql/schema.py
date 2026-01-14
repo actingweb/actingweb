@@ -144,7 +144,11 @@ class Attribute(Base):
     __table_args__ = (
         PrimaryKeyConstraint("id", "bucket_name"),
         # Index for TTL cleanup queries
-        Index("idx_attributes_ttl", "ttl_timestamp", postgresql_where="ttl_timestamp IS NOT NULL"),
+        Index(
+            "idx_attributes_ttl",
+            "ttl_timestamp",
+            postgresql_where="ttl_timestamp IS NOT NULL",
+        ),
     )
 
     id = Column(String(255), nullable=False)  # actor_id

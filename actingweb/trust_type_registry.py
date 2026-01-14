@@ -165,7 +165,9 @@ class TrustTypeRegistry:
             setattr(sys_actor.property, prop_name, trust_type_json)
             # Update cache
             self._cache[trust_type.name] = trust_type
-            logger.info(f"Registered trust type '{trust_type.name}' with {len(trust_type.base_permissions)} permissions")
+            logger.info(
+                f"Registered trust type '{trust_type.name}' with {len(trust_type.base_permissions)} permissions"
+            )
             return True
         except Exception as e:
             logger.error(f"Error registering trust type {trust_type.name}: {e}")
@@ -185,11 +187,15 @@ class TrustTypeRegistry:
             prop_name = f"trust_type:{name}"
             raw = getattr(sys_actor.property, prop_name, None)
             if not raw:
-                logger.debug(f"Trust type '{name}' not found in system actor properties")
+                logger.debug(
+                    f"Trust type '{name}' not found in system actor properties"
+                )
                 return None
             trust_type_data = json.loads(raw)
             trust_type = TrustType.from_dict(trust_type_data)
-            logger.debug(f"Loaded trust type '{name}' from DB: base_permissions={trust_type.base_permissions}")
+            logger.debug(
+                f"Loaded trust type '{name}' from DB: base_permissions={trust_type.base_permissions}"
+            )
             self._cache[name] = trust_type
             return trust_type
         except Exception as e:

@@ -316,7 +316,7 @@ class ActorInterface:
         Raises:
             RuntimeError: If config is not available
         """
-        if not hasattr(self._core_actor, 'config') or self._core_actor.config is None:
+        if not hasattr(self._core_actor, "config") or self._core_actor.config is None:
             raise RuntimeError("Actor config not available")
         return self._core_actor.config
 

@@ -28,7 +28,9 @@ def upgrade() -> None:
             ['actor_id'],
             ['actors.id'],
             name='fk_property_lookup_actor',
-            ondelete='CASCADE'
+            ondelete='CASCADE',
+            deferrable=True,
+            initially='DEFERRED'
         ),
         sa.PrimaryKeyConstraint('property_name', 'value')
     )

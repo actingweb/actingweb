@@ -48,6 +48,8 @@ class BaseActingWebIntegration:
         """
         from ...handlers import (
             actions,
+            async_actions,
+            async_methods,
             callbacks,
             devtest,
             meta,
@@ -61,10 +63,6 @@ class BaseActingWebIntegration:
         # Check if we should use async handlers (for FastAPI)
         # Subclasses can override _prefer_async_handlers() to return True
         prefer_async = getattr(self, "_prefer_async_handlers", lambda: False)()
-
-        # Import async handlers if preferred
-        if prefer_async:
-            from ...handlers import async_actions, async_methods
 
         # Create handler dictionary - most endpoints map directly to handlers
         handlers = {

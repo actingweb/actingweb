@@ -2,6 +2,37 @@
 CHANGELOG
 =========
 
+v3.9.0: Jan 14, 2026
+--------------------
+
+ADDED
+~~~~~
+
+- **Property Lookup Tables**: Added dedicated lookup tables for property reverse lookups (``get_actor_id_from_property()``), removing DynamoDB GSI 2048-byte size limit. Supports unlimited property value sizes for indexed properties in both DynamoDB and PostgreSQL backends.
+
+  - Configurable indexed properties via ``with_indexed_properties()`` (default: ``oauthId``, ``email``, ``externalUserId``)
+  - Dual-mode operation: new lookup table or legacy GSI/index
+  - Backward compatible: defaults to legacy mode (``use_lookup_table=false``)
+  - Environment variables: ``USE_PROPERTY_LOOKUP_TABLE``, ``INDEXED_PROPERTIES``
+  - Automatic cleanup: lookup entries deleted with properties/actors
+  - PostgreSQL foreign key CASCADE for automatic orphan cleanup
+
+- ``actingweb.db.dynamodb.property_lookup`` module with ``PropertyLookup`` model and ``DbPropertyLookup`` class
+- ``actingweb.db.postgresql.property_lookup`` module with ``DbPropertyLookup`` class
+- ``actingweb.interface.ActingWebApp.with_indexed_properties()`` builder method for configuration
+- ``actingweb.interface.ActingWebApp.with_legacy_property_index()`` builder method to control mode
+- PostgreSQL migration ``70d60420526_add_property_lookup_table.py`` for lookup table schema
+- Comprehensive test suite (``tests/test_property_lookup.py``) with 26 tests for both backends
+- Documentation in ``docs/quickstart/configuration.rst`` with migration guide and best practices
+
+CHANGED
+~~~~~~~
+
+- ``DbProperty.get_actor_id_from_property()`` now uses lookup table when configured, falling back to legacy GSI/index
+- ``DbProperty.set()`` now syncs lookup entries for indexed properties
+- ``DbProperty.delete()`` now removes lookup entries for indexed properties
+- ``DbPropertyList.delete()`` now cleans up all lookup entries when deleting actor properties
+
 v3.8.3: Jan 12, 2026
 --------------------
 

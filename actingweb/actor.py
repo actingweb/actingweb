@@ -1573,6 +1573,50 @@ class Actor:
             "Content-Type": "application/json",
         }
 
+        # Helper function for sync callback
+        def _send_callback_sync():
+            """Send subscription callback using requests (blocking)."""
+            try:
+                logger.debug(
+                    "Doing sync callback on subscription at url("
+                    + requrl
+                    + ") with body("
+                    + str(data)
+                    + ")"
+                )
+                response = requests.post(
+                    url=requrl,
+                    data=data.encode("utf-8"),
+                    headers=headers,
+                    timeout=(5, 10),
+                )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+                if response.status_code == 204 and sub["granularity"] == "high":
+                    if not sub_obj:
+                        logger.warning("About to clear diff without having subobj set")
+                    else:
+                        sub_obj.clear_diff(diff["sequence"])
+            except Exception:
+                logger.debug("Peer did not respond to callback on url(" + requrl + ")")
+                self.last_response_code = 0
+                self.last_response_message = (
+                    "No response from peer for subscription callback"
+                )
+
+        # Check if sync callbacks are forced (recommended for Lambda/serverless)
+        use_sync = getattr(self.config, "sync_subscription_callbacks", False)
+        if use_sync:
+            logger.info(
+                f"Sync callback seq={diff.get('sequence')} to {sub.get('peerid', 'unknown')}"
+            )
+            _send_callback_sync()
+            return
+
         # Fire callback asynchronously to avoid blocking the caller
         async def _send_callback_async():
             """Send subscription callback using httpx (non-blocking)."""
@@ -1610,41 +1654,20 @@ class Actor:
                     "No response from peer for subscription callback"
                 )
 
-        # Schedule the async callback without blocking
+        # Schedule the async callback without blocking (may be lost on Lambda freeze!)
         try:
             import asyncio
 
             loop = asyncio.get_running_loop()
             # We're in an async context - create a background task
             loop.create_task(_send_callback_async())
-            logger.info("Scheduled async callback task")
+            logger.debug(
+                f"Async callback seq={diff.get('sequence')} to {sub.get('peerid', 'unknown')} (fire-and-forget)"
+            )
         except RuntimeError:
             # No running event loop - fall back to sync request
             logger.debug("No async loop, falling back to sync callback")
-            try:
-                response = requests.post(
-                    url=requrl,
-                    data=data.encode("utf-8"),
-                    headers=headers,
-                    timeout=(5, 10),
-                )
-                self.last_response_code = response.status_code
-                self.last_response_message = (
-                    response.content.decode("utf-8", "ignore")
-                    if isinstance(response.content, bytes)
-                    else str(response.content)
-                )
-                if response.status_code == 204 and sub["granularity"] == "high":
-                    if not sub_obj:
-                        logger.warning("About to clear diff without having subobj set")
-                    else:
-                        sub_obj.clear_diff(diff["sequence"])
-            except Exception:
-                logger.debug("Peer did not respond to callback on url(" + requrl + ")")
-                self.last_response_code = 0
-                self.last_response_message = (
-                    "No response from peer for subscription callback"
-                )
+            _send_callback_sync()
 
     async def create_verified_trust_async(
         self,

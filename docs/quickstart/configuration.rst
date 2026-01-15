@@ -39,6 +39,7 @@ Runtime Switches
 - ``unique_creator``: Enforce one actor per creator (``with_unique_creator()``).
 - ``force_email_prop_as_creator``: Copy ``email`` property to ``creator``.
 - ``mcp``: Include MCP capability; toggle via ``with_mcp()``.
+- ``sync_subscription_callbacks``: Force synchronous subscription callbacks (``with_sync_callbacks()``). **Recommended for Lambda/serverless deployments** where async fire-and-forget callbacks may be lost when the function freezes.
 
 Browser Redirect Behavior
 -------------------------

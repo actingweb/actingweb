@@ -59,7 +59,7 @@ def test_actor_id():
 
 @pytest.fixture(autouse=True)
 def skip_postgresql_if_not_configured(request):
-    """Skip PostgreSQL tests if DATABASE_BACKEND is set to dynamodb."""
+    """Skip PostgreSQL tests if not configured or unavailable."""
     import os
     # Check if this test is parameterized with backend
     if hasattr(request, 'param'):
@@ -74,6 +74,16 @@ def skip_postgresql_if_not_configured(request):
     # Skip PostgreSQL tests if DATABASE_BACKEND is dynamodb (PostgreSQL not configured)
     if backend == "postgresql" and os.getenv("DATABASE_BACKEND") == "dynamodb":
         pytest.skip("PostgreSQL not configured in this CI job")
+
+    # Also skip if PostgreSQL is not available/configured (local development)
+    if backend == "postgresql":
+        try:
+            from actingweb.db.postgresql import connection
+            # Try to get a connection to verify PostgreSQL is configured
+            conn = connection.get_connection()
+            conn.close()
+        except Exception:
+            pytest.skip("PostgreSQL not available or not configured")
 
 
 @pytest.fixture

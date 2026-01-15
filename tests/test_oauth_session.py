@@ -26,20 +26,20 @@ class TestOAuth2SessionManager:
 
         # Mock the DbAttribute class to use in-memory storage
         class MockDbAttribute:
-            def __init__(test_self):  # type: ignore
-                test_self.storage = self._test_storage
+            def __init__(self):  # type: ignore
+                self.storage = self._test_storage
 
-            def get_bucket(test_self, actor_id, bucket):  # type: ignore
+            def get_bucket(self, actor_id, bucket):  # type: ignore
                 key = f"{actor_id}:{bucket}"
-                return test_self.storage.get(key, {})
+                return self.storage.get(key, {})
 
-            def get_attr(test_self, actor_id, bucket, name):  # type: ignore
+            def get_attr(self, actor_id, bucket, name):  # type: ignore
                 key = f"{actor_id}:{bucket}"
-                bucket_data = test_self.storage.get(key, {})
+                bucket_data = self.storage.get(key, {})
                 return bucket_data.get(name)
 
             def set_attr(
-                test_self,
+                self,
                 actor_id,
                 bucket,
                 name,
@@ -48,26 +48,26 @@ class TestOAuth2SessionManager:
                 ttl_seconds=None,
             ):  # type: ignore
                 key = f"{actor_id}:{bucket}"
-                if key not in test_self.storage:
-                    test_self.storage[key] = {}
-                test_self.storage[key][name] = {
+                if key not in self.storage:
+                    self.storage[key] = {}
+                self.storage[key][name] = {
                     "data": data,
                     "timestamp": timestamp,
                     "ttl_seconds": ttl_seconds,
                 }
                 return True
 
-            def delete_attr(test_self, actor_id, bucket, name):  # type: ignore
+            def delete_attr(self, actor_id, bucket, name):  # type: ignore
                 key = f"{actor_id}:{bucket}"
-                if key in test_self.storage and name in test_self.storage[key]:
-                    del test_self.storage[key][name]
+                if key in self.storage and name in self.storage[key]:
+                    del self.storage[key][name]
                     return True
                 return False
 
-            def delete_bucket(test_self, actor_id, bucket):  # type: ignore
+            def delete_bucket(self, actor_id, bucket):  # type: ignore
                 key = f"{actor_id}:{bucket}"
-                if key in test_self.storage:
-                    del test_self.storage[key]
+                if key in self.storage:
+                    del self.storage[key]
                     return True
                 return False
 

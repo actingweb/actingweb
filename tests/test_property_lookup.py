@@ -37,7 +37,7 @@ def test_actor_id():
     try:
         actor_mod = get_db_module("postgresql", "actor")
         actor = actor_mod.DbActor()
-        actor.create(actor_id=actor_id, aw_type="urn:actingweb:test", creator="test")
+        actor.create(actor_id=actor_id, creator="test@example.com", passphrase="")
     except Exception:
         pass  # Ignore errors - PostgreSQL may not be configured
 

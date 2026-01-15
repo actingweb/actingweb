@@ -2,6 +2,10 @@
 
 Specifically tests the sync_subscription_callbacks feature added for
 Lambda/serverless deployments.
+
+Note: Actor is imported inside fixtures (not at module level) to avoid
+triggering module initialization during pytest collection, which could
+affect test isolation in parallel execution.
 """
 
 from unittest.mock import Mock, patch
@@ -9,12 +13,14 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from actingweb.actor import Actor
-
 
 @pytest.fixture
 def mock_actor_sync():
     """Create a mocked Actor with sync_subscription_callbacks=True."""
+    # Import Actor inside fixture to avoid module-level import during collection
+    # This ensures the import happens after worker-specific DB prefix is set
+    from actingweb.actor import Actor
+
     mock_config = Mock()
     mock_config.force_email_prop_as_creator = False
     mock_config.sync_subscription_callbacks = True
@@ -41,6 +47,9 @@ def mock_actor_sync():
 @pytest.fixture
 def mock_actor_async():
     """Create a mocked Actor with sync_subscription_callbacks=False."""
+    # Import Actor inside fixture to avoid module-level import during collection
+    from actingweb.actor import Actor
+
     mock_config = Mock()
     mock_config.force_email_prop_as_creator = False
     mock_config.sync_subscription_callbacks = False

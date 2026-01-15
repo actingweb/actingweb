@@ -57,6 +57,25 @@ def test_actor_id():
             pass  # Ignore cleanup errors
 
 
+@pytest.fixture(autouse=True)
+def skip_postgresql_if_not_configured(request):
+    """Skip PostgreSQL tests if DATABASE_BACKEND is set to dynamodb."""
+    import os
+    # Check if this test is parameterized with backend
+    if hasattr(request, 'param'):
+        backend = request.param
+    elif 'backend' in request.fixturenames:
+        # Get backend from indirect fixture
+        backend = request.getfixturevalue('backend')
+    else:
+        # No backend parameter, don't skip
+        return
+
+    # Skip PostgreSQL tests if DATABASE_BACKEND is dynamodb (PostgreSQL not configured)
+    if backend == "postgresql" and os.getenv("DATABASE_BACKEND") == "dynamodb":
+        pytest.skip("PostgreSQL not configured in this CI job")
+
+
 @pytest.fixture
 def config_with_lookup_table(monkeypatch):
     """Configure environment to use lookup table."""

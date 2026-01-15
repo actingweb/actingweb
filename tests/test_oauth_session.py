@@ -25,9 +25,12 @@ class TestOAuth2SessionManager:
         self._test_storage = {}
 
         # Mock the DbAttribute class to use in-memory storage
+        # Capture reference to storage for use in nested class
+        test_storage = self._test_storage
+
         class MockDbAttribute:
             def __init__(self):  # type: ignore
-                self.storage = self._test_storage
+                self.storage = test_storage
 
             def get_bucket(self, actor_id, bucket):  # type: ignore
                 key = f"{actor_id}:{bucket}"

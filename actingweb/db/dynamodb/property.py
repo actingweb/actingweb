@@ -218,6 +218,8 @@ class DbProperty:
             DbPropertyLookup()
 
             # Delete old lookup entry if exists
+            # Note: Theoretical race condition if another actor creates same value
+            # between get() and delete(), but best-effort design accepts this edge case
             if old_value and old_value != new_value:
                 try:
                     lookup = PropertyLookup.get(name, old_value)

@@ -61,6 +61,11 @@ def test_actor_id():
 def skip_postgresql_if_not_configured(request):
     """Skip PostgreSQL tests if not configured or unavailable."""
     import os
+
+    # Only apply this skip logic to tests in this file (test_property_lookup.py)
+    if "test_property_lookup" not in str(request.fspath):
+        return
+
     # Check if this test is parameterized with backend
     if hasattr(request, 'param'):
         backend = request.param

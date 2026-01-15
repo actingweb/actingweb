@@ -562,7 +562,13 @@ class HookRegistry:
         path: list[str] | None = None,
         auth_context: dict[str, Any] | None = None,
     ) -> Any:
-        """Execute property hooks with transparent permission checking."""
+        """Execute property hooks with transparent permission checking.
+
+        Note: If you have async hooks and are in an async context,
+        use execute_property_hooks_async() instead for proper async execution.
+        Async hooks in this method will be executed via asyncio.run() which
+        may cause issues if already in an event loop.
+        """
         path = path or []
 
         # Check permission before executing hooks
@@ -581,7 +587,9 @@ class HookRegistry:
             hooks = self._property_hooks[property_name].get(operation, [])
             for hook in hooks:
                 try:
-                    value = hook(actor, operation, value, path)
+                    value = self._execute_hook_in_sync_context(
+                        hook, actor, operation, value, path
+                    )
                     if value is None and operation in ["put", "post"]:
                         # Hook rejected the operation
                         return None
@@ -595,7 +603,9 @@ class HookRegistry:
             hooks = self._property_hooks["*"].get(operation, [])
             for hook in hooks:
                 try:
-                    value = hook(actor, operation, value, path)
+                    value = self._execute_hook_in_sync_context(
+                        hook, actor, operation, value, path
+                    )
                     if value is None and operation in ["put", "post"]:
                         return None
                 except Exception as e:
@@ -608,7 +618,13 @@ class HookRegistry:
     def execute_callback_hooks(
         self, callback_name: str, actor: Any, data: Any
     ) -> bool | dict[str, Any]:
-        """Execute callback hooks and return whether callback was processed or result data."""
+        """Execute callback hooks and return whether callback was processed or result data.
+
+        Note: If you have async hooks and are in an async context,
+        use execute_callback_hooks_async() instead for proper async execution.
+        Async hooks in this method will be executed via asyncio.run() which
+        may cause issues if already in an event loop.
+        """
         processed = False
         result_data: dict[str, Any] | None = None
 
@@ -616,7 +632,9 @@ class HookRegistry:
         if callback_name in self._callback_hooks:
             for hook in self._callback_hooks[callback_name]:
                 try:
-                    hook_result = hook(actor, callback_name, data)
+                    hook_result = self._execute_hook_in_sync_context(
+                        hook, actor, callback_name, data
+                    )
                     if hook_result:
                         processed = True
                         if isinstance(hook_result, dict):
@@ -628,7 +646,9 @@ class HookRegistry:
         if "*" in self._callback_hooks:
             for hook in self._callback_hooks["*"]:
                 try:
-                    hook_result = hook(actor, callback_name, data)
+                    hook_result = self._execute_hook_in_sync_context(
+                        hook, actor, callback_name, data
+                    )
                     if hook_result:
                         processed = True
                         if isinstance(hook_result, dict):
@@ -644,7 +664,13 @@ class HookRegistry:
     def execute_app_callback_hooks(
         self, callback_name: str, data: Any
     ) -> bool | dict[str, Any]:
-        """Execute application-level callback hooks (no actor context)."""
+        """Execute application-level callback hooks (no actor context).
+
+        Note: If you have async hooks and are in an async context,
+        use execute_app_callback_hooks_async() instead for proper async execution.
+        Async hooks in this method will be executed via asyncio.run() which
+        may cause issues if already in an event loop.
+        """
         processed = False
         result_data: dict[str, Any] | None = None
 
@@ -652,7 +678,7 @@ class HookRegistry:
         if callback_name in self._app_callback_hooks:
             for hook in self._app_callback_hooks[callback_name]:
                 try:
-                    hook_result = hook(data)
+                    hook_result = self._execute_hook_in_sync_context(hook, data)
                     if hook_result:
                         processed = True
                         if isinstance(hook_result, dict):
@@ -668,26 +694,43 @@ class HookRegistry:
     def execute_subscription_hooks(
         self, actor: Any, subscription: dict[str, Any], peer_id: str, data: Any
     ) -> bool:
-        """Execute subscription hooks and return whether subscription was processed."""
+        """Execute subscription hooks and return whether subscription was processed.
+
+        Note: If you have async hooks and are in an async context,
+        use execute_subscription_hooks_async() instead for proper async execution.
+        Async hooks in this method will be executed via asyncio.run() which
+        may cause issues if already in an event loop.
+        """
         processed = False
 
         for hook in self._subscription_hooks:
             try:
-                if hook(actor, subscription, peer_id, data):
+                hook_result = self._execute_hook_in_sync_context(
+                    hook, actor, subscription, peer_id, data
+                )
+                if hook_result:
                     processed = True
             except Exception as e:
                 logger.error(f"Error in subscription hook: {e}")
 
         return processed
 
-    def execute_lifecycle_hooks(self, event: str, actor: Any, **kwargs) -> Any:
-        """Execute lifecycle hooks."""
+    def execute_lifecycle_hooks(self, event: str, actor: Any, **kwargs: Any) -> Any:
+        """Execute lifecycle hooks.
+
+        Note: If you have async hooks and are in an async context,
+        use execute_lifecycle_hooks_async() instead for proper async execution.
+        Async hooks in this method will be executed via asyncio.run() which
+        may cause issues if already in an event loop.
+        """
         result = None
 
         if event in self._lifecycle_hooks:
             for hook in self._lifecycle_hooks[event]:
                 try:
-                    hook_result = hook(actor, **kwargs)
+                    hook_result = self._execute_hook_in_sync_context(
+                        hook, actor, **kwargs
+                    )
                     if hook_result is not None:
                         result = hook_result
                 except Exception as e:

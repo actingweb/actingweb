@@ -2,6 +2,14 @@
 CHANGELOG
 =========
 
+v3.9.1: Jan 15, 2026
+--------------------
+
+FIXED
+~~~~~
+
+- **Async Hooks in Sync Execution Methods**: Fixed ``execute_lifecycle_hooks()``, ``execute_callback_hooks()``, ``execute_property_hooks()``, ``execute_subscription_hooks()``, and ``execute_app_callback_hooks()`` to properly execute async hooks when called from synchronous contexts. Previously, async hooks registered for these hook types would return unawaited coroutines instead of executing. Now all sync execution methods use ``_execute_hook_in_sync_context()`` to correctly handle both sync and async hooks via ``asyncio.run()`` fallback.
+
 v3.9.0: Jan 15, 2026
 --------------------
 

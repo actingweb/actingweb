@@ -2,6 +2,21 @@
 CHANGELOG
 =========
 
+v3.9.2: Jan 15, 2026
+--------------------
+
+ADDED
+~~~~~
+
+- **Synchronous Subscription Callbacks**: Added ``with_sync_callbacks()`` builder method and ``sync_subscription_callbacks`` config option for Lambda/serverless environments. When enabled, subscription callbacks use blocking HTTP requests instead of async fire-and-forget, ensuring callbacks complete before the request handler returns. This prevents callbacks from being lost when Lambda functions freeze after returning a response.
+
+  - New builder method: ``ActingWebApp.with_sync_callbacks(enable=True)``
+  - New config attribute: ``Config.sync_subscription_callbacks`` (default: ``False``)
+  - Refactored ``Actor.callback_subscription()`` to use shared sync helper function
+  - Improved logging with sequence numbers and peer IDs for callback debugging
+
+- **Subscription Sequence in GET Response**: Added ``sequence`` field to GET subscription response (``/subscriptions/<peerid>/<subid>``). The subscription's current sequence number is now included at the top level of the response, allowing peers to detect gaps in received diffs without examining individual diff sequence numbers. Updated ActingWeb Specification to version 1.4.
+
 v3.9.1: Jan 15, 2026
 --------------------
 

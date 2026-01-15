@@ -695,3 +695,38 @@ class TestAsyncHookSyncExecutionFixes:
         result = registry.execute_lifecycle_hooks("failing_event", mock_actor)
 
         assert result is None
+
+    def test_async_property_hook_with_nested_path(self, registry, mock_actor):
+        """Test async property hook correctly receives nested path parameter."""
+        received_paths = []
+
+        async def async_property_with_path(_actor, operation, value, path):
+            await asyncio.sleep(0.01)
+            received_paths.append(path)
+            return f"transformed:{value}:path={'/'.join(path)}"
+
+        registry.register_property_hook("settings", async_property_with_path)
+
+        # Test with deeply nested path
+        result = registry.execute_property_hooks(
+            "settings", "get", mock_actor, "dark", path=["theme", "color", "mode"]
+        )
+
+        assert result == "transformed:dark:path=theme/color/mode"
+        assert received_paths == [["theme", "color", "mode"]]
+
+    def test_async_subscription_hook_exception_handling(self, registry, mock_actor):
+        """Test exception handling in async subscription hooks via sync execution."""
+
+        async def failing_subscription(_actor, _subscription, _peer_id, _data):
+            await asyncio.sleep(0.01)
+            raise ValueError("Test error")
+
+        registry.register_subscription_hook(failing_subscription)
+
+        # Should not raise, should return False (not processed)
+        result = registry.execute_subscription_hooks(
+            mock_actor, {"sub_id": "123"}, "peer123", {"event": "test"}
+        )
+
+        assert result is False

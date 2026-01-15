@@ -1601,8 +1601,8 @@ class Actor:
                         logger.warning("About to clear diff without having subobj set")
                     else:
                         sub_obj.clear_diff(diff["sequence"])
-            except Exception:
-                logger.debug("Peer did not respond to callback on url(" + requrl + ")")
+            except (requests.RequestException, requests.Timeout, ConnectionError) as e:
+                logger.debug(f"Peer did not respond to callback on url({requrl}): {e}")
                 self.last_response_code = 0
                 self.last_response_message = (
                     "No response from peer for subscription callback"
@@ -1647,7 +1647,7 @@ class Actor:
                         logger.warning("About to clear diff without having subobj set")
                     else:
                         sub_obj.clear_diff(diff["sequence"])
-            except Exception as e:
+            except (httpx.HTTPError, httpx.TimeoutException) as e:
                 logger.debug(f"Peer did not respond to callback on url({requrl}): {e}")
                 self.last_response_code = 0
                 self.last_response_message = (

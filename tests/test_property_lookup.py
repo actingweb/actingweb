@@ -29,8 +29,27 @@ def get_db_module(backend: str, module: str):
 
 @pytest.fixture
 def test_actor_id():
-    """Generate a unique actor ID for each test."""
-    return str(uuid.uuid4())
+    """Generate a unique actor ID and create actor in PostgreSQL for foreign key tests."""
+    actor_id = str(uuid.uuid4())
+
+    # Create actor in PostgreSQL for foreign key constraint (best effort)
+    # This is needed because property_lookup table has FK to actors table
+    try:
+        actor_mod = get_db_module("postgresql", "actor")
+        actor = actor_mod.DbActor()
+        actor.create(actor_id=actor_id, aw_type="urn:actingweb:test", creator="test")
+    except Exception:
+        pass  # Ignore errors - PostgreSQL may not be configured
+
+    yield actor_id
+
+    # Cleanup: Delete actor from PostgreSQL (best effort)
+    try:
+        actor_mod = get_db_module("postgresql", "actor")
+        actor = actor_mod.DbActor()
+        actor.delete(actor_id=actor_id)
+    except Exception:
+        pass  # Ignore cleanup errors
 
 
 @pytest.fixture

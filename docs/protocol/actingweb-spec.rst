@@ -38,6 +38,9 @@ Changelog
 
 - Added ``sequence`` field requirement to GET subscription response (``/subscriptions/<peerid>/<subid>``)
 - The subscription's current sequence number MUST now be included at the top level of the response
+- Added ``subscriptionresync`` option tag for resync callback support
+- Added Resync Callback section for bulk operation synchronization
+- Callbacks now support optional ``type`` field (``"resync"`` or ``"diff"``)
 
 **Version 1.3** (December 2025)
 
@@ -432,6 +435,10 @@ listproperties
 
 trustpermissions
   The trust endpoint supports per‑relationship permission management (enhanced trust API and ``/permissions``).
+
+subscriptionresync
+  Support for the resync callback mechanism. When present, the actor supports sending
+  ``type: "resync"`` callbacks to indicate peers should perform a full GET to synchronize state.
 
 Response Conventions
 -----------------------------
@@ -2662,6 +2669,45 @@ return 404 Not found after clearing has been done.
   }
 
   204 No content
+
+Resync Callback (OPTIONAL)
+--------------------------
+
+An actor MAY support the resync callback mechanism by including the
+``subscriptionresync`` option tag in ``/meta/actingweb/supported``.
+
+When supported, the actor MAY send a resync callback to indicate that
+the peer should perform a full GET to synchronize state, rather than
+processing individual diffs. This is useful after bulk operations where
+many changes occurred and sending individual diffs would be inefficient.
+
+**Resync Callback Format**
+
+The resync callback includes a ``type`` field set to ``"resync"``::
+
+  {
+    "id": "actor123",
+    "subscriptionid": "sub456",
+    "target": "properties",
+    "subtarget": "memory_travel",
+    "sequence": 7,
+    "timestamp": "2026-01-15T12:00:00.000000Z",
+    "granularity": "high",
+    "type": "resync",
+    "url": "https://example.com/actor123/properties/memory_travel"
+  }
+
+The ``type`` field:
+
+- ``"resync"`` - Peer should GET full state from the provided URL
+- ``"diff"`` or absent - Normal diff callback (backward compatible)
+
+On receiving a resync callback, the peer SHOULD:
+
+1. Discard any cached state for the target/subtarget
+2. Perform a GET on the provided URL to fetch the current state
+3. Update local sequence tracking to the callback's sequence number
+4. Respond with ``204 No Content``
 
 Security Considerations
 =======================

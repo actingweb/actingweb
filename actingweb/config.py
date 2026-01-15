@@ -72,6 +72,13 @@ class Config:
         # Where can more info be found
         self.info = "http://actingweb.org/"
         #########
+        # Subscription callback settings
+        #########
+        # Force synchronous subscription callbacks (recommended for Lambda/serverless)
+        # When True, callbacks use blocking HTTP requests instead of async fire-and-forget
+        # This ensures callbacks complete before the Lambda function freezes
+        self.sync_subscription_callbacks = False
+        #########
         # Trust settings for this app
         #########
         # Default relationship if not specified

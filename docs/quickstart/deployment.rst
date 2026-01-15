@@ -32,11 +32,25 @@ AWS Lambda (Serverless)
     from actingweb.interface import ActingWebApp
 
     flask_app = Flask(__name__)
-    aw_app = ActingWebApp(...).with_web_ui()
+    aw_app = (
+        ActingWebApp(...)
+        .with_web_ui()
+        .with_sync_callbacks()  # IMPORTANT for Lambda!
+    )
     aw_app.integrate_flask(flask_app)
 
     def handler(event, context):
         return serverless_wsgi.handle_request(flask_app, event, context)
+
+**Important: Enable Synchronous Callbacks**
+
+In Lambda/serverless environments, async fire-and-forget callbacks may be lost when the function freezes after returning a response. Use ``with_sync_callbacks()`` to ensure subscription callbacks complete before the handler returns:
+
+.. code-block:: python
+
+    aw_app = ActingWebApp(...).with_sync_callbacks(enable=True)
+
+This makes callbacks use blocking HTTP requests instead of async tasks, guaranteeing delivery at the cost of slightly longer response times.
 
 Serverless config example:
 

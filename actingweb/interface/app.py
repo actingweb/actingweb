@@ -64,6 +64,7 @@ class ActingWebApp:
         self._unique_creator = False
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
+        self._sync_subscription_callbacks = False  # Async by default
 
         # Property lookup configuration
         self._indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
@@ -119,6 +120,9 @@ class ActingWebApp:
             self._config.indexed_properties = self._indexed_properties
         if hasattr(self, "_use_lookup_table"):
             self._config.use_lookup_table = self._use_lookup_table
+        # Subscription callback mode
+        if hasattr(self, "_sync_subscription_callbacks"):
+            self._config.sync_subscription_callbacks = self._sync_subscription_callbacks
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -248,6 +252,24 @@ class ActingWebApp:
         self._enable_mcp = enable
         # Note: aw_supported is computed in Config.__init__. We keep this minimal
         # to avoid touching unrelated features; OAuth fix does not require recompute.
+        return self
+
+    def with_sync_callbacks(self, enable: bool = True) -> "ActingWebApp":
+        """Enable synchronous subscription callbacks.
+
+        When enabled, subscription callbacks use blocking HTTP requests instead of
+        async fire-and-forget. This ensures callbacks complete before the request
+        handler returns, which is important for Lambda/serverless where async tasks
+        may be lost when the function freezes after returning a response.
+
+        Args:
+            enable: If True, use synchronous callbacks. Default is True.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._sync_subscription_callbacks = enable
+        self._apply_runtime_changes_to_config()
         return self
 
     def add_service(
@@ -460,6 +482,7 @@ class ActingWebApp:
                 oauth=self._oauth_config or {},
                 mcp=self._enable_mcp,
                 indexed_properties=self._indexed_properties,
+                sync_subscription_callbacks=self._sync_subscription_callbacks,
                 use_lookup_table=self._use_lookup_table,
             )
             self._attach_service_registry_to_config()

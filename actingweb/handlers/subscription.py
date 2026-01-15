@@ -348,6 +348,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
             "target": sub_dict["target"],
             "subtarget": sub_dict["subtarget"],
             "resource": sub_dict["resource"],
+            "sequence": sub_dict["sequence"],
             "data": pairs,
         }
         out = json.dumps(data)

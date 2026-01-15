@@ -276,6 +276,13 @@ class DbProperty:
                     """,
                     (name, new_value, actor_id),
                 )
+                # Log conflict if another actor already claimed this value
+                if cur.rowcount == 0:
+                    logger.warning(
+                        f"LOOKUP_CONFLICT: property={name} "
+                        f"value_len={len(new_value)} actor={actor_id} - "
+                        f"value already claimed by another actor"
+                    )
 
         except Exception as e:
             logger.error(

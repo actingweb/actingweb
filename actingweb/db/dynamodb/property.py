@@ -209,9 +209,17 @@ class DbProperty:
         Best-effort update - logs errors but doesn't fail property write.
         """
         try:
-            from actingweb.db.dynamodb.property_lookup import PropertyLookup
+            from actingweb.db.dynamodb.property_lookup import (
+                DbPropertyLookup,
+                PropertyLookup,
+            )
+
+            # Ensure table exists
+            DbPropertyLookup()
 
             # Delete old lookup entry if exists
+            # Note: Theoretical race condition if another actor creates same value
+            # between get() and delete(), but best-effort design accepts this edge case
             if old_value and old_value != new_value:
                 try:
                     lookup = PropertyLookup.get(name, old_value)
@@ -242,7 +250,13 @@ class DbProperty:
         Best-effort deletion - logs errors but doesn't fail property delete.
         """
         try:
-            from actingweb.db.dynamodb.property_lookup import PropertyLookup
+            from actingweb.db.dynamodb.property_lookup import (
+                DbPropertyLookup,
+                PropertyLookup,
+            )
+
+            # Ensure table exists
+            DbPropertyLookup()
 
             lookup = PropertyLookup.get(name, value)
             # Verify it belongs to the same actor before deleting
@@ -351,7 +365,13 @@ class DbPropertyList:
 
         # Delete lookup entries
         if indexed_props:
-            from actingweb.db.dynamodb.property_lookup import PropertyLookup
+            from actingweb.db.dynamodb.property_lookup import (
+                DbPropertyLookup,
+                PropertyLookup,
+            )
+
+            # Ensure table exists
+            DbPropertyLookup()
 
             for name, value in indexed_props:
                 try:

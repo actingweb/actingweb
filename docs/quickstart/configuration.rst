@@ -507,6 +507,21 @@ Size Limits
 
 **Recommendation:** Use lookup tables if you need to store OAuth tokens, long external IDs, or any property values exceeding 2KB.
 
+**Practical Size Limits:**
+
+While lookup tables remove hard limits, consider these guidelines for optimal performance:
+
+- **DynamoDB**: Hard limit of 400KB per item (applies to entire property record)
+- **PostgreSQL**: No hard limit (TEXT column), but very large values impact query performance
+- **Recommended**: Keep indexed property values under 10KB for best query performance
+- **Performance impact**: Property values over 100KB may cause slower writes and increased memory usage
+
+For extremely large data (>100KB), consider:
+
+1. Storing the data in external storage (S3, Cloud Storage) and keeping only a reference in the property
+2. Using property lists for chunked storage of large datasets
+3. Using non-indexed properties for large values that don't require reverse lookups
+
 Best Practices
 ~~~~~~~~~~~~~~
 

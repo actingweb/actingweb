@@ -1,5 +1,5 @@
 =====================================
-ActingWeb Specification - version 1.3
+ActingWeb Specification - version 1.4
 =====================================
 
 Introduction
@@ -33,6 +33,11 @@ license.
 
 Changelog
 -----------------------------
+
+**Version 1.4** (January 2026)
+
+- Added ``sequence`` field requirement to GET subscription response (``/subscriptions/<peerid>/<subid>``)
+- The subscription's current sequence number MUST now be included at the top level of the response
 
 **Version 1.3** (December 2025)
 
@@ -2527,7 +2532,12 @@ this specific subscription as identified by subscriptionid.
 
 A peer bearer token authenticated GET on the subscription id MUST offer
 a similar format, but here an array of data elements MUST represent one
-or more diff updates. In the below example, the first diff was retrieved
+or more diff updates. The response MUST include a ``sequence`` attribute
+at the top level indicating the subscription's current sequence number.
+This allows peers to detect gaps in received diffs without examining
+individual diff sequence numbers.
+
+In the below example, the first diff was retrieved
 earlier, now diff 2 - 6 are collected.
 
 ::
@@ -2538,6 +2548,7 @@ earlier, now diff 2 - 6 are collected.
     "resource": "",
     "target": "properties",
     "subtarget": "test",
+    "sequence": 6,
     "data": [
       {
         "timestamp": "2016-11-15T13:46:51.906980Z",

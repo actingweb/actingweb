@@ -713,14 +713,22 @@ class TestSubscriptionActorFlow:
         assert response.status_code == 200
         data = response.json()
 
+        # Verify top-level sequence field (spec v1.4 requirement)
+        assert "sequence" in data, "Response must include top-level 'sequence' field"
+        assert isinstance(data["sequence"], int), "sequence must be an integer"
+
         if "data" in data:
             # Should have 6 data entries (initial + 5 changes)
             assert len(data["data"]) >= 5
 
-            # Verify sequence numbers
+            # Verify sequence numbers in diffs
             assert data["data"][0]["sequence"] == 1
             if len(data["data"]) > 1:
                 assert data["data"][1]["sequence"] == 2
+
+            # Top-level sequence should match or exceed highest diff sequence
+            max_diff_seq = max(d["sequence"] for d in data["data"])
+            assert data["sequence"] >= max_diff_seq
 
             # Verify some data values
             if "data" in data["data"][0] and isinstance(data["data"][0]["data"], dict):
@@ -753,6 +761,11 @@ class TestSubscriptionActorFlow:
                         assert response.status_code == 200
 
                         sub_data = response.json()
+
+                        # Verify top-level sequence field (spec v1.4 requirement)
+                        assert "sequence" in sub_data, "Response must include 'sequence'"
+                        assert isinstance(sub_data["sequence"], int)
+
                         if "data" in sub_data and len(sub_data["data"]) >= 2:
                             assert sub_data["data"][0]["sequence"] == 1
                             assert sub_data["data"][0]["data"] == "initial"
@@ -810,6 +823,10 @@ class TestSubscriptionActorFlow:
         assert response.status_code == 200
         data = response.json()
 
+        # Verify top-level sequence field (spec v1.4 requirement)
+        assert "sequence" in data, "Response must include top-level 'sequence' field"
+        assert isinstance(data["sequence"], int), "sequence must be an integer"
+
         if "data" in data and len(data["data"]) > 0:
             # First remaining entry should be sequence 3
             assert data["data"][0]["sequence"] >= 3
@@ -840,6 +857,11 @@ class TestSubscriptionActorFlow:
                         )
                         if response.status_code == 200:
                             sub_data = response.json()
+
+                            # Verify top-level sequence (spec v1.4 requirement)
+                            assert "sequence" in sub_data, "Response must include 'sequence'"
+                            assert isinstance(sub_data["sequence"], int)
+
                             if "data" in sub_data and len(sub_data["data"]) > 0:
                                 # Verify nested structure
                                 first_data = sub_data["data"][0]["data"]

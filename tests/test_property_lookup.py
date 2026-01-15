@@ -30,26 +30,31 @@ def get_db_module(backend: str, module: str):
 @pytest.fixture
 def test_actor_id():
     """Generate a unique actor ID and create actor in PostgreSQL for foreign key tests."""
+    import os
     actor_id = str(uuid.uuid4())
 
-    # Create actor in PostgreSQL for foreign key constraint (best effort)
-    # This is needed because property_lookup table has FK to actors table
-    try:
-        actor_mod = get_db_module("postgresql", "actor")
-        actor = actor_mod.DbActor()
-        actor.create(actor_id=actor_id, creator="test@example.com", passphrase="")
-    except Exception:
-        pass  # Ignore errors - PostgreSQL may not be configured
+    # Only create actor in PostgreSQL if DATABASE_BACKEND is set to postgresql
+    # This avoids errors in dynamodb-only CI jobs
+    if os.getenv("DATABASE_BACKEND") == "postgresql":
+        # Create actor in PostgreSQL for foreign key constraint (best effort)
+        # This is needed because property_lookup table has FK to actors table
+        try:
+            actor_mod = get_db_module("postgresql", "actor")
+            actor = actor_mod.DbActor()
+            actor.create(actor_id=actor_id, creator="test@example.com", passphrase="")
+        except Exception:
+            pass  # Ignore errors - table may not exist yet
 
     yield actor_id
 
     # Cleanup: Delete actor from PostgreSQL (best effort)
-    try:
-        actor_mod = get_db_module("postgresql", "actor")
-        actor = actor_mod.DbActor()
-        actor.delete(actor_id=actor_id)
-    except Exception:
-        pass  # Ignore cleanup errors
+    if os.getenv("DATABASE_BACKEND") == "postgresql":
+        try:
+            actor_mod = get_db_module("postgresql", "actor")
+            actor = actor_mod.DbActor()
+            actor.delete(actor_id=actor_id)
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 @pytest.fixture

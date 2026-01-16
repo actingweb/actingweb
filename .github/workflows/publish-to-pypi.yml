@@ -211,8 +211,18 @@ jobs:
           VERSION="${{ needs.validate.outputs.version }}"
           echo "Extracting changelog for version: $VERSION"
           # Extract the section for this version from CHANGELOG.rst
-          # Match from "vX.Y.Z:" until the next version header or end of file
-          awk "/^v${VERSION}:/,/^v[0-9]+\.[0-9]+\.[0-9]+:/{if(/^v[0-9]+\.[0-9]+\.[0-9]+:/ && !/^v${VERSION}:/)exit; print}" CHANGELOG.rst > release_notes.txt
+          # Match from "vX.Y.Z:" until the next version header, "Unreleased", or end of file
+          # Handles: multi-digit versions, last entry in file, pre-release versions
+          awk "/^v${VERSION}:/,/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/{if(/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/ && !/^v${VERSION}:/)exit; print}" CHANGELOG.rst > release_notes.txt
+
+          # Validate extraction succeeded
+          if [ ! -s release_notes.txt ]; then
+            echo "WARNING: Could not extract changelog for version $VERSION"
+            echo "v${VERSION}" > release_notes.txt
+            echo "" >> release_notes.txt
+            echo "See CHANGELOG.rst for details." >> release_notes.txt
+          fi
+
           echo "--- Release notes ---"
           cat release_notes.txt
           echo "--- End release notes ---"

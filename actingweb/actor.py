@@ -90,6 +90,9 @@ class Actor:
 
         Includes retry logic for transient network failures with exponential backoff.
 
+        Note: This sync method blocks the event loop. In FastAPI/uvicorn contexts,
+        use AsyncTrustHandler which calls create_reciprocal_trust_async() instead.
+
         :param url: Root URI of a remote actor
         :param max_retries: Maximum number of retry attempts (default: 3)
         :param retry_delay: Initial delay between retries in seconds (default: 0.5)
@@ -156,42 +159,50 @@ class Actor:
         }
 
     async def get_peer_info_async(self, url: str) -> dict[str, Any]:
-        """Async version of get_peer_info using AwProxy.
+        """Async version of get_peer_info using httpx.
 
         Contacts another actor over HTTP/S to retrieve meta information without blocking.
 
         :param url: Root URI of a remote actor
         :return: Dict with last_response_code, last_response_message, and data
         """
+        import httpx
+
         try:
-            from .aw_proxy import AwProxy
-
             logger.info(f"Fetching peer info async from {url}")
-            proxy = AwProxy(
-                peer_target={"url": url},
-                config=self.config,
-            )
-            json_data = await proxy.get_resource_async(path="meta")
-
-            if json_data is None:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url + "/meta")
                 res = {
-                    "last_response_code": proxy.last_response_code,
-                    "last_response_message": proxy.last_response_message,
-                    "data": {},
+                    "last_response_code": response.status_code,
+                    "last_response_message": response.content,
+                    "data": response.json(),
                 }
-            else:
-                res = {
-                    "last_response_code": proxy.last_response_code,
-                    "last_response_message": proxy.last_response_message,
-                    "data": json_data,
-                }
-            logger.debug(f"Got peer info async from url({url})")
-        except Exception as e:
-            logger.error(f"Error getting peer info async from {url}: {e}")
-            res = {
+                logger.debug(
+                    f"Got peer info async from url({url}) with body({response.content})"
+                )
+                return res
+        except (TypeError, ValueError, KeyError) as e:
+            # JSON parsing errors
+            logger.warning(f"Invalid response from peer {url}: {e}")
+            return {
                 "last_response_code": 500,
+                "last_response_message": str(e),
+                "data": {},
             }
-        return res
+        except httpx.TimeoutException as e:
+            logger.warning(f"Timeout fetching peer info async from {url}: {e}")
+            return {
+                "last_response_code": 408,
+                "last_response_message": "Timeout",
+                "data": {},
+            }
+        except httpx.RequestError as e:
+            logger.warning(f"Network error fetching peer info async from {url}: {e}")
+            return {
+                "last_response_code": 500,
+                "last_response_message": str(e),
+                "data": {},
+            }
 
     def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
         """Retrieves an actor from storage or initialises if it does not exist"""
@@ -1090,22 +1101,31 @@ class Actor:
             "verify": new_trust["verification_token"] if new_trust else "",
         }
 
-        from .aw_proxy import AwProxy
+        import httpx
 
-        logger.info(f"Creating reciprocal trust async at {url}/trust/{relationship}")
+        requrl = url + "/trust/" + relationship
+        data = json.dumps(params)
+        logger.info(
+            f"Requesting trust relationship async from peer at ({requrl}) with data({data})"
+        )
         try:
-            proxy = AwProxy(peer_target={"url": url}, config=self.config)
-            await proxy.create_resource_async(
-                path=f"trust/{relationship}",
-                params=params,
-            )
-            self.last_response_code = proxy.last_response_code
-            self.last_response_message = (
-                proxy.last_response_message.decode("utf-8", "ignore")
-                if isinstance(proxy.last_response_message, bytes)
-                else str(proxy.last_response_message)
-            )
-        except Exception as e:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    requrl,
+                    content=data,
+                    headers={"Content-Type": "application/json"},
+                )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+        except httpx.TimeoutException:
+            logger.debug("Timeout creating trust with peer async, deleting my trust.")
+            dbtrust.delete()
+            return False
+        except httpx.RequestError as e:
             logger.debug(
                 f"Not able to create trust with peer async: {e}, deleting my trust."
             )

@@ -141,7 +141,10 @@ class BaseActingWebIntegration:
         Special case: UI forms that send GET /trust/<peerid>?_method=DELETE|PUT
         are treated as peer operations (TrustPeerHandler).
         """
-        from ...handlers import trust
+        from ...handlers import async_trust, trust
+
+        # Check if we should use async handlers (for FastAPI)
+        prefer_async = getattr(self, "_prefer_async_handlers", lambda: False)()
 
         relationship = kwargs.get("relationship")
         peerid = kwargs.get("peerid")
@@ -170,6 +173,11 @@ class BaseActingWebIntegration:
             path_parts.append(peerid)
 
         if len(path_parts) == 0:
+            # Root trust endpoint - use async handler for POST (trust creation)
+            if prefer_async:
+                return async_trust.AsyncTrustHandler(
+                    webobj, config, hooks=self.aw_app.hooks
+                )
             return trust.TrustHandler(webobj, config, hooks=self.aw_app.hooks)
         elif len(path_parts) == 1:
             # If _method override is present with DELETE/PUT, treat as peer operation

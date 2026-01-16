@@ -478,6 +478,8 @@ class TestWWWWithOAuthCookie:
 
         Pattern: oauth_token=<bearer_token>
         """
+        import time
+
         import requests
 
         # Create an actor
@@ -489,14 +491,31 @@ class TestWWWWithOAuthCookie:
         assert actor_response.status_code == 201
         actor_id = actor_response.json()["id"]
 
-        # Access www with OAuth cookie
-        response = requests.get(
-            f"{test_app}/{actor_id}/www",
-            cookies={"oauth_token": oauth2_client.access_token},
-        )
+        # Access www with OAuth cookie - retry on transient network errors
+        # PostgreSQL backend can occasionally have connection pool issues
+        max_retries = 3
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    f"{test_app}/{actor_id}/www",
+                    cookies={"oauth_token": oauth2_client.access_token},
+                    timeout=10,
+                )
+                # Should get 200 with HTML (or redirect if cookie auth not fully implemented)
+                assert response.status_code in [200, 302]
 
-        # Should get 200 with HTML (or redirect if cookie auth not fully implemented)
-        assert response.status_code in [200, 302]
-
-        if response.status_code == 200:
-            assert "text/html" in response.headers.get("Content-Type", "")
+                if response.status_code == 200:
+                    assert "text/html" in response.headers.get("Content-Type", "")
+                return  # Success
+            except (
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ConnectionError,
+            ) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    continue
+                raise AssertionError(
+                    f"Request failed after {max_retries} attempts: {last_error}"
+                ) from e

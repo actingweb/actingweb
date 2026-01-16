@@ -2,7 +2,12 @@
 CHANGELOG
 =========
 
-v3.9.2: Jan 15, 2026
+Unreleased
+----------
+
+(Changes for next release will be added here)
+
+v3.9.2: Jan 16, 2026
 --------------------
 
 ADDED
@@ -16,6 +21,18 @@ ADDED
   - Improved logging with sequence numbers and peer IDs for callback debugging
 
 - **Subscription Sequence in GET Response**: Added ``sequence`` field to GET subscription response (``/subscriptions/<peerid>/<subid>``). The subscription's current sequence number is now included at the top level of the response, allowing peers to detect gaps in received diffs without examining individual diff sequence numbers. Updated ActingWeb Specification to version 1.4.
+
+FIXED
+~~~~~
+
+- **Network Exception Handling in Trust Creation**: Fixed ``get_peer_info()`` to catch network-related exceptions (``ConnectionError``, ``Timeout``, etc.) that were previously uncaught. This prevents HTTP 500 errors during trust relationship creation when the peer is temporarily unavailable or slow to respond. The function now returns a proper 500 status code instead of crashing.
+
+IMPROVED
+~~~~~~~~
+
+- **Retry Logic for Peer Communication**: Added automatic retry with exponential backoff to ``get_peer_info()``. Network requests now retry up to 3 times with delays of 0.5s, 1s, and 2s on transient network failures. This significantly improves reliability when peers are briefly unavailable or slow to respond.
+
+- **Test Fixture Reliability**: Improved test server startup detection with faster polling (0.5s vs 1s) and added warmup requests after servers are detected as ready. This helps prevent race conditions in parallel test execution where the first real request might hit before internal initialization is complete.
 
 v3.9.1: Jan 15, 2026
 --------------------

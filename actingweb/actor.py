@@ -83,9 +83,16 @@ class Actor:
             self.property_lists = None
         self.get(actor_id=actor_id)
 
-    def get_peer_info(self, url: str) -> dict[str, Any]:
-        """Contacts an another actor over http/s to retrieve meta information
+    def get_peer_info(
+        self, url: str, max_retries: int = 3, retry_delay: float = 0.5
+    ) -> dict[str, Any]:
+        """Contacts another actor over http/s to retrieve meta information.
+
+        Includes retry logic for transient network failures with exponential backoff.
+
         :param url: Root URI of a remote actor
+        :param max_retries: Maximum number of retry attempts (default: 3)
+        :param retry_delay: Initial delay between retries in seconds (default: 0.5)
         :rtype: dict
         :return: The json response from the /meta path in the data element and last_response_code/last_response_message
         set to the results of the https request
@@ -97,20 +104,56 @@ class Actor:
         >>>    "data":{}
         >>>}
         """
-        try:
-            logger.info(f"Fetching peer info from {url}")
-            response = requests.get(url=url + "/meta", timeout=(5, 10))
-            res = {
-                "last_response_code": response.status_code,
-                "last_response_message": response.content,
-                "data": json.loads(response.content.decode("utf-8", "ignore")),
-            }
-            logger.debug(f"Got peer info from url({url}) with body({response.content})")
-        except (TypeError, ValueError, KeyError):
-            res = {
-                "last_response_code": 500,
-            }
-        return res
+        import time
+
+        last_error: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    logger.info(
+                        f"Retry attempt {attempt + 1}/{max_retries} for peer info from {url}"
+                    )
+                else:
+                    logger.info(f"Fetching peer info from {url}")
+
+                response = requests.get(url=url + "/meta", timeout=(5, 10))
+                res = {
+                    "last_response_code": response.status_code,
+                    "last_response_message": response.content,
+                    "data": json.loads(response.content.decode("utf-8", "ignore")),
+                }
+                logger.debug(
+                    f"Got peer info from url({url}) with body({response.content})"
+                )
+                return res
+            except (TypeError, ValueError, KeyError) as e:
+                # JSON parsing errors - don't retry
+                logger.warning(f"Invalid response from peer {url}: {e}")
+                return {
+                    "last_response_code": 500,
+                    "last_response_message": str(e),
+                }
+            except requests.exceptions.RequestException as e:
+                # Network errors - retry with exponential backoff
+                last_error = e
+                if attempt < max_retries - 1:
+                    delay = retry_delay * (2**attempt)  # Exponential backoff
+                    logger.warning(
+                        f"Network error fetching peer info from {url}: {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.warning(
+                        f"Network error fetching peer info from {url} after "
+                        f"{max_retries} attempts: {e}"
+                    )
+
+        # All retries exhausted
+        return {
+            "last_response_code": 500,
+            "last_response_message": str(last_error) if last_error else "Unknown error",
+        }
 
     async def get_peer_info_async(self, url: str) -> dict[str, Any]:
         """Async version of get_peer_info using AwProxy.

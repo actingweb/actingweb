@@ -37,12 +37,28 @@ make test-all-parallel            # Run ALL tests (unit + integration)
 poetry build                      # Build package
 ```
 
-### Version Bumping
+### Release Process
 
-Update version in **three files**:
-1. `pyproject.toml` - `version = "X.Y.Z"`
-2. `actingweb/__init__.py` - `__version__ = "X.Y.Z"`
-3. `CHANGELOG.rst` - Add new version entry
+Releases are decoupled from PRs. PRs merge to master without version bumps; releases are triggered by git tags.
+
+**For contributors (PRs):**
+1. Make changes
+2. Add entry to "Unreleased" section in `CHANGELOG.rst`
+3. Create PR, merge when approved
+4. No version bump needed
+
+**For maintainers (releasing):**
+1. Update version in `pyproject.toml` and `actingweb/__init__.py`
+2. Rename "Unreleased" to `vX.Y.Z: Date` in `CHANGELOG.rst`
+3. Add new empty "Unreleased" section at top
+4. Commit: `git commit -am "Release vX.Y.Z"`
+5. Tag: `git tag vX.Y.Z`
+6. Push: `git push && git push --tags`
+7. GitHub Actions validates version, runs tests, publishes to PyPI, creates GitHub Release
+
+**Version files** (must match tag):
+- `pyproject.toml` - `version = "X.Y.Z"`
+- `actingweb/__init__.py` - `__version__ = "X.Y.Z"`
 
 ## Documentation
 

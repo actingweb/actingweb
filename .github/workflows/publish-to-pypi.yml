@@ -1,18 +1,158 @@
-name: Publish to PyPI
+name: Release to PyPI
 
 on:
-  # Only trigger on successful completion of Tests workflow on master
-  workflow_run:
-    workflows: ["Tests"]
-    types: [completed]
-    branches: [master]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v3.10.0)'
+        required: true
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Parsed version: $VERSION"
+
+      - name: Validate version matches code
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          PYPROJECT_VERSION=$(grep -oP '(?<=^version = ")[^"]*' pyproject.toml || grep -o 'version = "[^"]*"' pyproject.toml | sed 's/version = "//;s/"//')
+          INIT_VERSION=$(grep -oP '(?<=__version__ = ")[^"]*' actingweb/__init__.py || grep -o '__version__ = "[^"]*"' actingweb/__init__.py | sed 's/__version__ = "//;s/"//')
+
+          echo "Tag version: $VERSION"
+          echo "pyproject.toml version: $PYPROJECT_VERSION"
+          echo "__init__.py version: $INIT_VERSION"
+
+          if [ "$VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "ERROR: Tag version ($VERSION) doesn't match pyproject.toml ($PYPROJECT_VERSION)"
+            exit 1
+          fi
+
+          if [ "$VERSION" != "$INIT_VERSION" ]; then
+            echo "ERROR: Tag version ($VERSION) doesn't match __init__.py ($INIT_VERSION)"
+            exit 1
+          fi
+
+          echo "Version validated: $VERSION"
+
+  test:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        backend: [dynamodb, postgresql]
+
+    name: Test (${{ matrix.backend }})
+
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
+
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: actingweb
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: actingweb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.7.0
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --with dev --extras "all"
+
+      - name: Run PostgreSQL migrations
+        if: matrix.backend == 'postgresql'
+        run: |
+          cd actingweb/db/postgresql
+          poetry run alembic upgrade head
+        env:
+          PG_DB_HOST: localhost
+          PG_DB_PORT: 5432
+          PG_DB_NAME: actingweb_test
+          PG_DB_USER: actingweb
+          PG_DB_PASSWORD: testpassword
+
+      - name: Wait for DynamoDB to be ready
+        if: matrix.backend == 'dynamodb'
+        run: |
+          echo "Waiting for DynamoDB to be ready..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8000/ > /dev/null 2>&1; then
+              echo "DynamoDB is ready!"
+              exit 0
+            fi
+            echo "Attempt $i: DynamoDB not ready yet, waiting..."
+            sleep 2
+          done
+          echo "DynamoDB failed to start within 60 seconds"
+          exit 1
+
+      - name: Run tests
+        run: |
+          poetry run pytest tests/ \
+            -m "not benchmark" \
+            -n 4 \
+            --dist loadscope \
+            --max-worker-restart=2 \
+            -v \
+            --tb=short
+        env:
+          DATABASE_BACKEND: ${{ matrix.backend }}
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DB_HOST: http://localhost:8000
+          AWS_DB_PREFIX: test
+          PG_DB_HOST: localhost
+          PG_DB_PORT: 5432
+          PG_DB_NAME: actingweb_test
+          PG_DB_USER: actingweb
+          PG_DB_PASSWORD: testpassword
+
   publish:
-    # Only run if Tests workflow succeeded AND it was a push to master
-    if: |
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push'
+    needs: [validate, test]
     runs-on: ubuntu-latest
 
     permissions:
@@ -22,6 +162,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -43,7 +185,7 @@ jobs:
 
       - name: Publish to PyPI
         env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.POETRY_PYPI_TOKEN_PYPI  }}
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.POETRY_PYPI_TOKEN_PYPI }}
         run: poetry publish --no-interaction --username __token__ --password $POETRY_PYPI_TOKEN_PYPI
 
       - name: Upload build artifacts
@@ -51,3 +193,45 @@ jobs:
         with:
           name: build-artifacts
           path: dist/
+
+  github-release:
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Extract changelog for version
+        id: changelog
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          echo "Extracting changelog for version: $VERSION"
+          # Extract the section for this version from CHANGELOG.rst
+          # Match from "vX.Y.Z:" until the next version header, "Unreleased", or end of file
+          # Handles: multi-digit versions, last entry in file, pre-release versions
+          awk "/^v${VERSION}:/,/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/{if(/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/ && !/^v${VERSION}:/)exit; print}" CHANGELOG.rst > release_notes.txt
+
+          # Validate extraction succeeded
+          if [ ! -s release_notes.txt ]; then
+            echo "WARNING: Could not extract changelog for version $VERSION"
+            echo "v${VERSION}" > release_notes.txt
+            echo "" >> release_notes.txt
+            echo "See CHANGELOG.rst for details." >> release_notes.txt
+          fi
+
+          echo "--- Release notes ---"
+          cat release_notes.txt
+          echo "--- End release notes ---"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Release ${{ needs.validate.outputs.version }}
+          body_path: release_notes.txt
+          draft: false
+          prerelease: false

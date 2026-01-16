@@ -2,6 +2,11 @@
 CHANGELOG
 =========
 
+Unreleased
+----------
+
+(Changes for next release will be added here)
+
 v3.9.2: Jan 16, 2026
 --------------------
 

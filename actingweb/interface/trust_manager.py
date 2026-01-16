@@ -231,6 +231,31 @@ class TrustManager:
             return TrustRelationship(rel_data)
         return None
 
+    async def create_relationship_async(
+        self,
+        peer_url: str,
+        relationship: str = "friend",
+        secret: str = "",
+        description: str = "",
+    ) -> TrustRelationship | None:
+        """Create a new trust relationship with another actor (async version).
+
+        This async version avoids blocking the event loop when making HTTP calls
+        to the peer actor. Use this in async contexts like FastAPI handlers.
+        """
+        if not secret:
+            secret = (
+                self._core_actor.config.new_token() if self._core_actor.config else ""
+            )
+
+        rel_data = await self._core_actor.create_reciprocal_trust_async(
+            url=peer_url, secret=secret, desc=description, relationship=relationship
+        )
+
+        if rel_data and isinstance(rel_data, dict):
+            return TrustRelationship(rel_data)
+        return None
+
     def approve_relationship(self, peer_id: str) -> bool:
         """Approve a trust relationship with lifecycle hook execution."""
         relationship = self.get_relationship(peer_id)

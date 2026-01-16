@@ -378,7 +378,7 @@ def test_app(docker_services, setup_database, worker_info):  # pylint: disable=u
     thread = Thread(target=run_app, daemon=True)
     thread.start()
 
-    # Wait for app to be ready
+    # Wait for app to be ready with improved reliability
     max_retries = 30
     for _ in range(max_retries):
         try:
@@ -387,11 +387,20 @@ def test_app(docker_services, setup_database, worker_info):  # pylint: disable=u
                 break
         except requests.exceptions.ConnectionError:
             pass
-        time.sleep(1)
+        time.sleep(0.5)  # Faster polling for quicker startup detection
     else:
         raise RuntimeError(
             f"Test app failed to start on port {test_app_port} within 30 seconds"
         )
+
+    # Warmup: make a few requests to ensure the app is fully initialized
+    # This helps prevent race conditions when the first real request hits
+    for _ in range(3):
+        try:
+            requests.get(f"{test_app_url}/", timeout=2)
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(0.1)
 
     return test_app_url
 
@@ -448,7 +457,7 @@ def www_test_app(docker_services, setup_database, worker_info):  # pylint: disab
     thread = Thread(target=run_app, daemon=True)
     thread.start()
 
-    # Wait for app to be ready
+    # Wait for app to be ready with improved reliability
     max_retries = 30
     for _ in range(max_retries):
         try:
@@ -457,11 +466,19 @@ def www_test_app(docker_services, setup_database, worker_info):  # pylint: disab
                 break
         except requests.exceptions.ConnectionError:
             pass
-        time.sleep(1)
+        time.sleep(0.5)  # Faster polling for quicker startup detection
     else:
         raise RuntimeError(
             f"WWW test app failed to start on port {www_test_port} within 30 seconds"
         )
+
+    # Warmup: make a few requests to ensure the app is fully initialized
+    for _ in range(3):
+        try:
+            requests.get(f"{www_test_url}/", timeout=2)
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(0.1)
 
     return www_test_url
 
@@ -502,7 +519,7 @@ def peer_app(docker_services, setup_database, worker_info):  # pylint: disable=u
     thread = Thread(target=run_app, daemon=True)
     thread.start()
 
-    # Wait for app to be ready
+    # Wait for app to be ready with improved reliability
     max_retries = 30
     for _ in range(max_retries):
         try:
@@ -511,11 +528,20 @@ def peer_app(docker_services, setup_database, worker_info):  # pylint: disable=u
                 break
         except requests.exceptions.ConnectionError:
             pass
-        time.sleep(1)
+        time.sleep(0.5)  # Faster polling for quicker startup detection
     else:
         raise RuntimeError(
             f"Peer app failed to start on port {peer_app_port} within 30 seconds"
         )
+
+    # Warmup: make a few requests to ensure the app is fully initialized
+    # This is especially important for peer_app which receives trust requests
+    for _ in range(3):
+        try:
+            requests.get(f"{peer_app_url}/", timeout=2)
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(0.1)
 
     return peer_app_url
 

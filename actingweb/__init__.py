@@ -4,6 +4,8 @@ __version__ = "3.9.2"
 __all__ = [
     "actor",  # pyright: ignore[reportUnsupportedDunderAll]
     "attribute",  # pyright: ignore[reportUnsupportedDunderAll]
+    "attribute_list",  # pyright: ignore[reportUnsupportedDunderAll]
+    "attribute_list_store",  # pyright: ignore[reportUnsupportedDunderAll]
     "oauth",  # pyright: ignore[reportUnsupportedDunderAll]
     "auth",  # pyright: ignore[reportUnsupportedDunderAll]
     "aw_proxy",  # pyright: ignore[reportUnsupportedDunderAll]

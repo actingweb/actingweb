@@ -1,0 +1,197 @@
+"""Tests for attribute_list module."""
+
+import pytest
+
+from actingweb.attribute_list import ListAttribute, ListAttributeIterator
+
+
+class TestListAttributeInitialization:
+    """Test ListAttribute class initialization."""
+
+    def test_init_with_all_params(self):
+        """Test initialization with actor_id, bucket, name, config."""
+        mock_config = object()
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=mock_config,
+        )
+
+        assert attr_list.actor_id == "test_actor"
+        assert attr_list.bucket == "test_bucket"
+        assert attr_list.name == "test_list"
+        assert attr_list.config == mock_config
+        assert attr_list._meta_cache is None
+
+    def test_init_without_config(self):
+        """Test initialization without config (no database)."""
+        attr_list = ListAttribute(
+            actor_id="test_actor", bucket="test_bucket", name="test_list", config=None
+        )
+
+        assert attr_list.actor_id == "test_actor"
+        assert attr_list.bucket == "test_bucket"
+        assert attr_list.name == "test_list"
+        assert attr_list.config is None
+
+    def test_get_meta_attribute_name(self):
+        """Test _get_meta_attribute_name() returns 'list:{name}:meta'."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="my_list",
+            config=None,
+        )
+
+        assert attr_list._get_meta_attribute_name() == "list:my_list:meta"
+
+    def test_get_item_attribute_name(self):
+        """Test _get_item_attribute_name(index) returns 'list:{name}:{index}'."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="my_list",
+            config=None,
+        )
+
+        assert attr_list._get_item_attribute_name(0) == "list:my_list:0"
+        assert attr_list._get_item_attribute_name(5) == "list:my_list:5"
+        assert attr_list._get_item_attribute_name(42) == "list:my_list:42"
+
+
+class TestListAttributeMetadata:
+    """Test ListAttribute metadata operations."""
+
+    def test_create_default_metadata(self):
+        """Test _create_default_metadata() returns proper structure."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        meta = attr_list._create_default_metadata()
+
+        required_fields = [
+            "length",
+            "created_at",
+            "updated_at",
+            "item_type",
+            "chunk_size",
+            "version",
+            "description",
+            "explanation",
+        ]
+        for field in required_fields:
+            assert field in meta
+
+        assert meta["length"] == 0
+        assert meta["item_type"] == "json"
+        assert meta["chunk_size"] == 1
+        assert meta["version"] == "1.0"
+        assert meta["description"] == ""
+        assert meta["explanation"] == ""
+
+    def test_invalidate_cache(self):
+        """Test _invalidate_cache() clears the metadata cache."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        attr_list._meta_cache = {"test": "data"}
+        attr_list._invalidate_cache()
+
+        assert attr_list._meta_cache is None
+
+
+class TestListAttributeIterator:
+    """Test ListAttributeIterator class."""
+
+    def test_iterator_initialization(self):
+        """Test ListAttributeIterator initializes correctly."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        iterator = ListAttributeIterator(attr_list)
+
+        assert iterator.list_prop == attr_list
+        assert iterator.current_index == 0
+
+    def test_iterator_iter_returns_self(self):
+        """Test __iter__ returns the iterator itself."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        iterator = ListAttributeIterator(attr_list)
+
+        assert iterator.__iter__() is iterator
+
+
+class TestListAttributeErrorHandling:
+    """Test ListAttribute error handling for operations without database."""
+
+    def test_len_without_config_returns_zero(self):
+        """Test __len__ returns 0 when no config provided."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        # Without a database, metadata returns default which has length 0
+        assert len(attr_list) == 0
+
+    def test_append_without_config_raises_error(self):
+        """Test append() raises RuntimeError without config."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            attr_list.append({"test": "data"})
+
+        assert "No database connection available" in str(exc_info.value)
+
+    def test_getitem_without_config_raises_error(self):
+        """Test __getitem__ raises RuntimeError without config."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        # Since len() returns 0, accessing any index should raise IndexError first
+        with pytest.raises(IndexError):
+            _ = attr_list[0]
+
+    def test_clear_without_config_raises_error(self):
+        """Test clear() raises RuntimeError without config."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            attr_list.clear()
+
+        assert "No database connection available" in str(exc_info.value)

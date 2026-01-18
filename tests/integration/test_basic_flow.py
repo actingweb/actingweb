@@ -7,9 +7,11 @@ This test suite runs sequentially - each test depends on the previous ones.
 Converted from Runscope/Blazemeter JSON test suite.
 """
 
+import pytest
 import requests
 
 
+@pytest.mark.xdist_group(name="basic_flow")
 class TestBasicActorFlow:
     """
     Sequential test flow for basic actor operations.

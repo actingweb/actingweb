@@ -11,6 +11,7 @@ import pytest
 import requests
 
 
+@pytest.mark.xdist_group(name="subscription_flow")
 @pytest.mark.usefixtures("http_client")
 class TestSubscriptionActorFlow:
     """

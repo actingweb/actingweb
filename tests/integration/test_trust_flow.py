@@ -7,9 +7,11 @@ This test suite runs sequentially - each test depends on the previous ones.
 Converted from Runscope/Blazemeter JSON test suite.
 """
 
+import pytest
 import requests
 
 
+@pytest.mark.xdist_group(name="trust_flow")
 class TestTrustActorFlow:
     """
     Sequential test flow for trust relationships between actors.

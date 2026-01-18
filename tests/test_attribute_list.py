@@ -212,3 +212,64 @@ class TestListAttributeErrorHandling:
             attr_list._get_item_attribute_name(-1)
 
         assert "non-negative" in str(exc_info.value)
+
+
+class TestListAttributeMetadataAccess:
+    """Test public metadata access methods."""
+
+    def test_get_metadata_returns_all_fields(self):
+        """Test get_metadata() returns all metadata fields."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,  # No config means it uses defaults
+        )
+
+        metadata = attr_list.get_metadata()
+
+        # Check all required fields are present
+        assert "created_at" in metadata
+        assert "updated_at" in metadata
+        assert "version" in metadata
+        assert "item_type" in metadata
+        assert "chunk_size" in metadata
+        assert "length" in metadata
+
+        # Check types and default values
+        assert isinstance(metadata["created_at"], str)
+        assert isinstance(metadata["updated_at"], str)
+        assert metadata["version"] == "1.0"
+        assert metadata["item_type"] == "json"
+        assert metadata["chunk_size"] == 1
+        assert metadata["length"] == 0
+
+    def test_get_metadata_returns_copy(self):
+        """Test get_metadata() returns a copy that doesn't affect stored metadata."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        metadata1 = attr_list.get_metadata()
+        metadata1["length"] = 999  # Modify the copy
+
+        metadata2 = attr_list.get_metadata()
+        assert metadata2["length"] == 0  # Original unchanged
+
+    def test_get_metadata_excludes_description_and_explanation(self):
+        """Test get_metadata() excludes description/explanation (have dedicated methods)."""
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=None,
+        )
+
+        metadata = attr_list.get_metadata()
+
+        # These should not be in get_metadata() output
+        assert "description" not in metadata
+        assert "explanation" not in metadata

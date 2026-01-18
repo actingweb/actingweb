@@ -299,6 +299,7 @@ class ListAttribute:
 
         # Shift all items after index down by one
         shifted_count = 0
+        failed_index = None
         try:
             for i in range(index + 1, length):
                 # Use fresh DB instance to avoid handle conflicts
@@ -332,14 +333,15 @@ class ListAttribute:
                         )
                         delete_db.delete_attr(name=self._get_item_attribute_name(i))
                         shifted_count += 1
+                failed_index = i
         except Exception as e:
             logger.error(
                 f"Partial failure in __delitem__ for list '{self.name}': "
-                f"Shifted {shifted_count} items before failure at index {i}: {e}"
+                f"Shifted {shifted_count} items before failure at index {failed_index}: {e}"
             )
             raise RuntimeError(
                 f"List may be in inconsistent state: Successfully shifted {shifted_count} "
-                f"items but failed at index {i}. Manual recovery may be required."
+                f"items but failed at index {failed_index}. Manual recovery may be required."
             ) from e
 
         # Update metadata length (only if we got here without exceptions)
@@ -546,6 +548,7 @@ class ListAttribute:
 
         # Shift all items from index onwards up by one (in reverse order)
         shifted_count = 0
+        failed_index = None
         try:
             for i in range(length - 1, index - 1, -1):
                 get_db = Attributes(
@@ -569,14 +572,15 @@ class ListAttribute:
                             name=self._get_item_attribute_name(i + 1), data=item_data
                         )
                         shifted_count += 1
+                failed_index = i
         except Exception as e:
             logger.error(
                 f"Partial failure in insert() for list '{self.name}': "
-                f"Shifted {shifted_count} items before failure at index {i}: {e}"
+                f"Shifted {shifted_count} items before failure at index {failed_index}: {e}"
             )
             raise RuntimeError(
                 f"List may be in inconsistent state: Successfully shifted {shifted_count} "
-                f"items but failed at index {i}. Manual recovery may be required."
+                f"items but failed at index {failed_index}. Manual recovery may be required."
             ) from e
 
         # Insert the new item

@@ -10,9 +10,11 @@ Converted from Runscope/Blazemeter JSON test suite.
 NOTE: The /devtest endpoints should be disabled in production environments.
 """
 
+import pytest
 import requests
 
 
+@pytest.mark.xdist_group(name="devtest_attributes_flow")
 class TestDevtestAttributesFlow:
     """
     Sequential test flow for devtest attribute bucket operations.

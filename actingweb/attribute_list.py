@@ -4,6 +4,19 @@ ListAttribute implementation for ActingWeb distributed list storage.
 This module provides a list interface that stores list items as individual
 attributes in buckets, bypassing the 400KB limit while maintaining API compatibility.
 Attributes are internal-only storage (not exposed via REST API).
+
+PERFORMANCE NOTE:
+This implementation creates fresh Attributes instances for each database operation
+to avoid handle conflicts. This mirrors the pattern used in ListProperty (property_list.py).
+While this has performance implications for large operations (O(n) DB instances for shifting),
+it ensures thread safety and avoids state management issues with the underlying
+database connection objects.
+
+For optimal performance:
+- Avoid frequent insert()/delete() operations at the beginning of large lists (O(n) cost)
+- Use append() for adding items (O(1) cost)
+- Batch operations via extend() when possible
+- Consider alternative data structures if you need frequent insertions at arbitrary positions
 """
 
 import logging
@@ -56,7 +69,23 @@ class ListAttribute:
         return f"list:{self.name}:meta"
 
     def _get_item_attribute_name(self, index: int) -> str:
-        """Get the attribute name for a list item at given index."""
+        """
+        Get the attribute name for a list item at given index.
+
+        Args:
+            index: Non-negative integer index
+
+        Returns:
+            Attribute name in format: list:{name}:{index}
+
+        Raises:
+            ValueError: If index is negative
+        """
+        if index < 0:
+            raise ValueError(
+                f"Attribute index must be non-negative, got {index}. "
+                "Caller should resolve negative indices before calling this method."
+            )
         return f"list:{self.name}:{index}"
 
     def _load_metadata(self) -> dict[str, Any]:
@@ -172,7 +201,9 @@ class ListAttribute:
             raise IndexError(f"List index {index} out of range (length: {length})")
 
         if not self.config:
-            raise RuntimeError("No database connection available")
+            raise RuntimeError(
+                "Cannot perform operation: config is None (database not initialized)"
+            )
 
         from .attribute import Attributes
 
@@ -205,7 +236,9 @@ class ListAttribute:
             raise IndexError(f"List index {index} out of range (length: {length})")
 
         if not self.config:
-            raise RuntimeError("No database connection available")
+            raise RuntimeError(
+                "Cannot perform operation: config is None (database not initialized)"
+            )
 
         from .attribute import Attributes
 
@@ -221,7 +254,22 @@ class ListAttribute:
         self._save_metadata(meta)
 
     def __delitem__(self, index: int) -> None:
-        """Delete item at index and shift remaining items."""
+        """
+        Delete item at index and shift remaining items.
+
+        WARNING: This operation performs multiple database writes without
+        transactional guarantees. If a failure occurs during item shifting,
+        the list may be left in an inconsistent state with duplicate items
+        or gaps. The metadata length will only be updated if all shifts succeed.
+
+        Performance: O(n) where n = (length - index). Avoid frequent deletions
+        from the beginning of large lists.
+
+        Raises:
+            IndexError: If index is out of range
+            RuntimeError: If config is not set
+            Exception: If database operations fail during shifting
+        """
         length = len(self)
 
         if index < 0:
@@ -231,49 +279,82 @@ class ListAttribute:
             raise IndexError(f"List index {index} out of range (length: {length})")
 
         if not self.config:
-            raise RuntimeError("No database connection available")
+            raise RuntimeError(
+                "Cannot perform operation: config is None (database not initialized)"
+            )
 
         from .attribute import Attributes
 
         # Delete the item at index
-        attr = Attributes(
-            actor_id=self.actor_id, bucket=self.bucket, config=self.config
-        )
-        attr.delete_attr(name=self._get_item_attribute_name(index))
-
-        # Shift all items after index down by one
-        for i in range(index + 1, length):
-            # Use fresh DB instance to avoid handle conflicts
-            item_db = Attributes(
+        try:
+            attr = Attributes(
                 actor_id=self.actor_id, bucket=self.bucket, config=self.config
             )
-            item_attr = item_db.get_attr(name=self._get_item_attribute_name(i))
+            attr.delete_attr(name=self._get_item_attribute_name(index))
+        except Exception as e:
+            logger.error(
+                f"Failed to delete item at index {index} for list '{self.name}': {e}"
+            )
+            raise RuntimeError(f"Failed to delete item at index {index}: {e}") from e
 
-            if item_attr is not None:
-                # Extract data from the attribute structure
-                item_data = (
-                    item_attr.get("data") if isinstance(item_attr, dict) else None
+        # Shift all items after index down by one
+        shifted_count = 0
+        try:
+            for i in range(index + 1, length):
+                # Use fresh DB instance to avoid handle conflicts
+                item_db = Attributes(
+                    actor_id=self.actor_id, bucket=self.bucket, config=self.config
                 )
+                item_attr = item_db.get_attr(name=self._get_item_attribute_name(i))
 
-                if item_data is not None:
-                    # Move item from position i to position i-1
-                    move_db = Attributes(
-                        actor_id=self.actor_id, bucket=self.bucket, config=self.config
-                    )
-                    move_db.set_attr(
-                        name=self._get_item_attribute_name(i - 1), data=item_data
+                if item_attr is not None:
+                    # Extract data from the attribute structure
+                    item_data = (
+                        item_attr.get("data") if isinstance(item_attr, dict) else None
                     )
 
-                    # Delete the old position
-                    delete_db = Attributes(
-                        actor_id=self.actor_id, bucket=self.bucket, config=self.config
-                    )
-                    delete_db.delete_attr(name=self._get_item_attribute_name(i))
+                    if item_data is not None:
+                        # Move item from position i to position i-1
+                        move_db = Attributes(
+                            actor_id=self.actor_id,
+                            bucket=self.bucket,
+                            config=self.config,
+                        )
+                        move_db.set_attr(
+                            name=self._get_item_attribute_name(i - 1), data=item_data
+                        )
 
-        # Update metadata length
-        meta = self._load_metadata()
-        meta["length"] = length - 1
-        self._save_metadata(meta)
+                        # Delete the old position
+                        delete_db = Attributes(
+                            actor_id=self.actor_id,
+                            bucket=self.bucket,
+                            config=self.config,
+                        )
+                        delete_db.delete_attr(name=self._get_item_attribute_name(i))
+                        shifted_count += 1
+        except Exception as e:
+            logger.error(
+                f"Partial failure in __delitem__ for list '{self.name}': "
+                f"Shifted {shifted_count} items before failure at index {i}: {e}"
+            )
+            raise RuntimeError(
+                f"List may be in inconsistent state: Successfully shifted {shifted_count} "
+                f"items but failed at index {i}. Manual recovery may be required."
+            ) from e
+
+        # Update metadata length (only if we got here without exceptions)
+        try:
+            meta = self._load_metadata()
+            meta["length"] = length - 1
+            self._save_metadata(meta)
+        except Exception as e:
+            logger.error(
+                f"Failed to update metadata after successful deletion in list '{self.name}': {e}"
+            )
+            raise RuntimeError(
+                f"Items were shifted successfully but metadata update failed. "
+                f"List length in metadata is now incorrect (still {length} instead of {length - 1})."
+            ) from e
 
     def __iter__(self) -> ListAttributeIterator:
         """Return iterator for lazy loading."""
@@ -282,7 +363,9 @@ class ListAttribute:
     def append(self, item: Any) -> None:
         """Add item to end of list."""
         if not self.config:
-            raise RuntimeError("No database connection available")
+            raise RuntimeError(
+                "Cannot perform operation: config is None (database not initialized)"
+            )
 
         length = len(self)
 
@@ -312,7 +395,9 @@ class ListAttribute:
     def clear(self) -> None:
         """Remove all items from list."""
         if not self.config:
-            raise RuntimeError("No database connection available")
+            raise RuntimeError(
+                "Cannot perform operation: config is None (database not initialized)"
+            )
 
         length = len(self)
 
@@ -332,7 +417,9 @@ class ListAttribute:
     def delete(self) -> None:
         """Delete the entire list including metadata."""
         if not self.config:
-            raise RuntimeError("No database connection available")
+            raise RuntimeError(
+                "Cannot perform operation: config is None (database not initialized)"
+            )
 
         length = len(self)
 
@@ -355,21 +442,44 @@ class ListAttribute:
         self._meta_cache = None
 
     def to_list(self) -> list[Any]:
-        """Load entire list into memory."""
+        """
+        Load entire list into memory.
+
+        Raises:
+            IndexError: If any items are missing from the list, which indicates
+                data corruption or inconsistent metadata.
+
+        Note: This method validates list integrity by ensuring all items from
+        0 to length-1 exist. If you need partial data on corruption, use slice()
+        with try/except for each index individually.
+        """
         length = len(self)
         result = []
 
         for i in range(length):
-            try:
-                result.append(self[i])
-            except IndexError as e:
-                logger.error(f"Error loading list item {i}: {e}")
-                continue
+            # Fail fast on missing items to detect data corruption
+            result.append(self[i])
 
         return result
 
     def slice(self, start: int, end: int) -> list[Any]:
-        """Load a range of items efficiently."""
+        """
+        Load a range of items efficiently.
+
+        Args:
+            start: Starting index (inclusive)
+            end: Ending index (exclusive)
+
+        Returns:
+            List of items from start to end (exclusive)
+
+        Raises:
+            IndexError: If any items in the range are missing, which indicates
+                data corruption or inconsistent metadata.
+
+        Note: This method validates data integrity by ensuring all requested
+        items exist. Negative indices are supported.
+        """
         length = len(self)
 
         # Handle negative indices
@@ -384,11 +494,8 @@ class ListAttribute:
 
         result = []
         for i in range(start, end):
-            try:
-                result.append(self[i])
-            except IndexError as e:
-                logger.error(f"Error loading list item {i}: {e}")
-                continue
+            # Fail fast on missing items to detect data corruption
+            result.append(self[i])
 
         return result
 
@@ -405,7 +512,24 @@ class ListAttribute:
         return item
 
     def insert(self, index: int, item: Any) -> None:
-        """Insert item at given index."""
+        """
+        Insert item at given index.
+
+        WARNING: This operation performs multiple database writes without
+        transactional guarantees. If a failure occurs during item shifting,
+        the list may be left in an inconsistent state with duplicate items.
+        The metadata length will only be updated if all operations succeed.
+
+        Performance: O(n) where n = (length - index). Avoid frequent insertions
+        at the beginning of large lists.
+
+        Args:
+            index: Position to insert at (negative indices supported)
+            item: Item to insert
+
+        Raises:
+            RuntimeError: If config is not set or database operations fail
+        """
         length = len(self)
 
         if index < 0:
@@ -414,41 +538,76 @@ class ListAttribute:
             index = length
 
         if not self.config:
-            raise RuntimeError("No database connection available")
+            raise RuntimeError(
+                "Cannot perform operation: config is None (database not initialized)"
+            )
 
         from .attribute import Attributes
 
-        # Shift all items from index onwards up by one
-        for i in range(length - 1, index - 1, -1):
-            get_db = Attributes(
-                actor_id=self.actor_id, bucket=self.bucket, config=self.config
-            )
-            item_attr = get_db.get_attr(name=self._get_item_attribute_name(i))
-
-            if item_attr is not None:
-                # Extract data from the attribute structure
-                item_data = (
-                    item_attr.get("data") if isinstance(item_attr, dict) else None
+        # Shift all items from index onwards up by one (in reverse order)
+        shifted_count = 0
+        try:
+            for i in range(length - 1, index - 1, -1):
+                get_db = Attributes(
+                    actor_id=self.actor_id, bucket=self.bucket, config=self.config
                 )
+                item_attr = get_db.get_attr(name=self._get_item_attribute_name(i))
 
-                if item_data is not None:
-                    set_db = Attributes(
-                        actor_id=self.actor_id, bucket=self.bucket, config=self.config
+                if item_attr is not None:
+                    # Extract data from the attribute structure
+                    item_data = (
+                        item_attr.get("data") if isinstance(item_attr, dict) else None
                     )
-                    set_db.set_attr(
-                        name=self._get_item_attribute_name(i + 1), data=item_data
-                    )
+
+                    if item_data is not None:
+                        set_db = Attributes(
+                            actor_id=self.actor_id,
+                            bucket=self.bucket,
+                            config=self.config,
+                        )
+                        set_db.set_attr(
+                            name=self._get_item_attribute_name(i + 1), data=item_data
+                        )
+                        shifted_count += 1
+        except Exception as e:
+            logger.error(
+                f"Partial failure in insert() for list '{self.name}': "
+                f"Shifted {shifted_count} items before failure at index {i}: {e}"
+            )
+            raise RuntimeError(
+                f"List may be in inconsistent state: Successfully shifted {shifted_count} "
+                f"items but failed at index {i}. Manual recovery may be required."
+            ) from e
 
         # Insert the new item
-        insert_db = Attributes(
-            actor_id=self.actor_id, bucket=self.bucket, config=self.config
-        )
-        insert_db.set_attr(name=self._get_item_attribute_name(index), data=item)
+        try:
+            insert_db = Attributes(
+                actor_id=self.actor_id, bucket=self.bucket, config=self.config
+            )
+            insert_db.set_attr(name=self._get_item_attribute_name(index), data=item)
+        except Exception as e:
+            logger.error(
+                f"Failed to insert item at index {index} in list '{self.name}' "
+                f"after shifting {shifted_count} items: {e}"
+            )
+            raise RuntimeError(
+                f"List is in inconsistent state: Items were shifted but new item "
+                f"insertion failed. There is now a gap at index {index}."
+            ) from e
 
-        # Update metadata
-        meta = self._load_metadata()
-        meta["length"] = length + 1
-        self._save_metadata(meta)
+        # Update metadata (only if we got here without exceptions)
+        try:
+            meta = self._load_metadata()
+            meta["length"] = length + 1
+            self._save_metadata(meta)
+        except Exception as e:
+            logger.error(
+                f"Failed to update metadata after successful insertion in list '{self.name}': {e}"
+            )
+            raise RuntimeError(
+                f"Item was inserted successfully but metadata update failed. "
+                f"List length in metadata is now incorrect (still {length} instead of {length + 1})."
+            ) from e
 
     def remove(self, value: Any) -> None:
         """Remove first occurrence of value."""

@@ -80,14 +80,10 @@ class AttributeListStore:
 
         # Validate actor_id and bucket are not None before creating ListAttribute
         if self._actor_id is None:
-            raise RuntimeError(
-                "Cannot create ListAttribute without a valid actor_id"
-            )
+            raise RuntimeError("Cannot create ListAttribute without a valid actor_id")
 
         if self._bucket is None:
-            raise RuntimeError(
-                "Cannot create ListAttribute without a valid bucket"
-            )
+            raise RuntimeError("Cannot create ListAttribute without a valid bucket")
 
         # Check cache first
         if k in self._list_cache:

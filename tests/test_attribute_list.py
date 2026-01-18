@@ -1,5 +1,7 @@
 """Tests for attribute_list module."""
 
+from unittest.mock import Mock
+
 import pytest
 
 from actingweb.attribute_list import ListAttribute, ListAttributeIterator
@@ -167,7 +169,7 @@ class TestListAttributeErrorHandling:
         with pytest.raises(RuntimeError) as exc_info:
             attr_list.append({"test": "data"})
 
-        assert "No database connection available" in str(exc_info.value)
+        assert "config is None" in str(exc_info.value)
 
     def test_getitem_without_config_raises_error(self):
         """Test __getitem__ raises RuntimeError without config."""
@@ -194,4 +196,19 @@ class TestListAttributeErrorHandling:
         with pytest.raises(RuntimeError) as exc_info:
             attr_list.clear()
 
-        assert "No database connection available" in str(exc_info.value)
+        assert "config is None" in str(exc_info.value)
+
+    def test_get_item_attribute_name_with_negative_index_raises_error(self):
+        """Test _get_item_attribute_name raises ValueError for negative index."""
+        mock_config = Mock()
+        attr_list = ListAttribute(
+            actor_id="test_actor",
+            bucket="test_bucket",
+            name="test_list",
+            config=mock_config,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            attr_list._get_item_attribute_name(-1)
+
+        assert "non-negative" in str(exc_info.value)

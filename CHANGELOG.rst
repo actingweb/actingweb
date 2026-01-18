@@ -5,7 +5,22 @@ CHANGELOG
 Unreleased
 ----------
 
-(Changes for next release will be added here)
+ADDED
+~~~~~
+
+- **Attribute List Storage**: Added ``ListAttribute`` and ``AttributeListStore`` for storing distributed lists in internal attributes (not exposed via REST API). This provides the same API as ``ListProperty``/``PropertyListStore`` but stores data in attribute buckets instead of properties, bypassing the 400KB property size limit while maintaining list semantics.
+
+  - New class: ``ListAttribute`` - Distributed list implementation using attributes
+  - New class: ``AttributeListStore`` - Per-actor-per-bucket list management
+  - Supports all standard list operations: append, extend, insert, pop, remove, index, count, clear, delete
+  - Metadata support with ``get_description()``, ``set_description()``, ``get_explanation()``, ``set_explanation()``, and ``get_metadata()`` for accessing list metadata (created_at, updated_at, version, etc.)
+  - Discovery methods: ``exists()``, ``list_all()``
+  - Bucket isolation: Same list name can exist independently in different buckets
+  - Lazy loading with ``ListAttributeIterator`` for efficient iteration
+  - Attribute naming pattern: ``list:{name}:{index}`` for items, ``list:{name}:meta`` for metadata
+  - Comprehensive test coverage: 12 unit tests for ListAttribute, 21 unit tests for AttributeListStore, 18 integration tests
+
+- **List Metadata Access**: Added ``get_metadata()`` method to both ``ListProperty`` and ``ListAttribute`` to expose internal metadata (created_at, updated_at, version, item_type, chunk_size, length). Previously, users needed to access private ``_load_metadata()`` method to get timestamps and other readonly metadata fields.
 
 v3.9.2: Jan 16, 2026
 --------------------

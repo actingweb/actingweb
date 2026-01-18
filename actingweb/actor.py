@@ -1659,13 +1659,23 @@ class Actor:
                     if isinstance(response.content, bytes)
                     else str(response.content)
                 )
+                # Log the response for debugging callback delivery issues
+                if response.status_code == 204:
+                    logger.info(
+                        f"Callback seq={diff.get('sequence')} delivered successfully (204)"
+                    )
+                else:
+                    logger.warning(
+                        f"Callback seq={diff.get('sequence')} returned {response.status_code}: "
+                        f"{self.last_response_message[:200] if self.last_response_message else 'no message'}"
+                    )
                 if response.status_code == 204 and sub["granularity"] == "high":
                     if not sub_obj:
                         logger.warning("About to clear diff without having subobj set")
                     else:
                         sub_obj.clear_diff(diff["sequence"])
             except (requests.RequestException, requests.Timeout, ConnectionError) as e:
-                logger.debug(f"Peer did not respond to callback on url({requrl}): {e}")
+                logger.warning(f"Callback seq={diff.get('sequence')} failed - peer did not respond: {e}")
                 self.last_response_code = 0
                 self.last_response_message = (
                     "No response from peer for subscription callback"

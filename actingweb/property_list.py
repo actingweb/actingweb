@@ -156,6 +156,36 @@ class ListProperty:
         meta["explanation"] = explanation
         self._save_metadata(meta)
 
+    def get_metadata(self) -> dict[str, Any]:
+        """
+        Get list metadata as a read-only dictionary.
+
+        Returns metadata including created_at, updated_at, version, item_type,
+        chunk_size, and length. For description and explanation, use the
+        dedicated get_description() and get_explanation() methods.
+
+        Returns:
+            Dictionary with metadata fields:
+            - created_at: ISO timestamp when list was created
+            - updated_at: ISO timestamp of last modification
+            - version: Metadata schema version
+            - item_type: Type of items stored (currently always "json")
+            - chunk_size: Internal chunk size (currently always 1)
+            - length: Number of items in the list
+
+        Note: This returns a copy; modifications won't affect the stored metadata.
+        Use set_description() and set_explanation() to update user-facing fields.
+        """
+        meta = self._load_metadata()
+        return {
+            "created_at": meta.get("created_at", ""),
+            "updated_at": meta.get("updated_at", ""),
+            "version": meta.get("version", ""),
+            "item_type": meta.get("item_type", ""),
+            "chunk_size": meta.get("chunk_size", 1),
+            "length": meta.get("length", 0),
+        }
+
     def __len__(self) -> int:
         """Get list length from metadata only (no item loading)."""
         meta = self._load_metadata()

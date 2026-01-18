@@ -1,7 +1,6 @@
 """Tests for version consistency across package files."""
 
 import re
-from datetime import datetime
 from pathlib import Path
 
 
@@ -62,63 +61,26 @@ class TestVersionConsistency:
             f"All three files must have the same version number."
         )
 
-    def test_changelog_has_recent_entry(self):
-        """Verify that the CHANGELOG.rst has been updated with a recent entry."""
+    def test_changelog_has_unreleased_section(self):
+        """
+        Verify that the CHANGELOG.rst has an 'Unreleased' section for PRs.
+
+        This allows PRs to add entries to the Unreleased section without
+        needing to update version numbers or dates. The actual release
+        process (via git tags) will handle version consistency validation.
+        """
         root_dir = Path(__file__).parent.parent
         changelog_path = root_dir / "CHANGELOG.rst"
 
         with open(changelog_path) as f:
             changelog_content = f.read()
 
-        # Check that the first version entry appears early in the file (within first 500 chars)
-        # This ensures the CHANGELOG is being maintained at the top
-        first_500 = changelog_content[:500]
-        assert re.search(r"^v\d+\.\d+", first_500, re.MULTILINE), (
-            "No version entry found at the top of CHANGELOG.rst. "
-            "Ensure the changelog is updated with new versions at the top."
-        )
-
-    def test_changelog_date_not_tbd(self):
-        """Verify that the topmost CHANGELOG entry has today's date, not TBD."""
-        root_dir = Path(__file__).parent.parent
-        changelog_path = root_dir / "CHANGELOG.rst"
-
-        with open(changelog_path) as f:
-            changelog_content = f.read()
-
-        # Match version pattern like "v3.4.2: TBD, 2025" or "v3.4.1: Nov 8, 2025"
-        version_match = re.search(
-            r"^v(\d+\.\d+(?:\.\d+)?): (.+), (\d{4})$", changelog_content, re.MULTILINE
-        )
-        assert version_match, "Could not find version entry in CHANGELOG.rst"
-
-        version = version_match.group(1)
-        date_part = version_match.group(2).strip()
-        year_part = version_match.group(3)
-
-        # Check that date is not "TBD"
-        assert date_part != "TBD", (
-            f"CHANGELOG.rst version {version} has 'TBD' as the date. "
-            f"Please update the date to today's date (e.g., '{datetime.now().strftime('%b %d, %Y')}')."
-        )
-
-        # Verify the date format and that it's today's date
-        try:
-            # Parse the date (e.g., "Nov 8")
-            parsed_date = datetime.strptime(f"{date_part}, {year_part}", "%b %d, %Y")
-        except ValueError as e:
-            raise AssertionError(
-                f"CHANGELOG.rst version {version} has invalid date format '{date_part}, {year_part}'. "
-                f"Expected format: 'Mon DD, YYYY' (e.g., 'Nov 8, 2025'). Error: {e}"
-            ) from e
-
-        # Get today's date (ignoring time)
-        today = datetime.now().date()
-        changelog_date = parsed_date.date()
-
-        # Verify it's today's date
-        assert changelog_date == today, (
-            f"CHANGELOG.rst version {version} has date {changelog_date.strftime('%b %d, %Y')} "
-            f"but today is {today.strftime('%b %d, %Y')}. "
-            f"Please update the CHANGELOG date to today's date."
+        # Check that "Unreleased" appears near the top (within first 200 chars)
+        first_200 = changelog_content[:200]
+        assert re.search(r"^Unreleased\s*$", first_200, re.MULTILINE), (
+            "CHANGELOG.rst must have an 'Unreleased' section at the top. "
+            "This allows PRs to add changelog entries before release. "
+            "The section should appear as a heading like:\n\n"
+            "Unreleased\n"
+            "----------\n"
         )

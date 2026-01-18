@@ -1,7 +1,6 @@
 """Tests for version consistency across package files."""
 
 import re
-from datetime import datetime
 from pathlib import Path
 
 

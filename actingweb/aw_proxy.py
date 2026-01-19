@@ -6,9 +6,6 @@ from typing import Any
 import httpx
 import requests
 
-# Type alias for timeout parameter
-TimeoutType = int | float | tuple[int | float, int | float] | None
-
 from actingweb import trust
 
 logger = logging.getLogger(__name__)
@@ -17,6 +14,9 @@ try:
     from urllib.parse import urlencode as urllib_urlencode
 except ImportError:
     from urllib.parse import urlencode as urllib_urlencode
+
+# Type alias for timeout parameter
+TimeoutType = int | float | tuple[int | float, int | float] | None
 
 
 class AwProxy:

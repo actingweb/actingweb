@@ -6,6 +6,9 @@ from typing import Any
 import httpx
 import requests
 
+# Type alias for timeout parameter
+TimeoutType = int | float | tuple[int | float, int | float] | None
+
 from actingweb import trust
 
 logger = logging.getLogger(__name__)
@@ -23,6 +26,14 @@ class AwProxy:
     existing trust or use peer_target for simplicity to use
     the trust established with the peer.
 
+    Args:
+        trust_target: Trust object for the target peer
+        peer_target: Simplified peer target dict
+        config: Configuration object
+        timeout: HTTP timeout in seconds. Either a single value (used for both
+                 connect and read timeouts) or a tuple (connect_timeout, read_timeout).
+                 Default: (5, 20) = 5s connect, 20s read timeout.
+
     Provides both sync methods (using ``requests``) and async methods
     (using ``httpx``) for peer communication:
 
@@ -32,21 +43,34 @@ class AwProxy:
     Use async methods in FastAPI routes for non-blocking I/O.
     """
 
-    def __init__(self, trust_target=None, peer_target=None, config=None, timeout=None):
+    def __init__(
+        self,
+        trust_target: Any = None,
+        peer_target: dict[str, Any] | None = None,
+        config: Any = None,
+        timeout: TimeoutType = None,
+    ):
         self.config = config
         self.last_response_code = 0
         self.last_response_message = 0
-        self.last_location = None
-        self.peer_passphrase = None
+        self.last_location: str | None = None
+        self.peer_passphrase: str | None = None
         # Set timeout - supports tuple (connect, read) or single value
         # Default: (5, 20) = 5s connect, 20s read timeout
         if timeout is None:
-            self.timeout = (5, 20)
+            self.timeout: tuple[int | float, int | float] = (5, 20)
         elif isinstance(timeout, tuple):
             self.timeout = timeout
         else:
             # Single value provided, use for both connect and read
             self.timeout = (timeout, timeout)
+        # Pre-compute httpx timeout for async methods (proper connect/read separation)
+        # httpx.Timeout accepts tuple format: (connect, read, write, pool)
+        self._httpx_timeout = httpx.Timeout(
+            timeout=float(self.timeout[1]),  # default for unspecified
+            connect=float(self.timeout[0]),
+            read=float(self.timeout[1]),
+        )
         if trust_target and trust_target.trust:
             self.trust = trust_target
             self.actorid = trust_target.id
@@ -297,7 +321,7 @@ class AwProxy:
             return None
         try:
             bh = self._basic_headers()
-            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 if data is None:
                     if method == "GET":
                         return await client.get(url, headers=bh)
@@ -340,7 +364,7 @@ class AwProxy:
         headers = self._bearer_headers()
         logger.info(f"Fetching peer resource async from {url}")
         try:
-            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.get(url, headers=headers)
                 # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
                 if response.status_code in (302, 401, 403):
@@ -431,7 +455,7 @@ class AwProxy:
             + ")"
         )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.post(url, content=data, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async(
@@ -532,7 +556,7 @@ class AwProxy:
             + ")"
         )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.put(url, content=data, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async(
@@ -616,7 +640,7 @@ class AwProxy:
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.info(f"Deleting peer resource async at {url}")
         try:
-            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.delete(url, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async("DELETE", url)

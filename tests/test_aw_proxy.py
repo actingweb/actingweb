@@ -3,7 +3,132 @@
 import base64
 from unittest.mock import Mock, patch
 
+import httpx
+
 from actingweb.aw_proxy import AwProxy
+
+
+class TestTimeoutConfiguration:
+    """Test timeout parameter configuration."""
+
+    def test_init_default_timeout(self):
+        """Test AwProxy uses default timeout of (5, 20)."""
+        proxy = AwProxy()
+        assert proxy.timeout == (5, 20)
+
+    def test_init_custom_single_timeout(self):
+        """Test AwProxy accepts single timeout value."""
+        proxy = AwProxy(timeout=30)
+        assert proxy.timeout == (30, 30)
+
+    def test_init_custom_tuple_timeout(self):
+        """Test AwProxy accepts tuple timeout value."""
+        proxy = AwProxy(timeout=(3, 15))
+        assert proxy.timeout == (3, 15)
+
+    def test_init_custom_float_timeout(self):
+        """Test AwProxy accepts float timeout value."""
+        proxy = AwProxy(timeout=2.5)
+        assert proxy.timeout == (2.5, 2.5)
+
+    def test_init_custom_float_tuple_timeout(self):
+        """Test AwProxy accepts tuple with float values."""
+        proxy = AwProxy(timeout=(1.5, 10.5))
+        assert proxy.timeout == (1.5, 10.5)
+
+    def test_httpx_timeout_object_created(self):
+        """Test AwProxy creates httpx.Timeout object with correct values."""
+        proxy = AwProxy(timeout=(3, 15))
+        assert isinstance(proxy._httpx_timeout, httpx.Timeout)
+        assert proxy._httpx_timeout.connect == 3.0
+        assert proxy._httpx_timeout.read == 15.0
+
+    def test_httpx_timeout_from_single_value(self):
+        """Test httpx.Timeout is correctly set from single timeout value."""
+        proxy = AwProxy(timeout=30)
+        assert proxy._httpx_timeout.connect == 30.0
+        assert proxy._httpx_timeout.read == 30.0
+
+    def test_sync_methods_use_configured_timeout(self):
+        """Test sync methods use the configured timeout."""
+        proxy = AwProxy(timeout=(7, 25))
+        proxy.trust = {
+            "baseuri": "https://peer.example.com/",
+            "secret": "token123",
+        }
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.content = b"{}"
+        mock_response.json.return_value = {}
+
+        with patch(
+            "actingweb.aw_proxy.requests.get", return_value=mock_response
+        ) as mock_get:
+            proxy.get_resource(path="test")
+
+        # Verify timeout was passed correctly
+        assert mock_get.call_args.kwargs["timeout"] == (7, 25)
+
+    def test_sync_post_uses_configured_timeout(self):
+        """Test sync POST method uses the configured timeout."""
+        proxy = AwProxy(timeout=(4, 30))
+        proxy.trust = {
+            "baseuri": "https://peer.example.com/",
+            "secret": "token123",
+        }
+
+        mock_response = Mock()
+        mock_response.status_code = 201
+        mock_response.content = b"{}"
+        mock_response.json.return_value = {}
+        mock_response.headers = {}
+
+        with patch(
+            "actingweb.aw_proxy.requests.post", return_value=mock_response
+        ) as mock_post:
+            proxy.create_resource(path="test", params={"key": "value"})
+
+        assert mock_post.call_args.kwargs["timeout"] == (4, 30)
+
+    def test_sync_put_uses_configured_timeout(self):
+        """Test sync PUT method uses the configured timeout."""
+        proxy = AwProxy(timeout=(2, 15))
+        proxy.trust = {
+            "baseuri": "https://peer.example.com/",
+            "secret": "token123",
+        }
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.content = b"{}"
+        mock_response.json.return_value = {}
+
+        with patch(
+            "actingweb.aw_proxy.requests.put", return_value=mock_response
+        ) as mock_put:
+            proxy.change_resource(path="test", params={"key": "value"})
+
+        assert mock_put.call_args.kwargs["timeout"] == (2, 15)
+
+    def test_sync_delete_uses_configured_timeout(self):
+        """Test sync DELETE method uses the configured timeout."""
+        proxy = AwProxy(timeout=(3, 12))
+        proxy.trust = {
+            "baseuri": "https://peer.example.com/",
+            "secret": "token123",
+        }
+
+        mock_response = Mock()
+        mock_response.status_code = 204
+        mock_response.content = b""
+
+        with patch(
+            "actingweb.aw_proxy.requests.delete", return_value=mock_response
+        ) as mock_delete:
+            proxy.delete_resource(path="test")
+
+        assert mock_delete.call_args.kwargs["timeout"] == (3, 12)
 
 
 class TestAwProxyInitialization:

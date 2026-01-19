@@ -32,12 +32,21 @@ class AwProxy:
     Use async methods in FastAPI routes for non-blocking I/O.
     """
 
-    def __init__(self, trust_target=None, peer_target=None, config=None):
+    def __init__(self, trust_target=None, peer_target=None, config=None, timeout=None):
         self.config = config
         self.last_response_code = 0
         self.last_response_message = 0
         self.last_location = None
         self.peer_passphrase = None
+        # Set timeout - supports tuple (connect, read) or single value
+        # Default: (5, 20) = 5s connect, 20s read timeout
+        if timeout is None:
+            self.timeout = (5, 20)
+        elif isinstance(timeout, tuple):
+            self.timeout = timeout
+        else:
+            # Single value provided, use for both connect and read
+            self.timeout = (timeout, timeout)
         if trust_target and trust_target.trust:
             self.trust = trust_target
             self.actorid = trust_target.id
@@ -77,23 +86,23 @@ class AwProxy:
             bh = self._basic_headers()
             if data is None:
                 if method == "GET":
-                    return requests.get(url=url, headers=bh, timeout=(5, 10))
+                    return requests.get(url=url, headers=bh, timeout=self.timeout)
                 if method == "DELETE":
-                    return requests.delete(url=url, headers=bh, timeout=(5, 10))
+                    return requests.delete(url=url, headers=bh, timeout=self.timeout)
             else:
                 if method == "POST":
                     return requests.post(
                         url=url,
                         data=data,
                         headers={**bh, "Content-Type": "application/json"},
-                        timeout=(5, 10),
+                        timeout=self.timeout,
                     )
                 if method == "PUT":
                     return requests.put(
                         url=url,
                         data=data,
                         headers={**bh, "Content-Type": "application/json"},
-                        timeout=(5, 10),
+                        timeout=self.timeout,
                     )
         except Exception:
             return None
@@ -112,7 +121,7 @@ class AwProxy:
         headers = self._bearer_headers()
         logger.info(f"Fetching peer resource from {url}")
         try:
-            response = requests.get(url=url, headers=headers, timeout=(5, 10))
+            response = requests.get(url=url, headers=headers, timeout=self.timeout)
             # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("GET", url)
@@ -161,7 +170,7 @@ class AwProxy:
         )
         try:
             response = requests.post(
-                url=url, data=data, headers=headers, timeout=(5, 10)
+                url=url, data=data, headers=headers, timeout=self.timeout
             )
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("POST", url, data=data)
@@ -217,7 +226,7 @@ class AwProxy:
         )
         try:
             response = requests.put(
-                url=url, data=data, headers=headers, timeout=(5, 10)
+                url=url, data=data, headers=headers, timeout=self.timeout
             )
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("PUT", url, data=data)
@@ -260,7 +269,7 @@ class AwProxy:
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.info(f"Deleting peer resource at {url}")
         try:
-            response = requests.delete(url=url, headers=headers, timeout=(5, 10))
+            response = requests.delete(url=url, headers=headers, timeout=self.timeout)
             if response.status_code in (302, 401, 403):
                 retry = self._maybe_retry_with_basic("DELETE", url)
                 if retry is not None:
@@ -288,7 +297,7 @@ class AwProxy:
             return None
         try:
             bh = self._basic_headers()
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
                 if data is None:
                     if method == "GET":
                         return await client.get(url, headers=bh)
@@ -331,7 +340,7 @@ class AwProxy:
         headers = self._bearer_headers()
         logger.info(f"Fetching peer resource async from {url}")
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
                 response = await client.get(url, headers=headers)
                 # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
                 if response.status_code in (302, 401, 403):
@@ -422,7 +431,7 @@ class AwProxy:
             + ")"
         )
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
                 response = await client.post(url, content=data, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async(
@@ -523,7 +532,7 @@ class AwProxy:
             + ")"
         )
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
                 response = await client.put(url, content=data, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async(
@@ -607,7 +616,7 @@ class AwProxy:
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.info(f"Deleting peer resource async at {url}")
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=self.timeout[1] if isinstance(self.timeout, tuple) else self.timeout) as client:
                 response = await client.delete(url, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async("DELETE", url)

@@ -97,15 +97,16 @@ class Actor:
         :param max_retries: Maximum number of retry attempts (default: 3)
         :param retry_delay: Initial delay between retries in seconds (default: 0.5)
         :rtype: dict
-        :return: The json response from the /meta path in the data element and last_response_code/last_response_message
-        set to the results of the https request
-        :Example:
+        :return: The json response from the /meta path in the data element and
+            last_response_code/last_response_message set to the results of the https request
 
-        >>>{
-        >>>    "last_response_code": 200,
-        >>>    "last_response_message": "OK",
-        >>>    "data":{}
-        >>>}
+        Example::
+
+            {
+                "last_response_code": 200,
+                "last_response_message": "OK",
+                "data": {}
+            }
         """
         import time
 

@@ -494,6 +494,276 @@ Subscription processing is **fully backward compatible**:
 - New apps can opt-in with ``.with_subscription_processing()``
 - Both approaches can coexist (raw hook takes precedence if registered)
 
+Error Handling Reference
+------------------------
+
+HTTP Status Codes
+~~~~~~~~~~~~~~~~~
+
+When processing subscription callbacks, the library returns these HTTP status codes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 25 60
+
+   * - Code
+     - Status
+     - Description
+   * - 201
+     - Created
+     - Callback processed successfully
+   * - 200
+     - OK
+     - Duplicate callback (already processed this sequence)
+   * - 202
+     - Accepted
+     - Callback queued as pending (gap detected, waiting for missing sequences)
+   * - 429
+     - Too Many Requests
+     - Back-pressure: pending queue full (``max_pending`` exceeded)
+   * - 401
+     - Unauthorized
+     - Invalid or missing trust token
+   * - 403
+     - Forbidden
+     - Trust relationship not approved or deleted
+   * - 400
+     - Bad Request
+     - Malformed callback payload
+
+ProcessResult Enum
+~~~~~~~~~~~~~~~~~~
+
+When using ``CallbackProcessor`` directly, the ``process_callback()`` method returns a ``ProcessResult``:
+
+.. code-block:: python
+
+   from actingweb.callback_processor import ProcessResult
+
+   result = processor.process_callback(peer_id, sub_id, sequence, data)
+
+   if result == ProcessResult.PROCESSED:
+       # Normal processing - callback was in sequence
+       # Your data hook will be called
+       pass
+
+   elif result == ProcessResult.DUPLICATE:
+       # Already processed this sequence number
+       # Safe to ignore, no action needed
+       pass
+
+   elif result == ProcessResult.PENDING:
+       # Gap detected - sequence is higher than expected
+       # Callback queued, waiting for missing sequences
+       # Will auto-process when gap is filled
+       pass
+
+   elif result == ProcessResult.RESYNC_REQUIRED:
+       # Gap timeout exceeded (gap_timeout_seconds)
+       # Library will request full resync from peer
+       pass
+
+   elif result == ProcessResult.BACK_PRESSURE:
+       # max_pending limit reached
+       # Publisher should slow down or retry later
+       pass
+
+Circuit Breaker States
+~~~~~~~~~~~~~~~~~~~~~~
+
+The ``FanOutManager`` uses circuit breakers to protect against failing peers:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - State
+     - Behavior
+   * - ``CLOSED``
+     - Normal operation - requests are sent to the peer
+   * - ``OPEN``
+     - Peer is unavailable - requests are skipped (fast-fail)
+   * - ``HALF_OPEN``
+     - Testing recovery - one request allowed to check peer status
+
+**Circuit breaker triggers:**
+
+- Opens after consecutive failures (default: 5)
+- Stays open for a cooldown period (default: 60 seconds)
+- Transitions to HALF_OPEN after cooldown
+- Closes again on successful delivery
+
+.. code-block:: python
+
+   from actingweb.fanout import FanOutManager
+
+   manager = FanOutManager(actor)
+
+   # Check status
+   status = manager.get_circuit_breaker_status(peer_id)
+   print(f"Circuit breaker for {peer_id}: {status}")
+
+   # Manual reset (e.g., after fixing connectivity)
+   if status == "OPEN":
+       manager.reset_circuit_breaker(peer_id)
+
+Performance Tuning
+------------------
+
+Tuning gap_timeout_seconds
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``gap_timeout_seconds`` parameter controls when a sequence gap triggers a resync:
+
+**Guidelines:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 15 60
+
+   * - Scenario
+     - Value
+     - Reasoning
+   * - Low-latency networks
+     - 2-3s
+     - Callbacks arrive quickly; gaps likely indicate lost messages
+   * - Standard deployments
+     - 5s
+     - Default; balances responsiveness and tolerance
+   * - High-latency/unreliable
+     - 10-15s
+     - Allow more time for delayed callbacks to arrive
+   * - Batch processing
+     - 30-60s
+     - Large batches may have temporary gaps during processing
+
+**Trade-offs:**
+
+- **Too short**: Unnecessary resyncs when callbacks are just delayed
+- **Too long**: Slow recovery when callbacks are actually lost
+
+Tuning max_pending
+~~~~~~~~~~~~~~~~~~
+
+The ``max_pending`` parameter limits how many out-of-order callbacks are queued:
+
+**Guidelines:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 15 60
+
+   * - Environment
+     - Value
+     - Reasoning
+   * - Memory-constrained (Lambda)
+     - 20-50
+     - Limited memory per function invocation
+   * - Standard deployments
+     - 100
+     - Default; handles typical burst scenarios
+   * - High-throughput systems
+     - 200-500
+     - More tolerance for temporary out-of-order delivery
+
+**Memory usage**: Each pending callback uses approximately 1-5KB depending on payload size.
+
+FanOutManager Tuning
+~~~~~~~~~~~~~~~~~~~~
+
+For publishers with many subscribers:
+
+.. code-block:: python
+
+   from actingweb.fanout import FanOutManager
+
+   manager = FanOutManager(
+       actor=actor,
+       max_concurrent=10,     # Parallel deliveries (default: 5)
+       default_timeout=45.0,  # Per-request timeout (default: 30s)
+       failure_threshold=3,   # Opens circuit after N failures (default: 5)
+       recovery_timeout=30.0, # Cooldown before testing (default: 60s)
+   )
+
+**Guidelines:**
+
+- ``max_concurrent``: Increase for many subscribers, decrease if overloading infrastructure
+- ``default_timeout``: Increase for slow peers, decrease for fast-fail behavior
+- ``failure_threshold``: Lower for quick circuit breaker activation
+- ``recovery_timeout``: Lower for faster retry attempts
+
+Back-Pressure Handling
+----------------------
+
+When the pending queue is full (``max_pending`` exceeded), the library returns HTTP 429.
+
+Publisher Handling
+~~~~~~~~~~~~~~~~~~
+
+Publishers should implement retry logic when receiving 429:
+
+.. code-block:: python
+
+   import time
+   import httpx
+
+   def send_callback_with_retry(url, data, auth, max_retries=3):
+       """Send callback with exponential backoff on 429."""
+       for attempt in range(max_retries):
+           response = httpx.post(url, json=data, auth=auth)
+
+           if response.status_code == 429:
+               # Back-pressure - subscriber is overloaded
+               wait_time = (2 ** attempt) + random.uniform(0, 1)
+               print(f"Back-pressure from subscriber, waiting {wait_time:.1f}s")
+               time.sleep(wait_time)
+               continue
+
+           return response
+
+       raise Exception("Max retries exceeded due to back-pressure")
+
+FanOutManager Automatic Handling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``FanOutManager`` handles 429 responses automatically:
+
+1. Marks the delivery as failed (not retried immediately)
+2. Increments the circuit breaker failure count
+3. Includes the peer in ``result.failures``
+
+.. code-block:: python
+
+   result = await manager.deliver(target="properties", data={"status": "active"})
+
+   for failure in result.failures:
+       if failure.status_code == 429:
+           print(f"Peer {failure.peer_id} is overloaded")
+           # Consider: reduce publishing rate or alert
+
+Subscriber Mitigation
+~~~~~~~~~~~~~~~~~~~~~
+
+If your application frequently hits back-pressure:
+
+1. **Increase max_pending**: Allow more callbacks to queue
+
+   .. code-block:: python
+
+      app.with_subscription_processing(max_pending=200)
+
+2. **Speed up processing**: Keep ``@subscription_data_hook`` handlers fast
+
+   .. code-block:: python
+
+      @app.subscription_data_hook("properties")
+      def on_property_change(actor, peer_id, target, data, sequence, callback_type):
+          # Do minimal work here
+          # Offload heavy processing to background task
+          background_queue.enqueue(process_data, peer_id, data)
+
+3. **Request suspension**: Ask publishers to suspend during high-load periods
+
 Database Support
 ----------------
 
@@ -503,3 +773,11 @@ Subscription processing works with both database backends:
 - **PostgreSQL**: Subscription state stored in attributes (no migration needed)
 
 Both backends support optimistic locking for concurrent callback handling.
+
+See Also
+--------
+
+- :doc:`trust-relationships` - Trust lifecycle and subscription cleanup
+- :doc:`troubleshooting` - Subscription troubleshooting guide
+- :doc:`../migration/v3.10` - Migration guide for subscription processing
+- :doc:`../contributing/testing` - Testing subscription handlers

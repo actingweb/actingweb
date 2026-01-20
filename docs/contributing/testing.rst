@@ -227,6 +227,220 @@ Run tests with coverage (project default threshold is 80%):
    poetry run pytest
 
 
+Testing Subscription Processing
+-------------------------------
+
+When testing applications using subscription processing (``.with_subscription_processing()``), use these patterns.
+
+Enabling Subscription Processing in Tests
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use the test harness with ``enable_subscription_processing=True``:
+
+.. code-block:: python
+
+   from tests.integration.test_harness import create_test_app
+
+   def test_subscription_callbacks():
+       """Test with subscription processing enabled."""
+       fastapi_app, aw_app = create_test_app(
+           fqdn="localhost:5555",
+           proto="http://",
+           enable_subscription_processing=True,
+           subscription_config={
+               "auto_sequence": True,
+               "auto_storage": True,
+               "auto_cleanup": True,
+               "gap_timeout_seconds": 1.0,  # Fast for tests
+               "max_pending": 50,
+           }
+       )
+
+       client = TestClient(fastapi_app)
+       # ... test subscription flows
+
+Simulating Callbacks with Devtest Endpoints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In devtest mode, use the ``devtest`` endpoints to inspect subscription state:
+
+.. code-block:: python
+
+   def test_callback_state_inspection():
+       """Inspect callback processing state via devtest."""
+       fastapi_app, aw_app = create_test_app(
+           enable_subscription_processing=True,
+           enable_devtest=True,  # Required for devtest endpoints
+       )
+       client = TestClient(fastapi_app)
+
+       # Create actor and subscription setup...
+
+       # Inspect callback state (devtest only)
+       response = client.get(
+           f"/{actor_id}/devtest/callback_state/{peer_id}/{subscription_id}",
+           auth=("creator", "passphrase")
+       )
+       assert response.status_code == 200
+       state = response.json()
+       assert "last_sequence" in state
+       assert "pending_count" in state
+
+Sending Test Callbacks
+~~~~~~~~~~~~~~~~~~~~~~
+
+Use the standard subscription callback endpoint:
+
+.. code-block:: python
+
+   def test_callback_processing():
+       """Send a callback and verify processing."""
+       # Setup publisher and subscriber actors...
+
+       # Send callback in ActingWeb protocol format
+       callback_data = {
+           "id": publisher_id,
+           "subscriptionid": subscription_id,
+           "sequence": 1,
+           "target": "properties",
+           "data": {"status": "active"},
+           "timestamp": "2026-01-20T12:00:00Z"
+       }
+
+       response = client.post(
+           f"/{subscriber_id}/callbacks",
+           json=callback_data,
+           auth=(peer_token, "")  # Trust token from subscription
+       )
+
+       # 201 = processed, 200 = duplicate, 202 = pending, 429 = backpressure
+       assert response.status_code in [200, 201, 202]
+
+Testing Sequence Handling
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Test out-of-order callbacks and gap detection:
+
+.. code-block:: python
+
+   @pytest.mark.xdist_group(name="subscription_flow")
+   class TestCallbackSequencing:
+       """Test callback sequencing behavior."""
+
+       def test_out_of_order_triggers_pending(self, subscriber_client, callback_auth):
+           """Callbacks arriving out of order should be queued."""
+           # Send sequence 1
+           response = send_callback(subscriber_client, callback_auth, sequence=1)
+           assert response.status_code == 201  # Processed
+
+           # Send sequence 3 (gap - missing 2)
+           response = send_callback(subscriber_client, callback_auth, sequence=3)
+           assert response.status_code == 202  # Pending
+
+           # Send sequence 2 (fill gap)
+           response = send_callback(subscriber_client, callback_auth, sequence=2)
+           assert response.status_code == 201  # Processed (and 3 auto-processed)
+
+       def test_duplicate_rejected(self, subscriber_client, callback_auth):
+           """Duplicate sequence numbers should be rejected."""
+           # Send sequence 1 twice
+           response = send_callback(subscriber_client, callback_auth, sequence=1)
+           assert response.status_code == 201
+
+           response = send_callback(subscriber_client, callback_auth, sequence=1)
+           assert response.status_code == 200  # Duplicate
+
+Testing RemotePeerStore
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Verify peer data storage:
+
+.. code-block:: python
+
+   from actingweb.remote_storage import RemotePeerStore
+
+   def test_peer_data_storage():
+       """Verify RemotePeerStore operations."""
+       actor = ActorInterface.get_by_id(actor_id, config)
+       store = RemotePeerStore(actor, peer_id)
+
+       # Test scalar values
+       store.set_value("status", {"active": True})
+       assert store.get_value("status") == {"active": True}
+
+       # Test lists
+       store.set_list("items", [{"id": 1}, {"id": 2}])
+       assert len(store.get_list("items")) == 2
+
+       # Test list operations
+       store.apply_list_operation("items", {
+           "operation": "append",
+           "items": [{"id": 3}]
+       })
+       assert len(store.get_list("items")) == 3
+
+       # Test cleanup
+       store.delete_all()
+       assert store.get_value("status") is None
+
+Testing Auto-Cleanup
+~~~~~~~~~~~~~~~~~~~~
+
+Verify peer data is cleaned up when trust is deleted:
+
+.. code-block:: python
+
+   def test_trust_deletion_cleans_peer_data():
+       """Verify auto_cleanup removes peer data on trust deletion."""
+       # Setup with auto_cleanup=True
+       fastapi_app, aw_app = create_test_app(
+           enable_subscription_processing=True,
+           subscription_config={"auto_cleanup": True}
+       )
+
+       # Create trust and store peer data...
+       store = RemotePeerStore(actor, peer_id)
+       store.set_value("test", {"data": "value"})
+       assert store.get_value("test") is not None
+
+       # Delete trust
+       actor.trust.delete_peer_trust(peer_id)
+
+       # Verify cleanup
+       assert store.get_value("test") is None
+
+Test Isolation for Subscription Tests
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Subscription tests often need specific isolation due to shared state:
+
+.. code-block:: python
+
+   import pytest
+
+   # Group subscription flow tests together
+   pytestmark = pytest.mark.xdist_group(name="subscription_processing")
+
+   class TestSubscriptionProcessingFlow:
+       """Tests that must run on the same worker."""
+
+       @pytest.fixture(autouse=True)
+       def setup_flow(self, request):
+           """Setup and teardown for each test."""
+           # Setup
+           self.actor = create_test_actor()
+           self.peer = create_test_peer()
+           establish_trust(self.actor, self.peer)
+
+           yield
+
+           # Teardown - clean up subscriptions and trust
+           cleanup_test_data(self.actor, self.peer)
+
+       def test_subscribe_and_receive_callback(self): ...
+       def test_unsubscribe_stops_callbacks(self): ...
+       def test_resync_after_gap(self): ...
+
 
 See Also
 --------

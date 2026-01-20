@@ -450,7 +450,7 @@ Authentication in Application Code
         return f"Tool executed for user {user_email}"
 
 Deployment Patterns
-===================
+-------------------
 
 AWS Lambda with Serverless Framework
 ------------------------------------

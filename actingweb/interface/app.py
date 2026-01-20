@@ -173,31 +173,31 @@ class ActingWebApp:
     def with_indexed_properties(
         self, properties: list[str] | None = None
     ) -> "ActingWebApp":
-        """
-        Configure which properties support reverse lookups via lookup table.
+        """Configure which properties support reverse lookups via lookup table.
 
         Properties specified here will have their values indexed in a separate
-        lookup table, enabling reverse lookups (value → actor_id) without the
+        lookup table, enabling reverse lookups (value -> actor_id) without the
         2048-byte size limit imposed by DynamoDB Global Secondary Indexes.
 
         Args:
-            properties: List of property names to index.
-                       Default: ["oauthId", "email", "externalUserId"]
-                       Set to empty list [] to disable all reverse lookups.
+            properties: List of property names to index. Default is
+                ["oauthId", "email", "externalUserId"]. Set to empty list []
+                to disable all reverse lookups.
 
         Returns:
             Self for method chaining
 
-        Example:
+        Example::
+
             app = (
                 ActingWebApp(...)
                 .with_indexed_properties(["oauthId", "email", "customUserId"])
             )
 
         Note:
-            - Only properties listed here can be used with Actor.get_from_property()
-            - Changes require application restart to take effect
-            - Use environment variable INDEXED_PROPERTIES for runtime override
+            Only properties listed here can be used with Actor.get_from_property().
+            Changes require application restart to take effect.
+            Use environment variable INDEXED_PROPERTIES for runtime override.
         """
         if properties is not None:
             self._indexed_properties = properties
@@ -530,7 +530,8 @@ class ActingWebApp:
         Args:
             target: Target to hook (e.g., "properties", "*" for all)
 
-        Example:
+        Example::
+
             @app.subscription_data_hook("properties")
             def on_property_change(
                 actor: ActorInterface,

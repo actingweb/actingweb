@@ -227,7 +227,7 @@ CHANGED
 - Added documentation to ``get_subscriptions()`` method explaining parameter filtering behavior
 
 v3.7.5: Dec 27, 2025
-----------
+--------------------
 
 ADDED
 ~~~~~
@@ -552,7 +552,7 @@ FIXED
 - Fixed Trust class attribute initialization to prevent AttributeError on early returns
 
 v3.4.3: Nov 23, 2025
--------------------
+--------------------
 
 FIXED
 ~~~~~
@@ -563,7 +563,7 @@ FIXED
 - Added conditional update check to prevent unnecessary trust relationship updates when client info hasn't changed
 
 v3.4.2: Nov 22, 2025
--------------------
+--------------------
 
 ADDED
 ~~~~~

@@ -91,14 +91,15 @@ def on_property_change(
 
 | Phase | Component | Status | Unit Tests | Integration Tests |
 |-------|-----------|--------|------------|-------------------|
-| 0 | Peer Capability Discovery | COMPLETE | 28 tests | Deferred |
-| 1 | Subscription Suspension & Resync | COMPLETE | Tests in suspension module | Deferred |
-| 2 | CallbackProcessor | COMPLETE | 20 tests | Deferred |
-| 3 | RemotePeerStore | COMPLETE | 34 tests | Deferred |
-| 4 | FanOutManager | COMPLETE | 32 tests | Deferred |
-| 5 | Integration Layer | COMPLETE | 27 tests | Deferred |
+| 0 | Peer Capability Discovery | COMPLETE | 28 tests | 4 tests |
+| 1 | Subscription Suspension & Resync | COMPLETE | Tests in suspension module | 23 tests |
+| 2 | CallbackProcessor | COMPLETE | 20 tests | 11 tests |
+| 3 | RemotePeerStore | COMPLETE | 34 tests | 16 tests |
+| 4 | FanOutManager | COMPLETE | 32 tests | 22 tests |
+| 5 | Integration Layer | COMPLETE | 27 tests | Included above |
 
 **Total New Unit Tests**: 113 tests (all passing)
+**Total New Integration Tests**: 150 tests (all passing)
 
 ### Files Created
 
@@ -116,6 +117,9 @@ def on_property_change(
 | `tests/test_remote_storage.py` | RemotePeerStore unit tests |
 | `tests/test_fanout.py` | FanOutManager unit tests |
 | `tests/test_subscription_processing.py` | Integration layer unit tests |
+| `tests/integration/test_subscription_processing_flow.py` | Subscription processing integration tests (62 tests) |
+| `tests/integration/test_fanout_flow.py` | Fan-out delivery integration tests (44 tests) |
+| `tests/integration/test_subscription_suspension_flow.py` | Suspension and resync integration tests (44 tests) |
 
 ### Files Modified
 
@@ -145,11 +149,13 @@ def on_property_change(
 | `tests/integration/test_actor_root_redirect.py` | Added xdist_group marker |
 | `tests/integration/test_peer_capabilities_integration.py` | Fixed auth bug (creator vs actor_id) |
 | `tests/integration/test_oauth2_security.py` | Added xdist_group markers |
+| `tests/integration/test_harness.py` | Added `enable_subscription_processing` parameter |
+| `tests/integration/conftest.py` | Added `callback_sender`, `remote_store_verifier`, `subscriber_app` fixtures |
 
 ### Remaining Work
 
-1. **Integration Tests**: The plan includes extensive integration tests for multi-actor subscription flows. These have been deferred pending a broader integration test infrastructure review.
-2. **End-to-End Testing**: Real-world testing with actual DynamoDB/PostgreSQL backends would validate the full flow.
+1. ~~**Integration Tests**: The plan includes extensive integration tests for multi-actor subscription flows. These have been deferred pending a broader integration test infrastructure review.~~ **COMPLETED** (2026-01-20): 150 integration tests added across 3 test files.
+2. **End-to-End Testing**: Real-world testing by refactoring actingweb_mcp to use the new library features would validate the full production readiness.
 
 ### Completed Work
 
@@ -194,7 +200,7 @@ def on_property_change(
 ## Phase 0: Peer Capability Discovery
 
 ### Overview
-Extend the trust model to track peer capabilities (`aw_supported`, `aw_version`) and provide a query API. This is a prerequisite for using optional protocol features like batch subscriptions and compression.
+Extend the trust model to track peer capabilities (`aw_supported`, `aw_version`) and provide a query API. This is a prerequisite for using optional protocol features like resync callbacks and compression.
 
 ### Changes Required
 
@@ -309,10 +315,10 @@ class PeerCapabilities:
 
     Usage:
         caps = PeerCapabilities(actor, peer_id)
-        if caps.supports_batch_subscriptions():
-            # Use batch endpoint
+        if caps.supports_resync_callbacks():
+            # Use resync callback format
         else:
-            # Fall back to individual requests
+            # Fall back to low-granularity callback
     """
 
     def __init__(self, actor: "ActorInterface", peer_id: str) -> None:
@@ -363,25 +369,13 @@ class PeerCapabilities:
         self._load_trust()
         return option in self._supported
 
-    def supports_batch_subscriptions(self) -> bool:
-        """Check if peer supports batch subscription creation."""
-        return self.supports("subscriptionbatch")
-
     def supports_compression(self) -> bool:
         """Check if peer supports callback compression."""
         return self.supports("callbackcompression")
 
-    def supports_health_endpoint(self) -> bool:
-        """Check if peer supports subscription health endpoint."""
-        return self.supports("subscriptionhealth")
-
     def supports_resync_callbacks(self) -> bool:
         """Check if peer supports resync callback type."""
         return self.supports("subscriptionresync")
-
-    def supports_stats_endpoint(self) -> bool:
-        """Check if peer supports subscription stats endpoint."""
-        return self.supports("subscriptionstats")
 
     def get_version(self) -> str | None:
         """Get peer's ActingWeb protocol version."""
@@ -3026,16 +3020,6 @@ class TestFanOutFlow:
 | `test_084_circuit_half_open_after_cooldown` | Wait 60s (or mock time), try delivery | State is HALF_OPEN, one request allowed |
 | `test_085_success_closes_circuit` | Subscriber recovers, callback succeeds | State returns to CLOSED |
 
-#### Test File: `tests/integration/test_protocol_endpoints.py`
-
-**10. Protocol Endpoints**
-
-| Test | Description | Assertions |
-| ---- | ----------- | ---------- |
-| `test_090_subscription_stats_endpoint` | GET /{actor_id}/subscriptions/stats | Returns JSON with counts |
-| `test_091_subscription_health_endpoint` | GET /{actor_id}/subscriptions/{subid}/health | Returns health status |
-| `test_092_batch_subscription_creation` | POST /{actor_id}/subscriptions/batch | Creates multiple subscriptions |
-
 #### Test File: `tests/integration/test_subscription_suspension_flow.py`
 
 **11. Subscription Suspension (Publisher Side)**
@@ -3303,9 +3287,6 @@ Per the ActingWeb protocol spec, optional features MUST check peer capabilities 
 |---------|------------|--------------|-------------------|
 | **Resync callbacks** | `subscriptionresync` | `caps.supports_resync_callbacks()` | Send low-granularity callback with URL |
 | **Callback compression** | `callbackcompression` | `caps.supports_compression()` | Send uncompressed |
-| **Batch subscription creation** | `subscriptionbatch` | `caps.supports_batch_subscriptions()` | Create subscriptions individually |
-| **Subscription health endpoint** | `subscriptionhealth` | `caps.supports_health_endpoint()` | Skip health checks |
-| **Subscription stats endpoint** | `subscriptionstats` | `caps.supports_stats_endpoint()` | Skip stats collection |
 
 ### Implementation Checklist
 
@@ -3331,9 +3312,6 @@ else:
 |-----------|----------|---------|--------|
 | `actor.py` | `_callback_subscription_resync()` | Resync callbacks | ✅ Implemented |
 | `fanout.py` | `_deliver_single()` | Compression | ✅ Implemented |
-| Future | Batch subscription helper | Batch creation | Not yet needed |
-| Future | Health monitoring | Health endpoint | Not yet needed |
-| Future | Stats collection | Stats endpoint | Not yet needed |
 
 ---
 

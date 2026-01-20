@@ -97,7 +97,7 @@ Signature: ``func(actor, **kwargs) -> Any``
 - Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``email_verification_required``, ``email_verified``
 
 Event Details
--------------
+~~~~~~~~~~~~~
 
 ``actor_created``
     Triggered when a new actor is created.
@@ -352,7 +352,7 @@ Async/Await Support
 **New in v3.9.0**: All ActingWeb hooks now support native async/await syntax. This enables efficient handling of I/O-bound operations without blocking the event loop in async frameworks like FastAPI.
 
 When to Use Async Hooks
-------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
 Use ``async def`` for hooks that need to call async services:
 
@@ -363,14 +363,14 @@ Use ``async def`` for hooks that need to call async services:
 - **Any async I/O operations**
 
 Performance Benefits
---------------------
+~~~~~~~~~~~~~~~~~~~~
 
 **FastAPI**: Async hooks execute natively without thread pool overhead, allowing true concurrent execution.
 
 **Flask**: Async hooks are executed via ``asyncio.run()``, providing compatibility with async libraries.
 
 Async Method Hooks
-------------------
+~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -385,7 +385,7 @@ Async Method Hooks
         return {"content": content, "status": response.status}
 
 Async Action Hooks
-------------------
+~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -406,7 +406,7 @@ Async Action Hooks
         return {"sent": result is not None}
 
 Async Property Hooks
---------------------
+~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -428,7 +428,7 @@ Async Property Hooks
         return value
 
 Async Lifecycle Hooks
-----------------------
+~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -443,7 +443,7 @@ Async Lifecycle Hooks
             )
 
 Mixed Sync and Async Hooks
----------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 You can use both synchronous and asynchronous hooks in the same application:
 
@@ -464,7 +464,7 @@ You can use both synchronous and asynchronous hooks in the same application:
 The framework automatically detects whether a hook is sync or async and handles execution appropriately.
 
 Framework-Specific Behavior
-----------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **FastAPI**:
   - Async hooks are executed natively without thread pool
@@ -477,7 +477,7 @@ Framework-Specific Behavior
   - Falls back to standard ``MethodsHandler`` and ``ActionsHandler``
 
 Best Practices
---------------
+~~~~~~~~~~~~~~
 
 1. **Use async for I/O**: Network requests, database queries, file operations
 2. **Use sync for CPU**: Calculations, data transformations, quick operations
@@ -485,7 +485,7 @@ Best Practices
 4. **Test both paths**: Ensure hooks work in both FastAPI and Flask contexts
 
 Backward Compatibility
-----------------------
+~~~~~~~~~~~~~~~~~~~~~~
 
 All existing synchronous hooks continue to work without changes. The async support is opt-in via ``async def`` syntax.
 

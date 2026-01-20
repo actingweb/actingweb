@@ -818,3 +818,62 @@ class DbAttributeBucketListProtocol(Protocol):
             True on success, False on failure
         """
         ...
+
+
+# =============================================================================
+# Subscription Suspension Protocols
+# =============================================================================
+
+
+@runtime_checkable
+class SubscriptionSuspensionProtocol(Protocol):
+    """Protocol for subscription suspension state persistence.
+
+    Suspension allows temporarily disabling diff registration for specific
+    targets/subtargets during bulk operations (imports, migrations).
+    When resumed, resync callbacks notify subscribers to re-fetch state.
+    """
+
+    def is_suspended(self, target: str, subtarget: str | None = None) -> bool:
+        """Check if a target/subtarget is currently suspended.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            True if suspended, False otherwise
+        """
+        ...
+
+    def suspend(self, target: str, subtarget: str | None = None) -> bool:
+        """Suspend diff registration for a target/subtarget.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            True if newly suspended, False if already suspended
+        """
+        ...
+
+    def resume(self, target: str, subtarget: str | None = None) -> bool:
+        """Resume diff registration for a target/subtarget.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            True if was suspended and now resumed, False if wasn't suspended
+        """
+        ...
+
+    def get_all_suspended(self) -> list[tuple[str, str | None]]:
+        """Get all currently suspended target/subtarget pairs.
+
+        Returns:
+            List of (target, subtarget) tuples
+        """
+        ...

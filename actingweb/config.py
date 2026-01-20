@@ -25,6 +25,7 @@ class Config:
     DbPeerTrustee: "ModuleType"
     DbSubscription: "ModuleType"
     DbSubscriptionDiff: "ModuleType"
+    DbSubscriptionSuspension: "ModuleType"
 
     def __init__(self, **kwargs: Any) -> None:
         #########
@@ -237,6 +238,9 @@ class Config:
         )
         self.DbTrust = importlib.import_module(
             "actingweb.db." + self.database + ".trust"
+        )
+        self.DbSubscriptionSuspension = importlib.import_module(
+            "actingweb.db." + self.database + ".subscription_suspension"
         )
         self.module: dict[str, Any] = {}
         self.module["deferred"] = None

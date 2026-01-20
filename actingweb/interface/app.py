@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from ..config import Config
+from ..subscription_config import SubscriptionProcessingConfig
 from .hooks import HookMetadata, HookRegistry
 
 if TYPE_CHECKING:
@@ -74,6 +75,10 @@ class ActingWebApp:
 
         # Hook registry
         self.hooks = HookRegistry()
+
+        # Subscription processing configuration
+        self._subscription_config = SubscriptionProcessingConfig()
+        self._subscription_data_hooks: dict[str, list[Callable[..., Any]]] = {}
 
         # Service registry for third-party OAuth2 services
         self._service_registry: Any | None = None  # Lazy initialized
@@ -456,6 +461,270 @@ class ActingWebApp:
             return func
 
         return decorator
+
+    def with_subscription_processing(
+        self,
+        auto_sequence: bool = True,
+        auto_storage: bool = True,
+        auto_cleanup: bool = True,
+        gap_timeout_seconds: float = 5.0,
+        max_pending: int = 100,
+        storage_prefix: str = "remote:",
+        max_concurrent_callbacks: int = 10,
+        max_payload_for_high_granularity: int = 65536,
+        circuit_breaker_threshold: int = 5,
+        circuit_breaker_cooldown: float = 60.0,
+    ) -> "ActingWebApp":
+        """Enable automatic subscription processing.
+
+        When enabled, the library automatically handles:
+        - Callback sequencing and deduplication
+        - Gap detection and resync triggering
+        - Data storage in RemotePeerStore (if auto_storage=True)
+        - Cleanup when trust is deleted (if auto_cleanup=True)
+
+        Args:
+            auto_sequence: Enable CallbackProcessor for sequence handling
+            auto_storage: Automatically store received data in RemotePeerStore
+            auto_cleanup: Register hook to clean up when trust is deleted
+            gap_timeout_seconds: Time before triggering resync on sequence gap
+            max_pending: Maximum pending callbacks before back-pressure (429)
+            storage_prefix: Bucket prefix for RemotePeerStore
+            max_concurrent_callbacks: Max concurrent callback deliveries
+            max_payload_for_high_granularity: Payload size before granularity downgrade
+            circuit_breaker_threshold: Failures before opening circuit
+            circuit_breaker_cooldown: Seconds before testing recovery
+
+        Returns:
+            Self for method chaining
+        """
+        self._subscription_config = SubscriptionProcessingConfig(
+            enabled=True,
+            auto_sequence=auto_sequence,
+            auto_storage=auto_storage,
+            auto_cleanup=auto_cleanup,
+            gap_timeout_seconds=gap_timeout_seconds,
+            max_pending=max_pending,
+            storage_prefix=storage_prefix,
+            max_concurrent_callbacks=max_concurrent_callbacks,
+            max_payload_for_high_granularity=max_payload_for_high_granularity,
+            circuit_breaker_threshold=circuit_breaker_threshold,
+            circuit_breaker_cooldown=circuit_breaker_cooldown,
+        )
+
+        # Register internal callback hook to route through processor
+        self._register_internal_subscription_handler()
+
+        # Register cleanup hook if enabled
+        if auto_cleanup:
+            self._register_cleanup_hook()
+
+        return self
+
+    def subscription_data_hook(self, target: str = "*") -> Callable[..., Any]:
+        """Decorator to register subscription data hooks.
+
+        Use with .with_subscription_processing() for automatic handling.
+        The handler receives already-sequenced, deduplicated data.
+
+        Args:
+            target: Target to hook (e.g., "properties", "*" for all)
+
+        Example:
+            @app.subscription_data_hook("properties")
+            def on_property_change(
+                actor: ActorInterface,
+                peer_id: str,
+                target: str,
+                data: dict,
+                sequence: int,
+                callback_type: str
+            ) -> None:
+                # Data is already sequenced and stored
+                pass
+        """
+
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            if target not in self._subscription_data_hooks:
+                self._subscription_data_hooks[target] = []
+            self._subscription_data_hooks[target].append(func)
+            return func
+
+        return decorator
+
+    def _register_internal_subscription_handler(self) -> None:
+        """Register internal handler for subscription callbacks."""
+        from .actor_interface import ActorInterface
+
+        @self.callback_hook("subscription")
+        def _internal_subscription_handler(
+            actor: ActorInterface,
+            name: str,
+            data: dict[str, Any],
+        ) -> bool:
+            """Internal handler that routes through CallbackProcessor."""
+            return self._process_subscription_callback(actor, data)
+
+    def _process_subscription_callback(
+        self,
+        actor: Any,
+        data: dict[str, Any],
+    ) -> bool:
+        """Process subscription callback through the automatic pipeline."""
+        import asyncio
+        import logging
+
+        from ..callback_processor import CallbackProcessor, ProcessResult
+        from ..remote_storage import RemotePeerStore
+
+        config = self._subscription_config
+        if not config.enabled:
+            return False
+
+        peer_id = data.get("peerid", "")
+        subscription = data.get("subscription", {})
+        subscription_id = subscription.get("subscriptionid", "")
+        callback_data = data.get("data", {})
+        sequence = data.get("sequence", 0)
+        callback_type = data.get("type", "diff")
+        target = subscription.get("target", "properties")
+
+        logger = logging.getLogger(__name__)
+
+        async def process() -> bool:
+            # Create processor
+            processor = CallbackProcessor(
+                actor,
+                gap_timeout_seconds=config.gap_timeout_seconds,
+                max_pending=config.max_pending,
+            )
+
+            # Define handler for processed callbacks
+            async def handler(cb: Any) -> None:
+                # Auto-storage
+                if config.auto_storage:
+                    store = RemotePeerStore(actor, peer_id, validate_peer_id=False)
+                    if cb.callback_type.value == "resync":
+                        store.apply_resync_data(cb.data)
+                    else:
+                        store.apply_callback_data(cb.data)
+
+                # Invoke user hooks
+                self._invoke_subscription_data_hooks(
+                    actor=actor,
+                    peer_id=peer_id,
+                    target=target,
+                    data=cb.data,
+                    sequence=cb.sequence,
+                    callback_type=cb.callback_type.value,
+                )
+
+            # Process through CallbackProcessor
+            result = await processor.process_callback(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                sequence=sequence,
+                data=callback_data,
+                callback_type=callback_type,
+                handler=handler,
+            )
+
+            return result in (ProcessResult.PROCESSED, ProcessResult.DUPLICATE)
+
+        # Run async processing
+        try:
+            _loop = asyncio.get_running_loop()  # Check if event loop is running
+            # If we're in an event loop, use run_in_executor
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, process())
+                return future.result()
+        except RuntimeError:
+            # No event loop running, safe to use asyncio.run
+            return asyncio.run(process())
+        except Exception as e:
+            logger.error(f"Error processing subscription callback: {e}")
+            return False
+
+    def _invoke_subscription_data_hooks(
+        self,
+        actor: Any,
+        peer_id: str,
+        target: str,
+        data: dict[str, Any],
+        sequence: int,
+        callback_type: str,
+    ) -> None:
+        """Invoke registered subscription data hooks."""
+        import asyncio
+        import inspect
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # Invoke target-specific hooks
+        if target in self._subscription_data_hooks:
+            for hook in self._subscription_data_hooks[target]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        asyncio.run(
+                            hook(actor, peer_id, target, data, sequence, callback_type)
+                        )
+                    else:
+                        hook(actor, peer_id, target, data, sequence, callback_type)
+                except Exception as e:
+                    logger.error(f"Error in subscription_data_hook for {target}: {e}")
+
+        # Invoke wildcard hooks
+        if "*" in self._subscription_data_hooks:
+            for hook in self._subscription_data_hooks["*"]:
+                try:
+                    if inspect.iscoroutinefunction(hook):
+                        asyncio.run(
+                            hook(actor, peer_id, target, data, sequence, callback_type)
+                        )
+                    else:
+                        hook(actor, peer_id, target, data, sequence, callback_type)
+                except Exception as e:
+                    logger.error(f"Error in subscription_data_hook wildcard: {e}")
+
+    def _register_cleanup_hook(self) -> None:
+        """Register hook to clean up when trust is deleted."""
+        import logging
+
+        from ..callback_processor import CallbackProcessor
+        from ..remote_storage import RemotePeerStore
+
+        logger = logging.getLogger(__name__)
+
+        @self.lifecycle_hook("trust_deleted")
+        def _cleanup_peer_data(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Clean up remote peer data when trust is deleted."""
+            if not peer_id:
+                return
+
+            # Clean up stored data
+            try:
+                store = RemotePeerStore(actor, peer_id, validate_peer_id=False)
+                store.delete_all()
+            except Exception as e:
+                logger.error(f"Error cleaning up RemotePeerStore for {peer_id}: {e}")
+
+            # Clean up callback state
+            try:
+                processor = CallbackProcessor(actor)
+                processor.clear_all_state_for_peer(peer_id)
+            except Exception as e:
+                logger.error(f"Error cleaning up callback state for {peer_id}: {e}")
+
+    def get_subscription_config(self) -> SubscriptionProcessingConfig:
+        """Get the subscription processing configuration."""
+        return self._subscription_config
 
     def get_config(self) -> Config:
         """Get the underlying ActingWeb Config object."""

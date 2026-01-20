@@ -1888,12 +1888,276 @@ class Actor:
             logger.error(f"Permission filtering failed for subscription callback: {e}")
             return None  # Fail-closed: don't send data on error
 
+    # =========================================================================
+    # Subscription Suspension Management
+    # =========================================================================
+
+    def is_subscription_suspended(
+        self, target: str, subtarget: str | None = None
+    ) -> bool:
+        """Check if diff registration is suspended for a target/subtarget.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            True if suspended, False otherwise
+        """
+        if not self.config:
+            return False
+        try:
+            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            return db.is_suspended(target, subtarget)
+        except Exception as e:
+            logger.error(f"Error checking suspension: {e}")
+            return False
+
+    def suspend_subscriptions(
+        self, target: str, subtarget: str | None = None
+    ) -> bool:
+        """Suspend diff registration for a target/subtarget.
+
+        While suspended, property changes will NOT register diffs or trigger callbacks.
+        Call resume_subscriptions() to lift suspension and send resync callbacks.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            True if newly suspended, False if already suspended
+        """
+        if not self.config:
+            return False
+        try:
+            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            return db.suspend(target, subtarget)
+        except Exception as e:
+            logger.error(f"Error suspending subscriptions: {e}")
+            return False
+
+    def resume_subscriptions(
+        self, target: str, subtarget: str | None = None
+    ) -> int:
+        """Resume diff registration and send resync callbacks.
+
+        Sends a resync callback to ALL subscriptions on this target/subtarget,
+        telling them to do a full GET to re-sync their state.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            The number of resync callbacks sent
+        """
+        if not self.config:
+            return 0
+        try:
+            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            if not db.resume(target, subtarget):
+                return 0  # Wasn't suspended
+
+            # Find all affected subscriptions and send resync callbacks
+            return self._send_resync_callbacks(target, subtarget)
+        except Exception as e:
+            logger.error(f"Error resuming subscriptions: {e}")
+            return 0
+
+    def _send_resync_callbacks(
+        self, target: str, subtarget: str | None
+    ) -> int:
+        """Send resync callbacks to all subscriptions on target/subtarget.
+
+        Args:
+            target: Target resource
+            subtarget: Optional subtarget
+
+        Returns:
+            Number of callbacks sent successfully
+        """
+        subs = self.get_subscriptions(target=target, subtarget=None, callback=False)
+        if not subs:
+            return 0
+
+        count = 0
+        for sub in subs:
+            sub_target = sub.get("target", "")
+            sub_subtarget = sub.get("subtarget")
+
+            # Match target
+            if sub_target != target:
+                continue
+
+            # Match subtarget if specified
+            if subtarget is not None and sub_subtarget != subtarget:
+                continue
+
+            # Send resync callback
+            if self._callback_subscription_resync(sub):
+                count += 1
+
+        logger.info(f"Sent {count} resync callbacks for {target}/{subtarget}")
+        return count
+
+    def _callback_subscription_resync(self, subscription: dict) -> bool:
+        """Send a resync callback to a single subscription.
+
+        Checks peer capability before sending resync. If peer doesn't support
+        the subscriptionresync option, falls back to low-granularity callback.
+
+        Args:
+            subscription: Subscription dict with peerid, subscriptionid, callback, etc.
+
+        Returns:
+            True if callback was sent successfully
+        """
+        from datetime import UTC, datetime
+
+        import httpx
+
+        peer_id = subscription.get("peerid", "")
+        sub_id = subscription.get("subscriptionid", "")
+        callback_url = subscription.get("callback", "")
+        target = subscription.get("target", "")
+        sub_subtarget = subscription.get("subtarget")
+
+        if not callback_url:
+            logger.warning(f"No callback URL for subscription {sub_id}")
+            return False
+
+        # Check if peer supports resync callbacks
+        from .interface.actor_interface import ActorInterface
+        from .peer_capabilities import PeerCapabilities
+
+        actor_interface = ActorInterface(self)
+        caps = PeerCapabilities(actor_interface, peer_id)
+        supports_resync = caps.supports_resync_callbacks()
+
+        # Increment sequence number
+        new_seq = self._increment_subscription_sequence(peer_id, sub_id)
+
+        # Build resource URL for resync
+        if not self.config:
+            logger.warning("No config available for building resource URL")
+            return False
+        resource_url = f"{self.config.proto}{self.config.fqdn}/{self.id}/{target}"
+        if sub_subtarget:
+            resource_url += f"/{sub_subtarget}"
+
+        # Build callback payload - use resync type only if peer supports it
+        if supports_resync:
+            # Resync callback per protocol spec v1.4
+            payload = {
+                "id": self.id,
+                "subscriptionid": sub_id,
+                "target": target,
+                "subtarget": sub_subtarget,
+                "sequence": new_seq,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "granularity": subscription.get("granularity", "high"),
+                "type": "resync",
+                "url": resource_url,
+            }
+            logger.debug(f"Sending resync callback to peer {peer_id} (supports resync)")
+        else:
+            # Fallback: low-granularity callback with URL only
+            # Peer should fetch full state from the URL
+            payload = {
+                "id": self.id,
+                "subscriptionid": sub_id,
+                "target": target,
+                "subtarget": sub_subtarget,
+                "sequence": new_seq,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "granularity": "low",
+                "url": resource_url,
+            }
+            logger.info(
+                f"Peer {peer_id} does not support resync callbacks, "
+                f"sending low-granularity callback instead"
+            )
+
+        # Get trust secret for authentication
+        from .trust import Trust
+
+        trust = Trust(actor_id=self.id, peerid=peer_id, config=self.config)
+        trust_data = trust.get()
+
+        if not trust_data:
+            logger.warning(f"No trust found for peer {peer_id}")
+            return False
+
+        secret = trust_data.get("secret", "")
+
+        # Send callback
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    callback_url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {secret}",
+                    },
+                )
+
+            if response.status_code in (200, 204):
+                logger.info(
+                    f"Sent resync callback to {peer_id} for subscription {sub_id}"
+                )
+                return True
+            else:
+                logger.warning(
+                    f"Resync callback to {peer_id} failed: {response.status_code}"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"Error sending resync callback to {peer_id}: {e}")
+            return False
+
+    def _increment_subscription_sequence(
+        self, peer_id: str, subscription_id: str
+    ) -> int:
+        """Increment and return the new sequence number for a subscription.
+
+        Args:
+            peer_id: Peer actor ID
+            subscription_id: Subscription ID
+
+        Returns:
+            New sequence number
+        """
+        sub_obj = self.get_subscription_obj(peerid=peer_id, subid=subscription_id)
+        if not sub_obj:
+            return 1
+
+        # Use the increase_seq() method which increments and returns new sequence
+        new_seq = sub_obj.increase_seq()
+        return new_seq if new_seq else 1
+
+    # =========================================================================
+    # Diff Registration
+    # =========================================================================
+
     def register_diffs(self, target=None, subtarget=None, resource=None, blob=None):
         """Registers a blob diff against all subscriptions with the correct target, subtarget, and resource.
 
         If resource is set, the blob is expected to be the FULL resource object, not a diff.
+
+        Note: Skips registration if the target/subtarget is currently suspended.
+        Use suspend_subscriptions() and resume_subscriptions() to manage suspension.
         """
         if blob is None or not target:
+            return
+
+        # Check suspension BEFORE registering diffs
+        if self.is_subscription_suspended(target, subtarget):
+            logger.debug(
+                f"Skipping diff registration for {target}/{subtarget}: suspended"
+            )
             return
         # Get all subscriptions, both with the specific subtarget/resource and those
         # without

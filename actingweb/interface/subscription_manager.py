@@ -462,3 +462,71 @@ class SubscriptionManager:
             if sub_data and len(sub_data) > 0:
                 return SubscriptionWithDiffs(core_sub)
         return None
+
+    # =========================================================================
+    # Subscription Suspension
+    # =========================================================================
+
+    def suspend(self, target: str, subtarget: str | None = None) -> bool:
+        """Suspend diff registration for a target/subtarget.
+
+        While suspended:
+        - Property changes will NOT register diffs
+        - No subscription callbacks will be sent
+        - Use resume() to lift suspension and trigger resync
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            True if newly suspended, False if already suspended
+
+        Example:
+            # Suspend before bulk operation
+            actor.subscriptions.suspend(target="properties", subtarget="memory_travel")
+
+            # Perform bulk updates without triggering callbacks
+            for item in bulk_data:
+                actor.properties["memory_travel"] = item
+
+            # Resume and notify subscribers to resync
+            callbacks_sent = actor.subscriptions.resume(
+                target="properties", subtarget="memory_travel"
+            )
+        """
+        return self._core_actor.suspend_subscriptions(target, subtarget)
+
+    def resume(self, target: str, subtarget: str | None = None) -> int:
+        """Resume diff registration and send resync callbacks.
+
+        Sends a resync callback to ALL subscriptions matching the target/subtarget,
+        telling subscribers to perform a full GET to re-sync their state.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            Number of resync callbacks sent successfully
+
+        Example:
+            # Resume after bulk operation
+            callbacks_sent = actor.subscriptions.resume(
+                target="properties", subtarget="memory_travel"
+            )
+            print(f"Notified {callbacks_sent} subscribers to resync")
+        """
+        return self._core_actor.resume_subscriptions(target, subtarget)
+
+    def is_suspended(self, target: str, subtarget: str | None = None) -> bool:
+        """Check if diff registration is suspended for a target/subtarget.
+
+        Args:
+            target: Target resource (e.g., "properties")
+            subtarget: Optional subtarget (e.g., property name)
+
+        Returns:
+            True if suspended, False otherwise
+        """
+        return self._core_actor.is_subscription_suspended(target, subtarget)

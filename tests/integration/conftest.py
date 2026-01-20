@@ -742,3 +742,226 @@ def trust_helper():
             return trust
 
     return TrustHelper()
+
+
+# Base port for subscriber app
+BASE_SUBSCRIBER_PORT = 5558
+
+
+@pytest.fixture(scope="session")
+def subscriber_app(docker_services, setup_database, worker_info):  # pylint: disable=unused-argument
+    """
+    Start a subscriber test app with subscription processing enabled.
+
+    Uses a different port than test_app and peer_app.
+    Returns the base URL for making requests.
+    """
+    from threading import Thread
+
+    import uvicorn
+
+    from .test_harness import create_test_app
+
+    subscriber_port = BASE_SUBSCRIBER_PORT + worker_info["port_offset"]
+    subscriber_url = f"http://{TEST_APP_HOST}:{subscriber_port}"
+
+    # Environment already set by test_app fixture
+    fastapi_app, _ = create_test_app(
+        fqdn=f"{TEST_APP_HOST}:{subscriber_port}",
+        proto="http://",
+        enable_oauth=True,
+        enable_mcp=False,
+        enable_devtest=True,
+        enable_subscription_processing=True,
+        subscription_config={
+            "auto_sequence": True,
+            "auto_storage": True,
+            "auto_cleanup": True,
+            "gap_timeout_seconds": 2.0,  # Shorter for testing
+            "max_pending": 50,
+        },
+    )
+
+    # Run in background thread with uvicorn
+    def run_app():
+        uvicorn.run(fastapi_app, host="0.0.0.0", port=subscriber_port, log_level="error")
+
+    thread = Thread(target=run_app, daemon=True)
+    thread.start()
+
+    # Wait for app to be ready
+    max_retries = 30
+    for _ in range(max_retries):
+        try:
+            response = requests.get(f"{subscriber_url}/", timeout=2)
+            if response.status_code in [200, 404]:
+                break
+        except requests.exceptions.ConnectionError:
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError(
+            f"Subscriber app failed to start on port {subscriber_port} within 30 seconds"
+        )
+
+    # Warmup
+    for _ in range(3):
+        try:
+            requests.get(f"{subscriber_url}/", timeout=2)
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(0.1)
+
+    return subscriber_url
+
+
+@pytest.fixture
+def callback_sender():
+    """
+    Helper fixture for sending subscription callbacks.
+
+    Handles callback wrapper format per protocol spec.
+    """
+    from datetime import datetime, timezone
+
+    class CallbackSender:
+        def send(
+            self,
+            to_actor: dict,
+            from_actor_id: str,
+            subscription_id: str,
+            sequence: int,
+            data: dict,
+            trust_secret: str,
+            callback_type: str = "diff",
+        ) -> requests.Response:
+            """Send a subscription callback."""
+            callback_url = f"{to_actor['url']}/callbacks/subscriptions/{from_actor_id}/{subscription_id}"
+
+            payload = {
+                "id": from_actor_id,
+                "target": "properties",
+                "sequence": sequence,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "granularity": "high",
+                "subscriptionid": subscription_id,
+                "data": data,
+            }
+
+            if callback_type == "resync":
+                payload["type"] = "resync"
+
+            return requests.post(
+                callback_url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {trust_secret}",
+                    "Content-Type": "application/json",
+                },
+            )
+
+        def send_out_of_order(
+            self,
+            to_actor: dict,
+            from_actor_id: str,
+            subscription_id: str,
+            sequences: list[int],
+            trust_secret: str,
+        ) -> list[requests.Response]:
+            """Send multiple callbacks with specified sequence order."""
+            responses = []
+            for seq in sequences:
+                resp = self.send(
+                    to_actor=to_actor,
+                    from_actor_id=from_actor_id,
+                    subscription_id=subscription_id,
+                    sequence=seq,
+                    data={"test_seq": seq},
+                    trust_secret=trust_secret,
+                )
+                responses.append(resp)
+            return responses
+
+    return CallbackSender()
+
+
+@pytest.fixture
+def remote_store_verifier():
+    """
+    Helper fixture for verifying RemotePeerStore contents.
+    """
+
+    class RemoteStoreVerifier:
+        def get_stored_data(
+            self,
+            actor_url: str,
+            actor_auth: tuple[str, str],
+            peer_id: str,
+        ) -> dict:
+            """Get all data stored for a peer in the remote store."""
+            # Access internal attributes via devtest endpoint
+            bucket = f"remote:{peer_id}"
+            response = requests.get(
+                f"{actor_url}/devtest/attributes/{bucket}",
+                auth=actor_auth,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {}
+
+        def verify_data_exists(
+            self,
+            actor_url: str,
+            actor_auth: tuple[str, str],
+            peer_id: str,
+            key: str,
+        ) -> bool:
+            """Check if specific data exists in remote store."""
+            data = self.get_stored_data(actor_url, actor_auth, peer_id)
+            return key in data
+
+        def verify_list_exists(
+            self,
+            actor_url: str,
+            actor_auth: tuple[str, str],
+            peer_id: str,
+            list_name: str,
+        ) -> bool:
+            """Check if a list exists in the remote store."""
+            data = self.get_stored_data(actor_url, actor_auth, peer_id)
+            return f"list:{list_name}:meta" in data
+
+        def get_callback_state(
+            self,
+            actor_url: str,
+            actor_auth: tuple[str, str],
+            peer_id: str,
+            subscription_id: str,
+        ) -> dict:
+            """Get callback processor state for a subscription."""
+            bucket = "_callback_state"
+            key = f"state:{peer_id}:{subscription_id}"
+            response = requests.get(
+                f"{actor_url}/devtest/attributes/{bucket}/{key}",
+                auth=actor_auth,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {}
+
+        def get_all_callback_state(
+            self,
+            actor_url: str,
+            actor_auth: tuple[str, str],
+        ) -> dict:
+            """Get all callback state for an actor."""
+            bucket = "_callback_state"
+            response = requests.get(
+                f"{actor_url}/devtest/attributes/{bucket}",
+                auth=actor_auth,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {}
+
+    return RemoteStoreVerifier()

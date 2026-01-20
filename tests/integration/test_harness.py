@@ -26,6 +26,8 @@ def create_test_app(
     enable_oauth: bool = False,
     enable_mcp: bool = False,
     enable_devtest: bool = True,
+    enable_subscription_processing: bool = False,
+    subscription_config: dict | None = None,
 ) -> tuple[FastAPI, ActingWebApp]:
     """
     Create a minimal ActingWeb test harness.
@@ -36,6 +38,8 @@ def create_test_app(
         enable_oauth: Enable OAuth2 configuration
         enable_mcp: Enable MCP endpoints
         enable_devtest: Enable devtest endpoints (for proxy tests)
+        enable_subscription_processing: Enable automatic subscription processing
+        subscription_config: Optional config dict for subscription processing
 
     Returns:
         Tuple of (fastapi_app, actingweb_app)
@@ -68,6 +72,17 @@ def create_test_app(
     # Optional: Enable MCP for MCP tests
     if enable_mcp:
         aw_app = aw_app.with_mcp(enable=True)
+
+    # Optional: Enable subscription processing for subscription tests
+    if enable_subscription_processing:
+        config = subscription_config or {}
+        aw_app = aw_app.with_subscription_processing(
+            auto_sequence=config.get("auto_sequence", True),
+            auto_storage=config.get("auto_storage", True),
+            auto_cleanup=config.get("auto_cleanup", True),
+            gap_timeout_seconds=config.get("gap_timeout_seconds", 5.0),
+            max_pending=config.get("max_pending", 100),
+        )
 
     # Register callback hook for custom www path template rendering test
     @aw_app.callback_hook("www")

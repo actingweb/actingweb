@@ -8,6 +8,35 @@ Unreleased
 ADDED
 ~~~~~
 
+- **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
+
+  - New module: ``actingweb.callback_processor`` - Processes incoming subscription callbacks with sequence validation
+  - New module: ``actingweb.remote_storage`` - Manages storing remote subscription data locally
+  - New module: ``actingweb.peer_capabilities`` - Peer capability negotiation during trust establishment
+  - New module: ``actingweb.subscription_config`` - Configuration for subscription behavior (gap thresholds, resync policies)
+  - New module: ``actingweb.fanout`` - Fan-out delivery for subscription callbacks
+  - Enhanced ``Trust`` model with ``peer_capabilities`` field for storing negotiated capabilities
+  - Automatic resync request when sequence gaps exceed configured thresholds
+  - Subscription suspension support for temporary delivery failures
+  - Circuit breaker pattern for handling unresponsive subscribers
+
+- **Subscription Suspension**: Added suspension/resume support for subscription delivery failures.
+
+  - New database table: ``SubscriptionSuspension`` for tracking suspended subscriptions
+  - DynamoDB and PostgreSQL backends with migration support
+  - Automatic suspension on repeated delivery failures
+  - Resync triggered on subscription resume
+  - Scoped suspensions by subtarget for granular control
+
+- **Comprehensive Integration Tests for Subscriptions**: Added extensive test coverage for subscription handling flows.
+
+  - ``test_subscription_processing_flow.py``: Callback sequencing, gap detection, resync handling
+  - ``test_fanout_flow.py``: Fan-out delivery, large payloads, concurrent changes, circuit breaker
+  - ``test_subscription_suspension_flow.py``: Suspension/resume, subtarget scoping, multiple subscribers
+  - New test fixtures: ``callback_sender``, ``trust_helper`` for subscription testing
+
+- **CI/CD Documentation Build**: Added documentation build job to GitHub Actions workflow.
+
 - **Configurable AwProxy Timeout**: Added ``timeout`` parameter to ``AwProxy`` constructor for configurable HTTP request timeouts. Accepts either a single value (used for both connect and read) or a tuple ``(connect_timeout, read_timeout)``. Default changed from hardcoded ``(5, 10)`` to ``(5, 20)`` seconds for better handling of slow peer responses.
 
 - **Attribute List Storage**: Added ``ListAttribute`` and ``AttributeListStore`` for storing distributed lists in internal attributes (not exposed via REST API). This provides the same API as ``ListProperty``/``PropertyListStore`` but stores data in attribute buckets instead of properties, bypassing the 400KB property size limit while maintaining list semantics.

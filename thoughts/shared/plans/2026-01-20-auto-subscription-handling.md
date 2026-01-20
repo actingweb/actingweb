@@ -126,12 +126,68 @@ def on_property_change(
 | `actingweb/db/dynamodb/trust.py` | Added capability fields (`aw_supported`, `aw_version`, `capabilities_fetched_at`) |
 | `actingweb/db/postgresql/trust.py` | Added capability fields |
 | `actingweb/db/__init__.py` | Added suspension DB factory function |
+| `actingweb/callback_processor.py` | New - Callback sequencing, deduplication, resync handling |
+| `actingweb/remote_storage.py` | New - Remote peer data storage with list operations |
+| `actingweb/fanout.py` | New - Fan-out delivery manager with circuit breakers |
+| `actingweb/peer_capabilities.py` | New - Peer capability discovery API |
+| `actingweb/subscription_config.py` | New - Configuration dataclass |
+| `docs/guides/subscriptions.rst` | Expanded documentation for subscription processing |
+| `docs/contributing/testing.rst` | Added parallel test isolation patterns |
+| `Makefile` | Changed `--dist loadscope` to `--dist loadgroup` |
+| `tests/test_callback_processor.py` | New unit tests + xdist_group marker |
+| `tests/test_remote_storage.py` | New unit tests + xdist_group marker |
+| `tests/test_fanout.py` | New unit tests + xdist_group marker |
+| `tests/test_peer_capabilities.py` | New unit tests |
+| `tests/test_subscription_processing.py` | New unit tests |
+| `tests/integration/test_devtest.py` | Added xdist_group marker |
+| `tests/integration/test_spa_api.py` | Added xdist_group markers |
+| `tests/integration/test_www_templates.py` | Added xdist_group markers |
+| `tests/integration/test_actor_root_redirect.py` | Added xdist_group marker |
+| `tests/integration/test_peer_capabilities_integration.py` | Fixed auth bug (creator vs actor_id) |
+| `tests/integration/test_oauth2_security.py` | Added xdist_group markers |
 
 ### Remaining Work
 
 1. **Integration Tests**: The plan includes extensive integration tests for multi-actor subscription flows. These have been deferred pending a broader integration test infrastructure review.
 2. **End-to-End Testing**: Real-world testing with actual DynamoDB/PostgreSQL backends would validate the full flow.
-3. **Documentation**: User-facing documentation for the new `.with_subscription_processing()` API should be added to `docs/`.
+
+### Completed Work
+
+1. **Documentation**: User-facing documentation added to `docs/guides/subscriptions.rst` with comprehensive coverage of:
+   - Quick start guide for `.with_subscription_processing()`
+   - Configuration options reference
+   - `@subscription_data_hook` decorator usage
+   - Callback types (diff vs resync)
+   - Peer capability discovery API
+   - Remote peer storage API
+   - List operations
+   - Subscription suspension
+   - Fan-out manager with circuit breakers
+   - Component-level usage examples
+   - Migration guide from raw hooks
+
+2. **Quality Gates**: All pyright errors and warnings fixed (0 errors, 0 warnings)
+
+3. **Unit Tests**: 145+ tests passing for new subscription processing components
+
+4. **Parallel Test Isolation**: Fixed parallel test execution issues:
+   - Added `pytestmark = pytest.mark.xdist_group(name="attribute_patching")` to `test_callback_processor.py` and `test_remote_storage.py` (both patch `actingweb.attribute.Attributes`)
+   - Added `pytestmark = pytest.mark.xdist_group(name="fanout_tests")` to `test_fanout.py`
+   - Changed Makefile from `--dist loadscope` to `--dist loadgroup` to respect xdist_group markers
+   - Added xdist_group markers to integration tests missing them:
+     - `test_devtest.py` - `devtest_TestDevTestEndpoints`
+     - `test_spa_api.py` - 4 test classes
+     - `test_www_templates.py` - 4 test classes
+     - `test_actor_root_redirect.py` - `actor_root_redirect_TestActorRootContentNegotiation`
+     - `test_oauth2_security.py` - 2 test classes
+   - Fixed auth bug in `test_peer_capabilities_integration.py` (was using actor_id instead of creator email)
+
+5. **Testing Documentation**: Added "Parallel Test Isolation Patterns" section to `docs/contributing/testing.rst`:
+   - xdist_group marker usage patterns
+   - Module patching guidance
+   - Distribution mode comparison table
+
+6. **Test Results**: **All tests pass** - 1378 passed, 14 skipped, 0 failures
 
 ---
 

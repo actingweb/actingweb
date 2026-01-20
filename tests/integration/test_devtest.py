@@ -10,9 +10,11 @@ NOTE: These tests should ONLY run with devtest endpoints enabled.
 In production, devtest MUST be disabled for security.
 """
 
+import pytest
 import requests
 
 
+@pytest.mark.xdist_group(name="devtest_TestDevTestEndpoints")
 class TestDevTestEndpoints:
     """
     Sequential test flow for devtest endpoints.

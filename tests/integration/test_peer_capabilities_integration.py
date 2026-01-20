@@ -23,9 +23,11 @@ class TestPeerCapabilitiesIntegration:
     # Shared state
     actor1_url: str | None = None
     actor1_id: str | None = None
+    creator1: str = "caps_test1@actingweb.net"
     passphrase1: str | None = None
     actor2_url: str | None = None
     actor2_id: str | None = None
+    creator2: str = "caps_test2@actingweb.net"
     passphrase2: str | None = None
     trust_url: str | None = None
     trust_secret: str | None = None
@@ -71,7 +73,7 @@ class TestPeerCapabilitiesIntegration:
                 "relationship": "friend",
                 "desc": "Capability test trust",
             },
-            auth=(self.actor1_id, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),
             headers={"Content-Type": "application/json"},
         )
 
@@ -87,7 +89,7 @@ class TestPeerCapabilitiesIntegration:
 
         response = requests.get(
             self.trust_url,
-            auth=(self.actor1_id, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),
         )
 
         assert response.status_code == 200
@@ -115,7 +117,7 @@ class TestPeerCapabilitiesIntegration:
                 "aw_version": "1.4",
                 "capabilities_fetched_at": "2026-01-20T12:00:00+00:00",
             },
-            auth=(self.actor1_id, self.passphrase1),
+            auth=(self.creator1, self.passphrase1),
             headers={"Content-Type": "application/json"},
         )
 
@@ -133,7 +135,7 @@ class TestPeerCapabilitiesIntegration:
         if self.trust_url and self.actor1_id and self.passphrase1:
             response = requests.delete(
                 self.trust_url,
-                auth=(self.actor1_id, self.passphrase1),
+                auth=(self.creator1, self.passphrase1),
             )
             # 204 or 200 are both acceptable
             assert response.status_code in (200, 204, 404)
@@ -144,7 +146,7 @@ class TestPeerCapabilitiesIntegration:
         if self.actor1_url and self.actor1_id and self.passphrase1:
             response = requests.delete(
                 self.actor1_url,
-                auth=(self.actor1_id, self.passphrase1),
+                auth=(self.creator1, self.passphrase1),
             )
             assert response.status_code in (200, 204, 404)
 
@@ -152,6 +154,6 @@ class TestPeerCapabilitiesIntegration:
         if self.actor2_url and self.actor2_id and self.passphrase2:
             response = requests.delete(
                 self.actor2_url,
-                auth=(self.actor2_id, self.passphrase2),
+                auth=(self.creator2, self.passphrase2),
             )
             assert response.status_code in (200, 204, 404)

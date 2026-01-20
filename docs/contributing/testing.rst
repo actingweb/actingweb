@@ -62,6 +62,75 @@ Test Isolation Notes
 2. If sequential passes → test isolation issue (not a bug)
 3. If sequential also fails → investigate the actual failure
 
+Parallel Test Isolation Patterns
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When writing tests that run in parallel with ``pytest-xdist``, use these patterns to ensure isolation:
+
+**1. xdist_group Marker** - Keep related tests on the same worker:
+
+.. code-block:: python
+
+   import pytest
+
+   # Module-level marker: All tests in this module run on the same worker
+   pytestmark = pytest.mark.xdist_group(name="my_group")
+
+   # Or class-level marker:
+   @pytest.mark.xdist_group(name="my_flow")
+   class TestMyFlow:
+       def test_step_1(self): ...
+       def test_step_2(self): ...
+
+Use xdist_group when:
+
+- Tests share class-level state
+- Tests use ``unittest.mock.patch()`` on the same module (patches can conflict across workers)
+- Tests must run in a specific order
+
+**2. Module Patching** - When multiple test modules patch the same import:
+
+.. code-block:: python
+
+   # test_module_a.py and test_module_b.py both patch actingweb.attribute.Attributes
+   # They MUST use the same xdist_group name to run on the same worker
+
+   # In test_module_a.py:
+   pytestmark = pytest.mark.xdist_group(name="attribute_patching")
+
+   # In test_module_b.py:
+   pytestmark = pytest.mark.xdist_group(name="attribute_patching")
+
+**3. Worker-Specific Prefixes** - For integration tests needing unique resources:
+
+.. code-block:: python
+
+   @pytest.fixture
+   def unique_email(worker_info):
+       """Generate a unique email per worker to avoid conflicts."""
+       return f"test_{worker_info['worker_id']}_{uuid.uuid4().hex[:8]}@example.com"
+
+**4. Distribution Mode** - The Makefile uses ``--dist loadgroup`` which respects xdist_group markers.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 40 40
+
+   * - Mode
+     - Behavior
+     - Use Case
+   * - ``loadgroup``
+     - Respects ``@pytest.mark.xdist_group``
+     - Default (recommended)
+   * - ``loadscope``
+     - Groups by module/class scope only
+     - Ignores xdist_group markers
+   * - ``load``
+     - Distributes tests evenly
+     - Maximum parallelism, no grouping
+
+See ``tests/integration/conftest.py`` for comprehensive isolation patterns used in integration tests.
+
 Test Organization
 ~~~~~~~~~~~~~~~~~
 

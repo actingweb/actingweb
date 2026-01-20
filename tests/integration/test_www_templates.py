@@ -17,7 +17,10 @@ enabled, allowing www endpoints to be accessed with basic auth credentials.
 This test suite runs sequentially - each test depends on the previous ones.
 """
 
+import pytest
 
+
+@pytest.mark.xdist_group(name="www_templates_TestWWWTemplates")
 class TestWWWTemplates:
     """
     Sequential test flow for www template verification.
@@ -314,6 +317,7 @@ class TestWWWTemplates:
         assert response.status_code in [200, 204]  # 204 No Content is valid for DELETE
 
 
+@pytest.mark.xdist_group(name="www_templates_TestWWWTemplateURLConsistency")
 class TestWWWTemplateURLConsistency:
     """
     Test that URL template values are consistent across all www pages.
@@ -386,6 +390,7 @@ class TestWWWTemplateURLConsistency:
         assert response.status_code in [200, 204]  # 204 No Content is valid for DELETE
 
 
+@pytest.mark.xdist_group(name="www_templates_TestWWWCustomTemplateRendering")
 class TestWWWCustomTemplateRendering:
     """
     Test custom template rendering via www callback hooks.
@@ -460,6 +465,7 @@ class TestWWWCustomTemplateRendering:
         assert response.status_code in [200, 204]
 
 
+@pytest.mark.xdist_group(name="www_templates_TestWWWWithOAuthCookie")
 class TestWWWWithOAuthCookie:
     """
     Test www endpoints with OAuth authentication using cookies.

@@ -1,8 +1,16 @@
-"""Unit tests for RemotePeerStore functionality."""
+"""Unit tests for RemotePeerStore functionality.
+
+Tests are grouped with @pytest.mark.xdist_group to ensure they run on the same
+worker during parallel execution, since they patch actingweb.attribute.Attributes.
+"""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# Mark all tests in this module to run on the same xdist worker as callback_processor
+# This prevents patch conflicts when tests run in parallel
+pytestmark = pytest.mark.xdist_group(name="attribute_patching")
 
 from actingweb.remote_storage import (
     DEFAULT_PEER_ID_PATTERN,
@@ -82,10 +90,16 @@ class TestRemotePeerStoreScalar:
         with patch("actingweb.attribute.Attributes") as mock:
             storage: dict[str, dict] = {}
 
-            def get_attr_side_effect(name=None):
+            def get_attr_side_effect(name: str | None = None) -> dict | None:
+                if name is None:
+                    return None
                 return storage.get(name)
 
-            def set_attr_side_effect(name=None, data=None, **_kwargs):
+            def set_attr_side_effect(
+                name: str | None = None, data: dict | None = None, **_kwargs: object
+            ) -> bool:
+                if name is None:
+                    return False
                 storage[name] = {"data": data, "timestamp": None}
                 return True
 
@@ -311,10 +325,16 @@ class TestRemotePeerStoreCallbackData:
         with patch("actingweb.attribute.Attributes") as attr_mock:
             attr_instance = MagicMock()
 
-            def get_attr_side_effect(name=None):
+            def get_attr_side_effect(name: str | None = None) -> dict | None:
+                if name is None:
+                    return None
                 return scalar_storage.get(name)
 
-            def set_attr_side_effect(name=None, data=None, **_kwargs):
+            def set_attr_side_effect(
+                name: str | None = None, data: dict | None = None, **_kwargs: object
+            ) -> bool:
+                if name is None:
+                    return False
                 scalar_storage[name] = {"data": data, "timestamp": None}
                 return True
 
@@ -494,11 +514,15 @@ class TestRemotePeerStoreResync:
         with patch("actingweb.attribute.Attributes") as attr_mock:
             attr_instance = MagicMock()
 
-            def set_attr_side_effect(name=None, data=None, **_kwargs):
+            def set_attr_side_effect(
+                name: str | None = None, data: dict | None = None, **_kwargs: object
+            ) -> bool:
+                if name is None:
+                    return False
                 scalar_storage[name] = {"data": data, "timestamp": None}
                 return True
 
-            def delete_bucket_side_effect():
+            def delete_bucket_side_effect() -> bool:
                 scalar_storage.clear()
                 list_data.clear()
                 return True

@@ -1,5 +1,3 @@
-"""Tests for FanOutManager."""
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -12,6 +10,17 @@ from actingweb.fanout import (
     FanOutManager,
     FanOutResult,
 )
+
+"""Tests for FanOutManager.
+
+Tests are grouped with @pytest.mark.xdist_group to ensure they run on the same
+worker during parallel execution, since they use asyncio event loops that can
+conflict across workers.
+"""
+
+# Mark all tests in this module to run on the same xdist worker
+# The sync tests use asyncio.get_event_loop() which can conflict in parallel
+pytestmark = pytest.mark.xdist_group(name="fanout_tests")
 
 
 class TestCircuitBreaker:

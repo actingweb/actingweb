@@ -112,6 +112,11 @@ class Trust(Base):
     client_platform = Column(String(255))
     oauth_client_id = Column(String(255))
 
+    # Peer capability tracking
+    aw_supported = Column(Text)  # Comma-separated option tags
+    aw_version = Column(String(50))  # Protocol version (e.g., "1.4")
+    capabilities_fetched_at = Column(DateTime)
+
 
 class PeerTrustee(Base):
     """PeerTrustee table - peers where this actor is trustee."""

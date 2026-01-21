@@ -92,15 +92,15 @@ Run tests in parallel across multiple CPU cores for 3-4x speedup:
     # All tests (unit + integration)
     make test-all-parallel
 
-    # Manual control (4 workers with loadscope distribution)
-    poetry run pytest tests/integration/ -n 4 -v --dist loadscope
+    # Manual control (4 workers with loadgroup distribution)
+    poetry run pytest tests/integration/ -n 4 -v --dist loadgroup
 
 **How Parallel Testing Works:**
 
 - Each worker gets isolated database tables (``test_w0_``, ``test_w1_``, etc.)
 - Test servers run on unique ports per worker (5555, 5565, 5575, etc.)
 - Actor emails are automatically made unique (``user_gw0_1_abc@example.com``)
-- Tests from the same class stay on the same worker (``--dist loadscope``)
+- Tests marked with ``@pytest.mark.xdist_group`` stay on the same worker (``--dist loadgroup``)
 - No test code changes needed - isolation is automatic
 
 **Writing Parallel-Safe Tests:**

@@ -8,6 +8,13 @@ Unreleased
 ADDED
 ~~~~~
 
+- **Passphrase-to-SPA-Token Exchange**: Added ``grant_type="passphrase"`` to the ``POST /oauth/spa/token`` endpoint for exchanging a valid creator passphrase for SPA tokens. This enables automated testing tools like Playwright to obtain authenticated access without going through the full OAuth2 flow.
+
+  - Devtest-mode only (returns 403 if ``config.devtest=False``) for security
+  - Returns ``access_token`` and ``refresh_token`` with standard OAuth2 response format
+  - Supports all token delivery modes: ``json``, ``cookie``, ``hybrid``
+  - Tokens can be used immediately to access actor resources via Bearer authentication
+
 - **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
 
   - New module: ``actingweb.callback_processor`` - Processes incoming subscription callbacks with sequence validation

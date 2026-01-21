@@ -211,6 +211,162 @@ Use FastAPI's `TestClient` to test HTTP routes without a server:
        r = client.post("/mcp", json={"jsonrpc":"2.0","id":1,"method":"tools/list"})
        assert r.status_code in (200, 401)
 
+Automated Testing with Playwright/Selenium
+------------------------------------------
+
+For end-to-end testing with browser automation tools like Playwright or Selenium, ActingWeb provides
+a passphrase-to-SPA-token exchange endpoint that bypasses the OAuth2 flow.
+
+.. warning::
+
+   This endpoint is **only available when devtest mode is enabled** (``with_devtest(enable=True)``).
+   It returns HTTP 403 when devtest is disabled, protecting production environments.
+
+Obtaining SPA Tokens via Passphrase
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Exchange a creator passphrase for SPA tokens:
+
+.. code-block:: python
+
+   import requests
+
+   # Create an actor (or use existing one)
+   create_response = requests.post(
+       "http://localhost:5000/",
+       json={"creator": "test@example.com"}
+   )
+   actor = create_response.json()
+   actor_id = actor["id"]
+   passphrase = actor["passphrase"]
+
+   # Exchange passphrase for SPA tokens
+   token_response = requests.post(
+       "http://localhost:5000/oauth/spa/token",
+       json={
+           "grant_type": "passphrase",
+           "actor_id": actor_id,
+           "passphrase": passphrase,
+       }
+   )
+   tokens = token_response.json()
+   access_token = tokens["access_token"]
+   refresh_token = tokens["refresh_token"]
+
+   # Use the token to access actor resources
+   props_response = requests.get(
+       f"http://localhost:5000/{actor_id}/properties",
+       headers={"Authorization": f"Bearer {access_token}"}
+   )
+
+Token Delivery Modes
+~~~~~~~~~~~~~~~~~~~~
+
+The endpoint supports three token delivery modes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 40 40
+
+   * - Mode
+     - Behavior
+     - Use Case
+   * - ``json`` (default)
+     - Both tokens in response body
+     - API testing, programmatic access
+   * - ``cookie``
+     - Tokens set as HttpOnly cookies
+     - Browser-based testing with cookie auth
+   * - ``hybrid``
+     - Access token in body, refresh in cookie
+     - SPAs that store access token in memory
+
+Example with cookie mode for Playwright:
+
+.. code-block:: python
+
+   # Get tokens as cookies
+   token_response = requests.post(
+       "http://localhost:5000/oauth/spa/token",
+       json={
+           "grant_type": "passphrase",
+           "actor_id": actor_id,
+           "passphrase": passphrase,
+           "token_delivery": "cookie",
+       }
+   )
+
+   # Extract cookies for Playwright
+   cookies = token_response.cookies
+   # Set these cookies in Playwright browser context
+
+Playwright Integration Example
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from playwright.sync_api import sync_playwright
+   import requests
+
+   def test_authenticated_page():
+       # Setup: Create actor and get tokens
+       actor = create_test_actor()
+       token_response = requests.post(
+           f"{BASE_URL}/oauth/spa/token",
+           json={
+               "grant_type": "passphrase",
+               "actor_id": actor["id"],
+               "passphrase": actor["passphrase"],
+               "token_delivery": "cookie",
+           }
+       )
+
+       with sync_playwright() as p:
+           browser = p.chromium.launch()
+           context = browser.new_context()
+
+           # Set authentication cookies from token response
+           for cookie in token_response.cookies:
+               context.add_cookies([{
+                   "name": cookie.name,
+                   "value": cookie.value,
+                   "domain": "localhost",
+                   "path": "/",
+               }])
+
+           page = context.new_page()
+           page.goto(f"{BASE_URL}/{actor['id']}/www")
+
+           # Page is now authenticated - test your UI
+           assert page.locator("h1").text_content() == "Dashboard"
+
+           browser.close()
+
+Response Format
+~~~~~~~~~~~~~~~
+
+Successful response (HTTP 200):
+
+.. code-block:: json
+
+   {
+     "success": true,
+     "actor_id": "<actor_id>",
+     "access_token": "<token>",
+     "refresh_token": "<token>",
+     "token_type": "Bearer",
+     "expires_in": 3600,
+     "expires_at": 1705847200,
+     "refresh_token_expires_in": 1209600
+   }
+
+Error responses:
+
+- **400**: Missing required parameter (``actor_id`` or ``passphrase``)
+- **401**: Invalid passphrase
+- **403**: Devtest mode not enabled
+- **404**: Actor not found
+
 Mocking AWS/DynamoDB
 --------------------
 

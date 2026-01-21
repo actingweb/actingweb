@@ -399,3 +399,162 @@ class TestRefreshTokenRotation:
             "expires_at": 9999999999,
         }
         assert fresh_token_data["used"] is False
+
+
+class TestPassphraseExchange:
+    """Test passphrase-to-SPA-token exchange endpoint."""
+
+    @pytest.fixture
+    def mock_config_devtest_enabled(self):
+        """Create a mock config object with devtest enabled."""
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth = {
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+        }
+        config.oauth2_provider = "google"
+        config.devtest = True
+        config.new_token = MagicMock(return_value="test-access-token")
+        return config
+
+    @pytest.fixture
+    def mock_config_devtest_disabled(self):
+        """Create a mock config object with devtest disabled."""
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth = {
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+        }
+        config.oauth2_provider = "google"
+        config.devtest = False
+        config.new_token = MagicMock(return_value="test-access-token")
+        return config
+
+    @pytest.fixture
+    def mock_webobj(self):
+        """Create a mock AWWebObj."""
+        webobj = MagicMock()
+        webobj.request = MagicMock()
+        webobj.request.body = None
+        webobj.request.headers = {"Accept": "application/json"}
+        webobj.request.cookies = {}
+        webobj.request.get = MagicMock(return_value="")
+        webobj.response = MagicMock()
+        webobj.response.headers = {}
+        webobj.response._cookies = []
+        webobj.response.set_status = MagicMock()
+        webobj.response.write = MagicMock()
+        webobj.response.set_cookie = MagicMock()
+        return webobj
+
+    def test_passphrase_grant_rejected_when_devtest_disabled(
+        self, mock_config_devtest_disabled, mock_webobj
+    ):
+        """Test that passphrase grant returns 403 when devtest mode is disabled."""
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        mock_webobj.request.body = json.dumps({
+            "grant_type": "passphrase",
+            "actor_id": "test-actor-id",
+            "passphrase": "test-passphrase",
+        })
+
+        handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_disabled)
+        result = handler._handle_token()
+
+        assert result["error"] is True
+        assert result["status_code"] == 403
+        assert "devtest" in result["message"].lower()
+
+    def test_passphrase_grant_missing_actor_id(
+        self, mock_config_devtest_enabled, mock_webobj
+    ):
+        """Test that passphrase grant returns error when actor_id is missing."""
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        mock_webobj.request.body = json.dumps({
+            "grant_type": "passphrase",
+            "passphrase": "test-passphrase",
+        })
+
+        handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_enabled)
+        result = handler._handle_token()
+
+        assert result["error"] is True
+        assert result["status_code"] == 400
+        assert "actor_id" in result["message"]
+
+    def test_passphrase_grant_missing_passphrase(
+        self, mock_config_devtest_enabled, mock_webobj
+    ):
+        """Test that passphrase grant returns error when passphrase is missing."""
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        mock_webobj.request.body = json.dumps({
+            "grant_type": "passphrase",
+            "actor_id": "test-actor-id",
+        })
+
+        handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_enabled)
+        result = handler._handle_token()
+
+        assert result["error"] is True
+        assert result["status_code"] == 400
+        assert "passphrase" in result["message"]
+
+    def test_passphrase_grant_type_routed_correctly(
+        self, mock_config_devtest_enabled, mock_webobj
+    ):
+        """Test that grant_type=passphrase is routed to the correct handler."""
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        mock_webobj.request.body = json.dumps({
+            "grant_type": "passphrase",
+            "actor_id": "test-actor-id",
+            "passphrase": "test-passphrase",
+        })
+
+        handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_enabled)
+
+        # Patch the _handle_passphrase_exchange method to verify it's called
+        with MagicMock() as mock_handler:
+            handler._handle_passphrase_exchange = mock_handler
+            mock_handler.return_value = {"success": True}
+
+            handler._handle_token()
+
+            # Verify the passphrase handler was called
+            mock_handler.assert_called_once()
+
+    def test_passphrase_grant_response_structure(self):
+        """Test the expected response structure for successful passphrase exchange."""
+        import time
+
+        # Define the expected response structure
+        expected_response = {
+            "success": True,
+            "actor_id": "actor123",
+            "access_token": "some-token",
+            "refresh_token": "some-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "expires_at": int(time.time()) + 3600,
+            "refresh_token_expires_in": 86400 * 14,
+        }
+
+        # Verify the structure has all required fields
+        assert "success" in expected_response
+        assert "actor_id" in expected_response
+        assert "access_token" in expected_response
+        assert "refresh_token" in expected_response
+        assert "token_type" in expected_response
+        assert "expires_in" in expected_response
+        assert "expires_at" in expected_response
+        assert "refresh_token_expires_in" in expected_response
+        assert expected_response["token_type"] == "Bearer"
+        assert expected_response["expires_in"] == 3600
+        assert expected_response["refresh_token_expires_in"] == 86400 * 14

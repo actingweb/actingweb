@@ -497,6 +497,8 @@ class OAuth2SPAHandler(BaseHandler):
             return self._handle_refresh_token(params, token_delivery)
         elif grant_type == "authorization_code":
             return self._handle_authorization_code(params, token_delivery)
+        elif grant_type == "passphrase":
+            return self._handle_passphrase_exchange(params, token_delivery)
         else:
             return self._json_error(400, f"Unsupported grant_type: {grant_type}")
 
@@ -680,6 +682,108 @@ class OAuth2SPAHandler(BaseHandler):
             400,
             "Use /oauth/spa/callback for authorization code exchange after redirect",
         )
+
+    def _handle_passphrase_exchange(
+        self, params: dict[str, Any], token_delivery: str
+    ) -> dict[str, Any]:
+        """
+        Handle passphrase grant for devtest mode.
+
+        This endpoint allows exchanging a valid creator passphrase for SPA tokens.
+        It is ONLY available when devtest mode is enabled.
+
+        This is useful for automated testing tools like Playwright that need
+        authenticated access without going through the full OAuth2 flow.
+
+        POST /oauth/spa/token with grant_type="passphrase"
+
+        Request body (JSON):
+        - grant_type: "passphrase"
+        - actor_id: The actor ID
+        - passphrase: The creator passphrase
+        - token_delivery: "json", "cookie", or "hybrid" (optional, default: "json")
+
+        Returns JSON with:
+        - success: True if authentication successful
+        - actor_id: The actor ID
+        - access_token: Access token (if token_delivery is "json" or "hybrid")
+        - refresh_token: Refresh token (if token_delivery is "json")
+        - token_type: "Bearer"
+        - expires_in: Token expiration in seconds
+        - expires_at: Token expiration timestamp
+        - refresh_token_expires_in: Refresh token expiration in seconds
+        """
+        # Security check: Only allow in devtest mode
+        if not self.config.devtest:
+            logger.warning(
+                "Passphrase grant attempted but devtest mode is disabled"
+            )
+            return self._json_error(
+                403, "Passphrase grant is only available in devtest mode"
+            )
+
+        # Validate required parameters
+        actor_id = params.get("actor_id")
+        passphrase = params.get("passphrase")
+
+        if not actor_id:
+            return self._json_error(400, "Missing required parameter: actor_id")
+
+        if not passphrase:
+            return self._json_error(400, "Missing required parameter: passphrase")
+
+        # Load and validate actor
+        from ..actor import Actor
+
+        actor = Actor(actor_id, config=self.config)
+
+        if not actor.id:
+            logger.debug(f"Passphrase grant failed: actor {actor_id} not found")
+            return self._json_error(404, "Actor not found")
+
+        # Validate passphrase
+        if not actor.passphrase or passphrase != actor.passphrase:
+            logger.debug(f"Passphrase grant failed: invalid passphrase for actor {actor_id}")
+            return self._json_error(401, "Invalid passphrase")
+
+        # Generate tokens
+        identifier = actor.creator or ""
+        access_token = self._generate_actingweb_token(actor_id, identifier)
+
+        from ..oauth_session import get_oauth2_session_manager
+
+        session_manager = get_oauth2_session_manager(self.config)
+        refresh_token = session_manager.create_refresh_token(actor_id, identifier)
+
+        expires_in = 3600  # 1 hour for access token
+        refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
+
+        response_data: dict[str, Any] = {
+            "success": True,
+            "actor_id": actor_id,
+            "token_type": "Bearer",
+            "expires_in": expires_in,
+            "expires_at": int(time.time()) + expires_in,
+            "refresh_token_expires_in": refresh_expires_in,
+        }
+
+        if token_delivery == "json":
+            response_data["access_token"] = access_token
+            response_data["refresh_token"] = refresh_token
+
+        elif token_delivery == "cookie":
+            self._set_token_cookies(
+                access_token, refresh_token, expires_in, httponly=True
+            )
+            response_data["token_delivery"] = "cookie"
+
+        elif token_delivery == "hybrid":
+            response_data["access_token"] = access_token
+            self._set_refresh_token_cookie(refresh_token, httponly=True)
+            response_data["token_delivery"] = "hybrid"
+
+        logger.info(f"Passphrase grant successful for actor {actor_id}")
+        return response_data
 
     def _handle_revoke(self) -> dict[str, Any]:
         """

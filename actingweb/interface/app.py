@@ -630,7 +630,9 @@ class ActingWebApp:
                 handler=handler,
             )
 
-            return result in (ProcessResult.PROCESSED, ProcessResult.DUPLICATE)
+            # Accept PENDING as success - callback was queued due to sequence gap
+            # Per ActingWeb protocol, receiver handles gaps via polling, sender should not retry
+            return result in (ProcessResult.PROCESSED, ProcessResult.DUPLICATE, ProcessResult.PENDING)
 
         # Run async processing
         try:

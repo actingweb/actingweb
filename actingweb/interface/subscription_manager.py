@@ -2,10 +2,17 @@
 Simplified subscription management for ActingWeb actors.
 """
 
-from typing import Any
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from ..actor import Actor as CoreActor
 from ..subscription import Subscription as CoreSubscription
+
+if TYPE_CHECKING:
+    from ..subscription_config import SubscriptionProcessingConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SubscriptionInfo:
@@ -132,6 +139,31 @@ class SubscriptionWithDiffs:
             True if the diff was cleared successfully, False otherwise
         """
         return bool(self._core_sub.clear_diff(seqnr=seqnr))
+
+
+@dataclass
+class SubscriptionSyncResult:
+    """Result of syncing a single subscription."""
+
+    subscription_id: str
+    success: bool
+    diffs_fetched: int
+    diffs_processed: int
+    final_sequence: int
+    error: str | None = None
+    error_code: int | None = None
+
+
+@dataclass
+class PeerSyncResult:
+    """Result of syncing all subscriptions to a peer."""
+
+    peer_id: str
+    success: bool
+    subscriptions_synced: int
+    total_diffs_processed: int
+    subscription_results: list[SubscriptionSyncResult]
+    error: str | None = None
 
 
 class SubscriptionManager:
@@ -530,3 +562,552 @@ class SubscriptionManager:
             True if suspended, False otherwise
         """
         return self._core_actor.is_subscription_suspended(target, subtarget)
+
+    # =========================================================================
+    # Pull-Based Sync API
+    # =========================================================================
+
+    def _get_peer_proxy(self, peer_id: str) -> Any:
+        """Get an AwProxy for communicating with a peer.
+
+        Args:
+            peer_id: The peer actor's ID
+
+        Returns:
+            AwProxy instance or None if no trust relationship exists
+        """
+        from ..aw_proxy import AwProxy
+
+        # Get the trust relationship with this peer
+        config = self._core_actor.config
+        peer_target = {
+            "id": self._core_actor.id,
+            "peerid": peer_id,
+            "passphrase": None,
+        }
+        return AwProxy(peer_target=peer_target, config=config)
+
+    def sync_subscription(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+    ) -> SubscriptionSyncResult:
+        """
+        Sync a single subscription by fetching and processing pending diffs from the peer.
+
+        This is a pull-based sync that fetches diffs from the peer actor that
+        we subscribed to, processes them, and clears them on the peer.
+
+        Args:
+            peer_id: ID of the peer actor we subscribed to
+            subscription_id: ID of the subscription to sync
+            config: Optional processing configuration
+
+        Returns:
+            SubscriptionSyncResult with sync outcome
+
+        Example:
+            result = actor.subscriptions.sync_subscription(
+                peer_id="peer123",
+                subscription_id="sub456"
+            )
+            if result.success:
+                print(f"Processed {result.diffs_processed} diffs")
+            else:
+                print(f"Sync failed: {result.error}")
+        """
+        from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
+        from ..remote_storage import RemotePeerStore
+        from ..subscription_config import SubscriptionProcessingConfig
+
+        # Use default config if not provided
+        if config is None:
+            config = SubscriptionProcessingConfig(enabled=True)
+
+        # Verify local subscription exists
+        sub = self.get_callback_subscription(peer_id, subscription_id)
+        if not sub:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error="Subscription not found",
+                error_code=404,
+            )
+
+        # Get proxy to peer
+        proxy = self._get_peer_proxy(peer_id)
+        if proxy is None or proxy.trust is None:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error="No trust relationship with peer",
+                error_code=404,
+            )
+
+        # Fetch diffs from peer
+        # Path: /subscriptions/{our_actor_id}/{subscription_id}
+        our_actor_id = self._core_actor.id
+        path = f"subscriptions/{our_actor_id}/{subscription_id}"
+
+        response = proxy.get_resource(path=path)
+
+        if response is None:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error="Failed to communicate with peer",
+                error_code=proxy.last_response_code or 502,
+            )
+
+        if "error" in response:
+            error_code = response["error"].get("code", 500)
+            error_msg = response["error"].get("message", "Unknown error")
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error=error_msg,
+                error_code=error_code,
+            )
+
+        # Parse response: {sequence: int, data: [{sequence, timestamp, data}, ...]}
+        diffs = response.get("data", [])
+        if not isinstance(diffs, list):
+            diffs = []
+
+        diffs_fetched = len(diffs)
+
+        # If no diffs, return success with 0 processed
+        if diffs_fetched == 0:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=True,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=response.get("sequence", 0),
+            )
+
+        # Sort diffs by sequence
+        diffs = sorted(diffs, key=lambda d: d.get("sequence", 0))
+
+        # Import ActorInterface for creating the callback processor
+        from .actor_interface import ActorInterface
+
+        # Create actor interface for callback processor
+        actor_interface = ActorInterface(self._core_actor)
+
+        # Process each diff
+        diffs_processed = 0
+        max_sequence = 0
+
+        # Set up handler based on config
+        def process_handler(cb):
+            """Handler to apply callback data to remote storage."""
+            if config.auto_storage:
+                store = RemotePeerStore(
+                    actor=actor_interface,
+                    peer_id=peer_id,
+                    validate_peer_id=False,
+                )
+                if cb.callback_type == CallbackType.RESYNC:
+                    store.apply_resync_data(cb.data)
+                else:
+                    store.apply_callback_data(cb.data)
+
+        # Create callback processor if sequence tracking is enabled
+        if config.auto_sequence:
+            processor = CallbackProcessor(
+                actor=actor_interface,
+                gap_timeout_seconds=config.gap_timeout_seconds,
+                max_pending=config.max_pending,
+            )
+
+            for diff in diffs:
+                seq = diff.get("sequence", 0)
+                data = diff.get("data", {})
+                timestamp = diff.get("timestamp", "")
+
+                # Add timestamp to data for handler
+                if timestamp and isinstance(data, dict):
+                    data["timestamp"] = timestamp
+
+                result = processor.process_callback_sync(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    sequence=seq,
+                    data=data,
+                    callback_type="diff",
+                    handler=process_handler if config.auto_storage else None,
+                )
+
+                if result == ProcessResult.PROCESSED:
+                    diffs_processed += 1
+
+                if seq > max_sequence:
+                    max_sequence = seq
+        else:
+            # No sequence tracking, just process all diffs
+            for diff in diffs:
+                seq = diff.get("sequence", 0)
+                data = diff.get("data", {})
+
+                if config.auto_storage:
+                    store = RemotePeerStore(
+                        actor=actor_interface,
+                        peer_id=peer_id,
+                        validate_peer_id=False,
+                    )
+                    store.apply_callback_data(data)
+
+                diffs_processed += 1
+                if seq > max_sequence:
+                    max_sequence = seq
+
+        # Clear processed diffs on peer
+        if max_sequence > 0:
+            clear_response = proxy.change_resource(
+                path=path, params={"sequence": max_sequence}
+            )
+            if clear_response is None or "error" in (clear_response or {}):
+                # Log warning but don't fail the sync
+                logger.warning(
+                    f"Failed to clear diffs on peer {peer_id} for subscription "
+                    f"{subscription_id}, sequence {max_sequence}"
+                )
+
+        return SubscriptionSyncResult(
+            subscription_id=subscription_id,
+            success=True,
+            diffs_fetched=diffs_fetched,
+            diffs_processed=diffs_processed,
+            final_sequence=max_sequence,
+        )
+
+    def sync_peer(
+        self,
+        peer_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+    ) -> PeerSyncResult:
+        """
+        Sync all outbound subscriptions to a peer.
+
+        Fetches and processes pending diffs for all subscriptions where
+        we subscribed to the specified peer.
+
+        Args:
+            peer_id: ID of the peer actor
+            config: Optional processing configuration
+
+        Returns:
+            PeerSyncResult with aggregate sync outcome
+
+        Example:
+            result = actor.subscriptions.sync_peer("peer123")
+            if result.success:
+                print(f"Synced {result.subscriptions_synced} subscriptions, "
+                      f"{result.total_diffs_processed} diffs total")
+            else:
+                for sub_result in result.subscription_results:
+                    if not sub_result.success:
+                        print(f"Failed: {sub_result.subscription_id}: {sub_result.error}")
+        """
+        # Get all outbound subscriptions to this peer
+        subscriptions = self.get_subscriptions_to_peer(peer_id)
+        outbound_subs = [s for s in subscriptions if s.is_outbound]
+
+        if not outbound_subs:
+            return PeerSyncResult(
+                peer_id=peer_id,
+                success=True,
+                subscriptions_synced=0,
+                total_diffs_processed=0,
+                subscription_results=[],
+            )
+
+        # Sync each subscription
+        results: list[SubscriptionSyncResult] = []
+        total_diffs = 0
+        all_success = True
+
+        for sub in outbound_subs:
+            result = self.sync_subscription(
+                peer_id=peer_id,
+                subscription_id=sub.subscription_id,
+                config=config,
+            )
+            results.append(result)
+            total_diffs += result.diffs_processed
+            if not result.success:
+                all_success = False
+
+        return PeerSyncResult(
+            peer_id=peer_id,
+            success=all_success,
+            subscriptions_synced=len([r for r in results if r.success]),
+            total_diffs_processed=total_diffs,
+            subscription_results=results,
+        )
+
+    async def sync_subscription_async(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+    ) -> SubscriptionSyncResult:
+        """
+        Async version of sync_subscription.
+
+        Sync a single subscription by fetching and processing pending diffs from the peer.
+
+        Args:
+            peer_id: ID of the peer actor we subscribed to
+            subscription_id: ID of the subscription to sync
+            config: Optional processing configuration
+
+        Returns:
+            SubscriptionSyncResult with sync outcome
+
+        Example:
+            result = await actor.subscriptions.sync_subscription_async(
+                peer_id="peer123",
+                subscription_id="sub456"
+            )
+        """
+        from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
+        from ..remote_storage import RemotePeerStore
+        from ..subscription_config import SubscriptionProcessingConfig
+
+        # Use default config if not provided
+        if config is None:
+            config = SubscriptionProcessingConfig(enabled=True)
+
+        # Verify local subscription exists
+        sub = self.get_callback_subscription(peer_id, subscription_id)
+        if not sub:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error="Subscription not found",
+                error_code=404,
+            )
+
+        # Get proxy to peer
+        proxy = self._get_peer_proxy(peer_id)
+        if proxy is None or proxy.trust is None:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error="No trust relationship with peer",
+                error_code=404,
+            )
+
+        # Fetch diffs from peer (async)
+        our_actor_id = self._core_actor.id
+        path = f"subscriptions/{our_actor_id}/{subscription_id}"
+
+        response = await proxy.get_resource_async(path=path)
+
+        if response is None:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error="Failed to communicate with peer",
+                error_code=proxy.last_response_code or 502,
+            )
+
+        if "error" in response:
+            error_code = response["error"].get("code", 500)
+            error_msg = response["error"].get("message", "Unknown error")
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=False,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=0,
+                error=error_msg,
+                error_code=error_code,
+            )
+
+        # Parse response
+        diffs = response.get("data", [])
+        if not isinstance(diffs, list):
+            diffs = []
+
+        diffs_fetched = len(diffs)
+
+        if diffs_fetched == 0:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=True,
+                diffs_fetched=0,
+                diffs_processed=0,
+                final_sequence=response.get("sequence", 0),
+            )
+
+        # Sort diffs by sequence
+        diffs = sorted(diffs, key=lambda d: d.get("sequence", 0))
+
+        from .actor_interface import ActorInterface
+
+        actor_interface = ActorInterface(self._core_actor)
+
+        diffs_processed = 0
+        max_sequence = 0
+
+        # Async handler for callback processing
+        async def process_handler_async(cb):
+            """Async handler to apply callback data to remote storage."""
+            if config.auto_storage:
+                store = RemotePeerStore(
+                    actor=actor_interface,
+                    peer_id=peer_id,
+                    validate_peer_id=False,
+                )
+                if cb.callback_type == CallbackType.RESYNC:
+                    store.apply_resync_data(cb.data)
+                else:
+                    store.apply_callback_data(cb.data)
+
+        if config.auto_sequence:
+            processor = CallbackProcessor(
+                actor=actor_interface,
+                gap_timeout_seconds=config.gap_timeout_seconds,
+                max_pending=config.max_pending,
+            )
+
+            for diff in diffs:
+                seq = diff.get("sequence", 0)
+                data = diff.get("data", {})
+                timestamp = diff.get("timestamp", "")
+
+                if timestamp and isinstance(data, dict):
+                    data["timestamp"] = timestamp
+
+                result = await processor.process_callback(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    sequence=seq,
+                    data=data,
+                    callback_type="diff",
+                    handler=process_handler_async if config.auto_storage else None,
+                )
+
+                if result == ProcessResult.PROCESSED:
+                    diffs_processed += 1
+
+                if seq > max_sequence:
+                    max_sequence = seq
+        else:
+            for diff in diffs:
+                seq = diff.get("sequence", 0)
+                data = diff.get("data", {})
+
+                if config.auto_storage:
+                    store = RemotePeerStore(
+                        actor=actor_interface,
+                        peer_id=peer_id,
+                        validate_peer_id=False,
+                    )
+                    store.apply_callback_data(data)
+
+                diffs_processed += 1
+                if seq > max_sequence:
+                    max_sequence = seq
+
+        # Clear processed diffs on peer (async)
+        if max_sequence > 0:
+            clear_response = await proxy.change_resource_async(
+                path=path, params={"sequence": max_sequence}
+            )
+            if clear_response is None or "error" in (clear_response or {}):
+                logger.warning(
+                    f"Failed to clear diffs on peer {peer_id} for subscription "
+                    f"{subscription_id}, sequence {max_sequence}"
+                )
+
+        return SubscriptionSyncResult(
+            subscription_id=subscription_id,
+            success=True,
+            diffs_fetched=diffs_fetched,
+            diffs_processed=diffs_processed,
+            final_sequence=max_sequence,
+        )
+
+    async def sync_peer_async(
+        self,
+        peer_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+    ) -> PeerSyncResult:
+        """
+        Async version of sync_peer.
+
+        Sync all outbound subscriptions to a peer.
+
+        Args:
+            peer_id: ID of the peer actor
+            config: Optional processing configuration
+
+        Returns:
+            PeerSyncResult with aggregate sync outcome
+
+        Example:
+            result = await actor.subscriptions.sync_peer_async("peer123")
+        """
+        import asyncio
+
+        # Get all outbound subscriptions to this peer
+        subscriptions = self.get_subscriptions_to_peer(peer_id)
+        outbound_subs = [s for s in subscriptions if s.is_outbound]
+
+        if not outbound_subs:
+            return PeerSyncResult(
+                peer_id=peer_id,
+                success=True,
+                subscriptions_synced=0,
+                total_diffs_processed=0,
+                subscription_results=[],
+            )
+
+        # Sync each subscription concurrently
+        tasks = [
+            self.sync_subscription_async(
+                peer_id=peer_id,
+                subscription_id=sub.subscription_id,
+                config=config,
+            )
+            for sub in outbound_subs
+        ]
+
+        results = await asyncio.gather(*tasks)
+
+        total_diffs = sum(r.diffs_processed for r in results)
+        all_success = all(r.success for r in results)
+
+        return PeerSyncResult(
+            peer_id=peer_id,
+            success=all_success,
+            subscriptions_synced=len([r for r in results if r.success]),
+            total_diffs_processed=total_diffs,
+            subscription_results=list(results),
+        )

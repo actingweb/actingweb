@@ -32,7 +32,11 @@ from .hooks import (
     subscription_hook,
 )
 from .property_store import PropertyStore
-from .subscription_manager import SubscriptionManager
+from .subscription_manager import (
+    PeerSyncResult,
+    SubscriptionManager,
+    SubscriptionSyncResult,
+)
 from .trust_manager import TrustManager
 
 __all__ = [
@@ -67,4 +71,7 @@ __all__ = [
     "FanOutManager",
     "FanOutResult",
     "SubscriptionProcessingConfig",
+    # Sync API types
+    "SubscriptionSyncResult",
+    "PeerSyncResult",
 ]

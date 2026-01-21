@@ -27,6 +27,16 @@ ADDED
   - Subscription suspension support for temporary delivery failures
   - Circuit breaker pattern for handling unresponsive subscribers
 
+- **Pull-Based Subscription Sync API**: Added ``sync_subscription()`` and ``sync_peer()`` methods to ``SubscriptionManager`` for explicitly fetching and processing pending diffs from peers.
+
+  - New method: ``sync_subscription(peer_id, subscription_id, config?)`` - Sync a single subscription
+  - New method: ``sync_peer(peer_id, config?)`` - Sync all outbound subscriptions to a peer
+  - Async variants: ``sync_subscription_async()`` and ``sync_peer_async()``
+  - New dataclass: ``SubscriptionSyncResult`` - Result of syncing a single subscription
+  - New dataclass: ``PeerSyncResult`` - Aggregate result of syncing all subscriptions to a peer
+  - Supports configurable processing via ``SubscriptionProcessingConfig``
+  - Complements push-based callbacks for manual "Sync All" workflows
+
 - **Subscription Suspension**: Added suspension/resume support for subscription delivery failures.
 
   - New database table: ``SubscriptionSuspension`` for tracking suspended subscriptions

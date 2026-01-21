@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pynamodb.exceptions import DoesNotExist
 
 
 class TestSubscriptionSuspensionDynamoDB:
@@ -37,8 +38,8 @@ class TestSubscriptionSuspensionDynamoDB:
             DbSubscriptionSuspension,
         )
 
-        # Setup mock to raise DoesNotExist (caught as Exception)
-        mock_model.get.side_effect = Exception("DoesNotExist")
+        # Setup mock to raise DoesNotExist
+        mock_model.get.side_effect = DoesNotExist()
 
         db = DbSubscriptionSuspension("actor123")
         result = db.is_suspended("properties", "email")
@@ -52,7 +53,7 @@ class TestSubscriptionSuspensionDynamoDB:
         )
 
         # First call to is_suspended returns False (not suspended)
-        mock_model.get.side_effect = Exception("DoesNotExist")
+        mock_model.get.side_effect = DoesNotExist()
 
         db = DbSubscriptionSuspension("actor123")
         result = db.suspend("properties", "email")
@@ -98,7 +99,7 @@ class TestSubscriptionSuspensionDynamoDB:
         )
 
         # Setup mock to raise DoesNotExist
-        mock_model.get.side_effect = Exception("DoesNotExist")
+        mock_model.get.side_effect = DoesNotExist()
 
         db = DbSubscriptionSuspension("actor123")
         result = db.resume("properties", "email")
@@ -128,7 +129,7 @@ class TestSubscriptionSuspensionDynamoDB:
             DbSubscriptionSuspension,
         )
 
-        mock_model.get.side_effect = Exception("DoesNotExist")
+        mock_model.get.side_effect = DoesNotExist()
 
         db = DbSubscriptionSuspension("actor123")
         db.is_suspended("properties", None)

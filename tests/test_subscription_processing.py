@@ -234,7 +234,8 @@ class TestSubscriptionDataHook:
 class TestInvokeSubscriptionDataHooks:
     """Tests for _invoke_subscription_data_hooks method."""
 
-    def test_invoke_target_specific_hooks(self) -> None:
+    @pytest.mark.asyncio
+    async def test_invoke_target_specific_hooks(self) -> None:
         """Target-specific hooks are invoked."""
         app = ActingWebApp(
             aw_type="urn:actingweb:test",
@@ -242,7 +243,7 @@ class TestInvokeSubscriptionDataHooks:
             fqdn="test.example.com",
         )
 
-        invoked = []
+        invoked: list[tuple[str, str, dict, int, str]] = []
 
         @app.subscription_data_hook("properties")
         def handler(
@@ -256,7 +257,7 @@ class TestInvokeSubscriptionDataHooks:
             invoked.append((peer_id, target, data, sequence, callback_type))
 
         mock_actor = MagicMock()
-        app._invoke_subscription_data_hooks(
+        await app._invoke_subscription_data_hooks(
             actor=mock_actor,
             peer_id="peer1",
             target="properties",
@@ -268,7 +269,8 @@ class TestInvokeSubscriptionDataHooks:
         assert len(invoked) == 1
         assert invoked[0] == ("peer1", "properties", {"key": "value"}, 1, "diff")
 
-    def test_invoke_wildcard_hooks(self) -> None:
+    @pytest.mark.asyncio
+    async def test_invoke_wildcard_hooks(self) -> None:
         """Wildcard hooks are invoked for any target."""
         app = ActingWebApp(
             aw_type="urn:actingweb:test",
@@ -276,7 +278,7 @@ class TestInvokeSubscriptionDataHooks:
             fqdn="test.example.com",
         )
 
-        invoked = []
+        invoked: list[str] = []
 
         @app.subscription_data_hook("*")
         def handler(
@@ -290,7 +292,7 @@ class TestInvokeSubscriptionDataHooks:
             invoked.append(target)
 
         mock_actor = MagicMock()
-        app._invoke_subscription_data_hooks(
+        await app._invoke_subscription_data_hooks(
             actor=mock_actor,
             peer_id="peer1",
             target="other_target",
@@ -301,7 +303,8 @@ class TestInvokeSubscriptionDataHooks:
 
         assert "other_target" in invoked
 
-    def test_hook_error_does_not_stop_other_hooks(self) -> None:
+    @pytest.mark.asyncio
+    async def test_hook_error_does_not_stop_other_hooks(self) -> None:
         """Error in one hook doesn't stop other hooks."""
         app = ActingWebApp(
             aw_type="urn:actingweb:test",
@@ -309,7 +312,7 @@ class TestInvokeSubscriptionDataHooks:
             fqdn="test.example.com",
         )
 
-        invoked = []
+        invoked: list[str] = []
 
         @app.subscription_data_hook("properties")
         def handler1(
@@ -335,7 +338,7 @@ class TestInvokeSubscriptionDataHooks:
 
         mock_actor = MagicMock()
         # Should not raise
-        app._invoke_subscription_data_hooks(
+        await app._invoke_subscription_data_hooks(
             actor=mock_actor,
             peer_id="peer1",
             target="properties",

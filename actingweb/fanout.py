@@ -3,8 +3,9 @@ Fan-out manager for subscription callback delivery.
 
 Provides scalable callback delivery with:
 - Parallel HTTP requests with bounded concurrency
-- Circuit breaker pattern for failing peers
+- Circuit breaker pattern for failing peers (with persistence for Kubernetes)
 - Automatic granularity downgrade for large payloads
+- Connection pooling via shared HTTP client
 """
 
 import asyncio
@@ -25,6 +26,41 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Shared HTTP client for connection pooling (module-level singleton)
+_shared_client: httpx.AsyncClient | None = None
+_client_lock = asyncio.Lock()
+
+
+async def get_shared_client(timeout: float = 30.0) -> httpx.AsyncClient:
+    """Get or create shared HTTP client for connection pooling.
+
+    Using a shared client provides:
+    - Connection pooling and reuse
+    - Reduced TIME_WAIT socket accumulation
+    - Better performance with many subscribers
+    """
+    global _shared_client
+    async with _client_lock:
+        if _shared_client is None or _shared_client.is_closed:
+            _shared_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout),
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=30.0,
+                ),
+            )
+    return _shared_client
+
+
+async def close_shared_client() -> None:
+    """Close the shared HTTP client. Call during application shutdown."""
+    global _shared_client
+    async with _client_lock:
+        if _shared_client is not None and not _shared_client.is_closed:
+            await _shared_client.aclose()
+            _shared_client = None
+
 
 class CircuitState(Enum):
     """Circuit breaker states."""
@@ -36,7 +72,10 @@ class CircuitState(Enum):
 
 @dataclass
 class CircuitBreaker:
-    """Circuit breaker for a single peer."""
+    """Circuit breaker for a single peer.
+
+    State can be persisted to survive pod restarts in Kubernetes deployments.
+    """
 
     peer_id: str
     state: CircuitState = CircuitState.CLOSED
@@ -86,6 +125,31 @@ class CircuitBreaker:
         # HALF_OPEN - allow one test request
         return True
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for persistence."""
+        return {
+            "peer_id": self.peer_id,
+            "state": self.state.value,
+            "failure_count": self.failure_count,
+            "last_failure_time": self.last_failure_time,
+            "last_success_time": self.last_success_time,
+            "failure_threshold": self.failure_threshold,
+            "cooldown_seconds": self.cooldown_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CircuitBreaker":
+        """Deserialize from dict."""
+        return cls(
+            peer_id=data.get("peer_id", ""),
+            state=CircuitState(data.get("state", "closed")),
+            failure_count=data.get("failure_count", 0),
+            last_failure_time=data.get("last_failure_time", 0.0),
+            last_success_time=data.get("last_success_time", 0.0),
+            failure_threshold=data.get("failure_threshold", 5),
+            cooldown_seconds=data.get("cooldown_seconds", 60.0),
+        )
+
 
 @dataclass
 class DeliveryResult:
@@ -117,9 +181,13 @@ class FanOutManager:
 
     Implements protocol v1.4 features:
     - Automatic granularity downgrade when payload > threshold
-    - Circuit breaker pattern for handling 429/503 responses
+    - Circuit breaker pattern for handling 429/503 responses (persisted for K8s)
     - Optional compression for large payloads
+    - Connection pooling via shared HTTP client
     """
+
+    # Storage bucket for circuit breaker state persistence
+    _CB_STATE_BUCKET = "_circuit_breaker_state"
 
     def __init__(
         self,
@@ -130,6 +198,7 @@ class FanOutManager:
         circuit_breaker_cooldown: float = 60.0,
         request_timeout: float = 30.0,
         enable_compression: bool = True,
+        persist_circuit_breakers: bool = True,
     ) -> None:
         """
         Initialize fan-out manager.
@@ -142,6 +211,7 @@ class FanOutManager:
             circuit_breaker_cooldown: Seconds before testing recovery
             request_timeout: HTTP request timeout in seconds
             enable_compression: Whether to use compression when supported
+            persist_circuit_breakers: Persist circuit breaker state (for Kubernetes)
         """
         self._actor = actor
         self._max_concurrent = max_concurrent
@@ -150,19 +220,94 @@ class FanOutManager:
         self._cb_cooldown = circuit_breaker_cooldown
         self._request_timeout = request_timeout
         self._enable_compression = enable_compression
+        self._persist_cb = persist_circuit_breakers
 
-        # Circuit breakers per peer
+        # Circuit breakers per peer (in-memory cache)
         self._circuit_breakers: dict[str, CircuitBreaker] = {}
+
+        # Load persisted circuit breaker state
+        if self._persist_cb:
+            self._load_circuit_breaker_state()
 
     def _get_circuit_breaker(self, peer_id: str) -> CircuitBreaker:
         """Get or create circuit breaker for peer."""
         if peer_id not in self._circuit_breakers:
-            self._circuit_breakers[peer_id] = CircuitBreaker(
-                peer_id=peer_id,
-                failure_threshold=self._cb_threshold,
-                cooldown_seconds=self._cb_cooldown,
-            )
+            # Try to load from persistence first
+            cb = self._load_single_circuit_breaker(peer_id)
+            if cb is None:
+                cb = CircuitBreaker(
+                    peer_id=peer_id,
+                    failure_threshold=self._cb_threshold,
+                    cooldown_seconds=self._cb_cooldown,
+                )
+            self._circuit_breakers[peer_id] = cb
         return self._circuit_breakers[peer_id]
+
+    def _load_circuit_breaker_state(self) -> None:
+        """Load all circuit breaker state from persistent storage."""
+        try:
+            from .attribute import Attributes
+
+            db = Attributes(
+                actor_id=self._actor.id,
+                bucket=self._CB_STATE_BUCKET,
+                config=self._actor.config,
+            )
+            all_attrs = db.get_bucket() or {}
+            for attr_name, attr_data in all_attrs.items():
+                if attr_name.startswith("cb:"):
+                    data = attr_data.get("data") if attr_data else None
+                    if data:
+                        cb = CircuitBreaker.from_dict(data)
+                        # Apply current config
+                        cb.failure_threshold = self._cb_threshold
+                        cb.cooldown_seconds = self._cb_cooldown
+                        self._circuit_breakers[cb.peer_id] = cb
+            if self._circuit_breakers:
+                logger.debug(
+                    f"Loaded {len(self._circuit_breakers)} circuit breaker states"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to load circuit breaker state: {e}")
+
+    def _load_single_circuit_breaker(self, peer_id: str) -> CircuitBreaker | None:
+        """Load a single circuit breaker from persistence."""
+        if not self._persist_cb:
+            return None
+        try:
+            from .attribute import Attributes
+
+            db = Attributes(
+                actor_id=self._actor.id,
+                bucket=self._CB_STATE_BUCKET,
+                config=self._actor.config,
+            )
+            attr = db.get_attr(name=f"cb:{peer_id}")
+            data = attr.get("data") if attr else None
+            if data:
+                cb = CircuitBreaker.from_dict(data)
+                cb.failure_threshold = self._cb_threshold
+                cb.cooldown_seconds = self._cb_cooldown
+                return cb
+        except Exception as e:
+            logger.debug(f"Failed to load circuit breaker for {peer_id}: {e}")
+        return None
+
+    def _persist_circuit_breaker(self, cb: CircuitBreaker) -> None:
+        """Persist circuit breaker state."""
+        if not self._persist_cb:
+            return
+        try:
+            from .attribute import Attributes
+
+            db = Attributes(
+                actor_id=self._actor.id,
+                bucket=self._CB_STATE_BUCKET,
+                config=self._actor.config,
+            )
+            db.set_attr(name=f"cb:{cb.peer_id}", data=cb.to_dict())
+        except Exception as e:
+            logger.warning(f"Failed to persist circuit breaker for {cb.peer_id}: {e}")
 
     async def deliver_to_subscribers(
         self,
@@ -320,66 +465,80 @@ class FanOutManager:
             if trust:
                 headers["Authorization"] = f"Bearer {trust.get('secret', '')}"
 
-            # Make HTTP request
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(self._request_timeout)
-            ) as client:
-                response = await client.post(
-                    callback_url, content=body_bytes, headers=headers
-                )
-                status = response.status_code
+            # Make HTTP request using shared client for connection pooling
+            client = await get_shared_client(self._request_timeout)
+            response = await client.post(
+                callback_url, content=body_bytes, headers=headers
+            )
+            status = response.status_code
 
-                if status in (200, 204):
-                    cb.record_success()
-                    return DeliveryResult(
-                        peer_id=peer_id,
-                        subscription_id=subscription_id,
-                        success=True,
-                        status_code=status,
-                        granularity_downgraded=granularity_downgraded,
-                    )
-                elif status == 429:
-                    # Rate limited - respect Retry-After
-                    retry_after = response.headers.get("Retry-After")
-                    cb.record_failure()
-                    return DeliveryResult(
-                        peer_id=peer_id,
-                        subscription_id=subscription_id,
-                        success=False,
-                        status_code=status,
-                        error="rate_limited",
-                        retry_after=int(retry_after) if retry_after else None,
-                    )
-                elif status == 503:
-                    cb.record_failure()
-                    return DeliveryResult(
-                        peer_id=peer_id,
-                        subscription_id=subscription_id,
-                        success=False,
-                        status_code=status,
-                        error="service_unavailable",
-                    )
-                else:
-                    cb.record_failure()
-                    return DeliveryResult(
-                        peer_id=peer_id,
-                        subscription_id=subscription_id,
-                        success=False,
-                        status_code=status,
-                        error=f"http_error_{status}",
-                    )
+            if status in (200, 204):
+                cb.record_success()
+                self._persist_circuit_breaker(cb)
+                return DeliveryResult(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    success=True,
+                    status_code=status,
+                    granularity_downgraded=granularity_downgraded,
+                )
+            elif status == 429:
+                # Rate limited - respect Retry-After
+                retry_after = response.headers.get("Retry-After")
+                cb.record_failure()
+                self._persist_circuit_breaker(cb)
+                return DeliveryResult(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    success=False,
+                    status_code=status,
+                    error="rate_limited",
+                    retry_after=int(retry_after) if retry_after else None,
+                )
+            elif status == 503:
+                cb.record_failure()
+                self._persist_circuit_breaker(cb)
+                return DeliveryResult(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    success=False,
+                    status_code=status,
+                    error="service_unavailable",
+                )
+            else:
+                cb.record_failure()
+                self._persist_circuit_breaker(cb)
+                return DeliveryResult(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    success=False,
+                    status_code=status,
+                    error=f"http_error_{status}",
+                )
 
         except httpx.TimeoutException:
             cb.record_failure()
+            self._persist_circuit_breaker(cb)
             return DeliveryResult(
                 peer_id=peer_id,
                 subscription_id=subscription_id,
                 success=False,
                 error="timeout",
             )
+        except httpx.RequestError as e:
+            cb.record_failure()
+            self._persist_circuit_breaker(cb)
+            logger.error(f"Request error delivering to {peer_id}: {e}")
+            return DeliveryResult(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                success=False,
+                error=f"request_error: {e}",
+            )
         except Exception as e:
             cb.record_failure()
-            logger.error(f"Error delivering to {peer_id}: {e}")
+            self._persist_circuit_breaker(cb)
+            logger.error(f"Unexpected error delivering to {peer_id}: {e}", exc_info=True)
             return DeliveryResult(
                 peer_id=peer_id,
                 subscription_id=subscription_id,
@@ -419,12 +578,13 @@ class FanOutManager:
 
     def reset_circuit_breaker(self, peer_id: str) -> None:
         """Manually reset a circuit breaker."""
-        if peer_id in self._circuit_breakers:
-            self._circuit_breakers[peer_id] = CircuitBreaker(
-                peer_id=peer_id,
-                failure_threshold=self._cb_threshold,
-                cooldown_seconds=self._cb_cooldown,
-            )
+        cb = CircuitBreaker(
+            peer_id=peer_id,
+            failure_threshold=self._cb_threshold,
+            cooldown_seconds=self._cb_cooldown,
+        )
+        self._circuit_breakers[peer_id] = cb
+        self._persist_circuit_breaker(cb)
 
     def deliver_to_subscribers_sync(
         self,
@@ -438,6 +598,6 @@ class FanOutManager:
 
         Runs the async version in an event loop.
         """
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             self.deliver_to_subscribers(subscriptions, payload, target, sequence)
         )

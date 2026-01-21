@@ -333,8 +333,11 @@ class CallbackProcessor:
                     try:
                         await handler(cb)
                     except Exception as e:
-                        logger.error(f"Handler error for seq={cb.sequence}: {e}")
-                        # Continue processing - at-most-once semantics
+                        # Log with full traceback for debugging, but continue
+                        # processing - at-most-once semantics means we don't retry
+                        logger.error(
+                            f"Handler error for seq={cb.sequence}: {e}", exc_info=True
+                        )
 
             return ProcessResult.PROCESSED
 
@@ -377,7 +380,8 @@ class CallbackProcessor:
             try:
                 await handler(callback)
             except Exception as e:
-                logger.error(f"Resync handler error: {e}")
+                # Log with full traceback for debugging
+                logger.error(f"Resync handler error: {e}", exc_info=True)
 
         return ProcessResult.PROCESSED
 
@@ -552,8 +556,11 @@ class CallbackProcessor:
                     try:
                         handler(cb)
                     except Exception as e:
-                        logger.error(f"Handler error for seq={cb.sequence}: {e}")
-                        # Continue processing - at-most-once semantics
+                        # Log with full traceback for debugging, but continue
+                        # processing - at-most-once semantics means we don't retry
+                        logger.error(
+                            f"Handler error for seq={cb.sequence}: {e}", exc_info=True
+                        )
 
             return ProcessResult.PROCESSED
 
@@ -596,6 +603,7 @@ class CallbackProcessor:
             try:
                 handler(callback)
             except Exception as e:
-                logger.error(f"Resync handler error: {e}")
+                # Log with full traceback for debugging
+                logger.error(f"Resync handler error: {e}", exc_info=True)
 
         return ProcessResult.PROCESSED

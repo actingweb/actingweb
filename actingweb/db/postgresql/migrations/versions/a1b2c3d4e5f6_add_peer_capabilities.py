@@ -21,7 +21,7 @@ def upgrade() -> None:
     """Add peer capability tracking fields to trusts table."""
     op.add_column('trusts', sa.Column('aw_supported', sa.Text(), nullable=True))
     op.add_column('trusts', sa.Column('aw_version', sa.String(50), nullable=True))
-    op.add_column('trusts', sa.Column('capabilities_fetched_at', sa.DateTime(), nullable=True))
+    op.add_column('trusts', sa.Column('capabilities_fetched_at', sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:

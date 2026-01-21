@@ -611,7 +611,7 @@ class ActingWebApp:
                         store.apply_callback_data(cb.data)
 
                 # Invoke user hooks
-                self._invoke_subscription_data_hooks(
+                await self._invoke_subscription_data_hooks(
                     actor=actor,
                     peer_id=peer_id,
                     target=target,
@@ -648,7 +648,7 @@ class ActingWebApp:
             logger.error(f"Error processing subscription callback: {e}")
             return False
 
-    def _invoke_subscription_data_hooks(
+    async def _invoke_subscription_data_hooks(
         self,
         actor: Any,
         peer_id: str,
@@ -658,7 +658,6 @@ class ActingWebApp:
         callback_type: str,
     ) -> None:
         """Invoke registered subscription data hooks."""
-        import asyncio
         import inspect
         import logging
 
@@ -669,9 +668,7 @@ class ActingWebApp:
             for hook in self._subscription_data_hooks[target]:
                 try:
                     if inspect.iscoroutinefunction(hook):
-                        asyncio.run(
-                            hook(actor, peer_id, target, data, sequence, callback_type)
-                        )
+                        await hook(actor, peer_id, target, data, sequence, callback_type)
                     else:
                         hook(actor, peer_id, target, data, sequence, callback_type)
                 except Exception as e:
@@ -682,9 +679,7 @@ class ActingWebApp:
             for hook in self._subscription_data_hooks["*"]:
                 try:
                     if inspect.iscoroutinefunction(hook):
-                        asyncio.run(
-                            hook(actor, peer_id, target, data, sequence, callback_type)
-                        )
+                        await hook(actor, peer_id, target, data, sequence, callback_type)
                     else:
                         hook(actor, peer_id, target, data, sequence, callback_type)
                 except Exception as e:

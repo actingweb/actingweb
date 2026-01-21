@@ -93,7 +93,7 @@ class TestCallbackProcessorSequencing:
         """Test processing first callback (sequence 1)."""
         processor = CallbackProcessor(mock_actor)
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -116,7 +116,7 @@ class TestCallbackProcessorSequencing:
         processor = CallbackProcessor(mock_actor)
 
         # Process sequence 1
-        result1 = asyncio.get_event_loop().run_until_complete(
+        result1 = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -127,7 +127,7 @@ class TestCallbackProcessorSequencing:
         assert result1 == ProcessResult.PROCESSED
 
         # Process sequence 2
-        result2 = asyncio.get_event_loop().run_until_complete(
+        result2 = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -147,7 +147,7 @@ class TestCallbackProcessorSequencing:
         processor = CallbackProcessor(mock_actor)
 
         # Process sequence 1
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -157,7 +157,7 @@ class TestCallbackProcessorSequencing:
         )
 
         # Try to process sequence 1 again
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -176,7 +176,7 @@ class TestCallbackProcessorSequencing:
 
         # Process sequences 1, 2, 3
         for seq in [1, 2, 3]:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id="sub1",
@@ -186,7 +186,7 @@ class TestCallbackProcessorSequencing:
             )
 
         # Try sequence 2 again
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -204,7 +204,7 @@ class TestCallbackProcessorSequencing:
         processor = CallbackProcessor(mock_actor)
 
         # Process sequence 1
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -214,7 +214,7 @@ class TestCallbackProcessorSequencing:
         )
 
         # Skip to sequence 3 (gap at 2)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -241,7 +241,7 @@ class TestCallbackProcessorSequencing:
             processed_callbacks.append(cb.sequence)
 
         # Process sequence 1
-        await_result = asyncio.get_event_loop().run_until_complete
+        await_result = asyncio.run
         await_result(
             processor.process_callback(
                 peer_id="peer1",
@@ -293,7 +293,7 @@ class TestCallbackProcessorPendingQueue:
         processor = CallbackProcessor(mock_actor, max_pending=3)
 
         # Process sequence 1
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -304,7 +304,7 @@ class TestCallbackProcessorPendingQueue:
 
         # Add sequences 3, 4, 5 to pending (gap at 2)
         for seq in [3, 4, 5]:
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id="sub1",
@@ -315,7 +315,7 @@ class TestCallbackProcessorPendingQueue:
             assert result == ProcessResult.PENDING
 
         # Try to add sequence 6 - should be rejected
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -333,7 +333,7 @@ class TestCallbackProcessorPendingQueue:
         processor = CallbackProcessor(mock_actor)
 
         # Process sequence 1
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -344,7 +344,7 @@ class TestCallbackProcessorPendingQueue:
 
         # Add out-of-order sequences to pending
         for seq in [5, 3, 4]:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id="sub1",
@@ -363,7 +363,7 @@ class TestCallbackProcessorPendingQueue:
         processor = CallbackProcessor(mock_actor, gap_timeout_seconds=0.1)
 
         # Process sequence 1
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -373,7 +373,7 @@ class TestCallbackProcessorPendingQueue:
         )
 
         # Add sequence 3 to pending (gap at 2)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -386,7 +386,7 @@ class TestCallbackProcessorPendingQueue:
         time.sleep(0.15)
 
         # Try to add another callback - should trigger resync
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -413,7 +413,7 @@ class TestCallbackProcessorResync:
 
         # Build up some state
         for seq in [1, 2, 3]:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id="sub1",
@@ -424,7 +424,7 @@ class TestCallbackProcessorResync:
 
         # Add pending callbacks
         for seq in [5, 6]:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id="sub1",
@@ -434,7 +434,7 @@ class TestCallbackProcessorResync:
             )
 
         # Process resync callback
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -462,7 +462,7 @@ class TestCallbackProcessorResync:
             nonlocal received_callback
             received_callback = cb
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -535,7 +535,7 @@ class TestCallbackProcessorOptimisticLocking:
                 mock_actor, max_retries=3, retry_backoff_base=0.01
             )
 
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id="sub1",
@@ -557,7 +557,7 @@ class TestCallbackProcessorCleanup:
         processor = CallbackProcessor(mock_actor)
 
         # Create some state
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -567,7 +567,7 @@ class TestCallbackProcessorCleanup:
         )
 
         # Add pending
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer1",
                 subscription_id="sub1",
@@ -592,7 +592,7 @@ class TestCallbackProcessorCleanup:
 
         # Create state for multiple subscriptions
         for sub_id in ["sub1", "sub2", "sub3"]:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id=sub_id,
@@ -602,7 +602,7 @@ class TestCallbackProcessorCleanup:
             )
 
         # Create state for another peer
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             processor.process_callback(
                 peer_id="peer2",
                 subscription_id="sub1",

@@ -822,7 +822,7 @@ def callback_sender():
 
     Handles callback wrapper format per protocol spec.
     """
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
     class CallbackSender:
         def send(
@@ -842,7 +842,7 @@ def callback_sender():
                 "id": from_actor_id,
                 "target": "properties",
                 "sequence": sequence,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "granularity": "high",
                 "subscriptionid": subscription_id,
                 "data": data,

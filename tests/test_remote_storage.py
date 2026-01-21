@@ -8,16 +8,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Mark all tests in this module to run on the same xdist worker as callback_processor
-# This prevents patch conflicts when tests run in parallel
-pytestmark = pytest.mark.xdist_group(name="attribute_patching")
-
 from actingweb.remote_storage import (
     DEFAULT_PEER_ID_PATTERN,
     PERMISSIVE_PEER_ID_PATTERN,
     RemotePeerStore,
     get_remote_bucket,
 )
+
+# Mark all tests in this module to run on the same xdist worker as callback_processor
+# This prevents patch conflicts when tests run in parallel
+pytestmark = pytest.mark.xdist_group(name="attribute_patching")
 
 
 class TestGetRemoteBucket:

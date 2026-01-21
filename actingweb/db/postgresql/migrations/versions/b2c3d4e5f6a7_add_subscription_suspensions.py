@@ -24,7 +24,7 @@ def upgrade() -> None:
         sa.Column('id', sa.String(255), nullable=False),
         sa.Column('target', sa.String(255), nullable=False),
         sa.Column('subtarget', sa.String(255), nullable=False, server_default=''),
-        sa.Column('suspended_at', sa.DateTime(), nullable=False),
+        sa.Column('suspended_at', sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint('id', 'target', 'subtarget')
     )
 

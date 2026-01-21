@@ -10,6 +10,7 @@ import os
 from datetime import UTC, datetime
 
 from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute
+from pynamodb.exceptions import DoesNotExist
 from pynamodb.models import Model
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ class DbSubscriptionSuspension:
         try:
             SubscriptionSuspension.get(self._actor_id, target_key)
             return True
-        except Exception:  # PynamoDB DoesNotExist exception
+        except DoesNotExist:
             return False
 
     def suspend(self, target: str, subtarget: str | None = None) -> bool:
@@ -87,7 +88,7 @@ class DbSubscriptionSuspension:
                 f"{'/' + subtarget if subtarget else ''}"
             )
             return True
-        except Exception:  # PynamoDB DoesNotExist exception
+        except DoesNotExist:
             return False
 
     def get_all_suspended(self) -> list[tuple[str, str | None]]:

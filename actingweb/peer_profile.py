@@ -9,7 +9,7 @@ caching of peer profile data during trust establishment.
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from . import attribute
@@ -309,7 +309,7 @@ def fetch_peer_profile(
     profile = PeerProfile(
         actor_id=actor_id,
         peer_id=peer_id,
-        fetched_at=datetime.utcnow().isoformat(),
+        fetched_at=datetime.now(UTC).isoformat(),
     )
 
     try:
@@ -396,7 +396,7 @@ async def fetch_peer_profile_async(
     profile = PeerProfile(
         actor_id=actor_id,
         peer_id=peer_id,
-        fetched_at=datetime.utcnow().isoformat(),
+        fetched_at=datetime.now(UTC).isoformat(),
     )
 
     try:

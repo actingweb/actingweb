@@ -734,31 +734,52 @@ def fetch_peer_methods_and_actions(
             logger.warning(f"Cannot fetch peer capabilities: no trust with {peer_id}")
             return capabilities
 
+        # Track fetch errors - empty responses indicate non-JSON errors
+        fetch_errors: list[str] = []
+
         # Fetch methods
         methods_response = proxy.get_resource(path="methods")
-        if methods_response and "error" not in methods_response:
-            capabilities.methods = _parse_methods_response(methods_response)
-        elif methods_response and "error" in methods_response:
+        if methods_response is None:
+            fetch_errors.append("methods: no response")
+        elif methods_response == {}:
+            # Empty dict indicates non-JSON response (e.g., 401/403/500 HTML)
+            fetch_errors.append("methods: invalid response (non-JSON)")
+            logger.debug(f"Empty/non-JSON response fetching methods from {peer_id}")
+        elif "error" in methods_response:
             error_code = methods_response["error"].get("code", 500)
             # 404 is OK - peer might not support methods
             if error_code != 404:
+                fetch_errors.append(f"methods: error {error_code}")
                 logger.debug(
                     f"Error fetching methods from {peer_id}: "
                     f"{methods_response['error']}"
                 )
+        else:
+            capabilities.methods = _parse_methods_response(methods_response)
 
         # Fetch actions
         actions_response = proxy.get_resource(path="actions")
-        if actions_response and "error" not in actions_response:
-            capabilities.actions = _parse_actions_response(actions_response)
-        elif actions_response and "error" in actions_response:
+        if actions_response is None:
+            fetch_errors.append("actions: no response")
+        elif actions_response == {}:
+            # Empty dict indicates non-JSON response (e.g., 401/403/500 HTML)
+            fetch_errors.append("actions: invalid response (non-JSON)")
+            logger.debug(f"Empty/non-JSON response fetching actions from {peer_id}")
+        elif "error" in actions_response:
             error_code = actions_response["error"].get("code", 500)
             # 404 is OK - peer might not support actions
             if error_code != 404:
+                fetch_errors.append(f"actions: error {error_code}")
                 logger.debug(
                     f"Error fetching actions from {peer_id}: "
                     f"{actions_response['error']}"
                 )
+        else:
+            capabilities.actions = _parse_actions_response(actions_response)
+
+        # Set fetch_error if any errors occurred
+        if fetch_errors:
+            capabilities.fetch_error = "; ".join(fetch_errors)
 
         logger.debug(
             f"Successfully fetched peer capabilities for {peer_id}: "
@@ -815,31 +836,52 @@ async def fetch_peer_methods_and_actions_async(
             logger.warning(f"Cannot fetch peer capabilities: no trust with {peer_id}")
             return capabilities
 
+        # Track fetch errors - empty responses indicate non-JSON errors
+        fetch_errors: list[str] = []
+
         # Fetch methods (async)
         methods_response = await proxy.get_resource_async(path="methods")
-        if methods_response and "error" not in methods_response:
-            capabilities.methods = _parse_methods_response(methods_response)
-        elif methods_response and "error" in methods_response:
+        if methods_response is None:
+            fetch_errors.append("methods: no response")
+        elif methods_response == {}:
+            # Empty dict indicates non-JSON response (e.g., 401/403/500 HTML)
+            fetch_errors.append("methods: invalid response (non-JSON)")
+            logger.debug(f"Empty/non-JSON response fetching methods from {peer_id}")
+        elif "error" in methods_response:
             error_code = methods_response["error"].get("code", 500)
             # 404 is OK - peer might not support methods
             if error_code != 404:
+                fetch_errors.append(f"methods: error {error_code}")
                 logger.debug(
                     f"Error fetching methods from {peer_id}: "
                     f"{methods_response['error']}"
                 )
+        else:
+            capabilities.methods = _parse_methods_response(methods_response)
 
         # Fetch actions (async)
         actions_response = await proxy.get_resource_async(path="actions")
-        if actions_response and "error" not in actions_response:
-            capabilities.actions = _parse_actions_response(actions_response)
-        elif actions_response and "error" in actions_response:
+        if actions_response is None:
+            fetch_errors.append("actions: no response")
+        elif actions_response == {}:
+            # Empty dict indicates non-JSON response (e.g., 401/403/500 HTML)
+            fetch_errors.append("actions: invalid response (non-JSON)")
+            logger.debug(f"Empty/non-JSON response fetching actions from {peer_id}")
+        elif "error" in actions_response:
             error_code = actions_response["error"].get("code", 500)
             # 404 is OK - peer might not support actions
             if error_code != 404:
+                fetch_errors.append(f"actions: error {error_code}")
                 logger.debug(
                     f"Error fetching actions from {peer_id}: "
                     f"{actions_response['error']}"
                 )
+        else:
+            capabilities.actions = _parse_actions_response(actions_response)
+
+        # Set fetch_error if any errors occurred
+        if fetch_errors:
+            capabilities.fetch_error = "; ".join(fetch_errors)
 
         logger.debug(
             f"Successfully fetched peer capabilities async for {peer_id}: "

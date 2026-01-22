@@ -45,10 +45,11 @@ def create_test_app(
         Tuple of (fastapi_app, actingweb_app)
     """
     # Create ActingWeb app with minimal configuration
+    # Note: database=None lets DATABASE_BACKEND env var take precedence
     aw_app = (
         ActingWebApp(
             aw_type="urn:actingweb:test:integration",
-            database="dynamodb",
+            database=None,  # Use DATABASE_BACKEND env var (set by conftest.py)
             fqdn=fqdn,
             proto=proto,
         )

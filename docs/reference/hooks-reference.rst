@@ -160,6 +160,8 @@ Event Details
 
     **Note**: Fires when this actor's approval completes the mutual trust (peer had already approved).
 
+    **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the peer's profile is automatically fetched and cached when this hook fires.
+
 ``trust_fully_approved_remote``
     Triggered when the PEER actor approves a trust relationship, completing mutual approval (both sides now approved).
 
@@ -176,6 +178,8 @@ Event Details
 
     **Note**: Fires when the peer's approval completes the mutual trust (this actor had already approved).
 
+    **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the peer's profile is automatically fetched and cached when this hook fires.
+
 ``trust_deleted``
     Triggered when a trust relationship is deleted.
 
@@ -187,6 +191,8 @@ Event Details
     - ``peer_id``: The ID of the peer in the trust relationship
     - ``relationship``: The type of trust relationship (e.g., "friend", "partner")
     - ``trust_data``: Dictionary containing the trust relationship data (may be empty if trust was already deleted)
+
+    **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the cached peer profile is automatically deleted when this hook fires.
 
 ``email_verification_required``
     Triggered when email verification is needed for OAuth2 actors.

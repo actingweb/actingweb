@@ -823,3 +823,127 @@ class TrustManager:
         except Exception as e:
             logger.error(f"Error modifying trust for {peer_id}: {e}")
             return False
+
+    # --- Peer Profile Caching ---
+
+    def get_peer_profile(self, peer_id: str) -> Any:
+        """Get the cached profile for a peer.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            PeerProfile if found and profile caching is enabled, None otherwise
+
+        Example::
+
+            profile = actor.trust.get_peer_profile(peer_id)
+            if profile:
+                print(f"Connected with {profile.displayname}")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if profile caching is enabled
+        if not getattr(self._core_actor.config, "peer_profile_attributes", None):
+            return None
+
+        try:
+            from ..peer_profile import get_peer_profile_store
+
+            store = get_peer_profile_store(self._core_actor.config)
+            return store.get_profile(self._core_actor.id, peer_id)
+        except Exception as e:
+            logger.warning(f"Error getting peer profile for {peer_id}: {e}")
+            return None
+
+    def refresh_peer_profile(self, peer_id: str) -> Any:
+        """Refresh the cached profile for a peer (sync version).
+
+        Fetches current profile attributes from the peer and updates the cache.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            Updated PeerProfile if successful, None if profile caching is disabled
+            or fetch failed
+
+        Example::
+
+            # Manual refresh
+            profile = actor.trust.refresh_peer_profile(peer_id)
+            if profile and not profile.fetch_error:
+                print(f"Refreshed profile: {profile.displayname}")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if profile caching is enabled
+        attributes = getattr(self._core_actor.config, "peer_profile_attributes", None)
+        if not attributes:
+            logger.debug("Peer profile caching not enabled")
+            return None
+
+        try:
+            from ..peer_profile import fetch_peer_profile, get_peer_profile_store
+
+            profile = fetch_peer_profile(
+                actor_id=self._core_actor.id,
+                peer_id=peer_id,
+                config=self._core_actor.config,
+                attributes=attributes,
+            )
+            store = get_peer_profile_store(self._core_actor.config)
+            store.store_profile(profile)
+            logger.debug(f"Refreshed peer profile for {peer_id}")
+            return profile
+        except Exception as e:
+            logger.warning(f"Error refreshing peer profile for {peer_id}: {e}")
+            return None
+
+    async def refresh_peer_profile_async(self, peer_id: str) -> Any:
+        """Refresh the cached profile for a peer (async version).
+
+        Fetches current profile attributes from the peer using async HTTP
+        and updates the cache.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            Updated PeerProfile if successful, None if profile caching is disabled
+            or fetch failed
+
+        Example::
+
+            # Manual refresh (async)
+            profile = await actor.trust.refresh_peer_profile_async(peer_id)
+            if profile and not profile.fetch_error:
+                print(f"Refreshed profile: {profile.displayname}")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if profile caching is enabled
+        attributes = getattr(self._core_actor.config, "peer_profile_attributes", None)
+        if not attributes:
+            logger.debug("Peer profile caching not enabled")
+            return None
+
+        try:
+            from ..peer_profile import fetch_peer_profile_async, get_peer_profile_store
+
+            profile = await fetch_peer_profile_async(
+                actor_id=self._core_actor.id,
+                peer_id=peer_id,
+                config=self._core_actor.config,
+                attributes=attributes,
+            )
+            store = get_peer_profile_store(self._core_actor.config)
+            store.store_profile(profile)
+            logger.debug(f"Refreshed peer profile (async) for {peer_id}")
+            return profile
+        except Exception as e:
+            logger.warning(f"Error refreshing peer profile async for {peer_id}: {e}")
+            return None

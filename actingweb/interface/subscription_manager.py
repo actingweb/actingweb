@@ -852,6 +852,29 @@ class SubscriptionManager:
             if not result.success:
                 all_success = False
 
+        # Refresh peer profile if configured
+        actor_config = self._core_actor.config
+        actor_id = self._core_actor.id
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_profile_attributes", None)
+        ):
+            try:
+                from ..peer_profile import fetch_peer_profile, get_peer_profile_store
+
+                profile = fetch_peer_profile(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                    attributes=actor_config.peer_profile_attributes,
+                )
+                store = get_peer_profile_store(actor_config)
+                store.store_profile(profile)
+                logger.debug(f"Refreshed peer profile during sync_peer for {peer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer profile during sync: {e}")
+
         return PeerSyncResult(
             peer_id=peer_id,
             success=all_success,
@@ -1103,6 +1126,36 @@ class SubscriptionManager:
 
         total_diffs = sum(r.diffs_processed for r in results)
         all_success = all(r.success for r in results)
+
+        # Refresh peer profile if configured (async)
+        actor_config = self._core_actor.config
+        actor_id = self._core_actor.id
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_profile_attributes", None)
+        ):
+            try:
+                from ..peer_profile import (
+                    fetch_peer_profile_async,
+                    get_peer_profile_store,
+                )
+
+                profile = await fetch_peer_profile_async(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                    attributes=actor_config.peer_profile_attributes,
+                )
+                store = get_peer_profile_store(actor_config)
+                store.store_profile(profile)
+                logger.debug(
+                    f"Refreshed peer profile (async) during sync_peer for {peer_id}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to refresh peer profile during sync (async): {e}"
+                )
 
         return PeerSyncResult(
             peer_id=peer_id,

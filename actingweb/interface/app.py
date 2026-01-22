@@ -73,6 +73,10 @@ class ActingWebApp:
             False  # False by default for backward compatibility
         )
 
+        # Peer profile caching configuration
+        # None = disabled, list of attributes = enabled
+        self._peer_profile_attributes: list[str] | None = None
+
         # Hook registry
         self.hooks = HookRegistry()
 
@@ -128,6 +132,9 @@ class ActingWebApp:
         # Subscription callback mode
         if hasattr(self, "_sync_subscription_callbacks"):
             self._config.sync_subscription_callbacks = self._sync_subscription_callbacks
+        # Peer profile caching configuration
+        if hasattr(self, "_peer_profile_attributes"):
+            self._config.peer_profile_attributes = self._peer_profile_attributes
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -276,6 +283,134 @@ class ActingWebApp:
         self._sync_subscription_callbacks = enable
         self._apply_runtime_changes_to_config()
         return self
+
+    def with_peer_profile(
+        self,
+        attributes: list[str] | None = None,
+    ) -> "ActingWebApp":
+        """Enable peer profile caching for trust relationships.
+
+        When enabled, peer profile attributes are automatically fetched and cached
+        when trust relationships are established. Profiles are refreshed during
+        sync_peer() operations.
+
+        Args:
+            attributes: List of property names to cache from peer actors.
+                Default: ["displayname", "email", "description"]
+                Pass empty list to explicitly disable caching.
+
+        Returns:
+            Self for method chaining.
+
+        Example::
+
+            app = (
+                ActingWebApp(...)
+                .with_peer_profile(attributes=["displayname", "email", "avatar_url"])
+            )
+
+            # Access via TrustManager
+            profile = actor.trust.get_peer_profile(peer_id)
+            if profile:
+                print(f"Connected with {profile.displayname}")
+        """
+        # Set default attributes if None provided
+        if attributes is None:
+            self._peer_profile_attributes = ["displayname", "email", "description"]
+        else:
+            self._peer_profile_attributes = attributes
+
+        self._apply_runtime_changes_to_config()
+
+        # Register lifecycle hooks when profile caching is enabled
+        if self._peer_profile_attributes:
+            self._register_peer_profile_hooks()
+
+        return self
+
+    def _register_peer_profile_hooks(self) -> None:
+        """Register lifecycle hooks for peer profile caching."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        @self.lifecycle_hook("trust_fully_approved_local")
+        def _fetch_profile_on_local_approval(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Fetch and cache peer profile when trust is fully approved (local side)."""
+            if not peer_id or not self._peer_profile_attributes:
+                return
+
+            try:
+                from ..peer_profile import fetch_peer_profile, get_peer_profile_store
+
+                config = self.get_config()
+                profile = fetch_peer_profile(
+                    actor_id=actor.id,
+                    peer_id=peer_id,
+                    config=config,
+                    attributes=self._peer_profile_attributes,
+                )
+                store = get_peer_profile_store(config)
+                store.store_profile(profile)
+                logger.debug(
+                    f"Cached peer profile for {peer_id} on local trust approval"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to cache peer profile for {peer_id}: {e}")
+
+        @self.lifecycle_hook("trust_fully_approved_remote")
+        def _fetch_profile_on_remote_approval(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Fetch and cache peer profile when trust is fully approved (remote side)."""
+            if not peer_id or not self._peer_profile_attributes:
+                return
+
+            try:
+                from ..peer_profile import fetch_peer_profile, get_peer_profile_store
+
+                config = self.get_config()
+                profile = fetch_peer_profile(
+                    actor_id=actor.id,
+                    peer_id=peer_id,
+                    config=config,
+                    attributes=self._peer_profile_attributes,
+                )
+                store = get_peer_profile_store(config)
+                store.store_profile(profile)
+                logger.debug(
+                    f"Cached peer profile for {peer_id} on remote trust approval"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to cache peer profile for {peer_id}: {e}")
+
+        @self.lifecycle_hook("trust_deleted")
+        def _cleanup_profile_on_trust_deleted(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Clean up cached peer profile when trust is deleted."""
+            if not peer_id or not self._peer_profile_attributes:
+                return
+
+            try:
+                from ..peer_profile import get_peer_profile_store
+
+                config = self.get_config()
+                store = get_peer_profile_store(config)
+                store.delete_profile(actor.id, peer_id)
+                logger.debug(f"Cleaned up peer profile for {peer_id} on trust deletion")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clean up peer profile for {peer_id}: {e}"
+                )
 
     def add_service(
         self,
@@ -751,6 +886,7 @@ class ActingWebApp:
                 indexed_properties=self._indexed_properties,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
                 use_lookup_table=self._use_lookup_table,
+                peer_profile_attributes=self._peer_profile_attributes,
             )
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them

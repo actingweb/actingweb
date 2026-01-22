@@ -534,6 +534,120 @@ Best Practices
 
 4. **Cleanup:** Lookup entries are automatically deleted when properties or actors are deleted. No manual cleanup needed.
 
+Peer Profile Caching
+--------------------
+
+ActingWeb can automatically cache profile attributes from peer actors with established trust relationships. This is useful for displaying peer information (display names, emails, etc.) without making repeated API calls.
+
+Configuration
+~~~~~~~~~~~~~
+
+Enable peer profile caching via the fluent API:
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_peer_profile(attributes=["displayname", "email", "description"])
+
+**Parameters:**
+
+- ``attributes``: List of property names to cache from peer actors.
+  Default when enabled: ``["displayname", "email", "description"]``
+  Pass an empty list to explicitly disable caching.
+
+**Default Behavior:**
+
+- Profile caching is **disabled by default**
+- Must call ``with_peer_profile()`` to enable
+- Profiles are stored in the ``peer_profiles`` attribute bucket
+
+Automatic Profile Updates
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When enabled, profiles are automatically updated:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Event
+     - Action
+   * - Trust fully approved (local)
+     - Fetch and cache peer profile
+   * - Trust fully approved (remote)
+     - Fetch and cache peer profile
+   * - ``sync_peer()`` completion
+     - Refresh cached profile
+   * - Trust deleted
+     - Delete cached profile
+
+Accessing Peer Profiles
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Use the TrustManager to access cached profiles:
+
+.. code-block:: python
+
+    # Get cached profile
+    profile = actor.trust.get_peer_profile(peer_id)
+    if profile:
+        print(f"Connected with {profile.displayname}")
+        print(f"Email: {profile.email}")
+
+    # Manual refresh (sync)
+    profile = actor.trust.refresh_peer_profile(peer_id)
+
+    # Manual refresh (async - for FastAPI)
+    profile = await actor.trust.refresh_peer_profile_async(peer_id)
+
+**PeerProfile Attributes:**
+
+- ``actor_id``: The actor caching this profile
+- ``peer_id``: The peer whose profile is cached
+- ``displayname``: Human-readable name
+- ``email``: Contact email
+- ``description``: Actor description
+- ``extra_attributes``: Dict of additional configured attributes
+- ``fetched_at``: ISO timestamp when profile was fetched
+- ``fetch_error``: Error message if fetch failed
+
+Error Handling
+~~~~~~~~~~~~~~
+
+Profile fetch failures are handled gracefully:
+
+- If the peer is unavailable, a profile with ``fetch_error`` is stored
+- Missing properties are stored as ``None``
+- Store failures are logged but don't crash the trust approval flow
+- 403/404 responses cache an empty profile to avoid retries
+
+Best Practices
+~~~~~~~~~~~~~~
+
+1. **Choose Attributes Carefully:** Only cache attributes you actually need. Each attribute requires a property lookup on the peer.
+
+2. **Handle Missing Data:** Profiles may have ``None`` values for attributes the peer doesn't have. Always check before using:
+
+   .. code-block:: python
+
+       if profile and profile.displayname:
+           display_text = profile.displayname
+       else:
+           display_text = f"Peer {peer_id[:8]}..."
+
+3. **Check for Errors:** The ``fetch_error`` field indicates if the last fetch failed:
+
+   .. code-block:: python
+
+       if profile and profile.fetch_error:
+           logger.warning(f"Profile fetch failed: {profile.fetch_error}")
+
+4. **Refresh When Needed:** Use ``refresh_peer_profile()`` after significant peer changes or if cached data might be stale.
+
 Logging
 -------
 

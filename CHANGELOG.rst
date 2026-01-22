@@ -11,6 +11,22 @@ v3.10.0a3: Jan 22, 2026
 ADDED
 ~~~~~
 
+- **Peer Profile Caching**: Added first-class support for caching profile attributes from peer actors with trust relationships. This enables applications to access peer information (displayname, email, etc.) without making repeated API calls.
+
+  - New module: ``actingweb.peer_profile`` - ``PeerProfile`` dataclass and ``PeerProfileStore`` for storage
+  - New configuration method: ``ActingWebApp.with_peer_profile(attributes=["displayname", "email", "description"])``
+  - New TrustManager methods: ``get_peer_profile()``, ``refresh_peer_profile()``, ``refresh_peer_profile_async()``
+  - Automatic profile fetch on trust approval via lifecycle hooks (``trust_fully_approved_local``, ``trust_fully_approved_remote``)
+  - Automatic profile cleanup on trust deletion via ``trust_deleted`` hook
+  - Profile refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
+  - Both sync and async fetch functions for flexible usage patterns
+
+v3.10.0a3: Jan 22, 2026
+-----------------------
+
+ADDED
+~~~~~
+
 - **Passphrase-to-SPA-Token Exchange**: Added ``grant_type="passphrase"`` to the ``POST /oauth/spa/token`` endpoint for exchanging a valid creator passphrase for SPA tokens. This enables automated testing tools like Playwright to obtain authenticated access without going through the full OAuth2 flow.
 
   - Devtest-mode only (returns 403 if ``config.devtest=False``) for security

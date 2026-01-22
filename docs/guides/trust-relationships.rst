@@ -190,3 +190,65 @@ Use trust hooks to react to lifecycle events:
        # Application-specific cleanup (storage cleanup is automatic)
        notify_websocket_clients(f"Peer {peerid} disconnected")
        log_audit_event("trust_deleted", peer_id=peerid)
+
+Peer Profile Caching
+--------------------
+
+ActingWeb can automatically cache profile attributes from trusted peers, making it easy to display peer information without repeated API calls.
+
+**Enable Profile Caching**
+
+.. code-block:: python
+
+   app = ActingWebApp(
+       aw_type="urn:actingweb:example.com:myapp",
+       fqdn="myapp.example.com"
+   ).with_peer_profile(attributes=["displayname", "email", "description"])
+
+When enabled, profiles are:
+
+- Automatically fetched when trust is fully approved (both sides)
+- Refreshed during ``sync_peer()`` operations
+- Cleaned up when trust is deleted
+
+**Accessing Cached Profiles**
+
+.. code-block:: python
+
+   # Get cached profile
+   profile = actor.trust.get_peer_profile(peer_id)
+   if profile:
+       print(f"Connected with {profile.displayname}")
+       print(f"Email: {profile.email}")
+       # Access additional attributes
+       avatar = profile.get_attribute("avatar_url")
+
+   # Check for fetch errors
+   if profile and profile.fetch_error:
+       print(f"Warning: {profile.fetch_error}")
+
+**Manual Profile Refresh**
+
+.. code-block:: python
+
+   # Sync version
+   profile = actor.trust.refresh_peer_profile(peer_id)
+
+   # Async version (for FastAPI)
+   profile = await actor.trust.refresh_peer_profile_async(peer_id)
+
+**Custom Attributes**
+
+Cache any property the peer exposes:
+
+.. code-block:: python
+
+   app.with_peer_profile(attributes=[
+       "displayname",
+       "email",
+       "avatar_url",
+       "timezone",
+       "organization",
+   ])
+
+See :doc:`../quickstart/configuration` for detailed configuration options.

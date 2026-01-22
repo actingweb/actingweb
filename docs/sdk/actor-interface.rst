@@ -92,6 +92,27 @@ Trust relationships and subscriptions are available via:
    actor.subscriptions.subscribe_to_peer(peer_id="peer123", target="properties")
    actor.subscriptions.notify_subscribers(target="properties", data={"status": "active"})
 
+Peer Profile Caching
+~~~~~~~~~~~~~~~~~~~~
+
+When peer profile caching is enabled (via ``app.with_peer_profile()``), you can access cached profile attributes:
+
+.. code-block:: python
+
+   # Get cached profile
+   profile = actor.trust.get_peer_profile(peer_id)
+   if profile:
+       print(f"Connected with {profile.displayname}")
+       print(f"Email: {profile.email}")
+
+   # Manual refresh
+   profile = actor.trust.refresh_peer_profile(peer_id)
+
+   # Async refresh (FastAPI)
+   profile = await actor.trust.refresh_peer_profile_async(peer_id)
+
+See :doc:`../guides/trust-relationships` for details on enabling and configuring profile caching.
+
 Next
 ----
 

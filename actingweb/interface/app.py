@@ -340,13 +340,17 @@ class ActingWebApp:
 
         logger = logging.getLogger(__name__)
 
-        @self.lifecycle_hook("trust_fully_approved_local")
-        def _fetch_profile_on_local_approval(
+        @self.lifecycle_hook("trust_approved")
+        def _fetch_profile_on_approval(
             actor: Any,
             peer_id: str = "",
             **kwargs: Any,
         ) -> None:
-            """Fetch and cache peer profile when trust is fully approved (local side)."""
+            """Fetch and cache peer profile when trust is approved.
+
+            This hook fires for both HTTP-based and programmatic approvals,
+            ensuring consistent caching behavior regardless of approval path.
+            """
             if not peer_id or not self._peer_profile_attributes:
                 return
 
@@ -362,37 +366,7 @@ class ActingWebApp:
                 )
                 store = get_peer_profile_store(config)
                 store.store_profile(profile)
-                logger.debug(
-                    f"Cached peer profile for {peer_id} on local trust approval"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to cache peer profile for {peer_id}: {e}")
-
-        @self.lifecycle_hook("trust_fully_approved_remote")
-        def _fetch_profile_on_remote_approval(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Fetch and cache peer profile when trust is fully approved (remote side)."""
-            if not peer_id or not self._peer_profile_attributes:
-                return
-
-            try:
-                from ..peer_profile import fetch_peer_profile, get_peer_profile_store
-
-                config = self.get_config()
-                profile = fetch_peer_profile(
-                    actor_id=actor.id,
-                    peer_id=peer_id,
-                    config=config,
-                    attributes=self._peer_profile_attributes,
-                )
-                store = get_peer_profile_store(config)
-                store.store_profile(profile)
-                logger.debug(
-                    f"Cached peer profile for {peer_id} on remote trust approval"
-                )
+                logger.debug(f"Cached peer profile for {peer_id} on trust approval")
             except Exception as e:
                 logger.warning(f"Failed to cache peer profile for {peer_id}: {e}")
 
@@ -457,13 +431,17 @@ class ActingWebApp:
 
         logger = logging.getLogger(__name__)
 
-        @self.lifecycle_hook("trust_fully_approved_local")
-        def _fetch_capabilities_on_local_approval(
+        @self.lifecycle_hook("trust_approved")
+        def _fetch_capabilities_on_approval(
             actor: Any,
             peer_id: str = "",
             **kwargs: Any,
         ) -> None:
-            """Fetch and cache peer capabilities when trust is fully approved (local)."""
+            """Fetch and cache peer capabilities when trust is approved.
+
+            This hook fires for both HTTP-based and programmatic approvals,
+            ensuring consistent caching behavior regardless of approval path.
+            """
             if not peer_id or not self._peer_capabilities_caching:
                 return
 
@@ -482,37 +460,7 @@ class ActingWebApp:
                 store = get_cached_capabilities_store(config)
                 store.store_capabilities(capabilities)
                 logger.debug(
-                    f"Cached peer capabilities for {peer_id} on local trust approval"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to cache peer capabilities for {peer_id}: {e}")
-
-        @self.lifecycle_hook("trust_fully_approved_remote")
-        def _fetch_capabilities_on_remote_approval(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Fetch and cache peer capabilities when trust is fully approved (remote)."""
-            if not peer_id or not self._peer_capabilities_caching:
-                return
-
-            try:
-                from ..peer_capabilities import (
-                    fetch_peer_methods_and_actions,
-                    get_cached_capabilities_store,
-                )
-
-                config = self.get_config()
-                capabilities = fetch_peer_methods_and_actions(
-                    actor_id=actor.id,
-                    peer_id=peer_id,
-                    config=config,
-                )
-                store = get_cached_capabilities_store(config)
-                store.store_capabilities(capabilities)
-                logger.debug(
-                    f"Cached peer capabilities for {peer_id} on remote trust approval"
+                    f"Cached peer capabilities for {peer_id} on trust approval"
                 )
             except Exception as e:
                 logger.warning(f"Failed to cache peer capabilities for {peer_id}: {e}")

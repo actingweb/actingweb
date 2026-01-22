@@ -16,12 +16,23 @@ def test_config(docker_services, setup_database, worker_info):  # noqa: ARG001
     """
     Provide a Config object for tests that need direct access.
 
-    This fixture creates a Config object matching the test environment.
+    This fixture creates a Config object matching the test environment,
+    including proper schema isolation for PostgreSQL parallel tests.
     """
     from actingweb.config import Config
 
     # Create config based on DATABASE_BACKEND
     database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
+
+    # Set up environment for PostgreSQL schema isolation
+    if database_backend == "postgresql":
+        os.environ["PG_DB_HOST"] = os.environ.get("PG_DB_HOST", "localhost")
+        os.environ["PG_DB_PORT"] = os.environ.get("PG_DB_PORT", "5433")
+        os.environ["PG_DB_NAME"] = os.environ.get("PG_DB_NAME", "actingweb_test")
+        os.environ["PG_DB_USER"] = os.environ.get("PG_DB_USER", "actingweb")
+        os.environ["PG_DB_PASSWORD"] = os.environ.get("PG_DB_PASSWORD", "testpassword")
+        os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        os.environ["PG_DB_SCHEMA"] = "public"
 
     config = Config(database=database_backend)
 

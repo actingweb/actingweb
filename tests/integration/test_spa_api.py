@@ -8,9 +8,11 @@ Tests the REST API endpoints added to support React SPA frontend:
 4. GET /{actor_id}/trust - Trust relationships with OAuth2 client data
 """
 
+import pytest
 import requests
 
 
+@pytest.mark.xdist_group(name="spa_api_TestPropertiesMetadataAPI")
 class TestPropertiesMetadataAPI:
     """
     Test properties API with metadata parameter.
@@ -78,6 +80,7 @@ class TestPropertiesMetadataAPI:
             assert response.status_code in [200, 204]
 
 
+@pytest.mark.xdist_group(name="spa_api_TestMetaTrustTypesAPI")
 class TestMetaTrustTypesAPI:
     """
     Test /meta/trusttypes endpoint.
@@ -135,6 +138,7 @@ class TestMetaTrustTypesAPI:
             assert response.status_code in [200, 204]
 
 
+@pytest.mark.xdist_group(name="spa_api_TestTrustWithOAuth2Data")
 class TestTrustWithOAuth2Data:
     """
     Test /trust endpoint returns OAuth2 client data.
@@ -259,6 +263,7 @@ class TestTrustWithOAuth2Data:
             assert response.status_code in [200, 204]
 
 
+@pytest.mark.xdist_group(name="spa_api_TestPropertyMetadataEndpoint")
 class TestPropertyMetadataEndpoint:
     """
     Test PUT /{actor_id}/properties/{name}/metadata endpoint.

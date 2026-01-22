@@ -6,9 +6,11 @@ Tests the /<actor_id> endpoint behavior:
 - Browsers (Accept: text/html) get redirected based on config.ui setting
 """
 
+import pytest
 import requests
 
 
+@pytest.mark.xdist_group(name="actor_root_redirect_TestActorRootContentNegotiation")
 class TestActorRootContentNegotiation:
     """
     Test content negotiation for actor root endpoint.

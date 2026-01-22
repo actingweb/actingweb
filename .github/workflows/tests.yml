@@ -101,7 +101,7 @@ jobs:
           poetry run pytest tests/ \
             -m "not benchmark" \
             -n 4 \
-            --dist loadscope \
+            --dist loadgroup \
             --max-worker-restart=2 \
             -v \
             --tb=short \
@@ -136,14 +136,6 @@ jobs:
         with:
           name: coverage-report-${{ matrix.backend }}
           path: htmlcov-${{ matrix.backend }}/
-
-      - name: Publish test results
-        if: always()
-        uses: EnricoMi/publish-unit-test-result-action@v2
-        with:
-          files: test-results/tests-${{ matrix.backend }}.xml
-          check_name: Test Results (${{ matrix.backend }})
-          comment_mode: off
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -238,3 +230,54 @@ jobs:
 
       - name: Run ruff linting
         run: poetry run ruff check actingweb tests
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Documentation Build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.7.0
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-docs-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction --with dev --extras "all"
+
+      - name: Build documentation
+        run: |
+          # Build docs with source in root directory (same as 'make html')
+          # -W: treat warnings as errors
+          # --keep-going: don't stop on first warning, show all
+          # Suppress specific warnings that are pre-existing tech debt:
+          # - ref.doc: broken document references (planned docs not yet created)
+          # - misc.highlighting_failure: code blocks with special syntax ($$, ...)
+          # - duplicate object: autodoc duplicates from multiple includes
+          poetry run sphinx-build -W --keep-going \
+            -D suppress_warnings="ref.doc,misc.highlighting_failure" \
+            -b html . _build/html
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: _build/html/

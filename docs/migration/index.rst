@@ -12,12 +12,16 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   v3.10
    v3.7
    v3.1
    common-pitfalls
 
 Version Migrations
 ==================
+
+**v3.10 Migration**
+   Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager, and peer capabilities.
 
 **v3.7 Migration**
    Guide for upgrading to ActingWeb 3.7, covering developer API extensions for SubscriptionManager and TrustManager with cleaner APIs and automatic lifecycle hooks.

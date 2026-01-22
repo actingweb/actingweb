@@ -112,6 +112,11 @@ class Trust(Base):
     client_platform = Column(String(255))
     oauth_client_id = Column(String(255))
 
+    # Peer capability tracking
+    aw_supported = Column(Text)  # Comma-separated option tags
+    aw_version = Column(String(50))  # Protocol version (e.g., "1.4")
+    capabilities_fetched_at = Column(DateTime)
+
 
 class PeerTrustee(Base):
     """PeerTrustee table - peers where this actor is trustee."""
@@ -180,3 +185,18 @@ class Attribute(Base):
     timestamp = Column(DateTime)
     # TTL timestamp for automatic cleanup (Unix epoch timestamp)
     ttl_timestamp = Column(BigInteger)
+
+
+class SubscriptionSuspension(Base):
+    """Tracks suspended subscription targets for an actor.
+
+    Suspension allows temporarily disabling diff registration for specific
+    targets/subtargets during bulk operations (imports, migrations).
+    """
+
+    __tablename__ = "subscription_suspensions"
+
+    id = Column(String(255), primary_key=True)  # actor_id
+    target = Column(String(255), primary_key=True)
+    subtarget = Column(String(255), primary_key=True, default="")
+    suspended_at = Column(DateTime, nullable=False)

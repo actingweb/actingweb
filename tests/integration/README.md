@@ -30,10 +30,10 @@ The test suite supports parallel execution using `pytest-xdist` for significantl
 ```bash
 make test-parallel           # Auto-detect CPU cores
 make test-parallel-fast      # Skip slow tests
-poetry run pytest tests/integration/ -n auto -v --dist loadscope
+poetry run pytest tests/integration/ -n auto -v --dist loadgroup
 ```
 
-**Note**: Use `--dist loadscope` to keep test classes together on the same worker, which is required for tests that use class-level state.
+**Note**: Use `--dist loadgroup` to respect `@pytest.mark.xdist_group` markers, which keeps related tests together on the same worker.
 
 See `../../CONTRIBUTING.rst` for detailed parallel testing documentation.
 

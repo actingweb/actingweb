@@ -33,14 +33,14 @@ test-integration-parallel:
 	@echo "Starting integration tests (parallel with auto worker detection)..."
 	docker-compose -f docker-compose.test.yml up -d
 	@sleep 2
-	poetry run pytest tests/integration/ -n auto -v --tb=short --dist loadscope
+	poetry run pytest tests/integration/ -n auto -v --tb=short --dist loadgroup
 	docker-compose -f docker-compose.test.yml down -v
 
 test-integration-parallel-fast:
 	@echo "Starting integration tests (parallel, fast mode - skipping slow tests)..."
 	docker-compose -f docker-compose.test.yml up -d
 	@sleep 2
-	poetry run pytest tests/integration/ -n auto -v -m "not slow" --tb=short --dist loadscope
+	poetry run pytest tests/integration/ -n auto -v -m "not slow" --tb=short --dist loadgroup
 	docker-compose -f docker-compose.test.yml down -v
 
 # Shorter aliases for parallel testing
@@ -55,7 +55,7 @@ test-all-parallel:
 	@echo "Starting all tests (parallel)..."
 	docker-compose -f docker-compose.test.yml up -d
 	@sleep 2
-	poetry run pytest tests/ -n auto -v --tb=short --dist loadscope
+	poetry run pytest tests/ -n auto -v --tb=short --dist loadgroup
 	docker-compose -f docker-compose.test.yml down -v
 
 # Catch-all target: route all unknown targets to Sphinx using the new

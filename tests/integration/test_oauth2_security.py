@@ -28,6 +28,7 @@ def cleanup_mocks() -> Generator[None, None, None]:
     patch.stopall()
 
 
+@pytest.mark.xdist_group(name="oauth2_security_TestCrossActorAuthorizationPrevention")
 class TestCrossActorAuthorizationPrevention:
     """
     Test protection against cross-actor authorization attacks.
@@ -361,6 +362,7 @@ class TestCrossActorAuthorizationPrevention:
         pass
 
 
+@pytest.mark.xdist_group(name="oauth2_security_TestEmailValidationSecurity")
 class TestEmailValidationSecurity:
     """Test email validation during OAuth2 flows."""
 

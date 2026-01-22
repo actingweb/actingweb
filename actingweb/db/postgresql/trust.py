@@ -86,7 +86,7 @@ class DbTrust:
                                    approved, peer_approved, verified, verification_token,
                                    peer_identifier, established_via, created_at, last_accessed,
                                    last_connected_via, client_name, client_version, client_platform,
-                                   oauth_client_id
+                                   oauth_client_id, aw_supported, aw_version, capabilities_fetched_at
                             FROM trusts
                             WHERE id = %s AND peerid = %s
                             """,
@@ -100,7 +100,7 @@ class DbTrust:
                                    approved, peer_approved, verified, verification_token,
                                    peer_identifier, established_via, created_at, last_accessed,
                                    last_connected_via, client_name, client_version, client_platform,
-                                   oauth_client_id
+                                   oauth_client_id, aw_supported, aw_version, capabilities_fetched_at
                             FROM trusts
                             WHERE id = %s AND secret = %s
                             LIMIT 1
@@ -163,6 +163,16 @@ class DbTrust:
                     if row[19]:  # oauth_client_id
                         result["oauth_client_id"] = row[19]
 
+                    # Add peer capability tracking fields
+                    if row[20]:  # aw_supported
+                        result["aw_supported"] = row[20]
+                    if row[21]:  # aw_version
+                        result["aw_version"] = row[21]
+                    if row[22]:  # capabilities_fetched_at
+                        result["capabilities_fetched_at"] = ensure_timezone_aware_iso(
+                            row[22]
+                        )
+
                     # Store handle for future operations
                     self.handle = result
                     return result
@@ -195,6 +205,10 @@ class DbTrust:
         client_version: str | None = None,
         client_platform: str | None = None,
         oauth_client_id: str | None = None,
+        # Peer capability tracking
+        aw_supported: str | None = None,
+        aw_version: str | None = None,
+        capabilities_fetched_at: str | datetime | None = None,
     ) -> bool:
         """
         Create a new trust.
@@ -246,6 +260,14 @@ class DbTrust:
         elif established_via:
             normalized_last_connected_via = canonical_connection_method(established_via)
 
+        # Parse capabilities_fetched_at if provided
+        caps_timestamp = None
+        if capabilities_fetched_at is not None:
+            if isinstance(capabilities_fetched_at, str):
+                caps_timestamp = _parse_timestamp(capabilities_fetched_at)
+            else:
+                caps_timestamp = capabilities_fetched_at
+
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -256,10 +278,10 @@ class DbTrust:
                             approved, peer_approved, verified, verification_token,
                             peer_identifier, established_via, created_at, last_accessed,
                             last_connected_via, client_name, client_version, client_platform,
-                            oauth_client_id
+                            oauth_client_id, aw_supported, aw_version, capabilities_fetched_at
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         """,
                         (
@@ -283,6 +305,9 @@ class DbTrust:
                             client_version,
                             client_platform,
                             oauth_client_id,
+                            aw_supported,
+                            aw_version,
+                            caps_timestamp,
                         ),
                     )
                 conn.commit()
@@ -323,6 +348,14 @@ class DbTrust:
             if oauth_client_id:
                 self.handle["oauth_client_id"] = oauth_client_id
 
+            # Add capability tracking to handle
+            if aw_supported:
+                self.handle["aw_supported"] = aw_supported
+            if aw_version:
+                self.handle["aw_version"] = aw_version
+            if caps_timestamp:
+                self.handle["capabilities_fetched_at"] = caps_timestamp.isoformat()
+
             return True
 
         except Exception as e:
@@ -349,6 +382,10 @@ class DbTrust:
         client_version: str | None = None,
         client_platform: str | None = None,
         oauth_client_id: str | None = None,
+        # Peer capability tracking
+        aw_supported: str | None = None,
+        aw_version: str | None = None,
+        capabilities_fetched_at: str | datetime | None = None,
     ) -> bool:
         """
         Modify a trust.
@@ -482,6 +519,26 @@ class DbTrust:
             updates.append("oauth_client_id = %s")
             params.append(oauth_client_id)
             self.handle["oauth_client_id"] = oauth_client_id
+
+        # Handle peer capability tracking fields
+        if aw_supported is not None:
+            updates.append("aw_supported = %s")
+            params.append(aw_supported)
+            self.handle["aw_supported"] = aw_supported
+
+        if aw_version is not None:
+            updates.append("aw_version = %s")
+            params.append(aw_version)
+            self.handle["aw_version"] = aw_version
+
+        if capabilities_fetched_at is not None:
+            try:
+                caps_timestamp = _parse_timestamp(capabilities_fetched_at)
+                updates.append("capabilities_fetched_at = %s")
+                params.append(caps_timestamp)
+                self.handle["capabilities_fetched_at"] = caps_timestamp.isoformat()
+            except ValueError as e:
+                logger.warning(f"Invalid capabilities_fetched_at timestamp: {e}")
 
         if not updates:
             return True  # Nothing to update
@@ -620,7 +677,7 @@ class DbTrustList:
                                approved, peer_approved, verified, verification_token,
                                peer_identifier, established_via, created_at, last_accessed,
                                last_connected_via, client_name, client_version, client_platform,
-                               oauth_client_id
+                               oauth_client_id, aw_supported, aw_version, capabilities_fetched_at
                         FROM trusts
                         WHERE id = %s
                         ORDER BY peerid
@@ -676,6 +733,16 @@ class DbTrustList:
                             result["client_platform"] = row[18]
                         if row[19]:  # oauth_client_id
                             result["oauth_client_id"] = row[19]
+
+                        # Add peer capability tracking fields
+                        if row[20]:  # aw_supported
+                            result["aw_supported"] = row[20]
+                        if row[21]:  # aw_version
+                            result["aw_version"] = row[21]
+                        if row[22]:  # capabilities_fetched_at
+                            result["capabilities_fetched_at"] = ensure_timezone_aware_iso(
+                                row[22]
+                            )
 
                         self.trusts.append(result)
 

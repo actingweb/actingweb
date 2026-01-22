@@ -1,5 +1,4 @@
-"""
-OAuth2 callback handler for ActingWeb.
+"""OAuth2 callback handler for ActingWeb.
 
 This handler processes OAuth2 callbacks from various providers after user authentication,
 exchanges the authorization code for an access token, and sets up the user session.
@@ -42,18 +41,19 @@ logger = logging.getLogger(__name__)
 
 
 class OAuth2CallbackHandler(BaseHandler):
-    """
-    Handles OAuth2 callbacks at /oauth/callback for Google/GitHub OAuth flows.
+    """Handles OAuth2 callbacks at /oauth/callback for Google/GitHub OAuth flows.
 
     This handler processes TWO types of OAuth2 flows:
 
     1. Web UI Login (no trust_type in state):
+
        - User clicks "Login with Google/GitHub" on factory page
        - After OAuth, creates/looks up actor and redirects to UI page
-         (/www if config.ui is enabled, /app for SPAs when config.ui is disabled)
+         (``/www`` if config.ui is enabled, ``/app`` for SPAs when config.ui is disabled)
        - If email is missing, redirects to /oauth/email for manual input
 
     2. MCP Authorization (trust_type in state, e.g., 'mcp_client'):
+
        - OAuth flow initiated with trust_type parameter
        - After OAuth, creates/looks up actor AND trust relationship
        - If email is missing, returns error (MCP clients can't use web forms)
@@ -62,6 +62,7 @@ class OAuth2CallbackHandler(BaseHandler):
     state and is routed to OAuth2EndpointsHandler, not this handler.
 
     Expected query parameters:
+
     - code: Authorization code to exchange for access token
     - state: CSRF protection and optional redirect URL, actor_id, trust_type
     - error: Error code if authentication failed

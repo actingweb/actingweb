@@ -58,8 +58,8 @@ def test_actor_id():
 
 
 @pytest.fixture(autouse=True)
-def skip_postgresql_if_not_configured(request):
-    """Skip PostgreSQL tests if not configured or unavailable."""
+def skip_mismatched_backend(request):
+    """Skip tests for backends that don't match DATABASE_BACKEND env var."""
     import os
 
     # Only apply this skip logic to tests in this file (test_property_lookup.py)
@@ -76,11 +76,12 @@ def skip_postgresql_if_not_configured(request):
         # No backend parameter, don't skip
         return
 
-    # Skip PostgreSQL tests if DATABASE_BACKEND is not explicitly set to postgresql
-    if backend == "postgresql":
-        db_backend = os.getenv("DATABASE_BACKEND", "dynamodb")
-        if db_backend != "postgresql":
-            pytest.skip(f"PostgreSQL tests skipped (DATABASE_BACKEND={db_backend})")
+    # Get configured backend (default to dynamodb for backward compatibility)
+    db_backend = os.getenv("DATABASE_BACKEND", "dynamodb")
+
+    # Skip if test backend doesn't match configured backend
+    if backend != db_backend:
+        pytest.skip(f"{backend} tests skipped (DATABASE_BACKEND={db_backend})")
 
 
 @pytest.fixture

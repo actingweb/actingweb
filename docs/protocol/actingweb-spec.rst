@@ -41,6 +41,13 @@ Changelog
 - Added ``subscriptionresync`` option tag for resync callback support
 - Added Resync Callback section for bulk operation synchronization
 - Callbacks now support optional ``type`` field (``"resync"`` or ``"diff"``)
+- Added Granularity Selection Guidelines with recommendations for large properties and high subscriber counts
+- Added Callback Delivery Semantics section clarifying at-most-once delivery and recovery mechanisms
+- Added Callback Payload Limits with RECOMMENDED 256KB maximum and automatic downgrade behavior
+- Added Callback Back-Pressure mechanism using HTTP 429/503 responses and circuit breaker pattern
+- Added Callback Compression support (OPTIONAL) using standard HTTP content encoding
+- Added Subscription Scope and Overlap clarification for handling multiple overlapping subscriptions
+- Added new option tags: ``subscriptionresync``, ``callbackcompression``
 
 **Version 1.3** (December 2025)
 
@@ -439,6 +446,10 @@ trustpermissions
 subscriptionresync
   Support for the resync callback mechanism. When present, the actor supports sending
   ``type: "resync"`` callbacks to indicate peers should perform a full GET to synchronize state.
+
+callbackcompression
+  Support for compressed callback payloads using standard HTTP content encoding (gzip, br).
+  Receivers advertising this tag accept ``Content-Encoding`` headers on callback requests.
 
 Response Conventions
 -----------------------------
@@ -2708,6 +2719,260 @@ On receiving a resync callback, the peer SHOULD:
 2. Perform a GET on the provided URL to fetch the current state
 3. Update local sequence tracking to the callback's sequence number
 4. Respond with ``204 No Content``
+
+Granularity Selection Guidelines
+--------------------------------
+
+Implementations SHOULD consider the following factors when selecting or recommending
+a granularity level for subscriptions:
+
++------------------------------------------+-------------------------+-----------------------------------------------+
+| **Scenario**                             | **Recommended**         | **Rationale**                                 |
++------------------------------------------+-------------------------+-----------------------------------------------+
+| Property < 64KB, subscribers < 10        | ``high``                | Efficient, immediate delivery                 |
++------------------------------------------+-------------------------+-----------------------------------------------+
+| Property < 64KB, subscribers >= 10       | ``low``                 | Reduces fan-out bandwidth                     |
++------------------------------------------+-------------------------+-----------------------------------------------+
+| Property >= 64KB                         | ``low``                 | Prevents callback payload explosion           |
++------------------------------------------+-------------------------+-----------------------------------------------+
+| List property (any size)                 | ``high``                | Diffs are already incremental                 |
++------------------------------------------+-------------------------+-----------------------------------------------+
+| Real-time requirements                   | ``high``                | Minimizes round-trips                         |
++------------------------------------------+-------------------------+-----------------------------------------------+
+| Bandwidth-constrained environments       | ``low`` or ``none``     | Peer fetches on-demand                        |
++------------------------------------------+-------------------------+-----------------------------------------------+
+
+Implementations MAY automatically downgrade from ``high`` to ``low`` granularity when the
+payload size exceeds a configurable threshold. If automatic downgrade occurs, the callback
+MUST still increment the sequence number normally and SHOULD include the ``url`` attribute
+pointing to where the full diff can be retrieved.
+
+When automatic downgrade occurs, implementations MAY include an ``X-ActingWeb-Granularity-Downgraded``
+header set to ``true`` to inform the receiver that the original subscription was for ``high``
+granularity but this specific callback was sent with ``low`` semantics due to payload size.
+
+Callback Delivery Semantics
+---------------------------
+
+ActingWeb subscription callbacks provide **at-most-once** delivery semantics by default.
+Implementations MUST NOT automatically retry failed callbacks unless explicitly configured
+to do so with appropriate safeguards.
+
+**Rationale**: Automatic retries can cause:
+
+- Duplicate processing if the receiver succeeded but the response was lost
+- Cascading failures under load conditions
+- Unpredictable ordering when combined with sequence numbers
+
+**Recovery Mechanisms**
+
+Receivers detecting gaps in sequence numbers have several recovery options:
+
+1. **Polling**: Perform a GET on the subscription endpoint to retrieve missed diffs.
+   This is the RECOMMENDED recovery mechanism.
+
+2. **Resync Callback**: If the sender supports ``subscriptionresync``, it MAY send a
+   ``type: "resync"`` callback to indicate the receiver should fetch full state.
+
+3. **Sequence Gap Detection**: Receivers SHOULD track the expected next sequence number.
+   When a gap is detected (received sequence > expected + 1), the receiver SHOULD
+   initiate recovery via polling.
+
+**Implementation Guidance**
+
+Implementations wanting stronger delivery guarantees SHOULD:
+
+- Use ``granularity="low"`` to reduce payload size and enable reliable fetching
+- Implement idempotent handlers that can safely process duplicate callbacks
+- Use subscription polling as a periodic backup mechanism
+- Consider the ``subscriptionresync`` option for bulk operation scenarios
+
+Callback Payload Limits
+-----------------------
+
+Implementations SHOULD enforce a maximum callback payload size. The RECOMMENDED limit
+is **256KB** for the complete callback JSON body.
+
+**When Payload Exceeds Limit**
+
+For regular properties, when the payload would exceed the configured limit, the actor MUST
+either:
+
+a. Send a ``type="resync"`` callback with a ``url`` attribute pointing to the full state, OR
+b. Automatically use ``granularity="low"`` semantics for this specific callback
+
+For list properties with large batch operations (e.g., ``extend`` with many items), the
+actor SHOULD split the operation into multiple callbacks:
+
+- Each callback MUST have its own sequence number
+- The ``operation`` field MUST accurately reflect each partial operation
+- Receivers MUST handle partial operations correctly (e.g., multiple ``extend`` callbacks)
+
+**Payload Size Headers**
+
+When a callback payload is modified due to size limits, implementations MAY include
+informational headers::
+
+  X-ActingWeb-Payload-Truncated: true
+  X-ActingWeb-Original-Size: 1048576
+
+These headers are informational only and do not change the callback semantics.
+
+Callback Back-Pressure (OPTIONAL)
+---------------------------------
+
+Actors MAY implement back-pressure signaling to handle overload conditions gracefully.
+This section describes RECOMMENDED patterns for back-pressure handling.
+
+**HTTP Response Codes for Back-Pressure**
+
+``429 Too Many Requests``
+  Indicates the receiver is temporarily overwhelmed and cannot process callbacks at the
+  current rate. The sender SHOULD:
+
+  - Temporarily stop sending callbacks to this subscription
+  - Store the diff in the subscription's pending data for later delivery or polling
+  - Retry after the period specified in the ``Retry-After`` header
+
+  Example response::
+
+    HTTP/1.1 429 Too Many Requests
+    Retry-After: 30
+    Content-Type: application/json
+
+    {"error": "rate_limit_exceeded", "retry_after": 30}
+
+``503 Service Unavailable``
+  Indicates the receiver is completely unavailable. The sender SHOULD:
+
+  - Stop all callbacks to this actor (not just this subscription)
+  - Accumulate diffs for later delivery via polling
+  - Implement exponential backoff for retry attempts
+
+  Example response::
+
+    HTTP/1.1 503 Service Unavailable
+    Retry-After: 120
+
+**Sequence Number Handling During Back-Pressure**
+
+When back-pressure is active, the sender MUST continue incrementing sequence numbers
+for each change. The diffs MUST remain available via GET on the subscription endpoint.
+Receivers can detect missed callbacks via sequence gaps and fetch via polling.
+
+**Circuit Breaker Pattern**
+
+Implementations SHOULD implement a circuit breaker pattern for callback delivery:
+
+- **Closed** (normal operation): Callbacks are sent normally
+- **Open** (after N consecutive failures, RECOMMENDED: 5): Stop attempting callbacks
+  for a cooldown period (RECOMMENDED: 60 seconds)
+- **Half-Open** (after cooldown): Attempt a single callback; if successful, return to
+  Closed; if failed, return to Open with extended cooldown
+
+During the Open state, diffs accumulate and are available via polling. This prevents
+cascading failures when a peer is experiencing problems.
+
+Callback Compression (OPTIONAL)
+-------------------------------
+
+Actors advertising the ``callbackcompression`` option tag MAY support compressed
+callback payloads using standard HTTP content encoding.
+
+**Requesting Compression Support**
+
+When creating a subscription, the requesting actor MAY indicate compression support
+by including an ``accept_encoding`` attribute::
+
+  {
+    "target": "properties",
+    "subtarget": "data",
+    "granularity": "high",
+    "accept_encoding": ["gzip", "br"]
+  }
+
+The ``accept_encoding`` array lists supported compression algorithms in order of preference.
+Supported values are: ``gzip``, ``br`` (Brotli), ``deflate``.
+
+**Sending Compressed Callbacks**
+
+When the receiver supports compression and the payload exceeds a threshold (RECOMMENDED: 1KB),
+the sender SHOULD compress the payload::
+
+  POST /callbacks/subscriptions/peer123/sub456
+  Content-Type: application/json
+  Content-Encoding: gzip
+
+  [gzip-compressed JSON body]
+
+**Requirements**
+
+- Compression MUST NOT change the logical content or affect sequence numbering
+- If compression fails or is unavailable, the sender MUST fall back to uncompressed delivery
+- The ``Content-Length`` header MUST reflect the compressed size
+- Receivers MUST handle both compressed and uncompressed callbacks regardless of
+  subscription settings (compression is a hint, not a guarantee)
+
+Subscription Scope and Overlap
+------------------------------
+
+When a peer creates multiple subscriptions that overlap in scope, the following
+rules apply to prevent duplicate callbacks and ensure predictable behavior.
+
+**Scope Hierarchy**
+
+Subscriptions have a natural hierarchy based on specificity:
+
+1. Target only (e.g., ``properties``) - broadest scope
+2. Target + subtarget (e.g., ``properties/config``) - medium scope
+3. Target + subtarget + resource (e.g., ``properties/config/theme``) - narrowest scope
+
+A broader subscription includes all changes that would be covered by narrower
+subscriptions within its scope.
+
+**No Duplicate Callbacks**
+
+When multiple subscriptions from the same peer match a single change, the actor
+MUST NOT send duplicate callbacks. Only ONE callback MUST be sent for each change.
+
+**Most Specific Subscription Wins**
+
+When a change matches multiple subscriptions from the same peer, the callback
+SHOULD be sent to the most specific (narrowest scope) matching subscription.
+
+**Example**
+
+::
+
+  Peer has subscriptions:
+  - Sub A: target=properties (all properties)
+  - Sub B: target=properties, subtarget=config
+
+  Change occurs to "config" property
+
+  Result: ONE callback sent to Sub B (more specific)
+
+  Change occurs to "profile" property
+
+  Result: ONE callback sent to Sub A (only matching subscription)
+
+**Explicit Duplication**
+
+If an application explicitly requires multiple callbacks for the same change
+(e.g., for different handlers), it MUST use one of the following approaches:
+
+1. Use separate actor identities (different peer IDs)
+2. Implement peer-side routing based on a single subscription
+3. Use a single broad subscription and filter client-side
+
+**Rationale**
+
+This behavior:
+
+- Reduces unnecessary network traffic
+- Simplifies receiver-side deduplication logic
+- Provides predictable, deterministic callback delivery
+- Aligns with the principle of least surprise
 
 Security Considerations
 =======================

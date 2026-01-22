@@ -106,6 +106,11 @@ class Trust(Model):
         null=True
     )  # Reference to OAuth2 client ID for credentials-based clients
 
+    # Peer capability tracking
+    aw_supported = UnicodeAttribute(null=True)  # Comma-separated option tags
+    aw_version = UnicodeAttribute(null=True)  # Protocol version (e.g., "1.4")
+    capabilities_fetched_at = UTCDateTimeAttribute(null=True)
+
     # Indexes
     secret_index = SecretIndex()
 
@@ -184,6 +189,16 @@ class DbTrust:
         if hasattr(t, "oauth_client_id") and t.oauth_client_id:
             result["oauth_client_id"] = t.oauth_client_id
 
+        # Add peer capability tracking fields
+        if hasattr(t, "aw_supported") and t.aw_supported:
+            result["aw_supported"] = t.aw_supported
+        if hasattr(t, "aw_version") and t.aw_version:
+            result["aw_version"] = t.aw_version
+        if hasattr(t, "capabilities_fetched_at") and t.capabilities_fetched_at:
+            result["capabilities_fetched_at"] = ensure_timezone_aware_iso(
+                t.capabilities_fetched_at
+            )
+
         return result
 
     def modify(
@@ -206,6 +221,10 @@ class DbTrust:
         client_version=None,
         client_platform=None,
         oauth_client_id=None,
+        # Peer capability tracking
+        aw_supported=None,
+        aw_version=None,
+        capabilities_fetched_at=None,
     ):
         """Modify a trust
 
@@ -262,6 +281,20 @@ class DbTrust:
         if oauth_client_id is not None:
             self.handle.oauth_client_id = oauth_client_id
 
+        # Handle peer capability tracking fields
+        if aw_supported is not None:
+            self.handle.aw_supported = aw_supported
+        if aw_version is not None:
+            self.handle.aw_version = aw_version
+        if capabilities_fetched_at is not None:
+            try:
+                self.handle.capabilities_fetched_at = _parse_timestamp(
+                    capabilities_fetched_at
+                )
+            except ValueError as e:
+                logger.warning(f"Invalid capabilities_fetched_at timestamp: {e}")
+                # Keep existing value if parsing fails
+
         self.handle.save()
         return True
 
@@ -289,6 +322,10 @@ class DbTrust:
         client_version=None,
         client_platform=None,
         oauth_client_id=None,
+        # Peer capability tracking
+        aw_supported=None,
+        aw_version=None,
+        capabilities_fetched_at=None,
     ):
         """Create a new trust"""
         if not actor_id or not peerid:
@@ -349,6 +386,19 @@ class DbTrust:
             trust_kwargs["last_connected_via"] = canonical_connection_method(
                 established_via
             )
+
+        # Add peer capability tracking if provided
+        if aw_supported is not None:
+            trust_kwargs["aw_supported"] = aw_supported
+        if aw_version is not None:
+            trust_kwargs["aw_version"] = aw_version
+        if capabilities_fetched_at is not None:
+            if isinstance(capabilities_fetched_at, str):
+                trust_kwargs["capabilities_fetched_at"] = datetime.fromisoformat(
+                    capabilities_fetched_at.replace("Z", "+00:00")
+                )
+            else:
+                trust_kwargs["capabilities_fetched_at"] = capabilities_fetched_at
 
         self.handle = Trust(**trust_kwargs)
         self.handle.save()
@@ -442,6 +492,16 @@ class DbTrustList:
                     result["client_platform"] = t.client_platform
                 if hasattr(t, "oauth_client_id") and t.oauth_client_id:
                     result["oauth_client_id"] = t.oauth_client_id
+
+                # Add peer capability tracking fields (same logic as get() method)
+                if hasattr(t, "aw_supported") and t.aw_supported:
+                    result["aw_supported"] = t.aw_supported
+                if hasattr(t, "aw_version") and t.aw_version:
+                    result["aw_version"] = t.aw_version
+                if hasattr(t, "capabilities_fetched_at") and t.capabilities_fetched_at:
+                    result["capabilities_fetched_at"] = ensure_timezone_aware_iso(
+                        t.capabilities_fetched_at
+                    )
 
                 self.trusts.append(result)
             return self.trusts

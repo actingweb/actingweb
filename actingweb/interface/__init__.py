@@ -5,6 +5,11 @@ This module provides a clean, fluent API for building ActingWeb applications
 with improved developer experience.
 """
 
+from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
+from ..fanout import FanOutManager, FanOutResult
+from ..peer_capabilities import PeerCapabilities
+from ..remote_storage import RemotePeerStore, get_remote_bucket
+from ..subscription_config import SubscriptionProcessingConfig
 from .actor_interface import ActorInterface
 from .app import ActingWebApp
 from .authenticated_views import (
@@ -27,7 +32,11 @@ from .hooks import (
     subscription_hook,
 )
 from .property_store import PropertyStore
-from .subscription_manager import SubscriptionManager
+from .subscription_manager import (
+    PeerSyncResult,
+    SubscriptionManager,
+    SubscriptionSyncResult,
+)
 from .trust_manager import TrustManager
 
 __all__ = [
@@ -52,4 +61,17 @@ __all__ = [
     "AuthenticatedPropertyListStore",
     "AuthenticatedSubscriptionManager",
     "PermissionError",
+    # Subscription processing
+    "CallbackProcessor",
+    "ProcessResult",
+    "CallbackType",
+    "RemotePeerStore",
+    "get_remote_bucket",
+    "PeerCapabilities",
+    "FanOutManager",
+    "FanOutResult",
+    "SubscriptionProcessingConfig",
+    # Sync API types
+    "SubscriptionSyncResult",
+    "PeerSyncResult",
 ]

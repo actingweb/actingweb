@@ -27,6 +27,7 @@ Hooks Registry
    :members:
    :undoc-members:
    :show-inheritance:
+   :noindex:
 
 Integrations
 ------------

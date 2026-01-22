@@ -156,6 +156,10 @@ class Trust:
         client_version: str | None = None,
         client_platform: str | None = None,
         oauth_client_id: str | None = None,
+        # Peer capability tracking
+        aw_supported: str | None = None,
+        aw_version: str | None = None,
+        capabilities_fetched_at: str | None = None,
     ) -> bool:
         if not self.handle:
             logger.debug("Attempted modifcation of trust without handle")
@@ -174,6 +178,13 @@ class Trust:
             self.trust["verification_token"] = verification_token
         if peer_approved is not None:
             self.trust["peer_approved"] = str(peer_approved).lower()
+        # Update capability fields in local trust dict
+        if aw_supported is not None:
+            self.trust["aw_supported"] = aw_supported
+        if aw_version is not None:
+            self.trust["aw_version"] = aw_version
+        if capabilities_fetched_at is not None:
+            self.trust["capabilities_fetched_at"] = capabilities_fetched_at
         return self.handle.modify(
             baseuri=baseuri,
             secret=secret,
@@ -193,6 +204,10 @@ class Trust:
             client_version=client_version,
             client_platform=client_platform,
             oauth_client_id=oauth_client_id,
+            # Pass through peer capability tracking
+            aw_supported=aw_supported,
+            aw_version=aw_version,
+            capabilities_fetched_at=capabilities_fetched_at,
         )
 
     def create(

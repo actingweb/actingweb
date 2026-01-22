@@ -759,3 +759,67 @@ class TrustManager:
         """Set the trustee root URL."""
         if self._core_actor.store:
             self._core_actor.store.trustee_root = value
+
+    # --- Peer Capability Support ---
+
+    def get_trust(self, peer_id: str) -> dict[str, Any] | None:
+        """Get raw trust data for a peer.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            Dict with trust data, or None if not found
+        """
+        return self._core_actor.get_trust_relationship(peerid=peer_id)
+
+    def modify_trust(
+        self,
+        peer_id: str,
+        aw_supported: str | None = None,
+        aw_version: str | None = None,
+        capabilities_fetched_at: str | None = None,
+        **kwargs: Any,
+    ) -> bool:
+        """Modify trust relationship with capability fields.
+
+        This method updates peer capability tracking fields without triggering
+        remote notifications (for internal use by PeerCapabilities).
+
+        Args:
+            peer_id: The peer actor ID
+            aw_supported: Comma-separated option tags
+            aw_version: Protocol version string
+            capabilities_fetched_at: ISO timestamp of when capabilities were fetched
+            **kwargs: Additional fields to modify
+
+        Returns:
+            True if modification succeeded, False otherwise
+        """
+        if not self._core_actor.config or not hasattr(
+            self._core_actor.config, "DbTrust"
+        ):
+            logger.error("Database backend (DbTrust) not configured")
+            return False
+
+        try:
+            from ..trust import Trust
+
+            trust = Trust(
+                actor_id=self._core_actor.id,
+                peerid=peer_id,
+                config=self._core_actor.config,
+            )
+            if not trust.get():
+                logger.warning(f"Trust not found for peer {peer_id}")
+                return False
+
+            return trust.modify(
+                aw_supported=aw_supported,
+                aw_version=aw_version,
+                capabilities_fetched_at=capabilities_fetched_at,
+                **kwargs,
+            )
+        except Exception as e:
+            logger.error(f"Error modifying trust for {peer_id}: {e}")
+            return False

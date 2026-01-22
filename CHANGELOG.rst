@@ -8,6 +8,52 @@ Unreleased
 ADDED
 ~~~~~
 
+- **Passphrase-to-SPA-Token Exchange**: Added ``grant_type="passphrase"`` to the ``POST /oauth/spa/token`` endpoint for exchanging a valid creator passphrase for SPA tokens. This enables automated testing tools like Playwright to obtain authenticated access without going through the full OAuth2 flow.
+
+  - Devtest-mode only (returns 403 if ``config.devtest=False``) for security
+  - Returns ``access_token`` and ``refresh_token`` with standard OAuth2 response format
+  - Supports all token delivery modes: ``json``, ``cookie``, ``hybrid``
+  - Tokens can be used immediately to access actor resources via Bearer authentication
+
+- **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
+
+  - New module: ``actingweb.callback_processor`` - Processes incoming subscription callbacks with sequence validation
+  - New module: ``actingweb.remote_storage`` - Manages storing remote subscription data locally
+  - New module: ``actingweb.peer_capabilities`` - Peer capability negotiation during trust establishment
+  - New module: ``actingweb.subscription_config`` - Configuration for subscription behavior (gap thresholds, resync policies)
+  - New module: ``actingweb.fanout`` - Fan-out delivery for subscription callbacks
+  - Enhanced ``Trust`` model with ``peer_capabilities`` field for storing negotiated capabilities
+  - Automatic resync request when sequence gaps exceed configured thresholds
+  - Subscription suspension support for temporary delivery failures
+  - Circuit breaker pattern for handling unresponsive subscribers
+
+- **Pull-Based Subscription Sync API**: Added ``sync_subscription()`` and ``sync_peer()`` methods to ``SubscriptionManager`` for explicitly fetching and processing pending diffs from peers.
+
+  - New method: ``sync_subscription(peer_id, subscription_id, config?)`` - Sync a single subscription
+  - New method: ``sync_peer(peer_id, config?)`` - Sync all outbound subscriptions to a peer
+  - Async variants: ``sync_subscription_async()`` and ``sync_peer_async()``
+  - New dataclass: ``SubscriptionSyncResult`` - Result of syncing a single subscription
+  - New dataclass: ``PeerSyncResult`` - Aggregate result of syncing all subscriptions to a peer
+  - Supports configurable processing via ``SubscriptionProcessingConfig``
+  - Complements push-based callbacks for manual "Sync All" workflows
+
+- **Subscription Suspension**: Added suspension/resume support for subscription delivery failures.
+
+  - New database table: ``SubscriptionSuspension`` for tracking suspended subscriptions
+  - DynamoDB and PostgreSQL backends with migration support
+  - Automatic suspension on repeated delivery failures
+  - Resync triggered on subscription resume
+  - Scoped suspensions by subtarget for granular control
+
+- **Comprehensive Integration Tests for Subscriptions**: Added extensive test coverage for subscription handling flows.
+
+  - ``test_subscription_processing_flow.py``: Callback sequencing, gap detection, resync handling
+  - ``test_fanout_flow.py``: Fan-out delivery, large payloads, concurrent changes, circuit breaker
+  - ``test_subscription_suspension_flow.py``: Suspension/resume, subtarget scoping, multiple subscribers
+  - New test fixtures: ``callback_sender``, ``trust_helper`` for subscription testing
+
+- **CI/CD Documentation Build**: Added documentation build job to GitHub Actions workflow.
+
 - **Configurable AwProxy Timeout**: Added ``timeout`` parameter to ``AwProxy`` constructor for configurable HTTP request timeouts. Accepts either a single value (used for both connect and read) or a tuple ``(connect_timeout, read_timeout)``. Default changed from hardcoded ``(5, 10)`` to ``(5, 20)`` seconds for better handling of slow peer responses.
 
 - **Attribute List Storage**: Added ``ListAttribute`` and ``AttributeListStore`` for storing distributed lists in internal attributes (not exposed via REST API). This provides the same API as ``ListProperty``/``PropertyListStore`` but stores data in attribute buckets instead of properties, bypassing the 400KB property size limit while maintaining list semantics.
@@ -227,7 +273,7 @@ CHANGED
 - Added documentation to ``get_subscriptions()`` method explaining parameter filtering behavior
 
 v3.7.5: Dec 27, 2025
-----------
+--------------------
 
 ADDED
 ~~~~~
@@ -552,7 +598,7 @@ FIXED
 - Fixed Trust class attribute initialization to prevent AttributeError on early returns
 
 v3.4.3: Nov 23, 2025
--------------------
+--------------------
 
 FIXED
 ~~~~~
@@ -563,7 +609,7 @@ FIXED
 - Added conditional update check to prevent unnecessary trust relationship updates when client info hasn't changed
 
 v3.4.2: Nov 22, 2025
--------------------
+--------------------
 
 ADDED
 ~~~~~

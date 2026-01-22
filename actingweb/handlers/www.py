@@ -192,8 +192,9 @@ class WwwHandler(base_handler.BaseHandler):
                     display_properties[prop_name] = prop_value
 
             # Debug logging
+            final_properties = display_properties if display_properties else (properties or {})
             logger.debug(
-                f"Template values - properties: {list((display_properties or properties).keys())}"
+                f"Template values - properties: {list(final_properties.keys())}"
             )
             logger.debug(f"Template values - list_properties: {list(list_properties)}")
 
@@ -202,7 +203,7 @@ class WwwHandler(base_handler.BaseHandler):
 
             self.response.template_values = {
                 "id": myself.id,
-                "properties": display_properties or properties,
+                "properties": final_properties,
                 "read_only_properties": read_only_properties,
                 "list_properties": list_properties,
                 "url": urls["url"],

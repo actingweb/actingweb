@@ -271,6 +271,7 @@ class DbTrust:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Use upsert to match DynamoDB behavior (PutItem overwrites)
                     cur.execute(
                         """
                         INSERT INTO trusts (
@@ -283,6 +284,27 @@ class DbTrust:
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
+                        ON CONFLICT (id, peerid) DO UPDATE SET
+                            baseuri = EXCLUDED.baseuri,
+                            type = EXCLUDED.type,
+                            relationship = EXCLUDED.relationship,
+                            secret = EXCLUDED.secret,
+                            "desc" = EXCLUDED."desc",
+                            approved = EXCLUDED.approved,
+                            peer_approved = EXCLUDED.peer_approved,
+                            verified = EXCLUDED.verified,
+                            verification_token = EXCLUDED.verification_token,
+                            peer_identifier = EXCLUDED.peer_identifier,
+                            established_via = EXCLUDED.established_via,
+                            last_accessed = EXCLUDED.last_accessed,
+                            last_connected_via = EXCLUDED.last_connected_via,
+                            client_name = EXCLUDED.client_name,
+                            client_version = EXCLUDED.client_version,
+                            client_platform = EXCLUDED.client_platform,
+                            oauth_client_id = EXCLUDED.oauth_client_id,
+                            aw_supported = EXCLUDED.aw_supported,
+                            aw_version = EXCLUDED.aw_version,
+                            capabilities_fetched_at = EXCLUDED.capabilities_fetched_at
                         """,
                         (
                             actor_id,

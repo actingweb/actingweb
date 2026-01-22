@@ -16,12 +16,17 @@ References:
 - actingweb_mcp uses OAuth clients with trust relationships for access control
 """
 
+import os
+
 import pytest
 
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
 from actingweb.interface.oauth_client_manager import OAuth2ClientManager
 from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
+
+# Get database backend from environment (set by conftest.py)
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 
 
 @pytest.fixture
@@ -30,7 +35,7 @@ def aw_app():
     return (
         ActingWebApp(
             aw_type="urn:actingweb:test:trust_oauth",
-            database="dynamodb",
+            database=DATABASE_BACKEND,
             fqdn="test.example.com",
             proto="http://",
         )

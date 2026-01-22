@@ -113,10 +113,40 @@ When peer profile caching is enabled (via ``app.with_peer_profile()``), you can 
 
 See :doc:`../guides/trust-relationships` for details on enabling and configuring profile caching.
 
+Peer Capabilities Caching
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When peer capabilities caching is enabled (via ``app.with_peer_capabilities()``), you can discover what methods and actions trusted peers expose:
+
+.. code-block:: python
+
+   # Get cached capabilities (methods + actions)
+   capabilities = actor.trust.get_peer_capabilities(peer_id)
+   if capabilities:
+       print(f"Methods: {capabilities.get_method_names()}")
+       print(f"Actions: {capabilities.get_action_names()}")
+
+       # Get specific method
+       method = capabilities.get_method("get_data")
+       if method:
+           print(f"{method.name}: {method.description}")
+
+   # Convenience methods
+   methods = actor.trust.get_peer_methods(peer_id)  # Just methods
+   actions = actor.trust.get_peer_actions(peer_id)  # Just actions
+
+   # Manual refresh
+   capabilities = actor.trust.refresh_peer_capabilities(peer_id)
+
+   # Async refresh (FastAPI)
+   capabilities = await actor.trust.refresh_peer_capabilities_async(peer_id)
+
+See :doc:`../guides/trust-relationships` for details on enabling and configuring capabilities caching.
+
 Next
 ----
 
-- Hooks: :doc:`hooks`
-- Large collections: :doc:`property-lists`
-- Trust details: :doc:`trust-manager`
-- Subscriptions: :doc:`subscriptions`
+- Hooks: :doc:`../guides/hooks`
+- Large collections: :doc:`../guides/property-lists`
+- Trust details: :doc:`../guides/trust-relationships`
+- Subscriptions: :doc:`../guides/subscriptions`

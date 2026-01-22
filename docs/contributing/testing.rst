@@ -371,7 +371,7 @@ Mocking AWS/DynamoDB
 --------------------
 
 - Unit tests should not depend on live AWS. Prefer mocking the DB layer or running with DynamoDB Local.
-- If using DynamoDB Local in CI, set `AWS_DB_HOST` and related env vars as shown in :doc:`local-dev-setup`.
+- If using DynamoDB Local in CI, set `AWS_DB_HOST` and related env vars as shown in :doc:`../quickstart/local-dev-setup`.
 
 Coverage
 --------

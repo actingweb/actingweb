@@ -289,7 +289,7 @@ Migration from Legacy Interface
    **Breaking Change in v3.1**: The legacy ``OnAWBase`` interface has been completely removed.
    
    If you're migrating from the old interface, all code using ``OnAWBase`` must be updated 
-   to use the modern hook system. See :doc:`migration-v3.1` for detailed migration instructions.
+   to use the modern hook system. See :doc:`../migration/v3.1` for detailed migration instructions.
 
 The modern hook system provides better organization, type safety, and testing capabilities compared to the legacy interface.
 
@@ -413,7 +413,7 @@ For production deployment, use standard Python deployment practices:
 Next Steps
 ----------
 
-1. See the :doc:`developers` guide for detailed API documentation
+1. See the :doc:`../sdk/developer-api` guide for detailed API documentation
 2. Check out the actingwebdemo application for a complete working example
 3. Read the ActingWeb specification for protocol details
 4. Join the ActingWeb community for support and discussion

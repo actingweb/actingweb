@@ -798,7 +798,7 @@ Content Security Policy
 
 Add CSP headers to prevent XSS:
 
-.. code-block:: http
+.. code-block:: text
 
    Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'
 
@@ -826,7 +826,7 @@ Returns OAuth configuration.
 
 **Response:**
 
-.. code-block:: json
+.. code-block:: text
 
    {
        "oauth_enabled": true,

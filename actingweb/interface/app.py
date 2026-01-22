@@ -77,6 +77,9 @@ class ActingWebApp:
         # None = disabled, list of attributes = enabled
         self._peer_profile_attributes: list[str] | None = None
 
+        # Peer capabilities (methods/actions) caching configuration
+        self._peer_capabilities_caching: bool = False
+
         # Hook registry
         self.hooks = HookRegistry()
 
@@ -135,6 +138,9 @@ class ActingWebApp:
         # Peer profile caching configuration
         if hasattr(self, "_peer_profile_attributes"):
             self._config.peer_profile_attributes = self._peer_profile_attributes
+        # Peer capabilities (methods/actions) caching configuration
+        if hasattr(self, "_peer_capabilities_caching"):
+            self._config.peer_capabilities_caching = self._peer_capabilities_caching
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -408,8 +414,131 @@ class ActingWebApp:
                 store.delete_profile(actor.id, peer_id)
                 logger.debug(f"Cleaned up peer profile for {peer_id} on trust deletion")
             except Exception as e:
+                logger.warning(f"Failed to clean up peer profile for {peer_id}: {e}")
+
+    def with_peer_capabilities(self, enable: bool = True) -> "ActingWebApp":
+        """Enable peer capabilities (methods/actions) caching for trust relationships.
+
+        When enabled, peer methods and actions are automatically fetched and cached
+        when trust relationships are established. Capabilities are refreshed during
+        sync_peer() operations.
+
+        Args:
+            enable: Whether to enable capabilities caching. Default True.
+
+        Returns:
+            Self for method chaining.
+
+        Example::
+
+            app = (
+                ActingWebApp(...)
+                .with_peer_capabilities(enable=True)
+            )
+
+            # Access via TrustManager
+            capabilities = actor.trust.get_peer_capabilities(peer_id)
+            if capabilities:
+                for method in capabilities.methods:
+                    print(f"Method: {method.name} - {method.description}")
+        """
+        self._peer_capabilities_caching = enable
+        self._apply_runtime_changes_to_config()
+
+        # Register lifecycle hooks when capabilities caching is enabled
+        if enable:
+            self._register_peer_capabilities_hooks()
+
+        return self
+
+    def _register_peer_capabilities_hooks(self) -> None:
+        """Register lifecycle hooks for peer capabilities caching."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        @self.lifecycle_hook("trust_fully_approved_local")
+        def _fetch_capabilities_on_local_approval(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Fetch and cache peer capabilities when trust is fully approved (local)."""
+            if not peer_id or not self._peer_capabilities_caching:
+                return
+
+            try:
+                from ..peer_capabilities import (
+                    fetch_peer_methods_and_actions,
+                    get_cached_capabilities_store,
+                )
+
+                config = self.get_config()
+                capabilities = fetch_peer_methods_and_actions(
+                    actor_id=actor.id,
+                    peer_id=peer_id,
+                    config=config,
+                )
+                store = get_cached_capabilities_store(config)
+                store.store_capabilities(capabilities)
+                logger.debug(
+                    f"Cached peer capabilities for {peer_id} on local trust approval"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to cache peer capabilities for {peer_id}: {e}")
+
+        @self.lifecycle_hook("trust_fully_approved_remote")
+        def _fetch_capabilities_on_remote_approval(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Fetch and cache peer capabilities when trust is fully approved (remote)."""
+            if not peer_id or not self._peer_capabilities_caching:
+                return
+
+            try:
+                from ..peer_capabilities import (
+                    fetch_peer_methods_and_actions,
+                    get_cached_capabilities_store,
+                )
+
+                config = self.get_config()
+                capabilities = fetch_peer_methods_and_actions(
+                    actor_id=actor.id,
+                    peer_id=peer_id,
+                    config=config,
+                )
+                store = get_cached_capabilities_store(config)
+                store.store_capabilities(capabilities)
+                logger.debug(
+                    f"Cached peer capabilities for {peer_id} on remote trust approval"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to cache peer capabilities for {peer_id}: {e}")
+
+        @self.lifecycle_hook("trust_deleted")
+        def _cleanup_capabilities_on_trust_deleted(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Clean up cached peer capabilities when trust is deleted."""
+            if not peer_id or not self._peer_capabilities_caching:
+                return
+
+            try:
+                from ..peer_capabilities import get_cached_capabilities_store
+
+                config = self.get_config()
+                store = get_cached_capabilities_store(config)
+                store.delete_capabilities(actor.id, peer_id)
+                logger.debug(
+                    f"Cleaned up peer capabilities for {peer_id} on trust deletion"
+                )
+            except Exception as e:
                 logger.warning(
-                    f"Failed to clean up peer profile for {peer_id}: {e}"
+                    f"Failed to clean up peer capabilities for {peer_id}: {e}"
                 )
 
     def add_service(
@@ -767,7 +896,11 @@ class ActingWebApp:
 
             # Accept PENDING as success - callback was queued due to sequence gap
             # Per ActingWeb protocol, receiver handles gaps via polling, sender should not retry
-            return result in (ProcessResult.PROCESSED, ProcessResult.DUPLICATE, ProcessResult.PENDING)
+            return result in (
+                ProcessResult.PROCESSED,
+                ProcessResult.DUPLICATE,
+                ProcessResult.PENDING,
+            )
 
         # Run async processing
         try:
@@ -805,7 +938,9 @@ class ActingWebApp:
             for hook in self._subscription_data_hooks[target]:
                 try:
                     if inspect.iscoroutinefunction(hook):
-                        await hook(actor, peer_id, target, data, sequence, callback_type)
+                        await hook(
+                            actor, peer_id, target, data, sequence, callback_type
+                        )
                     else:
                         hook(actor, peer_id, target, data, sequence, callback_type)
                 except Exception as e:
@@ -816,7 +951,9 @@ class ActingWebApp:
             for hook in self._subscription_data_hooks["*"]:
                 try:
                     if inspect.iscoroutinefunction(hook):
-                        await hook(actor, peer_id, target, data, sequence, callback_type)
+                        await hook(
+                            actor, peer_id, target, data, sequence, callback_type
+                        )
                     else:
                         hook(actor, peer_id, target, data, sequence, callback_type)
                 except Exception as e:
@@ -887,6 +1024,7 @@ class ActingWebApp:
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
                 use_lookup_table=self._use_lookup_table,
                 peer_profile_attributes=self._peer_profile_attributes,
+                peer_capabilities_caching=self._peer_capabilities_caching,
             )
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them

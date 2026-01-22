@@ -751,7 +751,7 @@ Implementation Guide
 
 For practical implementation details and simple usage patterns, see:
 
-* :doc:`unified-access-control-simple` - Simple developer guide
+* :doc:`access-control-simple` - Simple developer guide
 
 The Unified Access Control system provides the foundation for:
 

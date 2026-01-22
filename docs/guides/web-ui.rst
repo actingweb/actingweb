@@ -275,7 +275,7 @@ Available Templates
     doesn't return the user's email address. The user must enter their email
     to complete account creation.
 
-    See :doc:`oauth-login-flow` for details on the email fallback flow.
+    See :doc:`authentication` for details on the email fallback flow.
 
     Available variables:
     - ``session_id``: Session token for completing the OAuth flow
@@ -311,7 +311,7 @@ Available Templates
 **aw-root-factory.html**
     Root actor creation form template with OAuth login support.
 
-    See :doc:`oauth-login-flow` for the complete OAuth login implementation guide.
+    See :doc:`authentication` for the complete OAuth login implementation guide.
 
     Available variables:
     - ``form_action``: Form submission URL
@@ -745,6 +745,6 @@ Related Documentation
 
 For more information on building web applications with ActingWeb:
 
-- :doc:`oauth-login-flow` - Complete guide to implementing OAuth login with templates
-- :doc:`authentication-system` - Full authentication system documentation
+- :doc:`authentication` - Complete guide to implementing OAuth login with templates
+- :doc:`authentication` - Full authentication system documentation
 - :doc:`spa-authentication` - SPA-specific OAuth2 with JSON APIs (no templates)

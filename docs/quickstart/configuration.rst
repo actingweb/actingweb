@@ -648,6 +648,133 @@ Best Practices
 
 4. **Refresh When Needed:** Use ``refresh_peer_profile()`` after significant peer changes or if cached data might be stale.
 
+Peer Capabilities Caching
+-------------------------
+
+ActingWeb can automatically cache methods and actions that peer actors expose. This is useful for discovering what RPC methods and state-modifying actions are available on trusted peers without making repeated API calls.
+
+Configuration
+~~~~~~~~~~~~~
+
+Enable peer capabilities caching via the fluent API:
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_peer_capabilities(enable=True)
+
+**Parameters:**
+
+- ``enable``: Boolean to enable/disable capabilities caching. Default: ``True`` when called.
+
+**Default Behavior:**
+
+- Capabilities caching is **disabled by default**
+- Must call ``with_peer_capabilities()`` to enable
+- Capabilities are stored in the ``peer_capabilities`` attribute bucket
+
+Automatic Capabilities Updates
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When enabled, capabilities are automatically updated:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Event
+     - Action
+   * - Trust fully approved (local)
+     - Fetch and cache peer methods/actions
+   * - Trust fully approved (remote)
+     - Fetch and cache peer methods/actions
+   * - ``sync_peer()`` completion
+     - Refresh cached capabilities
+   * - Trust deleted
+     - Delete cached capabilities
+
+Accessing Peer Capabilities
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use the TrustManager to access cached capabilities:
+
+.. code-block:: python
+
+    # Get all cached capabilities
+    capabilities = actor.trust.get_peer_capabilities(peer_id)
+    if capabilities:
+        print(f"Methods: {capabilities.get_method_names()}")
+        print(f"Actions: {capabilities.get_action_names()}")
+
+        # Get specific method
+        method = capabilities.get_method("get_data")
+        if method:
+            print(f"{method.name}: {method.description}")
+            print(f"Input schema: {method.input_schema}")
+
+    # Convenience methods for methods/actions only
+    methods = actor.trust.get_peer_methods(peer_id)
+    actions = actor.trust.get_peer_actions(peer_id)
+
+    # Manual refresh (sync)
+    capabilities = actor.trust.refresh_peer_capabilities(peer_id)
+
+    # Manual refresh (async - for FastAPI)
+    capabilities = await actor.trust.refresh_peer_capabilities_async(peer_id)
+
+**CachedCapability Attributes:**
+
+- ``name``: Method or action name
+- ``description``: Human-readable description
+- ``input_schema``: JSON Schema for parameters (optional)
+- ``output_schema``: JSON Schema for return value (optional)
+- ``capability_type``: ``"method"`` or ``"action"``
+
+**CachedPeerCapabilities Attributes:**
+
+- ``actor_id``: The actor caching this data
+- ``peer_id``: The peer whose capabilities are cached
+- ``methods``: List of CachedCapability objects for methods
+- ``actions``: List of CachedCapability objects for actions
+- ``fetched_at``: ISO timestamp when capabilities were fetched
+- ``fetch_error``: Error message if fetch failed
+
+Error Handling
+~~~~~~~~~~~~~~
+
+Capabilities fetch failures are handled gracefully:
+
+- If the peer is unavailable, a capabilities object with ``fetch_error`` is stored
+- 404 responses for ``/methods`` or ``/actions`` are normal (peer may not support them)
+- Store failures are logged but don't crash the trust approval flow
+
+Best Practices
+~~~~~~~~~~~~~~
+
+1. **Enable Only When Needed:** Capabilities caching adds network requests during trust establishment. Enable only if you need to discover peer methods/actions.
+
+2. **Handle Missing Capabilities:** Check that methods/actions exist before using:
+
+   .. code-block:: python
+
+       method = capabilities.get_method("expected_method")
+       if method:
+           # Method is available, safe to call
+           pass
+
+3. **Check for Errors:** The ``fetch_error`` field indicates if the last fetch failed:
+
+   .. code-block:: python
+
+       if capabilities and capabilities.fetch_error:
+           logger.warning(f"Capabilities fetch failed: {capabilities.fetch_error}")
+
+4. **Refresh When Needed:** Use ``refresh_peer_capabilities()`` if cached data might be stale or after a peer upgrade.
+
 Logging
 -------
 
@@ -666,7 +793,7 @@ Convenience env vars read by the interface layer:
 URLs and Base Paths
 -------------------
 
-- ``root``: Computed as ``{proto}{fqdn}/``. Templates receive ``actor_root`` and ``actor_www`` (see :doc:`www-handler-templates`).
+- ``root``: Computed as ``{proto}{fqdn}/``. Templates receive ``actor_root`` and ``actor_www`` (see :doc:`../guides/web-ui`).
 - Deployments under a base path are supported by integrations; avoid relative paths in templates.
 
 MCP Capability
@@ -679,4 +806,4 @@ Notes
 -----
 
 - Always use ``ActorInterface`` in applications; the internal ``Actor`` class is for framework use.
-- Prefer property lists for large or growing collections; see :doc:`developers` for guidance.
+- Prefer property lists for large or growing collections; see :doc:`../sdk/developer-api` for guidance.

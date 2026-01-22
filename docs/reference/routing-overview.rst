@@ -192,6 +192,6 @@ Configuration Examples
 Notes
 =====
 
-- Optional MCP endpoints are controlled by with_mcp(enable=...); see :doc:`mcp-applications`.
+- Optional MCP endpoints are controlled by with_mcp(enable=...); see :doc:`../guides/mcp-applications`.
 - Development routes are available when with_devtest(True) is set.
 

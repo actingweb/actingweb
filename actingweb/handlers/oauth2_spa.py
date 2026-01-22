@@ -715,9 +715,7 @@ class OAuth2SPAHandler(BaseHandler):
         """
         # Security check: Only allow in devtest mode
         if not self.config.devtest:
-            logger.warning(
-                "Passphrase grant attempted but devtest mode is disabled"
-            )
+            logger.warning("Passphrase grant attempted but devtest mode is disabled")
             return self._json_error(
                 403, "Passphrase grant is only available in devtest mode"
             )
@@ -743,7 +741,9 @@ class OAuth2SPAHandler(BaseHandler):
 
         # Validate passphrase
         if not actor.passphrase or passphrase != actor.passphrase:
-            logger.debug(f"Passphrase grant failed: invalid passphrase for actor {actor_id}")
+            logger.debug(
+                f"Passphrase grant failed: invalid passphrase for actor {actor_id}"
+            )
             return self._json_error(401, "Invalid passphrase")
 
         # Generate tokens

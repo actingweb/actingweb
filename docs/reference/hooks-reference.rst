@@ -501,7 +501,7 @@ API Discovery
 The ``GET /<actor_id>/methods`` and ``GET /<actor_id>/actions`` endpoints return
 metadata for all registered hooks, enabling API discovery:
 
-.. code-block:: json
+.. code-block:: text
 
     {
       "methods": [

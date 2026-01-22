@@ -1,15 +1,27 @@
 """
 Peer capability discovery and caching.
 
-Provides an API to query what ActingWeb protocol features a peer supports.
-Capabilities are stored in the trust relationship and cached with a TTL.
+This module provides:
+1. Protocol capability discovery - query what ActingWeb protocol features a peer supports
+   (aw_supported options like subscriptionbatch, callbackcompression, etc.)
+2. Methods/Actions caching - cache the RPC methods and state-modifying actions that
+   peers expose via GET /methods and GET /actions endpoints
+
+Protocol capabilities are stored in the trust relationship with TTL.
+Methods/Actions are stored in a separate attribute bucket (peer_capabilities).
 """
 
+import json
 import logging
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from . import attribute
+from . import config as config_class
+from .constants import PEER_CAPABILITIES_BUCKET
 
 if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
@@ -235,9 +247,7 @@ class PeerCapabilities:
                     # Also fetch version
                     version_url = f"{baseuri}/meta/actingweb/version"
                     try:
-                        version_response = await client.get(
-                            version_url, timeout=5.0
-                        )
+                        version_response = await client.get(version_url, timeout=5.0)
                         if version_response.status_code == 200:
                             version = version_response.text.strip()
                     except Exception:
@@ -307,3 +317,538 @@ class PeerCapabilities:
 
         # Capabilities not cached or expired - fetch them
         await self.refresh_async()
+
+
+# =============================================================================
+# Methods & Actions Caching
+# =============================================================================
+#
+# The following classes provide first-class support for caching the methods
+# and actions that peer actors expose via GET /methods and GET /actions.
+# This is separate from protocol capabilities (aw_supported) above.
+# =============================================================================
+
+
+@dataclass
+class CachedCapability:
+    """
+    Single method or action definition from a peer.
+
+    This represents either a method (RPC-style function) or an action
+    (state-modifying operation) that a peer actor exposes.
+    """
+
+    name: str
+    description: str | None = None
+    input_schema: dict[str, Any] | None = None  # JSON Schema for parameters
+    output_schema: dict[str, Any] | None = None  # JSON Schema for return value
+    capability_type: str = "method"  # "method" or "action"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for storage."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CachedCapability":
+        """Create from dictionary loaded from storage."""
+        return cls(**data)
+
+    def validate(self) -> bool:
+        """Validate the capability definition."""
+        if not self.name or not isinstance(self.name, str):
+            return False
+        if self.capability_type not in ("method", "action"):
+            return False
+        return True
+
+
+@dataclass
+class CachedPeerCapabilities:
+    """
+    Cached methods and actions from a peer actor.
+
+    This contains all capabilities (methods and actions) that a peer actor
+    exposes, along with metadata about when they were fetched.
+    """
+
+    actor_id: str  # The actor caching this data
+    peer_id: str  # The peer whose capabilities are cached
+
+    # Cached capabilities
+    methods: list[CachedCapability] = field(default_factory=list)
+    actions: list[CachedCapability] = field(default_factory=list)
+
+    # Metadata
+    fetched_at: str | None = None  # ISO timestamp when capabilities were fetched
+    fetch_error: str | None = None  # Last error message if fetch failed
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for storage."""
+        return {
+            "actor_id": self.actor_id,
+            "peer_id": self.peer_id,
+            "methods": [m.to_dict() for m in self.methods],
+            "actions": [a.to_dict() for a in self.actions],
+            "fetched_at": self.fetched_at,
+            "fetch_error": self.fetch_error,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CachedPeerCapabilities":
+        """Create from dictionary loaded from storage."""
+        methods = [CachedCapability.from_dict(m) for m in data.get("methods", []) if m]
+        actions = [CachedCapability.from_dict(a) for a in data.get("actions", []) if a]
+        return cls(
+            actor_id=data["actor_id"],
+            peer_id=data["peer_id"],
+            methods=methods,
+            actions=actions,
+            fetched_at=data.get("fetched_at"),
+            fetch_error=data.get("fetch_error"),
+        )
+
+    def get_capabilities_key(self) -> str:
+        """Generate unique key for this capabilities entry (actor_id:peer_id)."""
+        return f"{self.actor_id}:{self.peer_id}"
+
+    def get_method(self, name: str) -> CachedCapability | None:
+        """Get a method by name."""
+        for method in self.methods:
+            if method.name == name:
+                return method
+        return None
+
+    def get_action(self, name: str) -> CachedCapability | None:
+        """Get an action by name."""
+        for action in self.actions:
+            if action.name == name:
+                return action
+        return None
+
+    def get_method_names(self) -> list[str]:
+        """Get list of all method names."""
+        return [m.name for m in self.methods]
+
+    def get_action_names(self) -> list[str]:
+        """Get list of all action names."""
+        return [a.name for a in self.actions]
+
+    def validate(self) -> bool:
+        """Validate the peer capabilities definition."""
+        if not self.actor_id or not isinstance(self.actor_id, str):
+            return False
+        if not self.peer_id or not isinstance(self.peer_id, str):
+            return False
+        # Validate all methods and actions
+        for method in self.methods:
+            if not method.validate():
+                return False
+        for action in self.actions:
+            if not action.validate():
+                return False
+        return True
+
+
+class CachedCapabilitiesStore:
+    """
+    Storage manager for peer methods/actions caching.
+
+    Capabilities are stored in actor-specific attribute buckets:
+    bucket="peer_capabilities", actor_id={actor_id}, name="{actor_id}:{peer_id}"
+
+    This follows the same pattern as PeerProfileStore for consistency.
+    """
+
+    def __init__(self, config: config_class.Config):
+        self.config = config
+        self._cache: dict[str, CachedPeerCapabilities] = {}
+
+    def _get_capabilities_bucket(self, actor_id: str) -> attribute.Attributes | None:
+        """Get the peer capabilities attribute bucket for an actor."""
+        try:
+            return attribute.Attributes(
+                actor_id=actor_id,
+                bucket=PEER_CAPABILITIES_BUCKET,
+                config=self.config,
+            )
+        except Exception as e:
+            logger.error(
+                f"Error accessing peer capabilities bucket for actor {actor_id}: {e}"
+            )
+            return None
+
+    def store_capabilities(self, capabilities: CachedPeerCapabilities) -> bool:
+        """Store peer capabilities."""
+        if not capabilities.validate():
+            logger.error(
+                f"Invalid peer capabilities definition: "
+                f"{capabilities.get_capabilities_key()}"
+            )
+            return False
+
+        bucket = self._get_capabilities_bucket(capabilities.actor_id)
+        if not bucket:
+            logger.error(
+                f"Cannot access peer capabilities bucket for actor "
+                f"{capabilities.actor_id}"
+            )
+            return False
+
+        try:
+            # Store capabilities data in attribute bucket
+            capabilities_key = capabilities.get_capabilities_key()
+            capabilities_data = capabilities.to_dict()
+
+            success = bucket.set_attr(
+                name=capabilities_key, data=json.dumps(capabilities_data)
+            )
+
+            if success:
+                # Update cache
+                cache_key = f"{capabilities.actor_id}:{capabilities.peer_id}"
+                self._cache[cache_key] = capabilities
+                logger.debug(f"Stored peer capabilities: {cache_key}")
+                return True
+            else:
+                logger.error(f"Failed to store peer capabilities {capabilities_key}")
+                return False
+
+        except Exception as e:
+            logger.error(
+                f"Error storing peer capabilities "
+                f"{capabilities.get_capabilities_key()}: {e}"
+            )
+            return False
+
+    def get_capabilities(
+        self, actor_id: str, peer_id: str
+    ) -> CachedPeerCapabilities | None:
+        """Get cached peer capabilities."""
+        cache_key = f"{actor_id}:{peer_id}"
+
+        # Check cache first
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        bucket = self._get_capabilities_bucket(actor_id)
+        if not bucket:
+            return None
+
+        try:
+            capabilities_key = f"{actor_id}:{peer_id}"
+
+            # Get capabilities from attribute bucket
+            attr_data = bucket.get_attr(name=capabilities_key)
+
+            if not attr_data or "data" not in attr_data:
+                return None
+
+            # Parse JSON and create CachedPeerCapabilities
+            capabilities_data = json.loads(attr_data["data"])
+            capabilities = CachedPeerCapabilities.from_dict(capabilities_data)
+
+            # Cache the result
+            self._cache[cache_key] = capabilities
+
+            return capabilities
+
+        except Exception as e:
+            logger.error(f"Error loading peer capabilities {cache_key}: {e}")
+            return None
+
+    def delete_capabilities(self, actor_id: str, peer_id: str) -> bool:
+        """Delete cached peer capabilities."""
+        bucket = self._get_capabilities_bucket(actor_id)
+        if not bucket:
+            return False
+
+        try:
+            capabilities_key = f"{actor_id}:{peer_id}"
+
+            # Delete from attribute bucket
+            success = bucket.delete_attr(name=capabilities_key)
+
+            if success:
+                # Remove from cache
+                cache_key = f"{actor_id}:{peer_id}"
+                self._cache.pop(cache_key, None)
+                logger.debug(f"Deleted peer capabilities: {cache_key}")
+                return True
+            else:
+                logger.debug(f"No peer capabilities to delete: {capabilities_key}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error deleting peer capabilities {actor_id}:{peer_id}: {e}")
+            return False
+
+    def list_actor_capabilities(self, actor_id: str) -> list[CachedPeerCapabilities]:
+        """List all cached peer capabilities for an actor."""
+        bucket = self._get_capabilities_bucket(actor_id)
+        if not bucket:
+            return []
+
+        capabilities_list = []
+
+        try:
+            # Get all attributes from the peer capabilities bucket
+            bucket_data = bucket.get_bucket() or {}
+
+            for attr_name, attr_info in bucket_data.items():
+                try:
+                    capabilities_data = json.loads(attr_info["data"])
+                    capabilities = CachedPeerCapabilities.from_dict(capabilities_data)
+                    capabilities_list.append(capabilities)
+
+                    # Cache while we're at it
+                    cache_key = f"{capabilities.actor_id}:{capabilities.peer_id}"
+                    self._cache[cache_key] = capabilities
+
+                except Exception as e:
+                    logger.error(f"Error parsing peer capabilities {attr_name}: {e}")
+                    continue
+
+            return capabilities_list
+
+        except Exception as e:
+            logger.error(f"Error listing peer capabilities for actor {actor_id}: {e}")
+            return []
+
+    def clear_cache(self) -> None:
+        """Clear the internal cache."""
+        self._cache.clear()
+
+
+# Singleton instance for methods/actions store
+_capabilities_store: CachedCapabilitiesStore | None = None
+
+
+def initialize_cached_capabilities_store(config: config_class.Config) -> None:
+    """Initialize the cached capabilities store at application startup."""
+    global _capabilities_store
+    if _capabilities_store is None:
+        logger.debug("Initializing cached capabilities store...")
+        _capabilities_store = CachedCapabilitiesStore(config)
+        logger.debug("Cached capabilities store initialized")
+
+
+def get_cached_capabilities_store(
+    config: config_class.Config,
+) -> CachedCapabilitiesStore:
+    """Get the singleton cached capabilities store.
+
+    Automatically initializes the store if not already initialized.
+    """
+    global _capabilities_store
+    if _capabilities_store is None:
+        initialize_cached_capabilities_store(config)
+    return _capabilities_store  # type: ignore[return-value]
+
+
+def _parse_methods_response(response: dict[str, Any]) -> list[CachedCapability]:
+    """Parse the response from GET /methods endpoint."""
+    methods_data = response.get("methods", [])
+    if not isinstance(methods_data, list):
+        return []
+
+    methods = []
+    for method_data in methods_data:
+        if not isinstance(method_data, dict):
+            continue
+        name = method_data.get("name")
+        if not name:
+            continue
+        method = CachedCapability(
+            name=name,
+            description=method_data.get("description"),
+            input_schema=method_data.get("input_schema"),
+            output_schema=method_data.get("output_schema"),
+            capability_type="method",
+        )
+        methods.append(method)
+    return methods
+
+
+def _parse_actions_response(response: dict[str, Any]) -> list[CachedCapability]:
+    """Parse the response from GET /actions endpoint."""
+    actions_data = response.get("actions", [])
+    if not isinstance(actions_data, list):
+        return []
+
+    actions = []
+    for action_data in actions_data:
+        if not isinstance(action_data, dict):
+            continue
+        name = action_data.get("name")
+        if not name:
+            continue
+        action = CachedCapability(
+            name=name,
+            description=action_data.get("description"),
+            input_schema=action_data.get("input_schema"),
+            output_schema=action_data.get("output_schema"),
+            capability_type="action",
+        )
+        actions.append(action)
+    return actions
+
+
+def fetch_peer_methods_and_actions(
+    actor_id: str,
+    peer_id: str,
+    config: config_class.Config,
+) -> CachedPeerCapabilities:
+    """
+    Fetch capabilities (methods and actions) from a peer actor (sync version).
+
+    Uses AwProxy to call the peer's /methods and /actions endpoints.
+
+    Args:
+        actor_id: The actor requesting the capabilities
+        peer_id: The peer whose capabilities to fetch
+        config: Configuration object
+
+    Returns:
+        CachedPeerCapabilities with fetched methods and actions
+        (or error info if fetch failed)
+    """
+    from .aw_proxy import AwProxy
+
+    capabilities = CachedPeerCapabilities(
+        actor_id=actor_id,
+        peer_id=peer_id,
+        fetched_at=datetime.now(UTC).isoformat(),
+    )
+
+    try:
+        # Create proxy for peer communication
+        peer_target = {
+            "id": actor_id,
+            "peerid": peer_id,
+            "passphrase": None,
+        }
+        proxy = AwProxy(peer_target=peer_target, config=config)
+
+        if not proxy.trust:
+            capabilities.fetch_error = "No trust relationship with peer"
+            logger.warning(f"Cannot fetch peer capabilities: no trust with {peer_id}")
+            return capabilities
+
+        # Fetch methods
+        methods_response = proxy.get_resource(path="methods")
+        if methods_response and "error" not in methods_response:
+            capabilities.methods = _parse_methods_response(methods_response)
+        elif methods_response and "error" in methods_response:
+            error_code = methods_response["error"].get("code", 500)
+            # 404 is OK - peer might not support methods
+            if error_code != 404:
+                logger.debug(
+                    f"Error fetching methods from {peer_id}: "
+                    f"{methods_response['error']}"
+                )
+
+        # Fetch actions
+        actions_response = proxy.get_resource(path="actions")
+        if actions_response and "error" not in actions_response:
+            capabilities.actions = _parse_actions_response(actions_response)
+        elif actions_response and "error" in actions_response:
+            error_code = actions_response["error"].get("code", 500)
+            # 404 is OK - peer might not support actions
+            if error_code != 404:
+                logger.debug(
+                    f"Error fetching actions from {peer_id}: "
+                    f"{actions_response['error']}"
+                )
+
+        logger.debug(
+            f"Successfully fetched peer capabilities for {peer_id}: "
+            f"{len(capabilities.methods)} methods, "
+            f"{len(capabilities.actions)} actions"
+        )
+        return capabilities
+
+    except Exception as e:
+        capabilities.fetch_error = f"Exception: {str(e)}"
+        logger.error(f"Exception fetching peer capabilities from {peer_id}: {e}")
+        return capabilities
+
+
+async def fetch_peer_methods_and_actions_async(
+    actor_id: str,
+    peer_id: str,
+    config: config_class.Config,
+) -> CachedPeerCapabilities:
+    """
+    Fetch capabilities (methods and actions) from a peer actor (async version).
+
+    Uses AwProxy.get_resource_async to call the peer's /methods and /actions
+    endpoints without blocking the event loop.
+
+    Args:
+        actor_id: The actor requesting the capabilities
+        peer_id: The peer whose capabilities to fetch
+        config: Configuration object
+
+    Returns:
+        CachedPeerCapabilities with fetched methods and actions
+        (or error info if fetch failed)
+    """
+    from .aw_proxy import AwProxy
+
+    capabilities = CachedPeerCapabilities(
+        actor_id=actor_id,
+        peer_id=peer_id,
+        fetched_at=datetime.now(UTC).isoformat(),
+    )
+
+    try:
+        # Create proxy for peer communication
+        peer_target = {
+            "id": actor_id,
+            "peerid": peer_id,
+            "passphrase": None,
+        }
+        proxy = AwProxy(peer_target=peer_target, config=config)
+
+        if not proxy.trust:
+            capabilities.fetch_error = "No trust relationship with peer"
+            logger.warning(f"Cannot fetch peer capabilities: no trust with {peer_id}")
+            return capabilities
+
+        # Fetch methods (async)
+        methods_response = await proxy.get_resource_async(path="methods")
+        if methods_response and "error" not in methods_response:
+            capabilities.methods = _parse_methods_response(methods_response)
+        elif methods_response and "error" in methods_response:
+            error_code = methods_response["error"].get("code", 500)
+            # 404 is OK - peer might not support methods
+            if error_code != 404:
+                logger.debug(
+                    f"Error fetching methods from {peer_id}: "
+                    f"{methods_response['error']}"
+                )
+
+        # Fetch actions (async)
+        actions_response = await proxy.get_resource_async(path="actions")
+        if actions_response and "error" not in actions_response:
+            capabilities.actions = _parse_actions_response(actions_response)
+        elif actions_response and "error" in actions_response:
+            error_code = actions_response["error"].get("code", 500)
+            # 404 is OK - peer might not support actions
+            if error_code != 404:
+                logger.debug(
+                    f"Error fetching actions from {peer_id}: "
+                    f"{actions_response['error']}"
+                )
+
+        logger.debug(
+            f"Successfully fetched peer capabilities async for {peer_id}: "
+            f"{len(capabilities.methods)} methods, "
+            f"{len(capabilities.actions)} actions"
+        )
+        return capabilities
+
+    except Exception as e:
+        capabilities.fetch_error = f"Exception: {str(e)}"
+        logger.error(f"Exception fetching peer capabilities async from {peer_id}: {e}")
+        return capabilities

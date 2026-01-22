@@ -538,7 +538,9 @@ class FanOutManager:
         except Exception as e:
             cb.record_failure()
             self._persist_circuit_breaker(cb)
-            logger.error(f"Unexpected error delivering to {peer_id}: {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error delivering to {peer_id}: {e}", exc_info=True
+            )
             return DeliveryResult(
                 peer_id=peer_id,
                 subscription_id=subscription_id,

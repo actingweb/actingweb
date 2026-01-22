@@ -105,6 +105,7 @@ OAUTH2_SYSTEM_ACTOR = "_actingweb_oauth2"
 TRUST_TYPES_BUCKET = "trust_types"
 TRUST_PERMISSIONS_BUCKET = "trust_permissions"
 PEER_PROFILES_BUCKET = "peer_profiles"
+PEER_CAPABILITIES_BUCKET = "peer_capabilities"
 
 # OAuth2 and authentication indexes
 AUTH_CODE_INDEX_BUCKET = "auth_code_index"

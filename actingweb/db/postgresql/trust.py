@@ -740,8 +740,8 @@ class DbTrustList:
                         if row[21]:  # aw_version
                             result["aw_version"] = row[21]
                         if row[22]:  # capabilities_fetched_at
-                            result["capabilities_fetched_at"] = ensure_timezone_aware_iso(
-                                row[22]
+                            result["capabilities_fetched_at"] = (
+                                ensure_timezone_aware_iso(row[22])
                             )
 
                         self.trusts.append(result)

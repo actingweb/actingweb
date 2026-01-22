@@ -144,9 +144,7 @@ class PeerProfileStore:
             profile_key = profile.get_profile_key()
             profile_data = profile.to_dict()
 
-            success = bucket.set_attr(
-                name=profile_key, data=json.dumps(profile_data)
-            )
+            success = bucket.set_attr(name=profile_key, data=json.dumps(profile_data))
 
             if success:
                 # Update cache
@@ -159,9 +157,7 @@ class PeerProfileStore:
                 return False
 
         except Exception as e:
-            logger.error(
-                f"Error storing peer profile {profile.get_profile_key()}: {e}"
-            )
+            logger.error(f"Error storing peer profile {profile.get_profile_key()}: {e}")
             return False
 
     def get_profile(self, actor_id: str, peer_id: str) -> PeerProfile | None:
@@ -327,9 +323,7 @@ def fetch_peer_profile(
 
         if not proxy.trust:
             profile.fetch_error = "No trust relationship with peer"
-            logger.warning(
-                f"Cannot fetch peer profile: no trust with {peer_id}"
-            )
+            logger.warning(f"Cannot fetch peer profile: no trust with {peer_id}")
             return profile
 
         # Fetch all properties at once
@@ -337,9 +331,7 @@ def fetch_peer_profile(
 
         if response is None:
             profile.fetch_error = "Failed to communicate with peer"
-            logger.warning(
-                f"Failed to fetch peer profile from {peer_id}: no response"
-            )
+            logger.warning(f"Failed to fetch peer profile from {peer_id}: no response")
             return profile
 
         if "error" in response:
@@ -418,9 +410,7 @@ async def fetch_peer_profile_async(
 
         if not proxy.trust:
             profile.fetch_error = "No trust relationship with peer"
-            logger.warning(
-                f"Cannot fetch peer profile: no trust with {peer_id}"
-            )
+            logger.warning(f"Cannot fetch peer profile: no trust with {peer_id}")
             return profile
 
         # Fetch all properties at once (async)
@@ -428,9 +418,7 @@ async def fetch_peer_profile_async(
 
         if response is None:
             profile.fetch_error = "Failed to communicate with peer"
-            logger.warning(
-                f"Failed to fetch peer profile from {peer_id}: no response"
-            )
+            logger.warning(f"Failed to fetch peer profile from {peer_id}: no response")
             return profile
 
         if "error" in response:

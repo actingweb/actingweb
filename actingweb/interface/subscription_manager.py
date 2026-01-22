@@ -875,6 +875,31 @@ class SubscriptionManager:
             except Exception as e:
                 logger.warning(f"Failed to refresh peer profile during sync: {e}")
 
+        # Refresh peer capabilities if configured
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_capabilities_caching", False)
+        ):
+            try:
+                from ..peer_capabilities import (
+                    fetch_peer_methods_and_actions,
+                    get_cached_capabilities_store,
+                )
+
+                capabilities = fetch_peer_methods_and_actions(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                )
+                store = get_cached_capabilities_store(actor_config)
+                store.store_capabilities(capabilities)
+                logger.debug(
+                    f"Refreshed peer capabilities during sync_peer for {peer_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer capabilities during sync: {e}")
+
         return PeerSyncResult(
             peer_id=peer_id,
             success=all_success,
@@ -1155,6 +1180,33 @@ class SubscriptionManager:
             except Exception as e:
                 logger.warning(
                     f"Failed to refresh peer profile during sync (async): {e}"
+                )
+
+        # Refresh peer capabilities if configured (async)
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_capabilities_caching", False)
+        ):
+            try:
+                from ..peer_capabilities import (
+                    fetch_peer_methods_and_actions_async,
+                    get_cached_capabilities_store,
+                )
+
+                capabilities = await fetch_peer_methods_and_actions_async(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                )
+                store = get_cached_capabilities_store(actor_config)
+                store.store_capabilities(capabilities)
+                logger.debug(
+                    f"Refreshed peer capabilities (async) during sync_peer for {peer_id}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to refresh peer capabilities during sync (async): {e}"
                 )
 
         return PeerSyncResult(

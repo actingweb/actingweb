@@ -88,4 +88,4 @@ Lists integrate with the standard properties endpoints. See the Properties handl
 Web UI
 ------
 
-The UI detects list properties and provides dedicated list pages with item and metadata editing. See :doc:`../www-handler-templates` for template customization.
+The UI detects list properties and provides dedicated list pages with item and metadata editing. See :doc:`web-ui` for template customization.

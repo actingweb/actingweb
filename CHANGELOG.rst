@@ -5,6 +5,33 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.0a4: Jan 22, 2026
+-----------------------
+
+ADDED
+~~~~~
+
+- **Peer Profile Caching**: Added first-class support for caching profile attributes from peer actors with trust relationships. This enables applications to access peer information (displayname, email, etc.) without making repeated API calls.
+
+  - New module: ``actingweb.peer_profile`` - ``PeerProfile`` dataclass and ``PeerProfileStore`` for storage
+  - New configuration method: ``ActingWebApp.with_peer_profile(attributes=["displayname", "email", "description"])``
+  - New TrustManager methods: ``get_peer_profile()``, ``refresh_peer_profile()``, ``refresh_peer_profile_async()``
+  - Automatic profile fetch on trust approval via lifecycle hooks (``trust_fully_approved_local``, ``trust_fully_approved_remote``)
+  - Automatic profile cleanup on trust deletion via ``trust_deleted`` hook
+  - Profile refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
+  - Both sync and async fetch functions for flexible usage patterns
+
+- **Peer Capabilities Caching (Methods & Actions)**: Added first-class support for caching methods and actions that peer actors expose. This enables applications to discover and access peer RPC methods and state-modifying actions without making repeated API calls.
+
+  - Extended ``actingweb.peer_capabilities`` module with ``CachedCapability``, ``CachedPeerCapabilities``, and ``CachedCapabilitiesStore``
+  - New configuration method: ``ActingWebApp.with_peer_capabilities(enable=True)``
+  - New TrustManager methods: ``get_peer_capabilities()``, ``get_peer_methods()``, ``get_peer_actions()``, ``refresh_peer_capabilities()``, ``refresh_peer_capabilities_async()``
+  - Automatic capabilities fetch on trust approval via lifecycle hooks (``trust_fully_approved_local``, ``trust_fully_approved_remote``)
+  - Automatic capabilities cleanup on trust deletion via ``trust_deleted`` hook
+  - Capabilities refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
+  - Both sync and async fetch functions: ``fetch_peer_methods_and_actions()``, ``fetch_peer_methods_and_actions_async()``
+  - New constant: ``PEER_CAPABILITIES_BUCKET`` for attribute storage
+
 v3.10.0a3: Jan 22, 2026
 -----------------------
 

@@ -363,7 +363,7 @@ Option 1: pg_cron Extension (Recommended)
 
 **Schedule cleanup job:**
 
-.. code-block:: sql
+.. code-block:: postgresql
 
     -- Run cleanup daily at 03:00 UTC
     SELECT cron.schedule(

@@ -44,8 +44,7 @@ def get_remote_bucket(
         pat = pattern or PERMISSIVE_PEER_ID_PATTERN
         if not pat.match(peer_id):
             raise ValueError(
-                f"Invalid peer_id format: {peer_id}. "
-                f"Expected pattern: {pat.pattern}"
+                f"Invalid peer_id format: {peer_id}. Expected pattern: {pat.pattern}"
             )
     return f"remote:{peer_id}"
 

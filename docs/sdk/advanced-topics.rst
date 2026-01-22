@@ -92,7 +92,7 @@ For custom routes outside the standard ActingWeb handler system, use ``check_and
 - **Proper error handling**: 401s, OAuth2 redirects, WWW-Authenticate headers
 - **Security**: Validates users can only access their own actor data
 
-See the full documentation in :doc:`../authentication-system` under "Custom Route Authentication".
+See the full documentation in :doc:`../guides/authentication` under "Custom Route Authentication".
 
 Async Peer Communication
 ------------------------
@@ -132,4 +132,4 @@ Async Peer Communication
 Migration
 ---------
 
-The legacy ``OnAWBase`` interface was removed in v3.1. Use the modern hook system and see :doc:`../migration-v3.1` for guidance.
+The legacy ``OnAWBase`` interface was removed in v3.1. Use the modern hook system and see :doc:`../migration/v3.1` for guidance.

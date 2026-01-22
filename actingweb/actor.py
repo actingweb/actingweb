@@ -1676,7 +1676,9 @@ class Actor:
                     else:
                         sub_obj.clear_diff(diff["sequence"])
             except (requests.RequestException, requests.Timeout, ConnectionError) as e:
-                logger.warning(f"Callback seq={diff.get('sequence')} failed - peer did not respond: {e}")
+                logger.warning(
+                    f"Callback seq={diff.get('sequence')} failed - peer did not respond: {e}"
+                )
                 self.last_response_code = 0
                 self.last_response_message = (
                     "No response from peer for subscription callback"
@@ -1914,9 +1916,7 @@ class Actor:
             logger.error(f"Error checking suspension: {e}")
             return False
 
-    def suspend_subscriptions(
-        self, target: str, subtarget: str | None = None
-    ) -> bool:
+    def suspend_subscriptions(self, target: str, subtarget: str | None = None) -> bool:
         """Suspend diff registration for a target/subtarget.
 
         While suspended, property changes will NOT register diffs or trigger callbacks.
@@ -1938,9 +1938,7 @@ class Actor:
             logger.error(f"Error suspending subscriptions: {e}")
             return False
 
-    def resume_subscriptions(
-        self, target: str, subtarget: str | None = None
-    ) -> int:
+    def resume_subscriptions(self, target: str, subtarget: str | None = None) -> int:
         """Resume diff registration and send resync callbacks.
 
         Sends a resync callback to ALL subscriptions on this target/subtarget,
@@ -1966,9 +1964,7 @@ class Actor:
             logger.error(f"Error resuming subscriptions: {e}")
             return 0
 
-    def _send_resync_callbacks(
-        self, target: str, subtarget: str | None
-    ) -> int:
+    def _send_resync_callbacks(self, target: str, subtarget: str | None) -> int:
         """Send resync callbacks to all subscriptions on target/subtarget.
 
         Args:

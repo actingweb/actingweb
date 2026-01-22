@@ -823,3 +823,296 @@ class TrustManager:
         except Exception as e:
             logger.error(f"Error modifying trust for {peer_id}: {e}")
             return False
+
+    # --- Peer Profile Caching ---
+
+    def get_peer_profile(self, peer_id: str) -> Any:
+        """Get the cached profile for a peer.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            PeerProfile if found and profile caching is enabled, None otherwise
+
+        Example::
+
+            profile = actor.trust.get_peer_profile(peer_id)
+            if profile:
+                print(f"Connected with {profile.displayname}")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if profile caching is enabled
+        if not getattr(self._core_actor.config, "peer_profile_attributes", None):
+            return None
+
+        try:
+            from ..peer_profile import get_peer_profile_store
+
+            store = get_peer_profile_store(self._core_actor.config)
+            return store.get_profile(self._core_actor.id, peer_id)
+        except Exception as e:
+            logger.warning(f"Error getting peer profile for {peer_id}: {e}")
+            return None
+
+    def refresh_peer_profile(self, peer_id: str) -> Any:
+        """Refresh the cached profile for a peer (sync version).
+
+        Fetches current profile attributes from the peer and updates the cache.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            Updated PeerProfile if successful, None if profile caching is disabled
+            or fetch failed
+
+        Example::
+
+            # Manual refresh
+            profile = actor.trust.refresh_peer_profile(peer_id)
+            if profile and not profile.fetch_error:
+                print(f"Refreshed profile: {profile.displayname}")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if profile caching is enabled
+        attributes = getattr(self._core_actor.config, "peer_profile_attributes", None)
+        if not attributes:
+            logger.debug("Peer profile caching not enabled")
+            return None
+
+        try:
+            from ..peer_profile import fetch_peer_profile, get_peer_profile_store
+
+            profile = fetch_peer_profile(
+                actor_id=self._core_actor.id,
+                peer_id=peer_id,
+                config=self._core_actor.config,
+                attributes=attributes,
+            )
+            store = get_peer_profile_store(self._core_actor.config)
+            store.store_profile(profile)
+            logger.debug(f"Refreshed peer profile for {peer_id}")
+            return profile
+        except Exception as e:
+            logger.warning(f"Error refreshing peer profile for {peer_id}: {e}")
+            return None
+
+    async def refresh_peer_profile_async(self, peer_id: str) -> Any:
+        """Refresh the cached profile for a peer (async version).
+
+        Fetches current profile attributes from the peer using async HTTP
+        and updates the cache.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            Updated PeerProfile if successful, None if profile caching is disabled
+            or fetch failed
+
+        Example::
+
+            # Manual refresh (async)
+            profile = await actor.trust.refresh_peer_profile_async(peer_id)
+            if profile and not profile.fetch_error:
+                print(f"Refreshed profile: {profile.displayname}")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if profile caching is enabled
+        attributes = getattr(self._core_actor.config, "peer_profile_attributes", None)
+        if not attributes:
+            logger.debug("Peer profile caching not enabled")
+            return None
+
+        try:
+            from ..peer_profile import fetch_peer_profile_async, get_peer_profile_store
+
+            profile = await fetch_peer_profile_async(
+                actor_id=self._core_actor.id,
+                peer_id=peer_id,
+                config=self._core_actor.config,
+                attributes=attributes,
+            )
+            store = get_peer_profile_store(self._core_actor.config)
+            store.store_profile(profile)
+            logger.debug(f"Refreshed peer profile (async) for {peer_id}")
+            return profile
+        except Exception as e:
+            logger.warning(f"Error refreshing peer profile async for {peer_id}: {e}")
+            return None
+
+    # --- Peer Capabilities (Methods/Actions) Caching ---
+
+    def get_peer_capabilities(self, peer_id: str) -> Any:
+        """Get the cached capabilities (methods + actions) for a peer.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            CachedPeerCapabilities if found and caching is enabled, None otherwise
+
+        Example::
+
+            capabilities = actor.trust.get_peer_capabilities(peer_id)
+            if capabilities:
+                print(f"Methods: {capabilities.get_method_names()}")
+                print(f"Actions: {capabilities.get_action_names()}")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if capabilities caching is enabled
+        if not getattr(self._core_actor.config, "peer_capabilities_caching", False):
+            return None
+
+        try:
+            from ..peer_capabilities import get_cached_capabilities_store
+
+            store = get_cached_capabilities_store(self._core_actor.config)
+            return store.get_capabilities(self._core_actor.id, peer_id)
+        except Exception as e:
+            logger.warning(f"Error getting peer capabilities for {peer_id}: {e}")
+            return None
+
+    def get_peer_methods(self, peer_id: str) -> list[Any]:
+        """Get cached methods for a peer (convenience method).
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            List of CachedCapability objects for methods, empty if not cached
+
+        Example::
+
+            methods = actor.trust.get_peer_methods(peer_id)
+            for method in methods:
+                print(f"{method.name}: {method.description}")
+        """
+        capabilities = self.get_peer_capabilities(peer_id)
+        if capabilities:
+            return capabilities.methods
+        return []
+
+    def get_peer_actions(self, peer_id: str) -> list[Any]:
+        """Get cached actions for a peer (convenience method).
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            List of CachedCapability objects for actions, empty if not cached
+
+        Example::
+
+            actions = actor.trust.get_peer_actions(peer_id)
+            for action in actions:
+                print(f"{action.name}: {action.description}")
+        """
+        capabilities = self.get_peer_capabilities(peer_id)
+        if capabilities:
+            return capabilities.actions
+        return []
+
+    def refresh_peer_capabilities(self, peer_id: str) -> Any:
+        """Refresh the cached capabilities for a peer (sync version).
+
+        Fetches current methods and actions from the peer and updates the cache.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            Updated CachedPeerCapabilities if successful, None if caching is
+            disabled or fetch failed
+
+        Example::
+
+            # Manual refresh
+            capabilities = actor.trust.refresh_peer_capabilities(peer_id)
+            if capabilities and not capabilities.fetch_error:
+                print(f"Refreshed: {len(capabilities.methods)} methods")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if capabilities caching is enabled
+        if not getattr(self._core_actor.config, "peer_capabilities_caching", False):
+            logger.debug("Peer capabilities caching not enabled")
+            return None
+
+        try:
+            from ..peer_capabilities import (
+                fetch_peer_methods_and_actions,
+                get_cached_capabilities_store,
+            )
+
+            capabilities = fetch_peer_methods_and_actions(
+                actor_id=self._core_actor.id,
+                peer_id=peer_id,
+                config=self._core_actor.config,
+            )
+            store = get_cached_capabilities_store(self._core_actor.config)
+            store.store_capabilities(capabilities)
+            logger.debug(f"Refreshed peer capabilities for {peer_id}")
+            return capabilities
+        except Exception as e:
+            logger.warning(f"Error refreshing peer capabilities for {peer_id}: {e}")
+            return None
+
+    async def refresh_peer_capabilities_async(self, peer_id: str) -> Any:
+        """Refresh the cached capabilities for a peer (async version).
+
+        Fetches current methods and actions from the peer using async HTTP
+        and updates the cache.
+
+        Args:
+            peer_id: The peer actor ID
+
+        Returns:
+            Updated CachedPeerCapabilities if successful, None if caching is
+            disabled or fetch failed
+
+        Example::
+
+            # Manual refresh (async)
+            capabilities = await actor.trust.refresh_peer_capabilities_async(peer_id)
+            if capabilities and not capabilities.fetch_error:
+                print(f"Refreshed: {len(capabilities.methods)} methods")
+        """
+        if not self._core_actor.config or not self._core_actor.id:
+            return None
+
+        # Check if capabilities caching is enabled
+        if not getattr(self._core_actor.config, "peer_capabilities_caching", False):
+            logger.debug("Peer capabilities caching not enabled")
+            return None
+
+        try:
+            from ..peer_capabilities import (
+                fetch_peer_methods_and_actions_async,
+                get_cached_capabilities_store,
+            )
+
+            capabilities = await fetch_peer_methods_and_actions_async(
+                actor_id=self._core_actor.id,
+                peer_id=peer_id,
+                config=self._core_actor.config,
+            )
+            store = get_cached_capabilities_store(self._core_actor.config)
+            store.store_capabilities(capabilities)
+            logger.debug(f"Refreshed peer capabilities (async) for {peer_id}")
+            return capabilities
+        except Exception as e:
+            logger.warning(
+                f"Error refreshing peer capabilities async for {peer_id}: {e}"
+            )
+            return None

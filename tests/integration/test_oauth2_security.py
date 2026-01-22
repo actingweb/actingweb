@@ -10,6 +10,7 @@ These tests ensure that OAuth2 flows properly validate actor ownership
 and prevent unauthorized access to other users' actors.
 """
 
+import os
 from collections.abc import Generator
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -18,6 +19,9 @@ import pytest
 
 from actingweb.aw_web_request import AWWebObj
 from actingweb.oauth_state import encode_state
+
+# Get database backend from environment (set by conftest.py)
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +70,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 3: Create request object for OAuth2 callback
         from actingweb import config as config_module
 
-        config = config_module.Config(database="dynamodb")
+        config = config_module.Config(database=DATABASE_BACKEND)
 
         # Configure OAuth2
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
@@ -155,7 +159,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 3: Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database="dynamodb")
+        config = config_module.Config(database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
@@ -228,7 +232,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 3: Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database="dynamodb")
+        config = config_module.Config(database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
@@ -296,7 +300,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 2: Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database="dynamodb")
+        config = config_module.Config(database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
@@ -385,7 +389,7 @@ class TestEmailValidationSecurity:
         # Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database="dynamodb")
+        config = config_module.Config(database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"

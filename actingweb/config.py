@@ -60,6 +60,18 @@ class Config:
             False  # False = use old GSI/index (backward compatible)
         )
         #########
+        # Peer profile caching configuration
+        #########
+        # When set (not None), enables automatic caching of peer profile attributes
+        # Default attributes when enabled: ["displayname", "email", "description"]
+        self.peer_profile_attributes: list[str] | None = None  # None = disabled
+        #########
+        # Peer capabilities caching configuration
+        #########
+        # When True, enables automatic caching of peer methods/actions
+        # Fetches from GET /methods and GET /actions endpoints
+        self.peer_capabilities_caching: bool = False
+        #########
         # Configurable ActingWeb settings for this app
         #########
         # The app type this actor implements

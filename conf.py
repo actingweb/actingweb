@@ -204,7 +204,35 @@ intersphinx_mapping = {
     'flask': ('https://flask.palletsprojects.com/en/latest/', None),
     'boto3': ('https://boto3.amazonaws.com/v1/documentation/api/latest/', None),
     'pynamodb': ('https://pynamodb.readthedocs.io/en/latest/', None),
+    'pydantic': ('https://docs.pydantic.dev/latest/', None),
 }
+
+# Suppress warnings for type references that can't be resolved
+# These are primarily from autodoc processing docstrings with type hints
+# to external packages that don't provide intersphinx inventories
+nitpick_ignore = [
+    # Python types module
+    ('py:class', 'ModuleType'),
+    # Internal actingweb classes that aren't exposed in docs
+    ('py:class', 'HookRegistry'),
+    ('py:class', 'AuthenticatedActorView'),
+    ('py:class', 'config_class.Config'),
+    ('py:class', 'actingweb.subscription_config.SubscriptionProcessingConfig'),
+    ('py:class', 'actingweb.interface.property_store.PropertyStore'),
+    ('py:class', 'actingweb.interface.subscription_manager.SubscriptionManager'),
+    ('py:class', 'actingweb.interface.trust_manager.TrustManager'),
+    ('py:class', 'actingweb.interface.hooks.HookMetadata'),
+    ('py:class', 'actingweb.interface.hooks.HookRegistry'),
+    ('py:class', 'actingweb.interface.integrations.base_integration.BaseActingWebIntegration'),
+    # Pydantic classes (intersphinx doesn't always work well)
+    ('py:class', 'pydantic.main.BaseModel'),
+    ('py:class', 'ConfigDict'),
+    # FastAPI/Starlette classes (intersphinx doesn't always work well)
+    ('py:class', 'fastapi.applications.FastAPI'),
+    ('py:class', 'starlette.requests.Request'),
+    ('py:class', 'starlette.responses.Response'),
+    ('py:class', 'starlette.responses.RedirectResponse'),
+]
 
 # Only label top-level sections to avoid duplicate labels
 autosectionlabel_maxdepth = 1

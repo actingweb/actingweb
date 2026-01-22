@@ -16,6 +16,8 @@ References:
 - actingweb_mcp uses OAuth clients with trust relationships for access control
 """
 
+import os
+
 import pytest
 
 from actingweb.interface.actor_interface import ActorInterface
@@ -23,14 +25,31 @@ from actingweb.interface.app import ActingWebApp
 from actingweb.interface.oauth_client_manager import OAuth2ClientManager
 from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
 
+# Get database backend from environment (set by conftest.py)
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
+
 
 @pytest.fixture
-def aw_app():
-    """Create ActingWeb app with OAuth2 and MCP enabled."""
+def aw_app(docker_services, setup_database, worker_info):  # noqa: ARG001
+    """Create ActingWeb app with OAuth2 and MCP enabled.
+
+    Depends on setup_database to ensure schema exists and worker_info
+    for proper database isolation in parallel tests.
+    """
+    # Set up environment for PostgreSQL schema isolation
+    if DATABASE_BACKEND == "postgresql":
+        os.environ["PG_DB_HOST"] = os.environ.get("PG_DB_HOST", "localhost")
+        os.environ["PG_DB_PORT"] = os.environ.get("PG_DB_PORT", "5433")
+        os.environ["PG_DB_NAME"] = os.environ.get("PG_DB_NAME", "actingweb_test")
+        os.environ["PG_DB_USER"] = os.environ.get("PG_DB_USER", "actingweb")
+        os.environ["PG_DB_PASSWORD"] = os.environ.get("PG_DB_PASSWORD", "testpassword")
+        os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        os.environ["PG_DB_SCHEMA"] = "public"
+
     return (
         ActingWebApp(
             aw_type="urn:actingweb:test:trust_oauth",
-            database="dynamodb",
+            database=DATABASE_BACKEND,
             fqdn="test.example.com",
             proto="http://",
         )

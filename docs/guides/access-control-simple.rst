@@ -496,4 +496,4 @@ This simple approach lets you focus on your application logic while ActingWeb ha
 See Also
 ========
 
-* :doc:`unified-access-control` - Complete system overview and architecture
+* :doc:`access-control` - Complete system overview and architecture

@@ -98,7 +98,7 @@ Where to next
 
 - Local dev setup: install extras, DynamoDB Local → :doc:`local-dev-setup`
 - Configuration reference: identity, auth (OAuth2), DB, base paths → :doc:`configuration`
-- Routing overview: generated routes and structure → :doc:`routing-overview`
-- Developer API: high‑level interfaces and hooks → :doc:`developers`
-- MCP apps: add AI‑client access when needed → :doc:`mcp-applications`
-- MCP quickstart: minimal server with tools/prompts → :doc:`mcp-quickstart`
+- Routing overview: generated routes and structure → :doc:`../reference/routing-overview`
+- Developer API: high‑level interfaces and hooks → :doc:`../sdk/developer-api`
+- MCP apps: add AI‑client access when needed → :doc:`../guides/mcp-applications`
+- MCP quickstart: minimal server with tools/prompts → :doc:`../guides/mcp-quickstart`

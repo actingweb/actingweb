@@ -124,7 +124,7 @@ Clients can discover available methods and actions via GET requests:
 
 The response includes metadata for each hook:
 
-.. code-block:: json
+.. code-block:: text
 
    {
      "methods": [
@@ -285,4 +285,4 @@ The runtime context is request-scoped and automatically managed by the framework
 Permissions
 -----------
 
-Permission checks are integrated transparently with hooks. See :doc:`../unified-access-control-simple` for the simple guide and :doc:`../unified-access-control` for full details.
+Permission checks are integrated transparently with hooks. See :doc:`access-control-simple` for the simple guide and :doc:`access-control` for full details.

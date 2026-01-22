@@ -76,6 +76,11 @@ class Trust:
         if not self.handle:
             return False
 
+        # Ensure trust data is loaded before checking if it's an OAuth2 client trust
+        # This is necessary because _is_oauth2_client_trust() relies on self.trust being populated
+        if not self.trust:
+            self.get()
+
         # If this is an OAuth2 client trust, delete the client (which also revokes tokens)
         if self.config and self._is_oauth2_client_trust():
             client_id = self._extract_client_id_from_peerid()

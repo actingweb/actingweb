@@ -28,7 +28,7 @@ Basic Usage
 Permissions (Per Relationship)
 -------------------------------
 
-For apps using unified access control, you can set per‑relationship overrides. See :doc:`../unified-access-control-simple` for the simple guide.
+For apps using unified access control, you can set per‑relationship overrides. See :doc:`access-control-simple` for the simple guide.
 
 Programmatic example:
 
@@ -56,7 +56,7 @@ REST API
 - ``GET /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 - ``DELETE /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 
-See also: :doc:`../unified-access-control` for the full system.
+See also: :doc:`access-control` for the full system.
 
 Trust and Subscriptions Lifecycle
 ---------------------------------
@@ -190,3 +190,139 @@ Use trust hooks to react to lifecycle events:
        # Application-specific cleanup (storage cleanup is automatic)
        notify_websocket_clients(f"Peer {peerid} disconnected")
        log_audit_event("trust_deleted", peer_id=peerid)
+
+Peer Profile Caching
+--------------------
+
+ActingWeb can automatically cache profile attributes from trusted peers, making it easy to display peer information without repeated API calls.
+
+**Enable Profile Caching**
+
+.. code-block:: python
+
+   app = ActingWebApp(
+       aw_type="urn:actingweb:example.com:myapp",
+       fqdn="myapp.example.com"
+   ).with_peer_profile(attributes=["displayname", "email", "description"])
+
+When enabled, profiles are:
+
+- Automatically fetched when trust is fully approved (both sides)
+- Refreshed during ``sync_peer()`` operations
+- Cleaned up when trust is deleted
+
+**Accessing Cached Profiles**
+
+.. code-block:: python
+
+   # Get cached profile
+   profile = actor.trust.get_peer_profile(peer_id)
+   if profile:
+       print(f"Connected with {profile.displayname}")
+       print(f"Email: {profile.email}")
+       # Access additional attributes
+       avatar = profile.get_attribute("avatar_url")
+
+   # Check for fetch errors
+   if profile and profile.fetch_error:
+       print(f"Warning: {profile.fetch_error}")
+
+**Manual Profile Refresh**
+
+.. code-block:: python
+
+   # Sync version
+   profile = actor.trust.refresh_peer_profile(peer_id)
+
+   # Async version (for FastAPI)
+   profile = await actor.trust.refresh_peer_profile_async(peer_id)
+
+**Custom Attributes**
+
+Cache any property the peer exposes:
+
+.. code-block:: python
+
+   app.with_peer_profile(attributes=[
+       "displayname",
+       "email",
+       "avatar_url",
+       "timezone",
+       "organization",
+   ])
+
+See :doc:`../quickstart/configuration` for detailed configuration options.
+
+Peer Capabilities Caching
+-------------------------
+
+ActingWeb can automatically cache the methods and actions that trusted peers expose, making it easy to discover what functionality is available without repeated API calls.
+
+**Enable Capabilities Caching**
+
+.. code-block:: python
+
+   app = ActingWebApp(
+       aw_type="urn:actingweb:example.com:myapp",
+       fqdn="myapp.example.com"
+   ).with_peer_capabilities(enable=True)
+
+When enabled, capabilities are:
+
+- Automatically fetched when trust is fully approved (both sides)
+- Refreshed during ``sync_peer()`` operations
+- Cleaned up when trust is deleted
+
+**Accessing Cached Capabilities**
+
+.. code-block:: python
+
+   # Get all cached capabilities
+   capabilities = actor.trust.get_peer_capabilities(peer_id)
+   if capabilities:
+       # List available methods and actions
+       print(f"Methods: {capabilities.get_method_names()}")
+       print(f"Actions: {capabilities.get_action_names()}")
+
+       # Get specific method details
+       method = capabilities.get_method("get_data")
+       if method:
+           print(f"{method.name}: {method.description}")
+           if method.input_schema:
+               print(f"Expects: {method.input_schema}")
+
+   # Convenience methods for just methods or actions
+   methods = actor.trust.get_peer_methods(peer_id)
+   actions = actor.trust.get_peer_actions(peer_id)
+
+   # Check for fetch errors
+   if capabilities and capabilities.fetch_error:
+       print(f"Warning: {capabilities.fetch_error}")
+
+**Manual Capabilities Refresh**
+
+.. code-block:: python
+
+   # Sync version
+   capabilities = actor.trust.refresh_peer_capabilities(peer_id)
+
+   # Async version (for FastAPI)
+   capabilities = await actor.trust.refresh_peer_capabilities_async(peer_id)
+
+**Use Case: Method Discovery**
+
+Peer capabilities caching is especially useful for MCP (Model Context Protocol) integration, where you need to discover what tools/methods a peer exposes:
+
+.. code-block:: python
+
+   # Check if peer supports a specific method before calling
+   capabilities = actor.trust.get_peer_capabilities(peer_id)
+   if capabilities:
+       if capabilities.get_method("summarize"):
+           # Safe to call the summarize method
+           result = actor.trust.call_peer_method(peer_id, "summarize", data)
+       else:
+           # Use fallback behavior
+           result = default_summarize(data)
+
+See :doc:`../quickstart/configuration` for detailed configuration options.

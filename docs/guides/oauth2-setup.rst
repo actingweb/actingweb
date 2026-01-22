@@ -435,7 +435,7 @@ This will provide detailed information about:
 Related Documentation
 =====================
 
-- :doc:`authentication-system` - Core OAuth2 authentication
-- :doc:`unified-access-control` - Trust and permission system  
+- :doc:`authentication` - Core OAuth2 authentication
+- :doc:`access-control` - Trust and permission system
 - :doc:`mcp-applications` - MCP server implementation
-- :doc:`developers` - General development guide
+- :doc:`../sdk/developer-api` - General development guide

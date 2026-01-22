@@ -101,8 +101,8 @@ Notes
 =====
 
 - Ensure AWS IAM policies allow DynamoDB operations your app requires.
-- For base paths (reverse proxies, API gateways), templates should use ``actor_root`` and ``actor_www``; see :doc:`www-handler-templates`.
-- See :doc:`routing-overview` for generated routes and structure.
+- For base paths (reverse proxies, API gateways), templates should use ``actor_root`` and ``actor_www``; see :doc:`../guides/web-ui`.
+- See :doc:`../reference/routing-overview` for generated routes and structure.
 
 Health Checks
 =============

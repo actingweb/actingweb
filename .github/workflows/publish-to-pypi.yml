@@ -15,11 +15,32 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      is_prerelease: ${{ steps.check_prerelease.outputs.is_prerelease }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0  # Fetch all history for branch verification
+
+      - name: Verify tag is on master branch
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "Checking if tag $TAG exists on master branch..."
+
+          # Get the commit SHA for the tag
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || git rev-list -n 1 "refs/tags/$TAG")
+          echo "Tag commit: $TAG_COMMIT"
+
+          # Check if this commit is reachable from master
+          if git merge-base --is-ancestor "$TAG_COMMIT" origin/master; then
+            echo "✓ Tag $TAG is on master branch"
+          else
+            echo "ERROR: Tag $TAG is not on master branch!"
+            echo "Tags can only be released from commits that are on the master branch."
+            echo "Please ensure your changes are merged to master before tagging."
+            exit 1
+          fi
 
       - name: Get version from tag
         id: get_version
@@ -28,6 +49,29 @@ jobs:
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Parsed version: $VERSION"
+
+      - name: Check if pre-release version
+        id: check_prerelease
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          # Check for pre-release patterns: aN (alpha), bN (beta), rcN (release candidate), .devN (dev)
+          # Examples: 3.10.0a1, 3.10.0b2, 3.10.0rc1, 3.10.0.dev1
+          if [[ "$VERSION" =~ (a|b|rc)[0-9]+$ ]] || [[ "$VERSION" =~ \.dev[0-9]+$ ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "Pre-release version detected: $VERSION"
+            if [[ "$VERSION" =~ a[0-9]+$ ]]; then
+              echo "  Type: Alpha"
+            elif [[ "$VERSION" =~ b[0-9]+$ ]]; then
+              echo "  Type: Beta"
+            elif [[ "$VERSION" =~ rc[0-9]+$ ]]; then
+              echo "  Type: Release Candidate"
+            elif [[ "$VERSION" =~ \.dev[0-9]+$ ]]; then
+              echo "  Type: Development"
+            fi
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "Stable release version: $VERSION"
+          fi
 
       - name: Validate version matches code
         run: |
@@ -51,8 +95,59 @@ jobs:
 
           echo "Version validated: $VERSION"
 
-  publish:
+  publish-testpypi:
     needs: validate
+    if: needs.validate.outputs.is_prerelease == 'true'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.7.0
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Build package
+        run: poetry build
+
+      - name: Configure TestPyPI repository
+        run: |
+          poetry config repositories.testpypi https://test.pypi.org/legacy/
+
+      - name: Publish to TestPyPI
+        env:
+          POETRY_TESTPYPI_TOKEN: ${{ secrets.POETRY_TESTPYPI_TOKEN }}
+        run: |
+          echo "Publishing pre-release version ${{ needs.validate.outputs.version }} to TestPyPI"
+          poetry publish --no-interaction --repository testpypi --username __token__ --password $POETRY_TESTPYPI_TOKEN
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+  publish-pypi:
+    needs: validate
+    if: needs.validate.outputs.is_prerelease == 'false'
     runs-on: ubuntu-latest
 
     permissions:
@@ -86,7 +181,9 @@ jobs:
       - name: Publish to PyPI
         env:
           POETRY_PYPI_TOKEN_PYPI: ${{ secrets.POETRY_PYPI_TOKEN_PYPI }}
-        run: poetry publish --no-interaction --username __token__ --password $POETRY_PYPI_TOKEN_PYPI
+        run: |
+          echo "Publishing stable version ${{ needs.validate.outputs.version }} to PyPI"
+          poetry publish --no-interaction --username __token__ --password $POETRY_PYPI_TOKEN_PYPI
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -95,7 +192,9 @@ jobs:
           path: dist/
 
   github-release:
-    needs: [validate, publish]
+    needs: [validate, publish-pypi, publish-testpypi]
+    # Run if either publish job succeeded (one will be skipped based on is_prerelease)
+    if: always() && (needs.publish-pypi.result == 'success' || needs.publish-testpypi.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -109,18 +208,53 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
-          echo "Extracting changelog for version: $VERSION"
-          # Extract the section for this version from CHANGELOG.rst
-          # Match from "vX.Y.Z:" until the next version header, "Unreleased", or end of file
-          # Handles: multi-digit versions, last entry in file, pre-release versions
-          awk "/^v${VERSION}:/,/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/{if(/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/ && !/^v${VERSION}:/)exit; print}" CHANGELOG.rst > release_notes.txt
+          IS_PRERELEASE="${{ needs.validate.outputs.is_prerelease }}"
+          echo "Extracting changelog for version: $VERSION (prerelease: $IS_PRERELEASE)"
+
+          # For pre-releases, check for specific version entry or use Unreleased section
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            # Try to extract specific pre-release entry first
+            awk "/^v${VERSION}:/,/^(v[0-9]+\.[0-9]+\.[0-9]+|Unreleased)/{if(/^(v[0-9]+\.[0-9]+\.[0-9]+|Unreleased)/ && !/^v${VERSION}:/)exit; print}" CHANGELOG.rst > release_notes.txt
+
+            # If no specific entry, use Unreleased section
+            if [ ! -s release_notes.txt ]; then
+              echo "No specific changelog entry for pre-release $VERSION, using Unreleased section"
+              awk '/^Unreleased/,/^v[0-9]+\.[0-9]+\.[0-9]+/{if(/^v[0-9]+\.[0-9]+\.[0-9]+/)exit; print}' CHANGELOG.rst > release_notes.txt
+            fi
+          else
+            # Extract the section for this stable version from CHANGELOG.rst
+            # Match from "vX.Y.Z:" until the next version header, "Unreleased", or end of file
+            awk "/^v${VERSION}:/,/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/{if(/^(v[0-9]+\.[0-9]+\.[0-9]+:|Unreleased)/ && !/^v${VERSION}:/)exit; print}" CHANGELOG.rst > release_notes.txt
+          fi
 
           # Validate extraction succeeded
           if [ ! -s release_notes.txt ]; then
             echo "WARNING: Could not extract changelog for version $VERSION"
             echo "v${VERSION}" > release_notes.txt
             echo "" >> release_notes.txt
-            echo "See CHANGELOG.rst for details." >> release_notes.txt
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              echo "This is a pre-release version for testing purposes." >> release_notes.txt
+              echo "" >> release_notes.txt
+              echo "Install from TestPyPI:" >> release_notes.txt
+              echo "\`\`\`" >> release_notes.txt
+              echo "pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ actingweb==$VERSION" >> release_notes.txt
+              echo "\`\`\`" >> release_notes.txt
+            else
+              echo "See CHANGELOG.rst for details." >> release_notes.txt
+            fi
+          fi
+
+          # Add TestPyPI install instructions for pre-releases
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "" >> release_notes.txt
+            echo "---" >> release_notes.txt
+            echo "" >> release_notes.txt
+            echo "**This is a pre-release version published to TestPyPI.**" >> release_notes.txt
+            echo "" >> release_notes.txt
+            echo "Install with:" >> release_notes.txt
+            echo "\`\`\`bash" >> release_notes.txt
+            echo "pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ actingweb==$VERSION" >> release_notes.txt
+            echo "\`\`\`" >> release_notes.txt
           fi
 
           echo "--- Release notes ---"
@@ -134,4 +268,4 @@ jobs:
           name: Release ${{ needs.validate.outputs.version }}
           body_path: release_notes.txt
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}

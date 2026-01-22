@@ -2,7 +2,7 @@
 CHANGELOG
 =========
 
-Unreleased
+v3.10.0a3: Jan 22, 2026
 ----------
 
 ADDED

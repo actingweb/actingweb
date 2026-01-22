@@ -164,3 +164,54 @@ CI/CD Testing
 - Tests run with 4 workers on public repos, 2 workers on private repos
 - Coverage reporting works seamlessly with parallel execution
 - Same test suite runs locally (``make test-parallel``) and in CI
+
+Release Process
+===============
+
+Releases are decoupled from PRs. PRs merge to master without version bumps; releases are triggered by git tags.
+
+**For contributors:** Add CHANGELOG.rst entries to the "Unreleased" section. No version bumps needed in PRs.
+
+**For maintainers (stable release):**
+
+1. Update version in ``pyproject.toml`` and ``actingweb/__init__.py``
+2. Rename "Unreleased" to ``vX.Y.Z: Date`` in ``CHANGELOG.rst``
+3. Add new empty "Unreleased" section at top
+4. Commit: ``git commit -am "Release vX.Y.Z"``
+5. Tag: ``git tag vX.Y.Z``
+6. Push: ``git push && git push --tags``
+
+GitHub Actions validates the tag is on master, runs tests, publishes to PyPI, and creates a GitHub Release.
+
+Pre-Release Versions
+--------------------
+
+Pre-release versions are automatically published to **TestPyPI** (not production PyPI).
+
+**Supported patterns:**
+
+- Alpha: ``X.Y.ZaN`` (e.g., ``3.10.0a1``)
+- Beta: ``X.Y.ZbN`` (e.g., ``3.10.0b1``)
+- Release Candidate: ``X.Y.ZrcN`` (e.g., ``3.10.0rc1``)
+- Development: ``X.Y.Z.devN`` (e.g., ``3.10.0.dev1``)
+
+**To create a pre-release:**
+
+1. Update version to pre-release version (e.g., ``3.10.0a1``)
+2. Commit and tag: ``git tag v3.10.0a1``
+3. Push: ``git push && git push --tags``
+
+**Installing pre-releases from TestPyPI:**
+
+.. code-block:: bash
+
+    pip install --index-url https://test.pypi.org/simple/ \
+        --extra-index-url https://pypi.org/simple/ \
+        actingweb==3.10.0a1
+
+**Branch restriction:** Tags can only be released from commits on the master branch. Tags on feature branches will fail the release workflow.
+
+**Required repository secrets:**
+
+- ``POETRY_PYPI_TOKEN_PYPI`` - Production PyPI API token (stable releases)
+- ``POETRY_TESTPYPI_TOKEN`` - TestPyPI API token (pre-releases)

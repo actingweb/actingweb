@@ -47,7 +47,7 @@ Releases are decoupled from PRs. PRs merge to master without version bumps; rele
 3. Create PR, merge when approved
 4. No version bump needed
 
-**For maintainers (releasing):**
+**For maintainers (stable release):**
 1. Update version in `pyproject.toml` and `actingweb/__init__.py`
 2. Rename "Unreleased" to `vX.Y.Z: Date` in `CHANGELOG.rst`
 3. Add new empty "Unreleased" section at top
@@ -56,9 +56,36 @@ Releases are decoupled from PRs. PRs merge to master without version bumps; rele
 6. Push: `git push && git push --tags`
 7. GitHub Actions validates version, runs tests, publishes to PyPI, creates GitHub Release
 
+**For maintainers (pre-release):**
+1. Update version in `pyproject.toml` and `actingweb/__init__.py` to pre-release version
+2. Commit: `git commit -am "Pre-release vX.Y.ZaN"` (or bN, rcN, .devN)
+3. Tag: `git tag vX.Y.ZaN`
+4. Push: `git push && git push --tags`
+5. GitHub Actions publishes to **TestPyPI** (not production PyPI)
+6. Creates GitHub Release marked as pre-release
+
+**Pre-release version patterns** (published to TestPyPI):
+- Alpha: `X.Y.ZaN` (e.g., `3.10.0a1`, `3.10.0a2`)
+- Beta: `X.Y.ZbN` (e.g., `3.10.0b1`, `3.10.0b2`)
+- Release Candidate: `X.Y.ZrcN` (e.g., `3.10.0rc1`, `3.10.0rc2`)
+- Development: `X.Y.Z.devN` (e.g., `3.10.0.dev1`)
+
+**Installing pre-releases from TestPyPI:**
+```bash
+pip install --index-url https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    actingweb==X.Y.ZaN
+```
+
 **Version files** (must match tag):
-- `pyproject.toml` - `version = "X.Y.Z"`
-- `actingweb/__init__.py` - `__version__ = "X.Y.Z"`
+- `pyproject.toml` - `version = "X.Y.Z"` or `version = "X.Y.ZaN"`
+- `actingweb/__init__.py` - `__version__ = "X.Y.Z"` or `__version__ = "X.Y.ZaN"`
+
+**Required repository secrets:**
+- `POETRY_PYPI_TOKEN_PYPI` - Production PyPI API token
+- `POETRY_TESTPYPI_TOKEN` - TestPyPI API token
+
+**Branch restriction:** Tags can only be released from commits on the master branch.
 
 ## Documentation
 

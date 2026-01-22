@@ -5,9 +5,24 @@ Tests verify:
 1. TTL timestamps are correctly set on attribute storage
 2. cleanup_expired_tokens() method works with actual data
 3. Orphaned index entries are cleaned up correctly
+
+Note: These tests are DynamoDB-specific as they test TTL timestamp features
+that are only available in the DynamoDB backend.
 """
 
+import os
 import time
+
+import pytest
+
+# Get database backend from environment (set by conftest.py)
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
+
+# Skip all tests in this module if not using DynamoDB
+pytestmark = pytest.mark.skipif(
+    DATABASE_BACKEND != "dynamodb",
+    reason="TTL tests are DynamoDB-specific",
+)
 
 
 class TestTTLAttributePersistence:

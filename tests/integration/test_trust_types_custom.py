@@ -22,23 +22,36 @@ import pytest
 from actingweb.interface.app import ActingWebApp
 from actingweb.trust_type_registry import get_registry
 
+# Get database backend from environment (set by conftest.py)
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
+
 # Use same DynamoDB host as conftest
 TEST_DYNAMODB_HOST = os.environ.get("AWS_DB_HOST", "http://localhost:8001")
 
 
 @pytest.fixture
-def aw_app(docker_services, worker_info):  # pylint: disable=unused-argument
+def aw_app(docker_services, setup_database, worker_info):  # noqa: ARG001
     """Create ActingWeb app for testing trust types.
 
-    Depends on docker_services to ensure DynamoDB is running.
-    Sets up AWS environment variables for database access.
+    Depends on docker_services to ensure database is running.
+    Sets up environment variables for database access.
     Resets the trust type registry singleton to ensure clean state.
     """
-    # Set environment for DynamoDB with worker-specific prefix
-    os.environ["AWS_ACCESS_KEY_ID"] = "test"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-    os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
-    os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
+    # Set up environment for PostgreSQL schema isolation
+    if DATABASE_BACKEND == "postgresql":
+        os.environ["PG_DB_HOST"] = os.environ.get("PG_DB_HOST", "localhost")
+        os.environ["PG_DB_PORT"] = os.environ.get("PG_DB_PORT", "5433")
+        os.environ["PG_DB_NAME"] = os.environ.get("PG_DB_NAME", "actingweb_test")
+        os.environ["PG_DB_USER"] = os.environ.get("PG_DB_USER", "actingweb")
+        os.environ["PG_DB_PASSWORD"] = os.environ.get("PG_DB_PASSWORD", "testpassword")
+        os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        os.environ["PG_DB_SCHEMA"] = "public"
+    else:
+        # Set environment for DynamoDB with worker-specific prefix
+        os.environ["AWS_ACCESS_KEY_ID"] = "test"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
+        os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
+        os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
 
     # Reset the trust type registry singleton to ensure fresh state
     import actingweb.trust_type_registry as registry_module
@@ -47,7 +60,7 @@ def aw_app(docker_services, worker_info):  # pylint: disable=unused-argument
 
     return ActingWebApp(
         aw_type="urn:actingweb:test:trust_types",
-        database="dynamodb",
+        database=DATABASE_BACKEND,
         fqdn="test.example.com",
         proto="http://",
     )

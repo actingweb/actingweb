@@ -17,18 +17,33 @@ References:
 - actingweb_mcp uses these patterns extensively for memory storage
 """
 
+import os
+
 import pytest
 
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
 
+# Get database backend from environment (set by conftest.py)
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
+
 
 @pytest.fixture
-def aw_app():
+def aw_app(docker_services, setup_database, worker_info):  # noqa: ARG001
     """Create ActingWeb app for testing."""
+    # Set up environment for PostgreSQL schema isolation
+    if DATABASE_BACKEND == "postgresql":
+        os.environ["PG_DB_HOST"] = os.environ.get("PG_DB_HOST", "localhost")
+        os.environ["PG_DB_PORT"] = os.environ.get("PG_DB_PORT", "5433")
+        os.environ["PG_DB_NAME"] = os.environ.get("PG_DB_NAME", "actingweb_test")
+        os.environ["PG_DB_USER"] = os.environ.get("PG_DB_USER", "actingweb")
+        os.environ["PG_DB_PASSWORD"] = os.environ.get("PG_DB_PASSWORD", "testpassword")
+        os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        os.environ["PG_DB_SCHEMA"] = "public"
+
     return ActingWebApp(
         aw_type="urn:actingweb:test:property_lists",
-        database="dynamodb",
+        database=DATABASE_BACKEND,
         fqdn="test.example.com",
         proto="http://",
     )

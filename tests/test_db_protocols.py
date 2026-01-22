@@ -10,6 +10,7 @@ NOTE: These tests require the database backend to be available:
 """
 
 import importlib
+import os
 
 import pytest
 
@@ -34,9 +35,12 @@ from actingweb.db.protocols import (
 # AWS_DB_PREFIX="protocol_test", but it was unused by any tests.
 # All tests rely on the global conftest.py environment setup instead.
 
+# Get the configured database backend - only test the active backend
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 
-# Actor and Property implemented for both backends
-@pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])
+
+# Actor and Property protocols
+@pytest.mark.parametrize("backend", [DATABASE_BACKEND])
 class TestPhase2ProtocolCompliance:
     """Test Actor and Property protocols for both backends."""
 
@@ -66,7 +70,7 @@ class TestPhase2ProtocolCompliance:
 
 
 # Trust tables implemented for both backends
-@pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])
+@pytest.mark.parametrize("backend", [DATABASE_BACKEND])
 class TestPhase3ProtocolCompliance:
     """Test Trust and PeerTrustee protocols for both backends."""
 
@@ -96,7 +100,7 @@ class TestPhase3ProtocolCompliance:
 
 
 # Subscriptions and Attributes implemented for both backends
-@pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])
+@pytest.mark.parametrize("backend", [DATABASE_BACKEND])
 class TestPhase4ProtocolCompliance:
     """Test Subscription and Attribute protocols for both backends."""
 

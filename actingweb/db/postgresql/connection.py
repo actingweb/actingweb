@@ -88,6 +88,27 @@ def get_schema_name() -> str:
         return base_schema
 
 
+def _configure_connection(conn: Any) -> None:
+    """
+    Configure a connection after checkout from the pool.
+
+    Sets the search_path to the worker-specific schema for test isolation.
+    This ensures all queries use the correct schema without requiring
+    explicit schema prefixes in SQL statements.
+
+    Args:
+        conn: The connection to configure
+    """
+    schema = get_schema_name()
+    if schema and schema != "public":
+        with conn.cursor() as cur:
+            # Validate schema name before using in query
+            if not schema.replace("_", "").replace("-", "").isalnum():
+                raise ValueError(f"Invalid schema name: {schema}")
+            cur.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+        logger.debug(f"Set search_path to {schema}")
+
+
 def get_pool() -> ConnectionPool:
     """
     Get or create the global connection pool (thread-safe singleton).
@@ -116,9 +137,10 @@ def get_pool() -> ConnectionPool:
                 min_size = int(os.getenv("PG_POOL_MIN_SIZE", "2"))
                 max_size = int(os.getenv("PG_POOL_MAX_SIZE", "10"))
                 timeout = float(os.getenv("PG_POOL_TIMEOUT", "30.0"))
+                schema = get_schema_name()
 
                 logger.info(
-                    f"Creating PostgreSQL connection pool (min={min_size}, max={max_size})"
+                    f"Creating PostgreSQL connection pool (min={min_size}, max={max_size}, schema={schema})"
                 )
 
                 _pool = ConnectionPool(
@@ -128,6 +150,8 @@ def get_pool() -> ConnectionPool:
                     timeout=timeout,
                     # Configure pool to check connections on checkout
                     check=ConnectionPool.check_connection,
+                    # Configure each connection after checkout to set search_path
+                    configure=_configure_connection,
                 )
 
                 logger.info("PostgreSQL connection pool created successfully")

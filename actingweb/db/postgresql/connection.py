@@ -96,6 +96,10 @@ def _configure_connection(conn: Any) -> None:
     This ensures all queries use the correct schema without requiring
     explicit schema prefixes in SQL statements.
 
+    Note: We must commit after SET search_path to leave the connection in a
+    clean state. Otherwise psycopg3 leaves it in INTRANS (in transaction) state,
+    which causes the pool to discard the connection.
+
     Args:
         conn: The connection to configure
     """
@@ -106,6 +110,7 @@ def _configure_connection(conn: Any) -> None:
             if not schema.replace("_", "").replace("-", "").isalnum():
                 raise ValueError(f"Invalid schema name: {schema}")
             cur.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+        conn.commit()  # Must commit to leave connection in clean state for pool
         logger.debug(f"Set search_path to {schema}")
 
 

@@ -561,3 +561,82 @@ async def fetch_peer_permissions_async(
         permissions.fetch_error = f"Exception: {str(e)}"
         logger.error(f"Exception fetching peer permissions async from {peer_id}: {e}")
         return permissions
+
+
+def detect_revoked_property_patterns(
+    old_permissions: PeerPermissions | None,
+    new_permissions: PeerPermissions,
+) -> list[str]:
+    """
+    Detect property patterns that were revoked between old and new permissions.
+
+    A pattern is considered revoked if it was in the old permissions but is
+    not in the new permissions.
+
+    Args:
+        old_permissions: Previous cached permissions (None if first callback)
+        new_permissions: New permissions from callback
+
+    Returns:
+        List of property patterns that were revoked (empty if none)
+    """
+    if old_permissions is None:
+        # No previous permissions, nothing was revoked
+        return []
+
+    old_props = old_permissions.properties or {}
+    new_props = new_permissions.properties or {}
+
+    old_patterns = set(old_props.get("patterns", []))
+    new_patterns = set(new_props.get("patterns", []))
+
+    # Patterns that were in old but not in new are revoked
+    revoked = old_patterns - new_patterns
+
+    return list(revoked)
+
+
+def detect_permission_changes(
+    old_permissions: PeerPermissions | None,
+    new_permissions: PeerPermissions,
+) -> dict[str, Any]:
+    """
+    Detect all permission changes between old and new permissions.
+
+    Provides detailed information about what changed for lifecycle hooks.
+
+    Args:
+        old_permissions: Previous cached permissions (None if first callback)
+        new_permissions: New permissions from callback
+
+    Returns:
+        Dict with change details:
+        - is_initial: True if this is the first permission callback
+        - revoked_patterns: List of property patterns that were revoked
+        - granted_patterns: List of property patterns that were newly granted
+        - has_revocations: True if any access was revoked
+    """
+    result: dict[str, Any] = {
+        "is_initial": old_permissions is None,
+        "revoked_patterns": [],
+        "granted_patterns": [],
+        "has_revocations": False,
+    }
+
+    if old_permissions is None:
+        # First callback - everything is newly granted
+        new_props = new_permissions.properties or {}
+        result["granted_patterns"] = list(new_props.get("patterns", []))
+        return result
+
+    old_props = old_permissions.properties or {}
+    new_props = new_permissions.properties or {}
+
+    old_patterns = set(old_props.get("patterns", []))
+    new_patterns = set(new_props.get("patterns", []))
+
+    result["revoked_patterns"] = list(old_patterns - new_patterns)
+    result["granted_patterns"] = list(new_patterns - old_patterns)
+    result["has_revocations"] = len(result["revoked_patterns"]) > 0
+
+    return result

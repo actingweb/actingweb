@@ -78,6 +78,9 @@ class Config:
         # Stores what permissions PEERS have granted US access to
         # Fetches from GET /permissions/{actor_id} endpoint
         self.peer_permissions_caching: bool = False
+        # When True, automatically delete cached peer data when permissions are revoked
+        # Only applies when peer_permissions_caching is enabled
+        self.auto_delete_on_revocation: bool = False
         #########
         # Configurable ActingWeb settings for this app
         #########

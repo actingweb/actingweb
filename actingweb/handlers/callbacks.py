@@ -1,8 +1,12 @@
 import json
 import logging
+from typing import TYPE_CHECKING
 
 from actingweb import auth
 from actingweb.handlers import base_handler
+
+if TYPE_CHECKING:
+    from actingweb.interface.actor_interface import ActorInterface
 
 logger = logging.getLogger(__name__)
 
@@ -157,11 +161,13 @@ class CallbacksHandler(base_handler.BaseHandler):
                 return
 
             # Store permissions in PeerPermissionStore
+            permission_changes: dict = {}
             try:
                 from datetime import UTC, datetime
 
                 from actingweb.peer_permissions import (
                     PeerPermissions,
+                    detect_permission_changes,
                     get_peer_permission_store,
                 )
 
@@ -181,12 +187,33 @@ class CallbacksHandler(base_handler.BaseHandler):
                 )
 
                 store = get_peer_permission_store(myself.config)
+
+                # Get old permissions before storing new ones (for comparison)
+                old_permissions = store.get_permissions(actor_id, granting_actor_id)
+
+                # Detect what changed
+                permission_changes = detect_permission_changes(
+                    old_permissions, peer_perms
+                )
+
+                # Store new permissions
                 store.store_permissions(peer_perms)
 
                 logger.debug(
                     f"Stored permission callback from {granting_actor_id} "
                     f"for actor {actor_id}"
                 )
+
+                # Auto-delete cached peer data if configured and access was revoked
+                if (
+                    permission_changes.get("has_revocations")
+                    and getattr(myself.config, "auto_delete_on_revocation", False)
+                ):
+                    self._delete_revoked_peer_data(
+                        actor_interface,
+                        granting_actor_id,
+                        permission_changes.get("revoked_patterns", []),
+                    )
 
             except Exception as e:
                 logger.error(f"Error storing permission callback: {e}")
@@ -198,6 +225,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 hook_data = params.copy()
                 hook_data["granting_actor_id"] = granting_actor_id
                 hook_data["method"] = "POST"
+                hook_data["permission_changes"] = permission_changes
                 self.hooks.execute_callback_hooks(
                     "permissions", actor_interface, hook_data
                 )
@@ -300,3 +328,61 @@ class CallbacksHandler(base_handler.BaseHandler):
                 self.response.write(json.dumps(hook_result))
         else:
             self.response.set_status(403, "Forbidden")
+
+    def _delete_revoked_peer_data(
+        self,
+        actor_interface: "ActorInterface",
+        peer_id: str,
+        revoked_patterns: list[str],
+    ) -> None:
+        """Delete cached peer data for revoked property patterns.
+
+        When a peer revokes access to certain properties (e.g., memory_*),
+        this method deletes the locally cached data that was synced via
+        subscriptions.
+
+        Args:
+            actor_interface: The actor interface for storage access
+            peer_id: The peer who revoked access
+            revoked_patterns: List of property patterns that were revoked
+        """
+        import fnmatch
+
+        from actingweb.remote_storage import RemotePeerStore
+
+        if not revoked_patterns:
+            return
+
+        try:
+            store = RemotePeerStore(actor_interface, peer_id)
+
+            # Get all stored lists for this peer
+            all_lists = store.list_all_lists()
+
+            deleted_count = 0
+            for list_name in all_lists:
+                # Check if this list matches any revoked pattern
+                for pattern in revoked_patterns:
+                    if fnmatch.fnmatch(list_name, pattern):
+                        try:
+                            store.delete_list(list_name)
+                            deleted_count += 1
+                            logger.info(
+                                f"Deleted revoked peer data: {list_name} "
+                                f"from peer {peer_id}"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to delete revoked data {list_name} "
+                                f"from peer {peer_id}: {e}"
+                            )
+                        break  # Don't double-delete if multiple patterns match
+
+            if deleted_count > 0:
+                logger.info(
+                    f"Deleted {deleted_count} cached items from peer {peer_id} "
+                    f"due to permission revocation"
+                )
+
+        except Exception as e:
+            logger.error(f"Error during revoked peer data deletion: {e}")

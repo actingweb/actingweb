@@ -147,6 +147,9 @@ class ActingWebApp:
         # Peer permissions caching configuration
         if hasattr(self, "_peer_permissions_caching"):
             self._config.peer_permissions_caching = self._peer_permissions_caching
+        # Auto-delete on revocation configuration
+        if hasattr(self, "_auto_delete_on_revocation"):
+            self._config.auto_delete_on_revocation = self._auto_delete_on_revocation
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -495,7 +498,11 @@ class ActingWebApp:
                     f"Failed to clean up peer capabilities for {peer_id}: {e}"
                 )
 
-    def with_peer_permissions(self, enable: bool = True) -> "ActingWebApp":
+    def with_peer_permissions(
+        self,
+        enable: bool = True,
+        auto_delete_on_revocation: bool = False,
+    ) -> "ActingWebApp":
         """Enable peer permissions caching for trust relationships.
 
         When enabled, peer permissions are automatically fetched and cached
@@ -510,6 +517,11 @@ class ActingWebApp:
 
         Args:
             enable: Whether to enable permissions caching. Default True.
+            auto_delete_on_revocation: When True, automatically delete cached
+                peer data from RemotePeerStore when the peer revokes property
+                access. This ensures that when a peer revokes access to certain
+                data (e.g., memory_* properties), the locally cached copies are
+                deleted. Default False.
 
         Returns:
             Self for method chaining.
@@ -518,7 +530,10 @@ class ActingWebApp:
 
             app = (
                 ActingWebApp(...)
-                .with_peer_permissions(enable=True)
+                .with_peer_permissions(
+                    enable=True,
+                    auto_delete_on_revocation=True  # Delete cached data on revocation
+                )
             )
 
             # Access cached permissions via PeerPermissionStore
@@ -530,6 +545,7 @@ class ActingWebApp:
                     print("Peer granted us access to memory_travel")
         """
         self._peer_permissions_caching = enable
+        self._auto_delete_on_revocation = auto_delete_on_revocation
         self._apply_runtime_changes_to_config()
 
         # Register lifecycle hooks when permissions caching is enabled

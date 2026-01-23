@@ -682,3 +682,323 @@ class TestBucketNamingConvention:
         from actingweb.constants import OAUTH_SESSION_BUCKET
 
         assert OAUTH_SESSION_BUCKET.startswith("_")
+
+
+class TestDetectRevokedPropertyPatterns:
+    """Test detect_revoked_property_patterns() function."""
+
+    def test_no_old_permissions_returns_empty(self):
+        """Test that None old_permissions returns empty list."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_revoked_property_patterns,
+        )
+
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],
+                "operations": ["read"],
+            },
+        )
+
+        revoked = detect_revoked_property_patterns(None, new_perms)
+        assert revoked == []
+
+    def test_no_revocations_returns_empty(self):
+        """Test that same patterns returns empty list."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_revoked_property_patterns,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],
+                "operations": ["read"],
+            },
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],
+                "operations": ["read"],
+            },
+        )
+
+        revoked = detect_revoked_property_patterns(old_perms, new_perms)
+        assert revoked == []
+
+    def test_detects_single_revoked_pattern(self):
+        """Test that a single revoked pattern is detected."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_revoked_property_patterns,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*", "profile_*"],
+                "operations": ["read"],
+            },
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],  # profile_* was revoked
+                "operations": ["read"],
+            },
+        )
+
+        revoked = detect_revoked_property_patterns(old_perms, new_perms)
+        assert revoked == ["profile_*"]
+
+    def test_detects_multiple_revoked_patterns(self):
+        """Test that multiple revoked patterns are detected."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_revoked_property_patterns,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*", "profile_*", "settings_*"],
+                "operations": ["read"],
+            },
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],  # profile_* and settings_* were revoked
+                "operations": ["read"],
+            },
+        )
+
+        revoked = detect_revoked_property_patterns(old_perms, new_perms)
+        assert set(revoked) == {"profile_*", "settings_*"}
+
+    def test_all_patterns_revoked(self):
+        """Test when all patterns are revoked (new has empty patterns)."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_revoked_property_patterns,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*", "profile_*"],
+                "operations": ["read"],
+            },
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": [],  # All revoked
+                "operations": ["read"],
+            },
+        )
+
+        revoked = detect_revoked_property_patterns(old_perms, new_perms)
+        assert set(revoked) == {"memory_*", "profile_*"}
+
+    def test_old_no_properties_returns_empty(self):
+        """Test when old has no properties."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_revoked_property_patterns,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties=None,
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],
+                "operations": ["read"],
+            },
+        )
+
+        revoked = detect_revoked_property_patterns(old_perms, new_perms)
+        assert revoked == []
+
+
+class TestDetectPermissionChanges:
+    """Test detect_permission_changes() function."""
+
+    def test_initial_callback_marks_is_initial(self):
+        """Test that first callback is marked as initial."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_permission_changes,
+        )
+
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],
+                "operations": ["read"],
+            },
+        )
+
+        changes = detect_permission_changes(None, new_perms)
+
+        assert changes["is_initial"] is True
+        assert changes["has_revocations"] is False
+        assert changes["granted_patterns"] == ["memory_*"]
+        assert changes["revoked_patterns"] == []
+
+    def test_detects_revocations(self):
+        """Test that revocations are detected."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_permission_changes,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*", "profile_*"],
+                "operations": ["read"],
+            },
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],
+                "operations": ["read"],
+            },
+        )
+
+        changes = detect_permission_changes(old_perms, new_perms)
+
+        assert changes["is_initial"] is False
+        assert changes["has_revocations"] is True
+        assert changes["revoked_patterns"] == ["profile_*"]
+        assert changes["granted_patterns"] == []
+
+    def test_detects_new_grants(self):
+        """Test that newly granted patterns are detected."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_permission_changes,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*"],
+                "operations": ["read"],
+            },
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*", "profile_*"],
+                "operations": ["read"],
+            },
+        )
+
+        changes = detect_permission_changes(old_perms, new_perms)
+
+        assert changes["is_initial"] is False
+        assert changes["has_revocations"] is False
+        assert changes["revoked_patterns"] == []
+        assert changes["granted_patterns"] == ["profile_*"]
+
+    def test_detects_both_grants_and_revocations(self):
+        """Test that both grants and revocations are detected."""
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            detect_permission_changes,
+        )
+
+        old_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*", "settings_*"],
+                "operations": ["read"],
+            },
+        )
+        new_perms = PeerPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            properties={
+                "patterns": ["memory_*", "profile_*"],  # settings_* revoked, profile_* added
+                "operations": ["read"],
+            },
+        )
+
+        changes = detect_permission_changes(old_perms, new_perms)
+
+        assert changes["is_initial"] is False
+        assert changes["has_revocations"] is True
+        assert changes["revoked_patterns"] == ["settings_*"]
+        assert changes["granted_patterns"] == ["profile_*"]
+
+
+class TestAutoDeleteOnRevocationConfiguration:
+    """Test auto_delete_on_revocation configuration."""
+
+    def test_auto_delete_disabled_by_default(self):
+        """Test that auto_delete_on_revocation is disabled by default."""
+        from actingweb.interface.app import ActingWebApp
+
+        app = ActingWebApp(
+            aw_type="urn:test:example.com:test",
+            fqdn="test.example.com",
+        ).with_peer_permissions()
+
+        assert app._auto_delete_on_revocation is False
+
+    def test_auto_delete_can_be_enabled(self):
+        """Test that auto_delete_on_revocation can be enabled."""
+        from actingweb.interface.app import ActingWebApp
+
+        app = ActingWebApp(
+            aw_type="urn:test:example.com:test",
+            fqdn="test.example.com",
+        ).with_peer_permissions(auto_delete_on_revocation=True)
+
+        assert app._auto_delete_on_revocation is True
+
+    def test_config_propagates_auto_delete(self):
+        """Test that auto_delete_on_revocation is propagated to Config."""
+        from actingweb.interface.app import ActingWebApp
+
+        app = ActingWebApp(
+            aw_type="urn:test:example.com:test",
+            fqdn="test.example.com",
+        ).with_peer_permissions(auto_delete_on_revocation=True)
+
+        config = app.get_config()
+        assert config.auto_delete_on_revocation is True
+
+    def test_config_default_auto_delete_false(self):
+        """Test that Config defaults auto_delete_on_revocation to False."""
+        from actingweb.config import Config
+
+        config = Config()
+        assert config.auto_delete_on_revocation is False

@@ -789,17 +789,25 @@ network requests.
     app = ActingWebApp(
         aw_type="urn:actingweb:example.com:myapp",
         fqdn="myapp.example.com"
-    ).with_peer_permissions(enable=True)
+    ).with_peer_permissions(
+        enable=True,
+        auto_delete_on_revocation=True  # Delete cached data when permissions revoked
+    )
 
 **Parameters:**
 
 - ``enable``: Boolean to enable/disable permissions caching. Default: ``True`` when called.
+- ``auto_delete_on_revocation``: When ``True``, automatically delete cached peer data
+  from ``RemotePeerStore`` when the peer revokes property access. This ensures that
+  when a peer revokes access to certain data (e.g., ``memory_*`` properties), the
+  locally cached copies are deleted. Default: ``False``.
 
 **Default Behavior:**
 
 - Permissions caching is **disabled by default**
 - Must call ``with_peer_permissions()`` to enable
 - Permissions are stored in the ``_peer_permissions`` attribute bucket (note the ``_`` prefix for library-internal buckets)
+- Auto-delete on revocation is **disabled by default**
 
 Automatic Permission Updates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -817,9 +825,51 @@ When enabled, permissions are automatically updated:
    * - ``sync_peer()`` completion
      - Refresh cached permissions
    * - Permission callback received
-     - Update cached permissions
+     - Update cached permissions (with change detection)
+   * - Permission revoked (with ``auto_delete_on_revocation=True``)
+     - Delete cached peer data matching revoked property patterns
    * - Trust deleted
      - Delete cached permissions
+
+Auto-Delete on Permission Revocation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When ``auto_delete_on_revocation=True`` is set and a peer revokes access to certain
+properties, the library automatically deletes the corresponding cached data from
+``RemotePeerStore``. This is useful when you're caching remote peer data via
+subscription callbacks and want to ensure that revoked data is cleaned up.
+
+**How it works:**
+
+1. When a permission callback arrives, the library compares old and new permissions
+2. Property patterns that were in the old permissions but not in the new are identified as "revoked"
+3. All stored lists in ``RemotePeerStore`` matching the revoked patterns are deleted
+4. The ``permission_changes`` dict is passed to the callback hook with details
+
+**Example:** If the old permissions had patterns ``["memory_*", "profile_*"]`` and the
+new permissions only have ``["memory_*"]``, then ``profile_*`` is considered revoked.
+Any cached lists matching ``profile_*`` (like ``profile_info``) will be deleted.
+
+**Callback Hook Data:**
+
+When handling permission callbacks, the hook data includes a ``permission_changes`` dict:
+
+.. code-block:: python
+
+    @app.callback_hook("permissions")
+    def on_permissions_callback(actor, name, data):
+        changes = data.get("permission_changes", {})
+
+        if changes.get("is_initial"):
+            print("First permission callback from this peer")
+
+        if changes.get("has_revocations"):
+            print(f"Revoked patterns: {changes['revoked_patterns']}")
+
+        if changes.get("granted_patterns"):
+            print(f"Newly granted: {changes['granted_patterns']}")
+
+        return True
 
 Accessing Peer Permissions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

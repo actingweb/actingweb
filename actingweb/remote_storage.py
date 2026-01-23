@@ -345,3 +345,56 @@ class RemotePeerStore:
                 results[key] = {"error": str(e)}
 
         return results
+
+    def apply_permission_data(self, permissions: dict[str, Any]) -> dict[str, Any]:
+        """Apply permission update from peer.
+
+        Stores what the REMOTE peer has granted US access to.
+        Uses PeerPermissionStore in _peer_permissions bucket.
+
+        This is typically called when receiving a permission callback from a peer.
+
+        Args:
+            permissions: Permission grant data {
+                "properties": {"patterns": [...], "operations": [...],
+                               "excluded_patterns": [...]},
+                "methods": {"allowed": [...], "denied": [...]},
+                "actions": {"allowed": [...], "denied": [...]},
+                "tools": {"allowed": [...], "denied": [...]},
+                "resources": {"allowed": [...], "denied": [...]},
+                "prompts": {"allowed": [...]}
+            }
+
+        Returns:
+            Result dict with success status
+        """
+        from datetime import UTC, datetime
+
+        from .peer_permissions import PeerPermissions, get_peer_permission_store
+
+        try:
+            actor_id = self._actor.id
+            if actor_id is None:
+                logger.error("Cannot apply permission data: actor has no ID")
+                return {"operation": "permission_update", "success": False, "error": "Actor has no ID"}
+
+            store = get_peer_permission_store(self._actor.config)
+
+            peer_perms = PeerPermissions(
+                actor_id=actor_id,
+                peer_id=self._peer_id,
+                properties=permissions.get("properties"),
+                methods=permissions.get("methods"),
+                actions=permissions.get("actions"),
+                tools=permissions.get("tools"),
+                resources=permissions.get("resources"),
+                prompts=permissions.get("prompts"),
+                fetched_at=datetime.now(UTC).isoformat(),
+            )
+
+            success = store.store_permissions(peer_perms)
+            return {"operation": "permission_update", "success": success}
+
+        except Exception as e:
+            logger.error(f"Error applying permission data from {self._peer_id}: {e}")
+            return {"operation": "permission_update", "success": False, "error": str(e)}

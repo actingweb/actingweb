@@ -326,3 +326,102 @@ Peer capabilities caching is especially useful for MCP (Model Context Protocol) 
            result = default_summarize(data)
 
 See :doc:`../quickstart/configuration` for detailed configuration options.
+
+Peer Permissions Caching
+------------------------
+
+ActingWeb can automatically cache what permissions peer actors have granted to your actor.
+This enables efficient permission checking without network requests.
+
+**Enable Permissions Caching**
+
+.. code-block:: python
+
+   app = ActingWebApp(
+       aw_type="urn:actingweb:example.com:myapp",
+       fqdn="myapp.example.com"
+   ).with_peer_permissions(enable=True)
+
+When enabled, permissions are:
+
+- Fetched when trust relationships are fully approved
+- Updated when permission callbacks are received from peers
+- Refreshed during ``sync_peer()`` operations
+- Deleted when trust relationships are removed
+
+**Accessing Cached Permissions**
+
+.. code-block:: python
+
+   from actingweb.peer_permissions import get_peer_permission_store
+
+   store = get_peer_permission_store(actor.config)
+
+   # Get cached permissions
+   perms = store.get_permissions(actor.id, peer_id)
+   if perms:
+       # Check property access
+       if perms.has_property_access("memory_travel", "read"):
+           data = actor.trust.get_peer_property(peer_id, "memory_travel")
+
+       # Check method access
+       if perms.has_method_access("sync_data"):
+           result = actor.trust.call_peer_method(peer_id, "sync_data", params)
+
+       # Check tool access (MCP)
+       if perms.has_tool_access("search"):
+           # Safe to use the search tool
+           pass
+
+   # Check for fetch errors
+   if perms and perms.fetch_error:
+       print(f"Warning: {perms.fetch_error}")
+
+**Manual Permissions Refresh**
+
+.. code-block:: python
+
+   from actingweb.peer_permissions import fetch_peer_permissions
+
+   # Synchronous refresh
+   perms = fetch_peer_permissions(actor, peer_id)
+
+   # Async refresh (for FastAPI)
+   perms = await fetch_peer_permissions_async(actor, peer_id)
+
+**Permission Callbacks**
+
+When a peer modifies permissions granted to your actor, they can send a permission callback
+to notify you immediately. The callback is sent to::
+
+   POST /{your_actor_id}/callbacks/permissions/{peer_actor_id}
+
+The library automatically handles these callbacks and updates the local cache. Peers supporting
+this feature advertise ``permissioncallback`` in their ``/meta/actingweb/supported`` endpoint.
+
+**Use Cases for MCP**
+
+Peer permissions caching is especially useful for MCP (Model Context Protocol) integration,
+where you need to check if you have access to a peer's tools or resources:
+
+.. code-block:: python
+
+   from actingweb.peer_permissions import get_peer_permission_store
+
+   store = get_peer_permission_store(actor.config)
+   perms = store.get_permissions(actor.id, peer_id)
+
+   if perms:
+       # Check tool access before calling
+       if perms.has_tool_access("search"):
+           result = await actor.trust.call_peer_tool(peer_id, "search", query)
+       else:
+           # Access denied - use alternative approach
+           result = local_search(query)
+
+       # Check resource access
+       if perms.has_resource_access("data://shared/*"):
+           # Can access shared data resources
+           pass
+
+See :doc:`../quickstart/configuration` for detailed configuration options.

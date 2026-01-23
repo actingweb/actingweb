@@ -590,6 +590,158 @@ Common Migration Issues
 2. Slow down publishing rate
 3. Check subscriber processing speed
 
+Breaking Change: Bucket Naming Convention
+=========================================
+
+**All library-internal buckets now use ``_`` prefix** to avoid namespace collisions
+with user-defined buckets.
+
+Why This Change?
+----------------
+
+Application code can create arbitrary buckets via ``Attributes(actor_id=..., bucket="mydata")``.
+Without a reserved prefix, a user's ``bucket="peer_permissions"`` would collide with
+the library's internal bucket of the same name.
+
+Convention:
+
+- ``_`` prefix = library-internal, managed by ActingWeb
+- No prefix = application/user data
+
+Renamed Buckets
+---------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 40
+
+   * - Old Name
+     - New Name
+   * - ``trust_types``
+     - ``_trust_types``
+   * - ``trust_permissions``
+     - ``_trust_permissions``
+   * - ``peer_profiles``
+     - ``_peer_profiles``
+   * - ``peer_capabilities``
+     - ``_peer_capabilities``
+   * - ``auth_code_index``
+     - ``_auth_code_index``
+   * - ``access_token_index``
+     - ``_access_token_index``
+   * - ``refresh_token_index``
+     - ``_refresh_token_index``
+   * - ``client_index``
+     - ``_client_index``
+   * - ``oauth_sessions``
+     - ``_oauth_sessions``
+
+Migration Impact
+----------------
+
+**For most deployments, no action is required.** The affected data is typically transient:
+
+- **OAuth sessions/tokens**: Recreated automatically on next login
+- **Auth indexes**: Rebuilt as tokens are issued
+
+**For deployments with existing trust relationships:**
+
+If you have existing trust types, permissions, peer profiles, or peer capabilities stored,
+you may need to migrate the data. The simplest approach is to re-establish trust
+relationships, which will repopulate the new buckets automatically.
+
+Peer Permissions Caching
+========================
+
+ActingWeb 3.10 adds **peer permissions caching** for trust relationships, following
+the same pattern as peer profiles and peer capabilities.
+
+What It Does
+------------
+
+Peer permissions caching stores what permissions **remote peers have granted us** access to.
+This is distinct from ``TrustPermissions`` which stores what **we grant to peers**.
+
+When enabled:
+
+- Permissions are automatically fetched when trust is approved
+- Permissions are refreshed during ``sync_peer()`` operations
+- Permissions are cleaned up when trust is deleted
+- Permission callbacks from peers are automatically stored
+
+Enabling Peer Permissions
+-------------------------
+
+Add ``.with_peer_permissions()`` to your application configuration:
+
+.. code-block:: python
+
+   from actingweb.interface import ActingWebApp
+
+   app = (
+       ActingWebApp(
+           aw_type="urn:actingweb:example.com:myapp",
+           database="dynamodb",
+           fqdn="myapp.example.com",
+           proto="https://"
+       )
+       .with_peer_permissions(enable=True)  # Enable permission caching
+       .with_peer_capabilities(enable=True)  # Also recommended
+   )
+
+Using Cached Permissions
+------------------------
+
+Access cached permissions via ``PeerPermissionStore``:
+
+.. code-block:: python
+
+   from actingweb.peer_permissions import get_peer_permission_store
+
+   # Get the permission store
+   store = get_peer_permission_store(actor.config)
+
+   # Get cached permissions for a specific peer
+   permissions = store.get_permissions(actor.id, peer_id)
+
+   if permissions:
+       # Check property access
+       if permissions.has_property_access("memory_travel", "read"):
+           print("Peer granted us read access to memory_travel")
+
+       # Check method access
+       if permissions.has_method_access("sync_data"):
+           print("Peer granted us access to sync_data method")
+
+       # Check tool access (MCP)
+       if permissions.has_tool_access("search"):
+           print("Peer granted us access to search tool")
+
+Permission Callback Handling
+----------------------------
+
+When peers notify us of permission changes via callbacks, the library automatically
+stores the updated permissions. You can register a hook for app-specific handling:
+
+.. code-block:: python
+
+   @app.callback_hook("permissions")
+   def on_permission_change(actor, req):
+       """Handle permission update from peer."""
+       granting_actor_id = req.json.get("granting_actor_id")
+       data = req.json.get("data", {})
+
+       # Permissions are already stored by the library
+       # Add your app-specific logic here
+       logger.info(f"Permission update from {granting_actor_id}")
+
+       # Example: trigger sync for newly granted permissions
+       if data.get("properties", {}).get("patterns"):
+           patterns = data["properties"]["patterns"]
+           for pattern in patterns:
+               if pattern.startswith("memory_"):
+                   sync_memory_type(actor, granting_actor_id, pattern)
+
 See Also
 ========
 

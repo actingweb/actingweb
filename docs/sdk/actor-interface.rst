@@ -143,6 +143,54 @@ When peer capabilities caching is enabled (via ``app.with_peer_capabilities()``)
 
 See :doc:`../guides/trust-relationships` for details on enabling and configuring capabilities caching.
 
+Peer Permissions Caching
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+When peer permissions caching is enabled (via ``app.with_peer_permissions()``), you can check what permissions peers have granted to your actor:
+
+.. code-block:: python
+
+   from actingweb.peer_permissions import get_peer_permission_store
+
+   store = get_peer_permission_store(actor.config)
+
+   # Get cached permissions
+   perms = store.get_permissions(actor.id, peer_id)
+   if perms:
+       # Check property access
+       if perms.has_property_access("memory_travel", "read"):
+           # Can read this property from peer
+           pass
+
+       # Check method access
+       if perms.has_method_access("sync_data"):
+           # Can call this method on peer
+           pass
+
+       # Check MCP tool access
+       if perms.has_tool_access("search"):
+           # Can use this tool on peer
+           pass
+
+   # Manual refresh
+   from actingweb.peer_permissions import fetch_peer_permissions
+   perms = fetch_peer_permissions(actor, peer_id)
+
+   # Async refresh (FastAPI)
+   from actingweb.peer_permissions import fetch_peer_permissions_async
+   perms = await fetch_peer_permissions_async(actor, peer_id)
+
+**PeerPermissions Access Methods:**
+
+- ``has_property_access(name, operation)`` - Check property permission (operation: read, write, subscribe, delete)
+- ``has_method_access(name)`` - Check method permission
+- ``has_action_access(name)`` - Check action permission
+- ``has_tool_access(name)`` - Check MCP tool permission
+- ``has_resource_access(uri)`` - Check MCP resource permission
+- ``has_prompt_access(name)`` - Check MCP prompt permission
+
+See :doc:`../guides/trust-relationships` for details on enabling and configuring permissions caching.
+
 Next
 ----
 

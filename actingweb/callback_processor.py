@@ -32,6 +32,7 @@ class CallbackType(Enum):
 
     DIFF = "diff"
     RESYNC = "resync"
+    PERMISSION = "permission"  # Permission update callback (no sequencing)
 
 
 @dataclass
@@ -231,6 +232,12 @@ class CallbackProcessor:
                 peer_id, subscription_id, sequence, data, handler
             )
 
+        # Handle permission callbacks - bypass sequencing entirely
+        if callback_type == "permission":
+            return await self._handle_permission(
+                peer_id, data, handler
+            )
+
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
             state = self._get_state(peer_id, subscription_id)
@@ -385,6 +392,36 @@ class CallbackProcessor:
 
         return ProcessResult.PROCESSED
 
+    async def _handle_permission(
+        self,
+        peer_id: str,
+        data: dict[str, Any],
+        handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
+    ) -> ProcessResult:
+        """Handle a permission callback.
+
+        Permission callbacks bypass sequencing entirely - they are stateless
+        and idempotent, containing the full current permissions.
+        """
+        logger.info(f"Processing permission callback from {peer_id}")
+
+        # Invoke handler with permission data
+        if handler:
+            callback = ProcessedCallback(
+                peer_id=peer_id,
+                subscription_id="",  # Not used for permissions
+                sequence=0,  # Not used for permissions
+                callback_type=CallbackType.PERMISSION,
+                data=data,
+                timestamp=data.get("timestamp", ""),
+            )
+            try:
+                await handler(callback)
+            except Exception as e:
+                logger.error(f"Permission handler error: {e}", exc_info=True)
+
+        return ProcessResult.PROCESSED
+
     def get_state_info(self, peer_id: str, subscription_id: str) -> dict[str, Any]:
         """Get current state information for debugging."""
         state = self._get_state(peer_id, subscription_id)
@@ -453,6 +490,10 @@ class CallbackProcessor:
             return self._handle_resync_sync(
                 peer_id, subscription_id, sequence, data, handler
             )
+
+        # Handle permission callbacks - bypass sequencing entirely
+        if callback_type == "permission":
+            return self._handle_permission_sync(peer_id, data, handler)
 
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
@@ -605,5 +646,35 @@ class CallbackProcessor:
             except Exception as e:
                 # Log with full traceback for debugging
                 logger.error(f"Resync handler error: {e}", exc_info=True)
+
+        return ProcessResult.PROCESSED
+
+    def _handle_permission_sync(
+        self,
+        peer_id: str,
+        data: dict[str, Any],
+        handler: Callable[[ProcessedCallback], None] | None,
+    ) -> ProcessResult:
+        """Handle a permission callback (sync version).
+
+        Permission callbacks bypass sequencing entirely - they are stateless
+        and idempotent, containing the full current permissions.
+        """
+        logger.info(f"Processing permission callback from {peer_id}")
+
+        # Invoke handler with permission data
+        if handler:
+            callback = ProcessedCallback(
+                peer_id=peer_id,
+                subscription_id="",  # Not used for permissions
+                sequence=0,  # Not used for permissions
+                callback_type=CallbackType.PERMISSION,
+                data=data,
+                timestamp=data.get("timestamp", ""),
+            )
+            try:
+                handler(callback)
+            except Exception as e:
+                logger.error(f"Permission handler error: {e}", exc_info=True)
 
         return ProcessResult.PROCESSED

@@ -80,6 +80,9 @@ class ActingWebApp:
         # Peer capabilities (methods/actions) caching configuration
         self._peer_capabilities_caching: bool = False
 
+        # Peer permissions caching configuration
+        self._peer_permissions_caching: bool = False
+
         # Hook registry
         self.hooks = HookRegistry()
 
@@ -141,6 +144,9 @@ class ActingWebApp:
         # Peer capabilities (methods/actions) caching configuration
         if hasattr(self, "_peer_capabilities_caching"):
             self._config.peer_capabilities_caching = self._peer_capabilities_caching
+        # Peer permissions caching configuration
+        if hasattr(self, "_peer_permissions_caching"):
+            self._config.peer_permissions_caching = self._peer_permissions_caching
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -487,6 +493,113 @@ class ActingWebApp:
             except Exception as e:
                 logger.warning(
                     f"Failed to clean up peer capabilities for {peer_id}: {e}"
+                )
+
+    def with_peer_permissions(self, enable: bool = True) -> "ActingWebApp":
+        """Enable peer permissions caching for trust relationships.
+
+        When enabled, peer permissions are automatically fetched and cached
+        when trust relationships are established. Permissions are refreshed during
+        sync_peer() operations.
+
+        This caches what permissions the REMOTE peer has granted US access to.
+        It is distinct from TrustPermissions which stores what WE grant to peers.
+
+        Permission callbacks from peers are automatically processed and stored
+        when this is enabled.
+
+        Args:
+            enable: Whether to enable permissions caching. Default True.
+
+        Returns:
+            Self for method chaining.
+
+        Example::
+
+            app = (
+                ActingWebApp(...)
+                .with_peer_permissions(enable=True)
+            )
+
+            # Access cached permissions via PeerPermissionStore
+            from actingweb.peer_permissions import get_peer_permission_store
+            store = get_peer_permission_store(actor.config)
+            permissions = store.get_permissions(actor.id, peer_id)
+            if permissions:
+                if permissions.has_property_access("memory_travel", "read"):
+                    print("Peer granted us access to memory_travel")
+        """
+        self._peer_permissions_caching = enable
+        self._apply_runtime_changes_to_config()
+
+        # Register lifecycle hooks when permissions caching is enabled
+        if enable:
+            self._register_peer_permissions_hooks()
+
+        return self
+
+    def _register_peer_permissions_hooks(self) -> None:
+        """Register lifecycle hooks for peer permissions caching."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        @self.lifecycle_hook("trust_approved")
+        def _fetch_permissions_on_approval(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Fetch and cache peer permissions when trust is approved.
+
+            This hook fires for both HTTP-based and programmatic approvals,
+            ensuring consistent caching behavior regardless of approval path.
+            """
+            if not peer_id or not self._peer_permissions_caching:
+                return
+
+            try:
+                from ..peer_permissions import (
+                    fetch_peer_permissions,
+                    get_peer_permission_store,
+                )
+
+                config = self.get_config()
+                permissions = fetch_peer_permissions(
+                    actor_id=actor.id,
+                    peer_id=peer_id,
+                    config=config,
+                )
+                store = get_peer_permission_store(config)
+                store.store_permissions(permissions)
+                logger.debug(
+                    f"Cached peer permissions for {peer_id} on trust approval"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to cache peer permissions for {peer_id}: {e}")
+
+        @self.lifecycle_hook("trust_deleted")
+        def _cleanup_permissions_on_trust_deleted(
+            actor: Any,
+            peer_id: str = "",
+            **kwargs: Any,
+        ) -> None:
+            """Clean up cached peer permissions when trust is deleted."""
+            if not peer_id or not self._peer_permissions_caching:
+                return
+
+            try:
+                from ..peer_permissions import get_peer_permission_store
+
+                config = self.get_config()
+                store = get_peer_permission_store(config)
+                store.delete_permissions(actor.id, peer_id)
+                logger.debug(
+                    f"Cleaned up peer permissions for {peer_id} on trust deletion"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clean up peer permissions for {peer_id}: {e}"
                 )
 
     def add_service(
@@ -973,6 +1086,7 @@ class ActingWebApp:
                 use_lookup_table=self._use_lookup_table,
                 peer_profile_attributes=self._peer_profile_attributes,
                 peer_capabilities_caching=self._peer_capabilities_caching,
+                peer_permissions_caching=self._peer_permissions_caching,
             )
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them

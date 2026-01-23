@@ -775,6 +775,140 @@ Best Practices
 
 4. **Refresh When Needed:** Use ``refresh_peer_capabilities()`` if cached data might be stale or after a peer upgrade.
 
+Peer Permissions Caching
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+When peer permissions caching is enabled, the library automatically caches what permissions
+peer actors have granted to your actor. This enables efficient permission checking without
+network requests.
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_peer_permissions(enable=True)
+
+**Parameters:**
+
+- ``enable``: Boolean to enable/disable permissions caching. Default: ``True`` when called.
+
+**Default Behavior:**
+
+- Permissions caching is **disabled by default**
+- Must call ``with_peer_permissions()`` to enable
+- Permissions are stored in the ``_peer_permissions`` attribute bucket (note the ``_`` prefix for library-internal buckets)
+
+Automatic Permission Updates
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When enabled, permissions are automatically updated:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Event
+     - Action
+   * - Trust fully approved
+     - Fetch and cache peer's granted permissions
+   * - ``sync_peer()`` completion
+     - Refresh cached permissions
+   * - Permission callback received
+     - Update cached permissions
+   * - Trust deleted
+     - Delete cached permissions
+
+Accessing Peer Permissions
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use the PeerPermissionStore to check cached permissions:
+
+.. code-block:: python
+
+    from actingweb.peer_permissions import get_peer_permission_store
+
+    store = get_peer_permission_store(actor.config)
+
+    # Get cached permissions
+    perms = store.get_permissions(actor.id, peer_id)
+    if perms:
+        # Check property access
+        if perms.has_property_access("memory_travel", "read"):
+            print("Can read memory_travel from peer")
+
+        # Check method access
+        if perms.has_method_access("sync_data"):
+            print("Can call sync_data on peer")
+
+        # Check tool access (MCP)
+        if perms.has_tool_access("search"):
+            print("Can use search tool on peer")
+
+**PeerPermissions Attributes:**
+
+- ``actor_id``: The actor caching this data
+- ``peer_id``: The peer who granted permissions
+- ``properties``: Property permission patterns and operations
+- ``methods``: Allowed/denied method patterns
+- ``actions``: Allowed/denied action patterns
+- ``tools``: Allowed/denied tool patterns (MCP)
+- ``resources``: Allowed/denied resource patterns (MCP)
+- ``prompts``: Allowed prompt patterns (MCP)
+- ``fetched_at``: ISO timestamp when permissions were fetched
+- ``fetch_error``: Error message if fetch failed
+
+**Permission Check Methods:**
+
+- ``has_property_access(name, operation)``: Check property permission (operation: read, write, subscribe, delete)
+- ``has_method_access(name)``: Check method permission
+- ``has_action_access(name)``: Check action permission
+- ``has_tool_access(name)``: Check tool permission (MCP)
+- ``has_resource_access(uri)``: Check resource permission (MCP)
+- ``has_prompt_access(name)``: Check prompt permission (MCP)
+
+Permission Callbacks
+~~~~~~~~~~~~~~~~~~~~
+
+When a peer modifies permissions granted to your actor, they can send a permission
+callback to notify you immediately. This requires the ``permissioncallback`` option
+to be advertised in the peer's ``/meta/actingweb/supported`` endpoint.
+
+The callback is sent to::
+
+    POST /{your_actor_id}/callbacks/permissions/{peer_actor_id}
+
+The library automatically handles these callbacks and updates the local cache.
+
+Best Practices
+~~~~~~~~~~~~~~
+
+1. **Enable for MCP Applications:** Permission caching is particularly useful for MCP applications that need to check tool/resource permissions frequently.
+
+2. **Handle Missing Permissions:** Always check for permissions before operations:
+
+   .. code-block:: python
+
+       perms = store.get_permissions(actor.id, peer_id)
+       if perms and perms.has_property_access("data", "read"):
+           # Safe to read
+           pass
+       else:
+           # No cached permissions or access denied
+           pass
+
+3. **Graceful Degradation:** If permissions aren't cached, fall back to synchronous fetch or deny access.
+
+4. **Refresh When Needed:** Use manual fetch if cached permissions might be stale:
+
+   .. code-block:: python
+
+       from actingweb.peer_permissions import fetch_peer_permissions
+
+       perms = fetch_peer_permissions(actor, peer_id)
+
 Logging
 -------
 

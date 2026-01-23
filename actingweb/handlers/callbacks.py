@@ -118,9 +118,93 @@ class CallbacksHandler(base_handler.BaseHandler):
         )
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Allow unauthenticated requests to /callbacks/subscriptions, so
-        # do the auth check further below
+        # Allow unauthenticated requests to /callbacks/subscriptions and
+        # /callbacks/permissions, so do the auth check further below
         path = name.split("/")
+
+        # Handle permission callbacks: /callbacks/permissions/{granting_actor_id}
+        if path[0] == "permissions" and len(path) >= 2:
+            granting_actor_id = path[1]
+
+            actor_interface = self._get_actor_interface(myself) if myself else None
+            if not actor_interface:
+                self.response.set_status(404, "Not found")
+                return
+
+            # Verify trust relationship exists with granting actor
+            if not check or not check.check_authorisation(
+                path="callbacks",
+                subpath="permissions",
+                method="POST",
+                peerid=granting_actor_id,
+            ):
+                if self.response:
+                    self.response.set_status(403, "Forbidden")
+                return
+
+            # Parse request body
+            try:
+                body: str | bytes | None = self.request.body
+                if body is None:
+                    body_str = "{}"
+                elif isinstance(body, bytes):
+                    body_str = body.decode("utf-8", "ignore")
+                else:
+                    body_str = body
+                params = json.loads(body_str)
+            except (TypeError, ValueError, KeyError):
+                self.response.set_status(400, "Error in json body")
+                return
+
+            # Store permissions in PeerPermissionStore
+            try:
+                from datetime import UTC, datetime
+
+                from actingweb.peer_permissions import (
+                    PeerPermissions,
+                    get_peer_permission_store,
+                )
+
+                perm_data = params.get("data", {})
+                timestamp = params.get("timestamp", datetime.now(UTC).isoformat())
+
+                peer_perms = PeerPermissions(
+                    actor_id=actor_id,
+                    peer_id=granting_actor_id,
+                    properties=perm_data.get("properties"),
+                    methods=perm_data.get("methods"),
+                    actions=perm_data.get("actions"),
+                    tools=perm_data.get("tools"),
+                    resources=perm_data.get("resources"),
+                    prompts=perm_data.get("prompts"),
+                    fetched_at=timestamp,
+                )
+
+                store = get_peer_permission_store(myself.config)
+                store.store_permissions(peer_perms)
+
+                logger.debug(
+                    f"Stored permission callback from {granting_actor_id} "
+                    f"for actor {actor_id}"
+                )
+
+            except Exception as e:
+                logger.error(f"Error storing permission callback: {e}")
+                self.response.set_status(500, "Internal error")
+                return
+
+            # Execute permission callback hook for app-specific handling
+            if self.hooks:
+                hook_data = params.copy()
+                hook_data["granting_actor_id"] = granting_actor_id
+                hook_data["method"] = "POST"
+                self.hooks.execute_callback_hooks(
+                    "permissions", actor_interface, hook_data
+                )
+
+            self.response.set_status(204, "No Content")
+            return
+
         if path[0] == "subscriptions":
             peerid = path[1]
             subid = path[2]

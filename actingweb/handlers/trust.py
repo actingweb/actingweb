@@ -397,7 +397,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 self.response.set_status(302, "Found")
                 self.response.set_redirect(f"/{actor_id}/www/trust")
             return
-        logger.debug("GET trust headers: " + str(self.request.headers))
+        logger.debug("GET trust request received")
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
         if not auth_result.success:
             return

@@ -55,7 +55,7 @@ class DbPropertyLookup:
                         return row[2]
                     return None
         except Exception as e:
-            logger.error(f"Error getting lookup {property_name}={value}: {e}")
+            logger.error(f"Error getting lookup for property {property_name}: {e}")
             return None
 
     def create(

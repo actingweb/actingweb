@@ -7,7 +7,6 @@ Tests the complete flow of:
 3. Verifying cached data is deleted when auto_delete_on_revocation=True
 """
 
-import json
 from unittest.mock import Mock, patch
 
 import pytest

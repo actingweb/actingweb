@@ -143,7 +143,7 @@ class AwProxy:
         if params:
             url = url + "?" + urllib_urlencode(params)
         headers = self._bearer_headers()
-        logger.info(f"Fetching peer resource from {url}")
+        logger.debug(f"Fetching peer resource from {url}")
         try:
             response = requests.get(url=url, headers=headers, timeout=self.timeout)
             # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
@@ -162,12 +162,7 @@ class AwProxy:
                     "message": "Unable to communciate with trust peer service.",
                 },
             }
-        logger.debug(
-            "Get trust peer resource POST response:("
-            + str(response.status_code)
-            + ") "
-            + str(response.content)
-        )
+        logger.debug(f"Get trust peer resource response: {response.status_code}")
         if response.status_code < 200 or response.status_code > 299:
             logger.info("Not able to get trust peer resource.")
         try:
@@ -215,12 +210,7 @@ class AwProxy:
             self.last_location = response.headers["Location"]
         else:
             self.last_location = None
-        logger.debug(
-            "Create trust peer resource POST response:("
-            + str(response.status_code)
-            + ") "
-            + str(response.content)
-        )
+        logger.debug(f"Create trust peer resource response: {response.status_code}")
         if response.status_code < 200 or response.status_code > 299:
             logger.warning("Not able to create new trust peer resource.")
         try:
@@ -267,12 +257,7 @@ class AwProxy:
                     "message": "Unable to communciate with trust peer service.",
                 },
             }
-        logger.debug(
-            "Change trust peer resource PUT response:("
-            + str(response.status_code)
-            + ") "
-            + str(response.content)
-        )
+        logger.debug(f"Change trust peer resource response: {response.status_code}")
         if response.status_code < 200 or response.status_code > 299:
             logger.warning("Not able to change trust peer resource.")
         try:
@@ -362,7 +347,7 @@ class AwProxy:
         if params:
             url = url + "?" + urllib_urlencode(params)
         headers = self._bearer_headers()
-        logger.info(f"Fetching peer resource async from {url}")
+        logger.debug(f"Fetching peer resource async from {url}")
         try:
             async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.get(url, headers=headers)
@@ -409,12 +394,7 @@ class AwProxy:
                     "message": "Internal error communicating with trust peer service.",
                 },
             }
-        logger.debug(
-            "Get trust peer resource async response:("
-            + str(response.status_code)
-            + ") "
-            + str(response.content)
-        )
+        logger.debug(f"Get trust peer resource async response: {response.status_code}")
         if response.status_code < 200 or response.status_code > 299:
             logger.info("Not able to get trust peer resource async.")
         try:
@@ -505,12 +485,7 @@ class AwProxy:
             self.last_location = response.headers["Location"]
         else:
             self.last_location = None
-        logger.debug(
-            "Create trust peer resource async response:("
-            + str(response.status_code)
-            + ") "
-            + str(response.content)
-        )
+        logger.debug(f"Create trust peer resource async response: {response.status_code}")
         if response.status_code < 200 or response.status_code > 299:
             logger.warning("Not able to create new trust peer resource async.")
         try:
@@ -602,12 +577,7 @@ class AwProxy:
                     "message": "Internal error communicating with trust peer service.",
                 },
             }
-        logger.debug(
-            "Change trust peer resource async response:("
-            + str(response.status_code)
-            + ") "
-            + str(response.content)
-        )
+        logger.debug(f"Change trust peer resource async response: {response.status_code}")
         if response.status_code < 200 or response.status_code > 299:
             logger.warning("Not able to change trust peer resource async.")
         try:
@@ -684,12 +654,7 @@ class AwProxy:
                     "message": "Internal error communicating with trust peer service.",
                 },
             }
-        logger.debug(
-            "Delete trust peer resource async response:("
-            + str(response.status_code)
-            + ") "
-            + str(response.content)
-        )
+        logger.debug(f"Delete trust peer resource async response: {response.status_code}")
         if response.status_code < 200 or response.status_code > 299:
             logger.warning("Not able to delete trust peer resource async.")
         try:

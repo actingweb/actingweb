@@ -266,7 +266,7 @@ class Auth:
         )
         new_trust = tru.get()
         if new_trust:
-            logger.debug("Found trust with token: (" + str(new_trust) + ")")
+            logger.debug(f"Found trust for peer: {new_trust.get('peerid', 'unknown')}")
             if self.actor and new_trust["peerid"] == self.actor.id:
                 logger.error("Peer == actor!!")
                 return False
@@ -585,7 +585,7 @@ class Auth:
         )
         new_trust = tru.get()
         if new_trust:
-            logger.debug("Found trust with token: (" + str(new_trust) + ")")
+            logger.debug(f"Found trust for peer: {new_trust.get('peerid', 'unknown')}")
             if self.actor and new_trust["peerid"] == self.actor.id:
                 logger.error("Peer == actor!!")
                 return False

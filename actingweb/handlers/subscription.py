@@ -297,7 +297,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
             return
 
         # Use developer API - ActorInterface with SubscriptionManager
@@ -364,7 +364,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
             return
         try:
             body = self.request.body
@@ -423,7 +423,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
             return
         # Do not delete remote subscription if this is from our peer
         if len(auth_result.auth_obj.acl["peerid"]) == 0:
@@ -447,7 +447,7 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<id>"):
+        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
             return
 
         # Use developer API - ActorInterface with SubscriptionManager

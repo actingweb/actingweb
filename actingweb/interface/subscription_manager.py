@@ -689,8 +689,70 @@ class SubscriptionManager:
 
         diffs_fetched = len(diffs)
 
-        # If no diffs, return success with 0 processed
-        if diffs_fetched == 0:
+        # If no diffs, fetch baseline data from target resource
+        if diffs_fetched == 0 and config.auto_storage:
+            # Construct full target path including subtarget and resource if present
+            target_path = sub.target
+            if sub.subtarget:
+                target_path = f"{target_path}/{sub.subtarget}"
+            if sub.resource:
+                target_path = f"{target_path}/{sub.resource}"
+
+            logger.info(
+                f"No diffs for subscription {subscription_id}, fetching baseline from {target_path}"
+            )
+
+            # Add metadata parameter for properties endpoint (only for collection-level)
+            if sub.target == "properties" and not sub.subtarget:
+                # Request metadata to include property list information
+                target_path = f"{target_path}?metadata=true"
+
+            # Fetch baseline data from target resource
+            baseline_response = proxy.get_resource(path=target_path)
+
+            # Reconstruct path for logging (without query params)
+            log_path = sub.target
+            if sub.subtarget:
+                log_path = f"{log_path}/{sub.subtarget}"
+            if sub.resource:
+                log_path = f"{log_path}/{sub.resource}"
+
+            if baseline_response and "error" not in baseline_response:
+                # Store baseline data
+                from .actor_interface import ActorInterface
+
+                actor_interface = ActorInterface(self._core_actor)
+                store = RemotePeerStore(
+                    actor=actor_interface,
+                    peer_id=peer_id,
+                    validate_peer_id=False,
+                )
+
+                # Apply baseline as resync data
+                store.apply_resync_data(baseline_response)
+                logger.info(
+                    f"Stored baseline data for subscription {subscription_id} from {log_path}"
+                )
+
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=True,
+                    diffs_fetched=0,
+                    diffs_processed=1,  # Count baseline fetch as 1 processed item
+                    final_sequence=response.get("sequence", 0),
+                )
+            else:
+                logger.warning(
+                    f"Failed to fetch baseline from {log_path} for subscription {subscription_id}"
+                )
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=True,
+                    diffs_fetched=0,
+                    diffs_processed=0,
+                    final_sequence=response.get("sequence", 0),
+                )
+        elif diffs_fetched == 0:
             return SubscriptionSyncResult(
                 subscription_id=subscription_id,
                 success=True,
@@ -1004,7 +1066,70 @@ class SubscriptionManager:
 
         diffs_fetched = len(diffs)
 
-        if diffs_fetched == 0:
+        # If no diffs, fetch baseline data from target resource
+        if diffs_fetched == 0 and config.auto_storage:
+            # Construct full target path including subtarget and resource if present
+            target_path = sub.target
+            if sub.subtarget:
+                target_path = f"{target_path}/{sub.subtarget}"
+            if sub.resource:
+                target_path = f"{target_path}/{sub.resource}"
+
+            logger.info(
+                f"No diffs for subscription {subscription_id}, fetching baseline from {target_path}"
+            )
+
+            # Add metadata parameter for properties endpoint (only for collection-level)
+            if sub.target == "properties" and not sub.subtarget:
+                # Request metadata to include property list information
+                target_path = f"{target_path}?metadata=true"
+
+            # Fetch baseline data from target resource
+            baseline_response = await proxy.get_resource_async(path=target_path)
+
+            # Reconstruct path for logging (without query params)
+            log_path = sub.target
+            if sub.subtarget:
+                log_path = f"{log_path}/{sub.subtarget}"
+            if sub.resource:
+                log_path = f"{log_path}/{sub.resource}"
+
+            if baseline_response and "error" not in baseline_response:
+                # Store baseline data
+                from .actor_interface import ActorInterface
+
+                actor_interface = ActorInterface(self._core_actor)
+                store = RemotePeerStore(
+                    actor=actor_interface,
+                    peer_id=peer_id,
+                    validate_peer_id=False,
+                )
+
+                # Apply baseline as resync data
+                store.apply_resync_data(baseline_response)
+                logger.info(
+                    f"Stored baseline data for subscription {subscription_id} from {log_path}"
+                )
+
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=True,
+                    diffs_fetched=0,
+                    diffs_processed=1,  # Count baseline fetch as 1 processed item
+                    final_sequence=response.get("sequence", 0),
+                )
+            else:
+                logger.warning(
+                    f"Failed to fetch baseline from {log_path} for subscription {subscription_id}"
+                )
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=True,
+                    diffs_fetched=0,
+                    diffs_processed=0,
+                    final_sequence=response.get("sequence", 0),
+                )
+        elif diffs_fetched == 0:
             return SubscriptionSyncResult(
                 subscription_id=subscription_id,
                 success=True,

@@ -325,9 +325,8 @@ class OAuth2EndpointsHandler(BaseHandler):
 
             form_data = parse_qs(body_str)
 
-            # Debug: log received form data
+            # Debug: log received form data keys only (never log body content which contains secrets)
             logger.debug(f"Token request form data keys: {list(form_data.keys())}")
-            logger.debug(f"Token request body: {body_str[:200]}...")  # First 200 chars
 
             # Extract parameters (parse_qs returns lists)
             params = {

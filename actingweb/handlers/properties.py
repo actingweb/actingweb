@@ -30,14 +30,10 @@ def delete_dict(d1, path):
     or dict that is specified by path.
     """
     if not d1:
-        # logger.debug('Path not found')
         return False
-    # logger.debug('d1: ' + json.dumps(d1))
-    # logger.debug('path: ' + str(path))
     if len(path) > 1 and path[1] and len(path[1]) > 0:
         return delete_dict(d1.get(path[0]), path[1:])
     if len(path) == 1 and path[0] and path[0] in d1:
-        # logger.debug('Deleting d1[' + path[0] + ']')
         try:
             del d1[path[0]]
             return True
@@ -298,24 +294,18 @@ class PropertiesHandler(base_handler.BaseHandler):
         # Check if metadata is requested via query parameter
         include_metadata = self.request.get("metadata") == "true"
 
-        # Return empty object with 200 OK when no properties exist (SPA-friendly, spec v1.2)
-        if not properties or len(properties) == 0:
-            out = json.dumps({})
-            self.response.write(out)
-            self.response.headers["Content-Type"] = "application/json"
-            return
-
         pair = {}
-        for name, value in list(properties.items()):
-            try:
-                js = json.loads(value)
-                pair[name] = js
-            except ValueError:
-                pair[name] = value
+        if properties and len(properties) > 0:
+            for name, value in list(properties.items()):
+                try:
+                    js = json.loads(value)
+                    pair[name] = js
+                except ValueError:
+                    pair[name] = value
 
         # Filter properties based on peer permissions
         peer_id = check.acl.get("peerid", "") if hasattr(check, "acl") else ""
-        if peer_id and actor_interface and actor_interface.id:
+        if peer_id and actor_interface and actor_interface.id and pair:
             try:
                 evaluator = get_permission_evaluator(self.config)
                 filtered_pair = {}
@@ -336,7 +326,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 pair = {}
 
         # Execute property hooks for all properties if available
-        if self.hooks:
+        if self.hooks and pair:
             if actor_interface:
                 auth_context = self._create_auth_context(check, "read")
                 result = {}
@@ -351,53 +341,53 @@ class PropertiesHandler(base_handler.BaseHandler):
         # Note: Don't return early if pair is empty - we still need to add list properties below
         # The final output will be handled at the end of the function
 
-        # Add list property metadata if requested
-        if include_metadata:
-            list_names = set()
-            # Use actor_interface for consistent property list access
-            if (
-                actor_interface
-                and hasattr(actor_interface, "property_lists")
-                and actor_interface.property_lists is not None
-            ):
-                all_list_names = set(actor_interface.property_lists.list_all() or [])
-                logger.debug(
-                    f"Found {len(all_list_names)} list properties: {all_list_names}"
-                )
+        # Always discover list properties (needed for both metadata and non-metadata responses)
+        list_names: set[str] = set()
+        if (
+            actor_interface
+            and hasattr(actor_interface, "property_lists")
+            and actor_interface.property_lists is not None
+        ):
+            all_list_names = set(actor_interface.property_lists.list_all() or [])
+            logger.debug(
+                f"Found {len(all_list_names)} list properties: {all_list_names}"
+            )
 
-                # Filter list properties based on peer permissions
-                if peer_id and actor_interface and actor_interface.id:
-                    try:
-                        evaluator = get_permission_evaluator(self.config)
-                        for list_name in all_list_names:
-                            result = evaluator.evaluate_property_access(
-                                actor_interface.id, peer_id, list_name, "read"
-                            )
-                            if (
-                                result == PermissionResult.ALLOWED
-                                or result == PermissionResult.NOT_FOUND
-                            ):
-                                list_names.add(list_name)
-                            # DENIED list properties are excluded
-                    except Exception as e:
-                        logger.error(
-                            f"Error filtering list properties by permission: {e}"
+            # Filter list properties based on peer permissions
+            if peer_id and actor_interface and actor_interface.id:
+                try:
+                    evaluator = get_permission_evaluator(self.config)
+                    for list_name in all_list_names:
+                        result = evaluator.evaluate_property_access(
+                            actor_interface.id, peer_id, list_name, "read"
                         )
-                        # On error, exclude all list properties for security
-                        list_names = set()
-                else:
-                    # No peer - include all (owner access)
-                    list_names = all_list_names
+                        if (
+                            result == PermissionResult.ALLOWED
+                            or result == PermissionResult.NOT_FOUND
+                        ):
+                            list_names.add(list_name)
+                        # DENIED list properties are excluded
+                except Exception as e:
+                    logger.error(
+                        f"Error filtering list properties by permission: {e}"
+                    )
+                    # On error, exclude all list properties for security
+                    list_names = set()
+            else:
+                # No peer - include all (owner access)
+                list_names = all_list_names
 
-                # Add metadata for permitted list properties
-                for list_name in list_names:
-                    list_prop = getattr(actor_interface.property_lists, list_name)
-                    pair[list_name] = {
-                        "is_list": True,
-                        "item_count": len(list_prop),
-                        "description": list_prop.get_description(),
-                        "explanation": list_prop.get_explanation(),
-                    }
+        # Add list properties based on metadata flag
+        if include_metadata:
+            # Full metadata format for list properties
+            for list_name in list_names:
+                list_prop = getattr(actor_interface.property_lists, list_name)
+                pair[list_name] = {
+                    "is_list": True,
+                    "item_count": len(list_prop),
+                    "description": list_prop.get_description(),
+                    "explanation": list_prop.get_explanation(),
+                }
 
             # Wrap non-list properties with is_list: false
             for name in list(pair.keys()):
@@ -409,6 +399,14 @@ class PropertiesHandler(base_handler.BaseHandler):
                         "value": current_value,
                         "is_list": False,
                     }
+        else:
+            # Minimal format for list properties (without metadata)
+            for list_name in list_names:
+                list_prop = getattr(actor_interface.property_lists, list_name)
+                pair[list_name] = {
+                    "_list": True,
+                    "count": len(list_prop),
+                }
 
         out = json.dumps(pair)
         self.response.write(out)
@@ -493,17 +491,14 @@ class PropertiesHandler(base_handler.BaseHandler):
         except (TypeError, ValueError, KeyError):
             pass
         store = {path[len(path) - 1]: body}
-        # logger.debug('store with body:' + json.dumps(store))
         # Make store to be at same level as orig value
         i = len(path) - 2
         while i > 0:
             c = copy.copy(store)
             store = {path[i]: c}
-            # logger.debug('store with i=' + str(i) + ' (' + json.dumps(store) + ')')
             i -= 1
-        # logger.debug('Snippet to store(' + json.dumps(store) + ')')
         orig = myself.property[name] if myself and myself.property else None
-        logger.debug("Original value(" + (orig or "") + ")")
+        logger.debug(f"Property {name} has existing value: {orig is not None}")
         try:
             orig = json.loads(orig or "{}")
             merge_dict(orig, store)
@@ -527,7 +522,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     return
         res = final_res
         res = json.dumps(res)
-        logger.debug("Result to store( " + res + ") in /properties/" + name)
+        logger.debug(f"Storing property /properties/{name}")
         if myself and myself.property:
             myself.property[name] = res
         myself.register_diffs(
@@ -1016,7 +1011,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
         orig = myself.property[name] if myself and myself.property else None
         old = orig
-        logger.debug("DELETE /properties original value(" + (orig or "") + ")")
+        logger.debug(f"DELETE property {name}, has existing value: {orig is not None}")
         try:
             orig = json.loads(orig or "{}")
         except (TypeError, ValueError, KeyError):
@@ -1045,7 +1040,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(403)
                     return
         res = json.dumps(orig)
-        logger.debug("Result to store( " + res + ") in /properties/" + name)
+        logger.debug(f"Storing property /properties/{name}")
         if myself and myself.property:
             myself.property[name] = res
         myself.register_diffs(

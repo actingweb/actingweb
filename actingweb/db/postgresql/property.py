@@ -163,7 +163,7 @@ class DbProperty:
                         else:
                             return None
             except Exception as e:
-                logger.error(f"Error reverse lookup property {name}={value}: {e}")
+                logger.error(f"Error reverse lookup for property {name}: {e}")
                 return None
 
     def set(

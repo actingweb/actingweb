@@ -56,8 +56,62 @@ class TestPropertiesMetadataAPI:
         )
         assert response.status_code == 200
         data = response.json()
-        # Should return simple key-value format
-        assert "test_prop" in data or isinstance(data, dict)
+        # Should return simple key-value format for regular properties
+        assert "test_prop" in data
+        # Regular property should be simple value, not wrapped with is_list metadata
+        assert data["test_prop"] == {"value": "test_value"}
+        assert "is_list" not in data.get("test_prop", {})
+
+    def test_003b_create_list_property(self, http_client):
+        """Create a list property for testing list inclusion without metadata."""
+        # Create a list property via POST
+        response = requests.post(
+            f"{self.actor_url}/properties",
+            json={"test_list": {"_type": "list", "description": "Test list"}},
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code in [200, 201]
+
+        # Add items to the list via the items endpoint
+        response = requests.post(
+            f"{self.actor_url}/properties/test_list/items",
+            json={"action": "add", "item_value": {"name": "item1"}},
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 201
+
+        response = requests.post(
+            f"{self.actor_url}/properties/test_list/items",
+            json={"action": "add", "item_value": {"name": "item2"}},
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 201
+
+    def test_003c_get_properties_with_list_no_metadata(self, http_client):
+        """Get properties without metadata - list properties should have minimal marker."""
+        response = requests.get(
+            f"{self.actor_url}/properties",
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        # Regular property should be simple value
+        assert "test_prop" in data
+        assert data["test_prop"] == {"value": "test_value"}
+
+        # List property should have minimal marker format
+        assert "test_list" in data
+        assert data["test_list"]["_list"] is True
+        assert data["test_list"]["count"] == 2
+        # Should NOT have full metadata fields
+        assert "is_list" not in data["test_list"]
+        assert "item_count" not in data["test_list"]
+        assert "description" not in data["test_list"]
+        assert "explanation" not in data["test_list"]
 
     def test_004_get_properties_with_metadata_true(self, http_client):
         """Get properties with metadata=true parameter."""
@@ -67,8 +121,21 @@ class TestPropertiesMetadataAPI:
         )
         assert response.status_code == 200
         data = response.json()
-        # Should return structured format with properties and list_properties
-        assert "properties" in data or "list_properties" in data or "test_prop" in data
+
+        # Regular property should be wrapped with is_list: false
+        assert "test_prop" in data
+        assert data["test_prop"]["is_list"] is False
+        assert data["test_prop"]["value"] == {"value": "test_value"}
+
+        # List property should have full metadata format
+        assert "test_list" in data
+        assert data["test_list"]["is_list"] is True
+        assert data["test_list"]["item_count"] == 2
+        assert "description" in data["test_list"]
+        assert "explanation" in data["test_list"]
+        # Should NOT have minimal format fields
+        assert "_list" not in data["test_list"]
+        assert "count" not in data["test_list"]
 
     def test_099_cleanup_actor(self, http_client):
         """Delete test actor."""

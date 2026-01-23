@@ -266,7 +266,7 @@ class TestSyncSubscription:
         assert result.error_code == 403
 
     def test_no_pending_diffs(self):
-        """Test sync when there are no pending diffs."""
+        """Test sync when there are no pending diffs (without auto_storage baseline fetch)."""
         actor = FakeCoreActor()
         actor._subscriptions[("peer_1", "sub_1", True)] = {
             "peerid": "peer_1",
@@ -276,6 +276,12 @@ class TestSyncSubscription:
         }
         manager = SubscriptionManager(actor)  # type: ignore[arg-type]
 
+        # Use auto_storage=False to test the simple no-diff path
+        # (auto_storage=True would trigger baseline fetching)
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_sequence=False, auto_storage=False
+        )
+
         with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
@@ -283,7 +289,7 @@ class TestSyncSubscription:
             mock_get_proxy.return_value = mock_proxy
 
             result = manager.sync_subscription(
-                peer_id="peer_1", subscription_id="sub_1"
+                peer_id="peer_1", subscription_id="sub_1", config=config
             )
 
         assert result.success is True

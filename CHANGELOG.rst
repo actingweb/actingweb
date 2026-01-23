@@ -32,6 +32,39 @@ ADDED
   - Both sync and async fetch functions: ``fetch_peer_methods_and_actions()``, ``fetch_peer_methods_and_actions_async()``
   - New constant: ``PEER_CAPABILITIES_BUCKET`` for attribute storage
 
+SECURITY
+~~~~~~~~
+
+- **Logging Security Hardening**: Comprehensive audit and remediation of all log statements to prevent sensitive information leakage in production logs.
+
+  - **Token masking**: Added ``_mask_token()`` helper in ``token_manager.py`` that shows only first 8 characters of tokens. Fixed 18 log statements that were previously logging full access/refresh tokens.
+  - **Request body removal**: Removed logging of OAuth2 token request body in ``oauth2_endpoints.py`` which could contain client_secret, authorization codes, and refresh tokens.
+  - **Headers removal**: Removed logging of HTTP request headers in ``trust.py`` which could expose Authorization headers.
+  - **State data protection**: Changed ``state_manager.py`` to only log flow_type instead of full OAuth2 state data.
+  - **Trust object protection**: Fixed ``auth.py`` to only log peer_id instead of full trust objects which could contain secrets.
+  - **Property value protection**: Removed property values from log messages in ``handlers/properties.py``, ``db/dynamodb/property.py``, ``db/postgresql/property.py``, and ``db/postgresql/property_lookup.py``.
+  - **Response content removal**: Removed HTTP response content from debug logs in ``aw_proxy.py`` (7 occurrences) - now only logs status codes.
+  - **Peer creation data removal**: Removed data payload from peer actor creation logs in ``actor.py``.
+
+CHANGED
+~~~~~~~
+
+- **Log level adjustments for production**: Changed verbose INFO-level logs to DEBUG for high-frequency operations:
+
+  - ``aw_proxy.py``: "Fetching peer resource" logs changed from INFO to DEBUG
+  - ``actor.py``: "Fetching peer info" logs changed from INFO to DEBUG
+
+- **Debug logging cleanup**: Removed 7 commented-out debug statements in ``handlers/properties.py`` that were logging JSON data and paths.
+
+- **List properties in non-metadata responses**: The ``GET /properties`` endpoint now includes list properties even without ``?metadata=true``. List properties are represented with a minimal marker format ``{"_list": true, "count": N}`` to allow clients to detect them without requesting full metadata. With ``?metadata=true``, the full format ``{"is_list": true, "item_count": N, "description": "...", "explanation": "..."}`` is returned.
+
+FIXED
+~~~~~
+
+- **Baseline data fetch for new subscriptions**: Fixed ``sync_subscription()`` and ``sync_subscription_async()`` to fetch baseline data from the target resource when no diffs exist. Previously, syncing a fresh subscription with 0 diffs would do nothing, leaving the remote storage empty. Now it properly establishes baseline data via ``RemotePeerStore.apply_resync_data()``, enabling features like Remote Memory to work immediately after subscription creation. The baseline fetch respects subscription scope by including subtarget and resource in the fetch path (e.g., ``/properties/myProp`` for scoped subscriptions, ``/properties?metadata=true`` for collection-level subscriptions).
+
+- **Subscription authorization path patterns**: Changed authorization path pattern from ``<id>/<id>`` to ``<id>/<subid>`` in ``handlers/subscription.py`` for clarity and consistency with other handlers.
+
 v3.10.0a3: Jan 22, 2026
 -----------------------
 

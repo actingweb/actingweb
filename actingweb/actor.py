@@ -118,7 +118,7 @@ class Actor:
                         f"Retry attempt {attempt + 1}/{max_retries} for peer info from {url}"
                     )
                 else:
-                    logger.info(f"Fetching peer info from {url}")
+                    logger.debug(f"Fetching peer info from {url}")
 
                 response = requests.get(url=url + "/meta", timeout=(5, 10))
                 res = {
@@ -170,7 +170,7 @@ class Actor:
         import httpx
 
         try:
-            logger.info(f"Fetching peer info async from {url}")
+            logger.debug(f"Fetching peer info async from {url}")
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url + "/meta")
                 res = {
@@ -590,7 +590,7 @@ class Actor:
                 "trustee_root": (self.config.root + self.id) if self.config else "",
             }
             data = json.dumps(params)
-            logger.debug(f"Creating peer actor at factory({factory}) with data({data})")
+            logger.debug(f"Creating peer actor at factory({factory})")
             response = None
             try:
                 response = requests.post(
@@ -989,11 +989,7 @@ class Actor:
         requrl = url + "/trust/" + relationship
         data = json.dumps(params)
         logger.debug(
-            "Creating reciprocal trust at url("
-            + requrl
-            + ") and body ("
-            + str(data)
-            + ")"
+            f"Creating reciprocal trust at url({requrl}) for peer {params.get('id', 'unknown')}"
         )
         try:
             response = requests.post(
@@ -1188,13 +1184,7 @@ class Actor:
                 "Authorization": "Bearer " + secret,
             }
             logger.debug(
-                "Verifying trust at requesting peer("
-                + peerid
-                + ") at url ("
-                + requrl
-                + ") and secret("
-                + secret
-                + ")"
+                f"Verifying trust at requesting peer({peerid}) at url ({requrl})"
             )
             try:
                 response = requests.get(url=requrl, headers=headers, timeout=(5, 10))
@@ -1205,15 +1195,16 @@ class Actor:
                     else str(response.content)
                 )
                 try:
-                    logger.debug(
-                        "Verifying trust response JSON:" + str(response.content)
-                    )
                     content_str = (
                         response.content.decode("utf-8", "ignore")
                         if isinstance(response.content, bytes)
                         else str(response.content)
                     )
                     data = json.loads(content_str)
+                    logger.debug(
+                        f"Verifying trust response: verified={data.get('verified', False)}, "
+                        f"approved={data.get('approved', False)}, peer_approved={data.get('peer_approved', False)}"
+                    )
                     if data["verification_token"] == verification_token:
                         verified = True
                     else:

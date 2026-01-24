@@ -592,6 +592,7 @@ class TestTrustPermissionStoreAsyncNotifications:
         """
         Test that store_permissions_async() calls _notify_peer_async when storage succeeds.
         """
+        import asyncio
         from unittest.mock import AsyncMock, patch
 
         from actingweb.trust_permissions import TrustPermissionStore
@@ -600,15 +601,31 @@ class TestTrustPermissionStoreAsyncNotifications:
         store = TrustPermissionStore(config)
         permissions = self._create_permissions()
 
+        # Track created tasks so we can await them
+        created_tasks = []
+        # Save original create_task to avoid recursion
+        original_create_task = asyncio.create_task
+
+        def mock_create_task(coro):
+            task = original_create_task(coro)
+            created_tasks.append(task)
+            return task
+
         with (
             patch.object(store, "_store_permissions_internal", return_value=True),
             patch.object(
                 store, "_notify_peer_async", new_callable=AsyncMock
             ) as mock_notify,
+            patch("asyncio.create_task", side_effect=mock_create_task),
         ):
             result = await store.store_permissions_async(permissions)
 
             assert result is True
+
+            # Wait for the background task to complete
+            if created_tasks:
+                await asyncio.gather(*created_tasks)
+
             mock_notify.assert_called_once_with(permissions)
 
     async def test_store_permissions_async_skips_notify_when_storage_fails(self):

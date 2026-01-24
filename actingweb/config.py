@@ -186,6 +186,11 @@ class Config:
             ("friend", "actions", "", "a"),
             ("partner", "actions", "", "a"),
             ("admin", "actions", "", "a"),
+            # Allow peers to query permissions granted to them
+            ("associate", "permissions/<id>", "GET", "a"),
+            ("friend", "permissions/<id>", "GET", "a"),
+            ("partner", "permissions/<id>", "GET", "a"),
+            ("admin", "permissions/<id>", "GET", "a"),
             # Allow service management for actor owners and administrators
             ("creator", "services", "", "a"),
             ("trustee", "services", "", "a"),

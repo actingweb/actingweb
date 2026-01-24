@@ -42,12 +42,14 @@ class TestPermissionsHandler:
         auth_result.actor = MagicMock()
         auth_result.authorize = MagicMock(return_value=True)
 
-        # Mock trust relationship
+        # Mock actor interface with trust relationship
+        mock_actor_interface = MagicMock()
         trust_rel = MagicMock()
         trust_rel.relationship = "subscriber"
-        auth_result.actor.trust.get_relationship = MagicMock(return_value=trust_rel)
+        mock_actor_interface.trust.get_relationship = MagicMock(return_value=trust_rel)
 
         handler.authenticate_actor = MagicMock(return_value=auth_result)
+        handler._get_actor_interface = MagicMock(return_value=mock_actor_interface)
 
         # Mock custom permissions
         custom_perms = TrustPermissions(
@@ -86,12 +88,14 @@ class TestPermissionsHandler:
         auth_result.actor = MagicMock()
         auth_result.authorize = MagicMock(return_value=True)
 
-        # Mock trust relationship
+        # Mock actor interface with trust relationship
+        mock_actor_interface = MagicMock()
         trust_rel = MagicMock()
         trust_rel.relationship = "subscriber"
-        auth_result.actor.trust.get_relationship = MagicMock(return_value=trust_rel)
+        mock_actor_interface.trust.get_relationship = MagicMock(return_value=trust_rel)
 
         handler.authenticate_actor = MagicMock(return_value=auth_result)
+        handler._get_actor_interface = MagicMock(return_value=mock_actor_interface)
 
         # Mock no custom permissions
         mock_store = MagicMock()
@@ -174,12 +178,14 @@ class TestPermissionsHandler:
         auth_result.actor = MagicMock()
         auth_result.authorize = MagicMock(return_value=False)
 
-        # Mock trust relationship exists
+        # Mock actor interface with trust relationship
+        mock_actor_interface = MagicMock()
         trust_rel = MagicMock()
         trust_rel.relationship = "subscriber"
-        auth_result.actor.trust.get_relationship = MagicMock(return_value=trust_rel)
+        mock_actor_interface.trust.get_relationship = MagicMock(return_value=trust_rel)
 
         handler.authenticate_actor = MagicMock(return_value=auth_result)
+        handler._get_actor_interface = MagicMock(return_value=mock_actor_interface)
 
         handler.get("actor123", "peer456")
 
@@ -194,12 +200,14 @@ class TestPermissionsHandler:
         auth_result.actor = MagicMock()
         auth_result.authorize = MagicMock(return_value=True)
 
-        # Mock trust relationship
+        # Mock actor interface with trust relationship
+        mock_actor_interface = MagicMock()
         trust_rel = MagicMock()
         trust_rel.relationship = "unknown_type"
-        auth_result.actor.trust.get_relationship = MagicMock(return_value=trust_rel)
+        mock_actor_interface.trust.get_relationship = MagicMock(return_value=trust_rel)
 
         handler.authenticate_actor = MagicMock(return_value=auth_result)
+        handler._get_actor_interface = MagicMock(return_value=mock_actor_interface)
 
         # Mock no custom permissions
         mock_store = MagicMock()
@@ -234,12 +242,14 @@ class TestPermissionsHandler:
         auth_result.actor = MagicMock()
         auth_result.authorize = MagicMock(return_value=True)
 
-        # Mock trust relationship
+        # Mock actor interface with trust relationship
+        mock_actor_interface = MagicMock()
         trust_rel = MagicMock()
         trust_rel.relationship = "subscriber"
-        auth_result.actor.trust.get_relationship = MagicMock(return_value=trust_rel)
+        mock_actor_interface.trust.get_relationship = MagicMock(return_value=trust_rel)
 
         handler.authenticate_actor = MagicMock(return_value=auth_result)
+        handler._get_actor_interface = MagicMock(return_value=mock_actor_interface)
 
         # Mock exception in get_permissions
         mock_store = MagicMock()

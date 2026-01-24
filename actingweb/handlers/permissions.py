@@ -9,6 +9,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from actingweb.handlers import base_handler
+from actingweb.trust_permissions import get_trust_permission_store
+from actingweb.trust_type_registry import get_registry
 
 if TYPE_CHECKING:
     pass
@@ -68,17 +70,22 @@ class PermissionsHandler(base_handler.BaseHandler):
             return
 
         # Check authorization - peer must be requesting their own permissions
-        if not auth_result.authorize("GET", "permissions", peer_id):
+        check = auth_result.auth_obj
+        if not check or not check.check_authorisation(
+            path="permissions",
+            subpath=peer_id,
+            method="GET",
+            peerid=peer_id,
+        ):
             logger.warning(
                 f"Authorization failed: peer {peer_id} querying permissions from {actor_id}"
             )
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
 
         # Get permissions from TrustPermissionStore
         try:
-            from actingweb.trust_permissions import get_trust_permission_store
-            from actingweb.trust_type_registry import get_registry
-
             perm_store = get_trust_permission_store(self.config)
             custom_permissions = perm_store.get_permissions(actor_id, peer_id)
 

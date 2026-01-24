@@ -340,12 +340,23 @@ This enables efficient permission checking without network requests.
    app = ActingWebApp(
        aw_type="urn:actingweb:example.com:myapp",
        fqdn="myapp.example.com"
-   ).with_peer_permissions(enable=True)
+   ).with_peer_permissions(
+       enable=True,
+       auto_delete_on_revocation=True,   # Delete cached data when revoked
+       notify_peer_on_change=True        # Auto-notify peers (default)
+   )
+
+**Configuration Options:**
+
+- ``enable``: Enable peer permissions caching. Default: ``True`` when called.
+- ``auto_delete_on_revocation``: Delete cached peer data when permissions revoked. Default: ``False``.
+- ``notify_peer_on_change``: Auto-notify peers when their permissions change. Default: ``True``.
 
 When enabled, permissions are:
 
 - Fetched when trust relationships are fully approved
 - Updated when permission callbacks are received from peers
+- Sent to peers automatically when you change their permissions (if ``notify_peer_on_change=True``)
 - Refreshed during ``sync_peer()`` operations
 - Deleted when trust relationships are removed
 

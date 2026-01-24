@@ -81,6 +81,10 @@ class Config:
         # When True, automatically delete cached peer data when permissions are revoked
         # Only applies when peer_permissions_caching is enabled
         self.auto_delete_on_revocation: bool = False
+        # When True, automatically notify peers when their permissions change
+        # Sends a callback to /callbacks/permissions/{actor_id} on the peer
+        # Only applies when peer_permissions_caching is enabled
+        self.notify_peer_on_change: bool = True
         #########
         # Configurable ActingWeb settings for this app
         #########

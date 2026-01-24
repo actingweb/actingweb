@@ -4,11 +4,18 @@ Trust Permission Storage for ActingWeb Unified Access Control.
 This module manages per-trust-relationship permission storage using ActingWeb's
 attribute store pattern. It allows individual trust relationships to override
 the default permissions defined in trust types.
+
+When notify_peer_on_change is enabled (default), storing permissions will
+automatically notify the affected peer via a callback to their
+/callbacks/permissions/{actor_id} endpoint.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from . import attribute
@@ -49,7 +56,7 @@ class TrustPermissions:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TrustPermissions":
+    def from_dict(cls, data: dict[str, Any]) -> TrustPermissions:
         """Create from dictionary loaded from storage."""
         return cls(**data)
 
@@ -95,8 +102,24 @@ class TrustPermissionStore:
             )
             return None
 
-    def store_permissions(self, permissions: TrustPermissions) -> bool:
-        """Store trust relationship permissions."""
+    def store_permissions(
+        self, permissions: TrustPermissions, notify_peer: bool | None = None
+    ) -> bool:
+        """Store trust relationship permissions.
+
+        If notify_peer_on_change is enabled in config (default True) and
+        notify_peer is not explicitly False, automatically sends a permission
+        callback to the affected peer.
+
+        Args:
+            permissions: The TrustPermissions to store.
+            notify_peer: Override for peer notification. If None (default),
+                uses config.notify_peer_on_change. If True/False, overrides config.
+
+        Returns:
+            True if storage succeeded. Notification failures are logged but
+            don't affect the return value.
+        """
         if not permissions.validate():
             logger.error(
                 f"Invalid trust permissions definition: {permissions.get_permission_key()}"
@@ -124,6 +147,15 @@ class TrustPermissionStore:
                 cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
                 self._cache[cache_key] = permissions
                 logger.info(f"Stored trust permissions: {cache_key}")
+
+                # Auto-notify peer if configured
+                should_notify = notify_peer
+                if should_notify is None:
+                    should_notify = getattr(self.config, "notify_peer_on_change", True)
+
+                if should_notify:
+                    self._notify_peer(permissions)
+
                 return True
             else:
                 logger.error(f"Failed to store trust permissions {permission_key}")
@@ -134,6 +166,204 @@ class TrustPermissionStore:
                 f"Error storing trust permissions {permissions.get_permission_key()}: {e}"
             )
             return False
+
+    async def store_permissions_async(
+        self, permissions: TrustPermissions, notify_peer: bool | None = None
+    ) -> bool:
+        """Store trust relationship permissions asynchronously.
+
+        Same as store_permissions() but uses async notification.
+
+        Args:
+            permissions: The TrustPermissions to store.
+            notify_peer: Override for peer notification. If None (default),
+                uses config.notify_peer_on_change. If True/False, overrides config.
+
+        Returns:
+            True if storage succeeded. Notification failures are logged but
+            don't affect the return value.
+        """
+        if not permissions.validate():
+            logger.error(
+                f"Invalid trust permissions definition: {permissions.get_permission_key()}"
+            )
+            return False
+
+        bucket = self._get_permissions_bucket(permissions.actor_id)
+        if not bucket:
+            logger.error(
+                f"Cannot access trust permissions bucket for actor {permissions.actor_id}"
+            )
+            return False
+
+        try:
+            # Store permissions data in attribute bucket
+            permission_key = permissions.get_permission_key()
+            permissions_data = permissions.to_dict()
+
+            success = bucket.set_attr(
+                name=permission_key, data=json.dumps(permissions_data)
+            )
+
+            if success:
+                # Update cache
+                cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
+                self._cache[cache_key] = permissions
+                logger.info(f"Stored trust permissions: {cache_key}")
+
+                # Auto-notify peer if configured
+                should_notify = notify_peer
+                if should_notify is None:
+                    should_notify = getattr(self.config, "notify_peer_on_change", True)
+
+                if should_notify:
+                    await self._notify_peer_async(permissions)
+
+                return True
+            else:
+                logger.error(f"Failed to store trust permissions {permission_key}")
+                return False
+
+        except Exception as e:
+            logger.error(
+                f"Error storing trust permissions {permissions.get_permission_key()}: {e}"
+            )
+            return False
+
+    def _notify_peer(self, permissions: TrustPermissions) -> None:
+        """Send permission callback to the affected peer.
+
+        This is fire-and-forget - failures are logged but don't affect
+        the store operation.
+
+        Args:
+            permissions: The TrustPermissions that were stored.
+        """
+        try:
+            from .aw_proxy import AwProxy
+
+            proxy = AwProxy(
+                peer_target={
+                    "id": permissions.actor_id,
+                    "peerid": permissions.peer_id,
+                    "passphrase": None,
+                },
+                config=self.config,
+            )
+
+            if not proxy.trust:
+                logger.warning(
+                    f"Cannot notify peer {permissions.peer_id}: no trust relationship"
+                )
+                return
+
+            callback_data = self._build_callback_data(permissions)
+
+            # POST to peer's /callbacks/permissions/{our_actor_id}
+            response = proxy.create_resource(
+                path=f"callbacks/permissions/{permissions.actor_id}",
+                params=callback_data,
+            )
+
+            if response and "error" not in response:
+                logger.debug(
+                    f"Notified peer {permissions.peer_id} of permission change"
+                )
+            else:
+                logger.warning(
+                    f"Failed to notify peer {permissions.peer_id}: {response}"
+                )
+
+        except Exception as e:
+            logger.warning(f"Error notifying peer {permissions.peer_id}: {e}")
+
+    async def _notify_peer_async(self, permissions: TrustPermissions) -> None:
+        """Send permission callback to the affected peer asynchronously.
+
+        This is fire-and-forget - failures are logged but don't affect
+        the store operation.
+
+        Args:
+            permissions: The TrustPermissions that were stored.
+        """
+        try:
+            import httpx
+
+            from .trust import Trust
+
+            # Get trust relationship to find peer URL and secret
+            trust = Trust(
+                actor_id=permissions.actor_id,
+                peerid=permissions.peer_id,
+                config=self.config,
+            )
+            trust_info = trust.get()
+
+            if not trust_info:
+                logger.warning(
+                    f"Cannot notify peer {permissions.peer_id}: no trust relationship"
+                )
+                return
+
+            peer_baseuri = trust_info.get("baseuri", "")
+            peer_secret = trust_info.get("secret", "")
+
+            if not peer_baseuri:
+                logger.warning(
+                    f"Cannot notify peer {permissions.peer_id}: no baseuri in trust"
+                )
+                return
+
+            callback_url = f"{peer_baseuri.rstrip('/')}/callbacks/permissions/{permissions.actor_id}"
+            callback_data = self._build_callback_data(permissions)
+
+            headers = {"Content-Type": "application/json"}
+            if peer_secret:
+                headers["Authorization"] = f"Bearer {peer_secret}"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    callback_url,
+                    json=callback_data,
+                    headers=headers,
+                )
+
+                if response.status_code in (200, 201, 202, 204):
+                    logger.debug(
+                        f"Notified peer {permissions.peer_id} of permission change"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to notify peer {permissions.peer_id}: "
+                        f"status={response.status_code}"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Error notifying peer {permissions.peer_id}: {e}")
+
+    def _build_callback_data(self, permissions: TrustPermissions) -> dict[str, Any]:
+        """Build the callback data payload for permission notification.
+
+        Args:
+            permissions: The TrustPermissions to send.
+
+        Returns:
+            Dict containing the callback payload.
+        """
+        return {
+            "id": permissions.actor_id,
+            "target": "permissions",
+            "type": "permission",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "data": {
+                "properties": permissions.properties,
+                "methods": permissions.methods,
+                "actions": permissions.actions,
+                "tools": permissions.tools,
+                "resources": permissions.resources,
+                "prompts": permissions.prompts,
+            },
+        }
 
     def get_permissions(self, actor_id: str, peer_id: str) -> TrustPermissions | None:
         """Get trust relationship permissions."""

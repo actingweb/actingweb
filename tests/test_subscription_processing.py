@@ -79,7 +79,10 @@ class TestModuleExports:
     def test_get_remote_bucket_exported(self) -> None:
         """get_remote_bucket is exported."""
         assert get_remote_bucket is not None
-        assert get_remote_bucket("abc123def456abc123def456abc12345") == "remote:abc123def456abc123def456abc12345"
+        assert (
+            get_remote_bucket("abc123def456abc123def456abc12345")
+            == "remote:abc123def456abc123def456abc12345"
+        )
 
     def test_peer_capabilities_exported(self) -> None:
         """PeerCapabilities is exported."""
@@ -394,9 +397,14 @@ class TestProcessSubscriptionCallback:
 
         # Mock the CallbackProcessor
         mock_processor = MagicMock()
-        mock_processor.process_callback = AsyncMock(return_value=ProcessResult.PROCESSED)
+        mock_processor.process_callback = AsyncMock(
+            return_value=ProcessResult.PROCESSED
+        )
 
-        with patch("actingweb.callback_processor.CallbackProcessor", return_value=mock_processor):
+        with patch(
+            "actingweb.callback_processor.CallbackProcessor",
+            return_value=mock_processor,
+        ):
             app._process_subscription_callback(mock_actor, callback_data)
 
         # The processor should have been called

@@ -685,9 +685,20 @@ Add ``.with_peer_permissions()`` to your application configuration:
            fqdn="myapp.example.com",
            proto="https://"
        )
-       .with_peer_permissions(enable=True)  # Enable permission caching
+       .with_peer_permissions(
+           enable=True,                      # Enable permission caching
+           auto_delete_on_revocation=True,   # Delete cached data when revoked
+           notify_peer_on_change=True        # Auto-notify peers (default)
+       )
        .with_peer_capabilities(enable=True)  # Also recommended
    )
+
+**Configuration Options:**
+
+- ``enable``: Enable/disable peer permissions caching. Default: ``True`` when called.
+- ``auto_delete_on_revocation``: Delete cached peer data when permissions are revoked. Default: ``False``.
+- ``notify_peer_on_change``: Automatically notify peers when you change their permissions
+  by sending a callback to ``/callbacks/permissions/{actor_id}``. Default: ``True``.
 
 Using Cached Permissions
 ------------------------

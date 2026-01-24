@@ -791,7 +791,8 @@ network requests.
         fqdn="myapp.example.com"
     ).with_peer_permissions(
         enable=True,
-        auto_delete_on_revocation=True  # Delete cached data when permissions revoked
+        auto_delete_on_revocation=True,  # Delete cached data when permissions revoked
+        notify_peer_on_change=True       # Auto-notify peers when their permissions change
     )
 
 **Parameters:**
@@ -801,6 +802,10 @@ network requests.
   from ``RemotePeerStore`` when the peer revokes property access. This ensures that
   when a peer revokes access to certain data (e.g., ``memory_*`` properties), the
   locally cached copies are deleted. Default: ``False``.
+- ``notify_peer_on_change``: When ``True``, automatically notify peers when their
+  permissions change by sending a callback to their ``/callbacks/permissions/{actor_id}``
+  endpoint. This is fire-and-forget (failures are logged but don't block the store
+  operation). Default: ``True``.
 
 **Default Behavior:**
 
@@ -808,6 +813,7 @@ network requests.
 - Must call ``with_peer_permissions()`` to enable
 - Permissions are stored in the ``_peer_permissions`` attribute bucket (note the ``_`` prefix for library-internal buckets)
 - Auto-delete on revocation is **disabled by default**
+- Notify peer on change is **enabled by default**
 
 Automatic Permission Updates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -828,6 +834,8 @@ When enabled, permissions are automatically updated:
      - Update cached permissions (with change detection)
    * - Permission revoked (with ``auto_delete_on_revocation=True``)
      - Delete cached peer data matching revoked property patterns
+   * - Permissions stored (with ``notify_peer_on_change=True``)
+     - Send callback to peer's ``/callbacks/permissions/{actor_id}``
    * - Trust deleted
      - Delete cached permissions
 

@@ -264,9 +264,12 @@ class NotifyingListProperty:
             if items is not None:
                 diff_info["items"] = items
 
+            # Note: diff_info already contains "list": self._list_name to identify
+            # this as a list operation. We use clean subtarget without "list:" prefix
+            # as that prefix is an internal storage detail, not exposed via HTTP/callbacks.
             self._actor.register_diffs(
                 target="properties",
-                subtarget=f"list:{self._list_name}",
+                subtarget=self._list_name,
                 resource=None,
                 blob=json.dumps(diff_info),
             )

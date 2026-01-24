@@ -15,7 +15,9 @@ class TestListPropertyMetadataAccess:
         mock_config.DbProperty.DbProperty.return_value = mock_db
         mock_db.get.return_value = None  # No existing metadata
 
-        prop_list = ListProperty(actor_id="test_actor", name="test_list", config=mock_config)
+        prop_list = ListProperty(
+            actor_id="test_actor", name="test_list", config=mock_config
+        )
 
         metadata = prop_list.get_metadata()
 
@@ -42,7 +44,9 @@ class TestListPropertyMetadataAccess:
         mock_config.DbProperty.DbProperty.return_value = mock_db
         mock_db.get.return_value = None
 
-        prop_list = ListProperty(actor_id="test_actor", name="test_list", config=mock_config)
+        prop_list = ListProperty(
+            actor_id="test_actor", name="test_list", config=mock_config
+        )
 
         metadata1 = prop_list.get_metadata()
         metadata1["length"] = 999  # Modify the copy
@@ -57,7 +61,9 @@ class TestListPropertyMetadataAccess:
         mock_config.DbProperty.DbProperty.return_value = mock_db
         mock_db.get.return_value = None
 
-        prop_list = ListProperty(actor_id="test_actor", name="test_list", config=mock_config)
+        prop_list = ListProperty(
+            actor_id="test_actor", name="test_list", config=mock_config
+        )
 
         metadata = prop_list.get_metadata()
 

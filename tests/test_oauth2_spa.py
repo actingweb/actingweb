@@ -457,11 +457,13 @@ class TestPassphraseExchange:
         """Test that passphrase grant returns 403 when devtest mode is disabled."""
         from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
 
-        mock_webobj.request.body = json.dumps({
-            "grant_type": "passphrase",
-            "actor_id": "test-actor-id",
-            "passphrase": "test-passphrase",
-        })
+        mock_webobj.request.body = json.dumps(
+            {
+                "grant_type": "passphrase",
+                "actor_id": "test-actor-id",
+                "passphrase": "test-passphrase",
+            }
+        )
 
         handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_disabled)
         result = handler._handle_token()
@@ -476,10 +478,12 @@ class TestPassphraseExchange:
         """Test that passphrase grant returns error when actor_id is missing."""
         from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
 
-        mock_webobj.request.body = json.dumps({
-            "grant_type": "passphrase",
-            "passphrase": "test-passphrase",
-        })
+        mock_webobj.request.body = json.dumps(
+            {
+                "grant_type": "passphrase",
+                "passphrase": "test-passphrase",
+            }
+        )
 
         handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_enabled)
         result = handler._handle_token()
@@ -494,10 +498,12 @@ class TestPassphraseExchange:
         """Test that passphrase grant returns error when passphrase is missing."""
         from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
 
-        mock_webobj.request.body = json.dumps({
-            "grant_type": "passphrase",
-            "actor_id": "test-actor-id",
-        })
+        mock_webobj.request.body = json.dumps(
+            {
+                "grant_type": "passphrase",
+                "actor_id": "test-actor-id",
+            }
+        )
 
         handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_enabled)
         result = handler._handle_token()
@@ -512,11 +518,13 @@ class TestPassphraseExchange:
         """Test that grant_type=passphrase is routed to the correct handler."""
         from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
 
-        mock_webobj.request.body = json.dumps({
-            "grant_type": "passphrase",
-            "actor_id": "test-actor-id",
-            "passphrase": "test-passphrase",
-        })
+        mock_webobj.request.body = json.dumps(
+            {
+                "grant_type": "passphrase",
+                "actor_id": "test-actor-id",
+                "passphrase": "test-passphrase",
+            }
+        )
 
         handler = OAuth2SPAHandler(mock_webobj, mock_config_devtest_enabled)
 

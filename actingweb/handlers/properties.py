@@ -375,9 +375,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                             list_names.add(list_name)
                         # DENIED list properties are excluded
                 except Exception as e:
-                    logger.error(
-                        f"Error filtering list properties by permission: {e}"
-                    )
+                    logger.error(f"Error filtering list properties by permission: {e}")
                     # On error, exclude all list properties for security
                     list_names = set()
             else:

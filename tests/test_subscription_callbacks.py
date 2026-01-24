@@ -116,9 +116,9 @@ class TestSyncSubscriptionCallbacks:
                 )
 
                 # Verify requests.post was called (sync path)
-                assert (
-                    mock_post.called
-                ), "requests.post should be called when sync_callbacks=True"
+                assert mock_post.called, (
+                    "requests.post should be called when sync_callbacks=True"
+                )
                 call_args = mock_post.call_args
                 assert (
                     "https://peer.example.com/callbacks/subscriptions/test_actor/sub456"

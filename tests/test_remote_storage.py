@@ -67,9 +67,7 @@ class TestPeerIdPatterns:
     def test_permissive_pattern_matches_both(self):
         """Test permissive pattern matches both formats."""
         assert PERMISSIVE_PEER_ID_PATTERN.match("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        assert PERMISSIVE_PEER_ID_PATTERN.match(
-            "a1b2c3d4-e5f6-a7b8-c9d0-e1f2a3b4c5d6"
-        )
+        assert PERMISSIVE_PEER_ID_PATTERN.match("a1b2c3d4-e5f6-a7b8-c9d0-e1f2a3b4c5d6")
         assert not PERMISSIVE_PEER_ID_PATTERN.match("invalid")
 
 
@@ -250,9 +248,7 @@ class TestRemotePeerStoreList:
         list_data: dict[str, list] = {}
         list_metadata: dict[str, dict] = {}
 
-        with patch(
-            "actingweb.attribute_list_store.AttributeListStore"
-        ) as list_mock:
+        with patch("actingweb.attribute_list_store.AttributeListStore") as list_mock:
             list_mock.return_value = MockListStore(list_data, list_metadata)
 
             # Also mock Attributes for delete_bucket
@@ -678,7 +674,9 @@ class TestRemotePeerStorePermissionData:
         """Create mock for PeerPermissionStore."""
         stored_permissions = []
 
-        with patch("actingweb.peer_permissions.get_peer_permission_store") as mock_get_store:
+        with patch(
+            "actingweb.peer_permissions.get_peer_permission_store"
+        ) as mock_get_store:
             mock_store = MagicMock()
 
             def store_permissions_side_effect(perms):
@@ -692,7 +690,9 @@ class TestRemotePeerStorePermissionData:
             with patch("actingweb.attribute.Attributes"):
                 yield mock_store, stored_permissions
 
-    def test_apply_permission_data_stores_permissions(self, mock_actor, mock_permission_store):
+    def test_apply_permission_data_stores_permissions(
+        self, mock_actor, mock_permission_store
+    ):
         """Test applying permission data stores in PeerPermissionStore."""
         _, stored_permissions = mock_permission_store
 
@@ -717,7 +717,9 @@ class TestRemotePeerStorePermissionData:
         assert stored.properties == permissions["properties"]
         assert stored.methods == permissions["methods"]
 
-    def test_apply_permission_data_with_all_fields(self, mock_actor, mock_permission_store):
+    def test_apply_permission_data_with_all_fields(
+        self, mock_actor, mock_permission_store
+    ):
         """Test applying permission data with all permission fields."""
         _, stored_permissions = mock_permission_store
 
@@ -746,7 +748,9 @@ class TestRemotePeerStorePermissionData:
         assert stored.resources == permissions["resources"]
         assert stored.prompts == permissions["prompts"]
 
-    def test_apply_permission_data_with_partial_fields(self, mock_actor, mock_permission_store):
+    def test_apply_permission_data_with_partial_fields(
+        self, mock_actor, mock_permission_store
+    ):
         """Test applying permission data with only some fields."""
         _, stored_permissions = mock_permission_store
 
@@ -764,7 +768,9 @@ class TestRemotePeerStorePermissionData:
         assert stored.properties is None
         assert stored.methods is None
 
-    def test_apply_permission_data_includes_timestamp(self, mock_actor, mock_permission_store):
+    def test_apply_permission_data_includes_timestamp(
+        self, mock_actor, mock_permission_store
+    ):
         """Test that apply_permission_data includes fetched_at timestamp."""
         _, stored_permissions = mock_permission_store
 
@@ -786,7 +792,9 @@ class TestRemotePeerStorePermissionData:
         actor.id = None  # No actor ID
         actor.config = MagicMock()
 
-        store = RemotePeerStore(actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False)
+        store = RemotePeerStore(
+            actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False
+        )
         permissions = {"properties": {"patterns": ["*"]}}
 
         result = store.apply_permission_data(permissions)
@@ -798,7 +806,9 @@ class TestRemotePeerStorePermissionData:
 
     def test_apply_permission_data_handles_store_error(self, mock_actor):
         """Test apply_permission_data handles store errors gracefully."""
-        with patch("actingweb.peer_permissions.get_peer_permission_store") as mock_get_store:
+        with patch(
+            "actingweb.peer_permissions.get_peer_permission_store"
+        ) as mock_get_store:
             mock_store = MagicMock()
             mock_store.store_permissions.side_effect = Exception("Database error")
             mock_get_store.return_value = mock_store

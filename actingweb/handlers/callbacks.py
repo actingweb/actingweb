@@ -205,9 +205,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                 )
 
                 # Auto-delete cached peer data if configured and access was revoked
-                if (
-                    permission_changes.get("has_revocations")
-                    and getattr(myself.config, "auto_delete_on_revocation", False)
+                if permission_changes.get("has_revocations") and getattr(
+                    myself.config, "auto_delete_on_revocation", False
                 ):
                     self._delete_revoked_peer_data(
                         actor_interface,

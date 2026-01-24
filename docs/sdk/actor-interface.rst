@@ -146,7 +146,7 @@ See :doc:`../guides/trust-relationships` for details on enabling and configuring
 Peer Permissions Caching
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-When peer permissions caching is enabled (via ``app.with_peer_permissions()``), you can check what permissions peers have granted to your actor:
+When peer permissions caching is enabled (via ``app.with_peer_permissions()``), you can check what permissions peers have granted to your actor. The ``notify_peer_on_change`` option (default ``True``) automatically notifies peers when you change their permissions. See :doc:`../quickstart/configuration` for all options.
 
 .. code-block:: python
 

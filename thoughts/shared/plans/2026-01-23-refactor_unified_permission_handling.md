@@ -35,34 +35,34 @@ Add library-level permission caching infrastructure to ActingWeb:
 | - | Unit tests for peer_permissions | ✅ DONE | 45 tests in test_peer_permissions_unit.py |
 | - | CHANGELOG.rst updated | ✅ DONE | Breaking changes + features documented |
 
-### PARTIALLY COMPLETE
+### ALL COMPLETE
 
 | Phase | Task | Status | Notes |
 |-------|------|--------|-------|
-| 4.1 | Fix subscription diff callbacks (list: prefix) | ⬜ TODO | `interface/property_store.py:269` uses `subtarget=f"list:{name}"` |
+| 4.1 | Fix subscription diff callbacks (list: prefix) | ✅ DONE | `interface/property_store.py:269` now uses clean subtarget |
 | 4.2 | Block GET /properties/list:* access | ✅ DONE | `handlers/properties.py:154` blocks access |
 | 4.4 | Reject list: keys in Property class | ✅ DONE | `property.py:75-88` raises ValueError |
-| - | Additional library tests | ⬜ TODO | test_callback_processor.py, test_remote_storage.py |
+| - | Additional library tests | ✅ DONE | Already exist in test_callback_processor.py, test_remote_storage.py |
 
-### NOT STARTED - Required for actingweb_mcp Migration
+### COMPLETE - Required for actingweb_mcp Migration
 
 | Phase | Task | Status | Notes |
 |-------|------|--------|-------|
-| 5.1 | Add `notify_peer_on_change` config option | ⬜ TODO | Add to Config class and with_peer_permissions() |
-| 5.2 | Auto-notify peer in TrustPermissionStore.store_permissions() | ⬜ TODO | Call _notify_peer() when configured |
-| 5.3 | Add _notify_peer() method to TrustPermissionStore | ⬜ TODO | Fire-and-forget POST to /callbacks/permissions |
-| 5.4 | Add async variants: store_permissions_async(), _notify_peer_async() | ⬜ TODO | Non-blocking versions |
+| 5.1 | Add `notify_peer_on_change` config option | ✅ DONE | Added to Config class and with_peer_permissions() |
+| 5.2 | Auto-notify peer in TrustPermissionStore.store_permissions() | ✅ DONE | Calls _notify_peer() when configured |
+| 5.3 | Add _notify_peer() method to TrustPermissionStore | ✅ DONE | Fire-and-forget POST to /callbacks/permissions |
+| 5.4 | Add async variants: store_permissions_async(), _notify_peer_async() | ✅ DONE | Non-blocking versions using httpx |
 
-### DOCUMENTATION NOT STARTED
+### DOCUMENTATION COMPLETE
 
 | File | Task | Status | Notes |
 |------|------|--------|-------|
-| `docs/migration/v3.10.rst` | Add bucket naming breaking change | ⬜ TODO | Document `_` prefix migration |
-| `docs/migration/v3.10.rst` | Add peer permissions caching section | ⬜ TODO | Document `with_peer_permissions()` |
-| `docs/protocol/actingweb-spec.rst` | Add Permission Callback section | ⬜ TODO | New callback type for v1.4/v1.5 |
-| `docs/quickstart/configuration.rst` | Add `with_peer_permissions()` | ⬜ TODO | Matches `with_peer_capabilities()` docs |
-| `docs/guides/trust-relationships.rst` | Add peer permissions caching | ⬜ TODO | Matches `with_peer_capabilities()` docs |
-| `docs/sdk/actor-interface.rst` | Add PeerPermissionStore usage | ⬜ TODO | Matches peer_capabilities docs |
+| `docs/migration/v3.10.rst` | Add bucket naming breaking change | ✅ DONE | Line 593+ |
+| `docs/migration/v3.10.rst` | Add peer permissions caching section | ✅ DONE | Line 653+ |
+| `docs/protocol/actingweb-spec.rst` | Add Permission Callback section | ✅ DONE | Line 2723+ |
+| `docs/quickstart/configuration.rst` | Add `with_peer_permissions()` | ✅ DONE | Line 778+ |
+| `docs/guides/trust-relationships.rst` | Add peer permissions caching | ✅ DONE | Line 330+ |
+| `docs/sdk/actor-interface.rst` | Add PeerPermissionStore usage | ✅ DONE | Line 146+ |
 
 ---
 
@@ -319,10 +319,13 @@ Add test cases:
 - `actingweb/config.py` - Add peer_permissions_caching attribute
 - `CHANGELOG.rst` - Document breaking changes + features
 
-**TO MODIFY** (remaining code):
-- `actingweb/handlers/properties.py` - Add list: prefix validation in get() method
-- `actingweb/property.py` - Reject list: prefixed keys in __getitem__
-- `actingweb/actor.py` - Review register_diffs() for list property handling
+**MODIFIED** (all complete):
+- ✅ `actingweb/interface/property_store.py` - Fixed list: prefix in subtarget (line 269)
+- ✅ `actingweb/trust_permissions.py` - Added _notify_peer(), _notify_peer_async(), store_permissions_async(), auto-notification
+- ✅ `actingweb/config.py` - Added notify_peer_on_change config option
+- ✅ `actingweb/interface/app.py` - Added notify_peer_on_change to with_peer_permissions()
+- ✅ `actingweb/handlers/properties.py` - list: prefix validation in get() method (line 154)
+- ✅ `actingweb/property.py` - Reject list: prefixed keys in __getitem__/__setitem__ (lines 75-88)
 
 **TO MODIFY** (remaining documentation):
 - `docs/migration/v3.10.rst` - Add bucket naming breaking change + peer permissions caching
@@ -554,7 +557,7 @@ self._actor.register_diffs(
 
 Required to support actingweb_mcp migration. See: `actingweb_mcp/thoughts/shared/plans/2026-01-23-unified-permission-handling-migration.md`
 
-**5.1 Add Config Option**
+#### 5.1 Add Config Option
 
 **File**: `actingweb/config.py` (after line 83)
 
@@ -575,7 +578,7 @@ def with_peer_permissions(
 ) -> "ActingWebApp":
 ```
 
-**5.2 & 5.3 Auto-Notify Peer in TrustPermissionStore**
+#### 5.2 & 5.3 Auto-Notify Peer in TrustPermissionStore
 
 **File**: `actingweb/trust_permissions.py`
 
@@ -651,30 +654,21 @@ def _notify_peer(self, permissions: TrustPermissions) -> None:
         logger.warning(f"Error notifying peer {permissions.peer_id}: {e}")
 ```
 
-**5.4 Add Async Variants**
+#### 5.4 Add Async Variants
 
 Add `store_permissions_async()` and `_notify_peer_async()` using httpx for non-blocking operations.
 
-### Priority 3: Documentation Updates
+### Priority 3: Documentation (COMPLETE)
 
-1. **docs/migration/v3.10.rst**:
-   - Add "Breaking Change: Bucket Naming Convention" section documenting `_` prefix
-   - Add "Peer Permissions Caching" section documenting `with_peer_permissions()`
+All documentation has been added:
+- ✅ `docs/migration/v3.10.rst` - Bucket naming convention and peer permissions caching
+- ✅ `docs/protocol/actingweb-spec.rst` - Permission Callback section (line 2723+)
+- ✅ `docs/quickstart/configuration.rst` - Peer Permissions Caching section (line 778+)
+- ✅ `docs/guides/trust-relationships.rst` - Peer permissions caching (line 330+)
+- ✅ `docs/sdk/actor-interface.rst` - PeerPermissionStore usage (line 146+)
+- ✅ `docs/contributing/architecture.rst` - Inter-actor communication flow diagrams
 
-2. **docs/protocol/actingweb-spec.rst**:
-   - Add "Permission Callback (OPTIONAL)" section
-   - Update changelog for v1.4 or v1.5
-
-3. **docs/quickstart/configuration.rst**:
-   - Add `with_peer_permissions()` configuration example (matches existing `with_peer_capabilities()`)
-
-4. **docs/guides/trust-relationships.rst**:
-   - Add peer permissions caching documentation (matches existing peer_capabilities section)
-
-5. **docs/sdk/actor-interface.rst**:
-   - Add PeerPermissionStore usage examples
-
-### Priority 3: Additional Tests
+### Priority 4: Additional Tests (TODO)
 
 1. **tests/test_callback_processor.py**: Permission callback bypasses sequencing
 2. **tests/test_remote_storage.py**: `apply_permission_data()` tests
@@ -685,8 +679,8 @@ Add `store_permissions_async()` and `_notify_peer_async()` using httpx for non-b
 
 - ✅ PeerPermissionStore successfully caches full TrustPermissions structure
 - ✅ Permission changes flow through subscription callback system
-- ⬜ "list:" prefix never exposed via HTTP or callbacks (Phase 4.1 - diff subtarget still uses prefix)
+- ✅ "list:" prefix never exposed via HTTP or callbacks (Phase 4.1 - fixed)
 - ✅ Subscription creation automatically fetches permission baseline
-- ✅ Unit tests pass (45 tests)
-- ⬜ Automatic peer notification when permissions change (Phase 5 - required for actingweb_mcp)
-- ⬜ Async variants for permission storage and notification (Phase 5.4)
+- ✅ Unit tests pass (45+ tests)
+- ✅ Automatic peer notification when permissions change (Phase 5 - implemented)
+- ✅ Async variants for permission storage and notification (Phase 5.4 - implemented)

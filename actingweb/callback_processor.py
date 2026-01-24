@@ -234,9 +234,7 @@ class CallbackProcessor:
 
         # Handle permission callbacks - bypass sequencing entirely
         if callback_type == "permission":
-            return await self._handle_permission(
-                peer_id, data, handler
-            )
+            return await self._handle_permission(peer_id, data, handler)
 
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):

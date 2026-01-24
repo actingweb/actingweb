@@ -88,7 +88,9 @@ class TestCallbackProcessorSequencing:
     """Test callback sequencing logic."""
 
     def test_process_first_callback_in_sequence(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test processing first callback (sequence 1)."""
         processor = CallbackProcessor(mock_actor)
@@ -110,7 +112,9 @@ class TestCallbackProcessorSequencing:
         assert state_info["pending_count"] == 0
 
     def test_process_callback_in_order(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test processing callbacks in correct sequence order."""
         processor = CallbackProcessor(mock_actor)
@@ -141,7 +145,9 @@ class TestCallbackProcessorSequencing:
         assert state_info["last_seq"] == 2
 
     def test_detect_duplicate_callback(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test duplicate callback detection."""
         processor = CallbackProcessor(mock_actor)
@@ -169,7 +175,9 @@ class TestCallbackProcessorSequencing:
         assert result == ProcessResult.DUPLICATE
 
     def test_detect_old_sequence_as_duplicate(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that sequences lower than last_seq are duplicates."""
         processor = CallbackProcessor(mock_actor)
@@ -198,7 +206,9 @@ class TestCallbackProcessorSequencing:
         assert result == ProcessResult.DUPLICATE
 
     def test_gap_adds_to_pending(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that gaps add callbacks to pending queue."""
         processor = CallbackProcessor(mock_actor)
@@ -231,7 +241,9 @@ class TestCallbackProcessorSequencing:
         assert 3 in state_info["pending_sequences"]
 
     def test_fill_gap_processes_pending(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that filling a gap processes pending callbacks."""
         processor = CallbackProcessor(mock_actor)
@@ -287,7 +299,9 @@ class TestCallbackProcessorPendingQueue:
     """Test pending queue functionality."""
 
     def test_pending_queue_limit(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test back-pressure when pending queue is full."""
         processor = CallbackProcessor(mock_actor, max_pending=3)
@@ -327,7 +341,9 @@ class TestCallbackProcessorPendingQueue:
         assert result == ProcessResult.REJECTED
 
     def test_pending_callbacks_sorted(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that pending callbacks are sorted by sequence."""
         processor = CallbackProcessor(mock_actor)
@@ -357,7 +373,9 @@ class TestCallbackProcessorPendingQueue:
         assert state_info["pending_sequences"] == [3, 4, 5]  # Sorted
 
     def test_gap_timeout_triggers_resync(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that gap timeout triggers resync."""
         processor = CallbackProcessor(mock_actor, gap_timeout_seconds=0.1)
@@ -406,7 +424,9 @@ class TestCallbackProcessorResync:
     """Test resync callback handling."""
 
     def test_resync_resets_state(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that resync callback resets state."""
         processor = CallbackProcessor(mock_actor)
@@ -452,7 +472,9 @@ class TestCallbackProcessorResync:
         assert state_info["resync_pending"] is False
 
     def test_resync_invokes_handler(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that resync invokes handler with correct type."""
         processor = CallbackProcessor(mock_actor)
@@ -551,7 +573,9 @@ class TestCallbackProcessorCleanup:
     """Test state cleanup functionality."""
 
     def test_clear_state_removes_subscription_data(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test clearing state for a subscription."""
         processor = CallbackProcessor(mock_actor)
@@ -585,7 +609,9 @@ class TestCallbackProcessorCleanup:
         assert state_info["pending_count"] == 0
 
     def test_clear_all_state_for_peer(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test clearing all state for a peer."""
         processor = CallbackProcessor(mock_actor)
@@ -628,7 +654,9 @@ class TestCallbackProcessorSyncVersion:
     """Test synchronous version of callback processing."""
 
     def test_sync_process_callback(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test synchronous callback processing."""
         processor = CallbackProcessor(mock_actor)
@@ -646,7 +674,9 @@ class TestCallbackProcessorSyncVersion:
         assert state_info["last_seq"] == 1
 
     def test_sync_handler_invoked(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test sync handler is invoked correctly."""
         processor = CallbackProcessor(mock_actor)
@@ -668,7 +698,9 @@ class TestCallbackProcessorSyncVersion:
         assert received_callbacks[0].callback_type == CallbackType.DIFF
 
     def test_sync_resync_processing(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test synchronous resync processing."""
         processor = CallbackProcessor(mock_actor)
@@ -728,7 +760,9 @@ class TestPermissionCallbackProcessing:
     """Test permission callback handling."""
 
     def test_permission_callback_bypasses_sequencing(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that permission callbacks bypass sequence tracking."""
         processor = CallbackProcessor(mock_actor)
@@ -750,7 +784,9 @@ class TestPermissionCallbackProcessing:
         assert result == ProcessResult.PROCESSED
 
     def test_permission_callback_invokes_handler(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that permission callbacks invoke handler with correct type."""
         processor = CallbackProcessor(mock_actor)
@@ -779,7 +815,9 @@ class TestPermissionCallbackProcessing:
         assert "properties" in received_callback.data
 
     def test_permission_callback_does_not_affect_subscription_state(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that permission callbacks don't affect subscription state."""
         processor = CallbackProcessor(mock_actor)
@@ -813,7 +851,9 @@ class TestPermissionCallbackProcessing:
         assert state_after["last_seq"] == 1
 
     def test_permission_callback_sync_version(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test synchronous permission callback processing."""
         processor = CallbackProcessor(mock_actor)
@@ -837,7 +877,9 @@ class TestPermissionCallbackProcessing:
         assert received_callback.callback_type == CallbackType.PERMISSION
 
     def test_permission_callback_with_full_permission_structure(
-        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+        self,
+        mock_actor: MagicMock,
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test permission callback with complete permission structure."""
         processor = CallbackProcessor(mock_actor)
@@ -873,7 +915,10 @@ class TestPermissionCallbackProcessing:
 
         assert received_callback is not None
         assert received_callback.data == permission_data
-        assert received_callback.data["properties"]["patterns"] == ["memory_*", "profile/*"]
+        assert received_callback.data["properties"]["patterns"] == [
+            "memory_*",
+            "profile/*",
+        ]
         assert received_callback.data["tools"]["allowed"] == ["search", "fetch"]
 
 

@@ -59,7 +59,9 @@ class TestPeerProfileDataclass:
             },
         )
 
-        assert profile.extra_attributes["avatar_url"] == "https://example.com/avatar.png"
+        assert (
+            profile.extra_attributes["avatar_url"] == "https://example.com/avatar.png"
+        )
         assert profile.extra_attributes["timezone"] == "UTC"
 
     def test_profile_with_metadata(self):
@@ -160,7 +162,9 @@ class TestPeerProfileMethods:
         profile.set_attribute("avatar_url", "https://example.com/avatar.png")
         profile.set_attribute("timezone", "UTC")
 
-        assert profile.extra_attributes["avatar_url"] == "https://example.com/avatar.png"
+        assert (
+            profile.extra_attributes["avatar_url"] == "https://example.com/avatar.png"
+        )
         assert profile.extra_attributes["timezone"] == "UTC"
 
     def test_validate_valid_profile(self):
@@ -242,7 +246,9 @@ class TestPeerProfileSerialization:
         assert data["displayname"] == "Test User"
         assert data["email"] == "test@example.com"
         assert data["description"] == "A test description"
-        assert data["extra_attributes"]["avatar_url"] == "https://example.com/avatar.png"
+        assert (
+            data["extra_attributes"]["avatar_url"] == "https://example.com/avatar.png"
+        )
         assert data["fetched_at"] == "2025-01-22T10:00:00"
         assert data["fetch_error"] is None
 
@@ -289,7 +295,9 @@ class TestPeerProfileSerialization:
         assert profile.displayname == "Test User"
         assert profile.email == "test@example.com"
         assert profile.description == "A test description"
-        assert profile.extra_attributes["avatar_url"] == "https://example.com/avatar.png"
+        assert (
+            profile.extra_attributes["avatar_url"] == "https://example.com/avatar.png"
+        )
         assert profile.fetched_at == "2025-01-22T10:00:00"
         assert profile.fetch_error is None
 
@@ -344,13 +352,10 @@ class TestActingWebAppConfiguration:
         """Test with_peer_profile() sets default attributes."""
         from actingweb.interface.app import ActingWebApp
 
-        app = (
-            ActingWebApp(
-                aw_type="urn:test:example.com:test",
-                fqdn="test.example.com",
-            )
-            .with_peer_profile()
-        )
+        app = ActingWebApp(
+            aw_type="urn:test:example.com:test",
+            fqdn="test.example.com",
+        ).with_peer_profile()
 
         assert app._peer_profile_attributes == ["displayname", "email", "description"]
 
@@ -359,13 +364,10 @@ class TestActingWebAppConfiguration:
         from actingweb.interface.app import ActingWebApp
 
         custom_attrs = ["displayname", "avatar_url", "timezone"]
-        app = (
-            ActingWebApp(
-                aw_type="urn:test:example.com:test",
-                fqdn="test.example.com",
-            )
-            .with_peer_profile(attributes=custom_attrs)
-        )
+        app = ActingWebApp(
+            aw_type="urn:test:example.com:test",
+            fqdn="test.example.com",
+        ).with_peer_profile(attributes=custom_attrs)
 
         assert app._peer_profile_attributes == custom_attrs
 
@@ -373,13 +375,10 @@ class TestActingWebAppConfiguration:
         """Test with_peer_profile() with empty list disables caching."""
         from actingweb.interface.app import ActingWebApp
 
-        app = (
-            ActingWebApp(
-                aw_type="urn:test:example.com:test",
-                fqdn="test.example.com",
-            )
-            .with_peer_profile(attributes=[])
-        )
+        app = ActingWebApp(
+            aw_type="urn:test:example.com:test",
+            fqdn="test.example.com",
+        ).with_peer_profile(attributes=[])
 
         # Empty list should be set, not None
         assert app._peer_profile_attributes == []
@@ -388,13 +387,10 @@ class TestActingWebAppConfiguration:
         """Test that peer_profile_attributes is propagated to Config."""
         from actingweb.interface.app import ActingWebApp
 
-        app = (
-            ActingWebApp(
-                aw_type="urn:test:example.com:test",
-                fqdn="test.example.com",
-            )
-            .with_peer_profile(attributes=["displayname", "email"])
-        )
+        app = ActingWebApp(
+            aw_type="urn:test:example.com:test",
+            fqdn="test.example.com",
+        ).with_peer_profile(attributes=["displayname", "email"])
 
         config = app.get_config()
         assert config.peer_profile_attributes == ["displayname", "email"]

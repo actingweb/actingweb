@@ -72,7 +72,10 @@ class TestPassphraseExchangeEndpoint:
         assert response.status_code == 401
         data = response.json()
         assert data["error"] is True
-        assert "passphrase" in data["message"].lower() or "invalid" in data["message"].lower()
+        assert (
+            "passphrase" in data["message"].lower()
+            or "invalid" in data["message"].lower()
+        )
 
     def test_passphrase_exchange_nonexistent_actor(self, test_app):
         """Test that nonexistent actor returns 404."""
@@ -292,7 +295,9 @@ class TestPassphraseExchangeDevtestDisabled:
                 pass
             time.sleep(0.5)
         else:
-            raise RuntimeError(f"No-devtest app failed to start on port {no_devtest_port}")
+            raise RuntimeError(
+                f"No-devtest app failed to start on port {no_devtest_port}"
+            )
 
         return no_devtest_url
 

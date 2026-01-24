@@ -31,6 +31,7 @@ def get_db_module(backend: str, module: str):
 def test_actor_id():
     """Generate a unique actor ID and create actor in PostgreSQL for foreign key tests."""
     import os
+
     actor_id = str(uuid.uuid4())
 
     # Only create actor in PostgreSQL if DATABASE_BACKEND is set to postgresql
@@ -67,11 +68,11 @@ def skip_mismatched_backend(request):
         return
 
     # Check if this test is parameterized with backend
-    if hasattr(request, 'param'):
+    if hasattr(request, "param"):
         backend = request.param
-    elif 'backend' in request.fixturenames:
+    elif "backend" in request.fixturenames:
         # Get backend from indirect fixture
-        backend = request.getfixturevalue('backend')
+        backend = request.getfixturevalue("backend")
     else:
         # No backend parameter, don't skip
         return
@@ -188,11 +189,15 @@ class TestPropertyLookupBasicOperations:
         if backend == "dynamodb":
             # DynamoDB PutItem overwrites existing entry (last write wins)
             assert result2 is True, "DynamoDB allows overwrite"
-            assert found_actor_id == other_actor_id, "DynamoDB overwrites with new value"
+            assert found_actor_id == other_actor_id, (
+                "DynamoDB overwrites with new value"
+            )
         elif backend == "postgresql":
             # PostgreSQL INSERT fails on duplicate primary key
             assert result2 is False, "PostgreSQL rejects duplicate"
-            assert found_actor_id == test_actor_id, "PostgreSQL preserves original entry"
+            assert found_actor_id == test_actor_id, (
+                "PostgreSQL preserves original entry"
+            )
 
         # Cleanup
         lookup3.delete()
@@ -434,9 +439,9 @@ class TestLargeValueSupport:
         found_actor_id = prop2.get_actor_id_from_property(
             name="oauthId", value=large_value
         )
-        assert (
-            found_actor_id == test_actor_id
-        ), "Lookup table should handle large values that would exceed GSI limit"
+        assert found_actor_id == test_actor_id, (
+            "Lookup table should handle large values that would exceed GSI limit"
+        )
 
         # Cleanup
         prop2.delete()

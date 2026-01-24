@@ -192,7 +192,9 @@ class WwwHandler(base_handler.BaseHandler):
                     display_properties[prop_name] = prop_value
 
             # Debug logging
-            final_properties = display_properties if display_properties else (properties or {})
+            final_properties = (
+                display_properties if display_properties else (properties or {})
+            )
             logger.debug(
                 f"Template values - properties: {list(final_properties.keys())}"
             )

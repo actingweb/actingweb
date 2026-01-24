@@ -51,7 +51,9 @@ class TestAsyncHookExecution:
 
         registry.register_method_hook("test_method", sync_hook)
 
-        result = await registry.execute_method_hooks_async("test_method", mock_actor, {})
+        result = await registry.execute_method_hooks_async(
+            "test_method", mock_actor, {}
+        )
 
         assert result == {"result": "sync"}
 
@@ -86,7 +88,9 @@ class TestAsyncHookExecution:
         registry.register_method_hook("test_method", failing_hook)
 
         # Should return None and log error, not propagate exception
-        result = await registry.execute_method_hooks_async("test_method", mock_actor, {})
+        result = await registry.execute_method_hooks_async(
+            "test_method", mock_actor, {}
+        )
         assert result is None
 
     @pytest.mark.asyncio
@@ -324,7 +328,9 @@ class TestAsyncHookContextDetection:
         assert result == {"ran": "via_asyncio_run"}
 
     @pytest.mark.asyncio
-    async def test_async_hook_from_sync_method_in_async_context(self, registry, mock_actor):
+    async def test_async_hook_from_sync_method_in_async_context(
+        self, registry, mock_actor
+    ):
         """Test async hook called from sync method while inside async event loop.
 
         This tests the ThreadPoolExecutor fallback path in _execute_hook_in_sync_context.
@@ -350,7 +356,9 @@ class TestAsyncHookContextDetection:
         assert execution_log == ["async_hook_start", "async_hook_end"]
 
     @pytest.mark.asyncio
-    async def test_mixed_hooks_from_sync_method_in_async_context(self, registry, mock_actor):
+    async def test_mixed_hooks_from_sync_method_in_async_context(
+        self, registry, mock_actor
+    ):
         """Test both sync and async hooks via sync method in async context."""
         execution_log = []
 
@@ -405,7 +413,9 @@ class TestAsyncHookFlaskCompatibility:
         registry.register_method_hook("flask_method", async_method)
 
         # Simulate Flask handler calling execute_method_hooks (sync)
-        result = registry.execute_method_hooks("flask_method", mock_actor, {"input": "test"})
+        result = registry.execute_method_hooks(
+            "flask_method", mock_actor, {"input": "test"}
+        )
 
         assert result == {"processed": "test"}
 
@@ -419,7 +429,9 @@ class TestAsyncHookFlaskCompatibility:
         registry.register_action_hook("flask_action", async_action)
 
         # Simulate Flask handler calling execute_action_hooks (sync)
-        result = registry.execute_action_hooks("flask_action", mock_actor, {"param": "value"})
+        result = registry.execute_action_hooks(
+            "flask_action", mock_actor, {"param": "value"}
+        )
 
         assert result == {"action_result": "value"}
 

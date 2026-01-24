@@ -80,6 +80,14 @@ ADDED
   - App-specific handling via ``@app.callback_hook("permissions")`` decorator
   - New ``RemotePeerStore.apply_permission_data()`` method for programmatic permission updates
 
+- **Automatic Peer Notification on Permission Change**: Added automatic notification of peers when their permissions are changed via ``TrustPermissionStore.store_permissions()``.
+
+  - New configuration option: ``ActingWebApp.with_peer_permissions(notify_peer_on_change=True)`` (default: ``True``)
+  - New ``TrustPermissionStore`` methods: ``store_permissions_async()``, ``_notify_peer()``, ``_notify_peer_async()``
+  - Notifications are fire-and-forget (failures logged but don't block storage)
+  - Sends POST to peer's ``/callbacks/permissions/{actor_id}`` endpoint
+  - Can be disabled per-call via ``store_permissions(permissions, notify_peer=False)``
+
 - **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
 
   - New module: ``actingweb.callback_processor`` - Processes incoming subscription callbacks with sequence validation
@@ -174,6 +182,8 @@ FIXED
 - **Baseline data fetch for new subscriptions**: Fixed ``sync_subscription()`` and ``sync_subscription_async()`` to fetch baseline data from the target resource when no diffs exist. Previously, syncing a fresh subscription with 0 diffs would do nothing, leaving the remote storage empty. Now it properly establishes baseline data via ``RemotePeerStore.apply_resync_data()``, enabling features like Remote Memory to work immediately after subscription creation. The baseline fetch respects subscription scope by including subtarget and resource in the fetch path (e.g., ``/properties/myProp`` for scoped subscriptions, ``/properties?metadata=true`` for collection-level subscriptions).
 
 - **Subscription authorization path patterns**: Changed authorization path pattern from ``<id>/<id>`` to ``<id>/<subid>`` in ``handlers/subscription.py`` for clarity and consistency with other handlers.
+
+- **List property subscription diff callbacks**: Fixed ``list:`` prefix leakage in subscription diff callbacks. Previously, list property changes registered diffs with ``subtarget="list:myList"`` which exposed the internal ``list:`` prefix in callbacks sent to subscribers. Now uses clean subtarget (``subtarget="myList"``) - the diff blob already contains ``"list": "myList"`` to identify list operations. Subscribers no longer need to strip the prefix when processing list property callbacks.
 
 v3.9.2: Jan 16, 2026
 --------------------

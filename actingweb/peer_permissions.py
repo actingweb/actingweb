@@ -199,9 +199,7 @@ class PeerPermissionStore:
         self.config = config
         self._cache: dict[str, PeerPermissions] = {}
 
-    def _get_permissions_bucket(
-        self, actor_id: str
-    ) -> attribute.Attributes | None:
+    def _get_permissions_bucket(self, actor_id: str) -> attribute.Attributes | None:
         """Get the peer permissions attribute bucket for an actor."""
         try:
             return attribute.Attributes(
@@ -266,9 +264,7 @@ class PeerPermissionStore:
             )
             return False
 
-    def get_permissions(
-        self, actor_id: str, peer_id: str
-    ) -> PeerPermissions | None:
+    def get_permissions(self, actor_id: str, peer_id: str) -> PeerPermissions | None:
         """Get cached peer permissions."""
         cache_key = f"{actor_id}:{peer_id}"
 

@@ -40,7 +40,7 @@ class TestPropertyListNotifications:
         mock_actor.register_diffs.assert_called_once()
         call_args = mock_actor.register_diffs.call_args
         assert call_args[1]["target"] == "properties"
-        assert call_args[1]["subtarget"] == "list:test_list"
+        assert call_args[1]["subtarget"] == "test_list"
 
         blob = json.loads(call_args[1]["blob"])
         assert blob["operation"] == "append"
@@ -230,12 +230,12 @@ class TestPropertyListNotifications:
         blob = json.loads(mock_actor.register_diffs.call_args[1]["blob"])
         assert blob["list"] == "test_list"
 
-    def test_subtarget_has_list_prefix(self):
-        """Test that subtarget uses 'list:' prefix for property list notifications."""
+    def test_subtarget_uses_clean_list_name(self):
+        """Test that subtarget uses clean list name without 'list:' prefix."""
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
         mock_list_prop.__len__ = Mock(return_value=2)
 
         notifying_list.append("item")
 
         call_args = mock_actor.register_diffs.call_args
-        assert call_args[1]["subtarget"] == "list:test_list"
+        assert call_args[1]["subtarget"] == "test_list"

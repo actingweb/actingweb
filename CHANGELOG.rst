@@ -5,7 +5,7 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.10.0a5: Jan 23, 2026
+v3.10.0a5: Jan 24, 2026
 -----------------------
 
 BREAKING CHANGES

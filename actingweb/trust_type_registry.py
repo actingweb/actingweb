@@ -176,7 +176,6 @@ class TrustTypeRegistry:
     def get_type(self, name: str) -> TrustType | None:
         """Get a trust type by name (from system actor properties)."""
         if self._cache_valid and name in self._cache:
-            logger.debug(f"Returning cached trust type '{name}'")
             return self._cache[name]
 
         sys_actor = self._get_system_actor()

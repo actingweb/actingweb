@@ -219,20 +219,25 @@ class TrustPermissionStore:
             don't affect the return value.
 
         Performance Notes:
-            Async version: Notification is non-blocking but still awaited. For true
-            fire-and-forget, consider using a background task queue.
+            Async version: Notification is fire-and-forget using background task.
+            This prevents blocking when the peer is on the same server.
         """
         success = self._store_permissions_internal(permissions)
 
         if success and self._should_notify_peer(notify_peer):
-            try:
-                await self._notify_peer_async(permissions)
-            except Exception as e:
-                # Fire-and-forget: log but don't affect return value
-                logger.warning(
-                    f"Exception during async peer notification for {permissions.actor_id}: {e}",
-                    exc_info=True,
-                )
+            # Fire-and-forget: schedule notification as background task
+            import asyncio
+
+            async def _notify_with_error_handling():
+                try:
+                    await self._notify_peer_async(permissions)
+                except Exception as e:
+                    logger.warning(
+                        f"Exception during async peer notification for {permissions.actor_id}: {e}",
+                        exc_info=True,
+                    )
+
+            asyncio.create_task(_notify_with_error_handling())
 
         return success
 

@@ -963,9 +963,21 @@ Best Practices
 
    .. code-block:: python
 
-       from actingweb.peer_permissions import fetch_peer_permissions
+       from actingweb.peer_permissions import fetch_peer_permissions_async
 
-       perms = fetch_peer_permissions(actor, peer_id)
+       perms = await fetch_peer_permissions_async(actor.id, peer_id, actor.config)
+
+**Permission Query Endpoint:**
+
+The library provides a built-in handler for the ``GET /{actor_id}/permissions/{peer_id}``
+endpoint. This allows peers to proactively query what permissions they've been granted,
+supporting initial discovery and refresh scenarios.
+
+The endpoint is automatically available when using the ActingWeb framework and requires
+no additional configuration. Peers must have a valid trust relationship to query permissions.
+
+This pull-based query endpoint complements the push-based permission callback mechanism,
+forming a robust hybrid architecture for permission discovery and synchronization
 
 Logging
 -------

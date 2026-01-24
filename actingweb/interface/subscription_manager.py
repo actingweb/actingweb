@@ -1278,6 +1278,7 @@ class SubscriptionManager:
         all_success = all(r.success for r in results)
 
         # Refresh peer profile if configured (async)
+        # Try to use already-synced properties data first to avoid redundant fetch
         actor_config = self._core_actor.config
         actor_id = self._core_actor.id
         if (
@@ -1286,22 +1287,77 @@ class SubscriptionManager:
             and getattr(actor_config, "peer_profile_attributes", None)
         ):
             try:
-                from ..peer_profile import (
-                    fetch_peer_profile_async,
-                    get_peer_profile_store,
+                from datetime import UTC, datetime
+
+                from ..peer_profile import PeerProfile, get_peer_profile_store
+                from ..remote_storage import RemotePeerStore
+                from .actor_interface import ActorInterface
+
+                # Check if we have recently synced properties data
+                actor_interface = ActorInterface(self._core_actor)
+                remote_store = RemotePeerStore(
+                    actor=actor_interface,
+                    peer_id=peer_id,
+                    validate_peer_id=False,
                 )
 
-                profile = await fetch_peer_profile_async(
+                # Try to extract profile from synced properties
+                profile_extracted = False
+                profile = PeerProfile(
                     actor_id=actor_id,
                     peer_id=peer_id,
-                    config=actor_config,
-                    attributes=actor_config.peer_profile_attributes,
+                    fetched_at=datetime.now(UTC).isoformat(),
                 )
+
+                try:
+                    # Get properties from remote store (properties are stored as values)
+                    for attr in actor_config.peer_profile_attributes:
+                        value_data = remote_store.get_value(attr)
+                        if value_data is not None:
+                            # Extract actual value (properties are wrapped in {"value": ...})
+                            if isinstance(value_data, dict) and "value" in value_data:
+                                actual_value = value_data["value"]
+                            else:
+                                actual_value = value_data
+
+                            # Convert to string for standard profile attributes
+                            if attr == "displayname":
+                                profile.displayname = str(actual_value) if actual_value is not None else None
+                                profile_extracted = True
+                            elif attr == "email":
+                                profile.email = str(actual_value) if actual_value is not None else None
+                                profile_extracted = True
+                            elif attr == "description":
+                                profile.description = str(actual_value) if actual_value is not None else None
+                                profile_extracted = True
+                            else:
+                                # Store in extra_attributes (keep original type)
+                                profile.extra_attributes[attr] = actual_value
+                                profile_extracted = True
+                except Exception:
+                    # If reading from store fails, we'll fetch below
+                    profile_extracted = False
+
+                # Only fetch if we couldn't extract from synced data
+                if not profile_extracted:
+                    from ..peer_profile import fetch_peer_profile_async
+
+                    profile = await fetch_peer_profile_async(
+                        actor_id=actor_id,
+                        peer_id=peer_id,
+                        config=actor_config,
+                        attributes=actor_config.peer_profile_attributes,
+                    )
+                    logger.debug(
+                        f"Fetched peer profile (async) during sync_peer for {peer_id}"
+                    )
+                else:
+                    logger.debug(
+                        f"Extracted peer profile from synced properties for {peer_id} (avoided redundant fetch)"
+                    )
+
                 store = get_peer_profile_store(actor_config)
                 store.store_profile(profile)
-                logger.debug(
-                    f"Refreshed peer profile (async) during sync_peer for {peer_id}"
-                )
             except Exception as e:
                 logger.warning(
                     f"Failed to refresh peer profile during sync (async): {e}"
@@ -1335,6 +1391,9 @@ class SubscriptionManager:
                 )
 
         # Refresh peer permissions if configured (async)
+        # This fetches from the peer's GET /permissions/{actor_id} endpoint
+        # to establish initial permission baseline or refresh cached permissions.
+        # Complements the reactive callback-based push mechanism.
         if (
             actor_config
             and actor_id
@@ -1351,11 +1410,19 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     config=actor_config,
                 )
-                store = get_peer_permission_store(actor_config)
-                store.store_permissions(permissions)
-                logger.debug(
-                    f"Refreshed peer permissions (async) during sync_peer for {peer_id}"
-                )
+
+                # Only store if fetch was successful (no error)
+                # Don't overwrite callback-received permissions with empty data from 404
+                if not permissions.fetch_error:
+                    store = get_peer_permission_store(actor_config)
+                    store.store_permissions(permissions)
+                    logger.debug(
+                        f"Refreshed peer permissions (async) during sync_peer for {peer_id}"
+                    )
+                else:
+                    logger.debug(
+                        f"Skipping permission storage during sync - fetch failed: {permissions.fetch_error}"
+                    )
             except Exception as e:
                 logger.warning(
                     f"Failed to refresh peer permissions during sync (async): {e}"

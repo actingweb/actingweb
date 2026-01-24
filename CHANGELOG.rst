@@ -150,6 +150,33 @@ ADDED
 
 - **Configurable AwProxy Timeout**: Added ``timeout`` parameter to ``AwProxy`` constructor for configurable HTTP request timeouts. Accepts either a single value (used for both connect and read) or a tuple ``(connect_timeout, read_timeout)``. Default changed from hardcoded ``(5, 10)`` to ``(5, 20)`` seconds for better handling of slow peer responses.
 
+- **Permission Query Endpoint**: Added ``GET /{actor_id}/permissions/{peer_id}`` endpoint allowing peers to query what permissions they've been granted. This supports proactive permission discovery, complementing the reactive callback-based push mechanism.
+
+  - New handler: ``actingweb.handlers.permissions.PermissionsHandler``
+  - Returns custom permission overrides or trust type defaults
+  - Includes metadata: ``source`` (custom_override or trust_type_default), ``trust_type``, ``created_by``, ``updated_at``, ``notes``
+  - Authentication required: peer must authenticate as the ``peer_id`` in the URL
+  - Authorization: peer can only query their own granted permissions
+  - Error responses: 404 (no trust relationship), 403 (not authorized), 500 (retrieval failed)
+  - Both Flask and FastAPI integrations supported
+  - Comprehensive test coverage in ``tests/test_permissions_handler.py``
+
+- **Permission Protocol Option Tags**: Added automatic advertisement of permission-related capabilities via ActingWeb protocol option tags in ``/meta/actingweb/supported`` endpoint.
+
+  - New option tag: ``permissioncallback`` - indicates support for receiving permission change notifications
+  - New option tag: ``permissionquery`` - indicates support for ``GET /{actor_id}/permissions/{peer_id}`` endpoint
+  - Tags automatically added when ``ActingWebApp.with_peer_permissions(enable=True)`` is called
+  - New method: ``Config.update_supported_options()`` - dynamically updates option tags based on enabled features
+  - Complies with ActingWeb Protocol Specification v1.4 requirements (spec lines 2064-2065, 2830)
+
+- **Peer Profile Extraction from Subscriptions**: Added automatic extraction of peer profile attributes from synced subscription data in ``sync_peer()`` and ``sync_peer_async()``. When peer permissions caching is enabled and a subscription exists for profile properties, the profile is extracted from the cached subscription data before falling back to a direct HTTP fetch. This reduces unnecessary API calls and improves performance.
+
+  - Profile attributes extracted from ``RemotePeerStore`` when available
+  - Handles wrapped property values (``{"value": ...}``) correctly
+  - Type conversion to strings for standard profile fields (displayname, email, description)
+  - Extra attributes stored with original types preserved
+  - Graceful fallback to HTTP fetch if extraction fails
+
 SECURITY
 ~~~~~~~~
 
@@ -184,6 +211,8 @@ FIXED
 - **Subscription authorization path patterns**: Changed authorization path pattern from ``<id>/<id>`` to ``<id>/<subid>`` in ``handlers/subscription.py`` for clarity and consistency with other handlers.
 
 - **List property subscription diff callbacks**: Fixed ``list:`` prefix leakage in subscription diff callbacks. Previously, list property changes registered diffs with ``subtarget="list:myList"`` which exposed the internal ``list:`` prefix in callbacks sent to subscribers. Now uses clean subtarget (``subtarget="myList"``) - the diff blob already contains ``"list": "myList"`` to identify list operations. Subscribers no longer need to strip the prefix when processing list property callbacks.
+
+- **Profile attribute type conversion in sync**: Fixed type conversion when extracting peer profile attributes from synced subscription data. Profile attributes retrieved from ``RemotePeerStore`` are now properly unwrapped from ``{"value": ...}`` format and converted to strings for standard profile fields (displayname, email, description). This fixes type errors where dict values were being assigned to string-typed profile fields.
 
 v3.9.2: Jan 16, 2026
 --------------------

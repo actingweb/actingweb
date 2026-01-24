@@ -951,6 +951,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 request, actor_id, "trust", relationship=None, peerid=None
             )
 
+        # Permission query endpoint - allows peers to query what permissions they've been granted
+        @self.fastapi_app.get("/{actor_id}/permissions/{peer_id}")
+        async def app_permissions_query(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str,
+            peer_id: str,
+            request: Request,
+        ) -> Response:
+            return await self._handle_actor_request(
+                request, actor_id, "permissions", peer_id=peer_id
+            )
+
         # Trust permission management endpoints
         @self.fastapi_app.get("/{actor_id}/trust/{relationship}/{peerid}/permissions")
         @self.fastapi_app.put("/{actor_id}/trust/{relationship}/{peerid}/permissions")
@@ -2245,6 +2256,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         if peerid:
                             args.append(peerid)
                     self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
+            elif endpoint == "permissions":
+                # Permission query endpoint: /{actor_id}/permissions/{peer_id}
+                if kwargs.get("peer_id"):
+                    args.append(kwargs["peer_id"])
             elif endpoint == "subscriptions":
                 if kwargs.get("peerid"):
                     args.append(kwargs["peerid"])

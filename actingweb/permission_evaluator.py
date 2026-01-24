@@ -558,7 +558,7 @@ def check_property_access(
     Returns:
         True if access is allowed, False otherwise
     """
-    evaluator = PermissionEvaluator(config)
+    evaluator = get_permission_evaluator(config)
     result = evaluator.evaluate_property_access(
         actor_id, peer_id, property_path, operation
     )
@@ -574,7 +574,7 @@ def check_method_access(
     Returns:
         True if access is allowed, False otherwise
     """
-    evaluator = PermissionEvaluator(config)
+    evaluator = get_permission_evaluator(config)
     result = evaluator.evaluate_method_access(actor_id, peer_id, method_name)
     return result == PermissionResult.ALLOWED
 
@@ -588,9 +588,42 @@ def check_tool_access(
     Returns:
         True if access is allowed, False otherwise
     """
-    evaluator = PermissionEvaluator(config)
+    evaluator = get_permission_evaluator(config)
     result = evaluator.evaluate_tool_access(actor_id, peer_id, tool_name)
     return result == PermissionResult.ALLOWED
+
+
+def batch_check_property_access(
+    config: config_class.Config,
+    actor_id: str,
+    peer_id: str,
+    property_paths: list[str],
+    operation: str,
+) -> list[str]:
+    """
+    Batch property access check - more efficient than calling check_property_access in a loop.
+
+    Args:
+        config: ActingWeb config
+        actor_id: The actor granting access
+        peer_id: The peer requesting access
+        property_paths: List of property paths to check
+        operation: Operation to check ("read", "write", etc.)
+
+    Returns:
+        List of property paths that passed the permission check
+    """
+    evaluator = get_permission_evaluator(config)
+    accessible = []
+
+    for property_path in property_paths:
+        result = evaluator.evaluate_property_access(
+            actor_id, peer_id, property_path, operation
+        )
+        if result == PermissionResult.ALLOWED:
+            accessible.append(property_path)
+
+    return accessible
 
 
 # Singleton instance

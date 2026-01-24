@@ -700,6 +700,20 @@ Add ``.with_peer_permissions()`` to your application configuration:
 - ``notify_peer_on_change``: Automatically notify peers when you change their permissions
   by sending a callback to ``/callbacks/permissions/{actor_id}``. Default: ``True``.
 
+**Permission Query Endpoint (NEW in v3.10.0a5):**
+
+The ``GET /{actor_id}/permissions/{peer_id}`` endpoint is now available for
+proactive permission discovery. This complements the existing permission callback
+mechanism by supporting:
+
+- Initial permission baseline during trust establishment
+- Permission refresh without waiting for callbacks
+- Recovery if permission callbacks are missed
+
+The endpoint is automatically registered when using the ActingWeb framework.
+No migration changes needed. The endpoint returns either custom permission overrides
+or trust type defaults, allowing peers to discover what permissions they have been granted.
+
 Using Cached Permissions
 ------------------------
 

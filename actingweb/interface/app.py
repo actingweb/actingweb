@@ -153,6 +153,8 @@ class ActingWebApp:
         # Notify peer on change configuration
         if hasattr(self, "_notify_peer_on_change"):
             self._config.notify_peer_on_change = self._notify_peer_on_change
+        # Update supported options based on enabled features
+        self._config.update_supported_options()
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 

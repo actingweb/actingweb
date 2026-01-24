@@ -304,6 +304,13 @@ class FlaskIntegration(BaseActingWebIntegration):
                 actor_id, "trust", relationship=relationship, peerid=peerid
             )
 
+        # Permission query endpoint - allows peers to query what permissions they've been granted
+        @self.flask_app.route("/<actor_id>/permissions/<peer_id>", methods=["GET"])
+        def app_permissions_query(  # pyright: ignore[reportUnusedFunction]
+            actor_id: str, peer_id: str
+        ) -> Response | WerkzeugResponse | str:
+            return self._handle_actor_request(actor_id, "permissions", peer_id=peer_id)
+
         # Trust permission management endpoints
         @self.flask_app.route(
             "/<actor_id>/trust/<relationship>/<peerid>/permissions",
@@ -1428,6 +1435,9 @@ class FlaskIntegration(BaseActingWebIntegration):
                 elif endpoint == "www":
                     # WwwHandler.get(actor_id, path) - path defaults to "" if not provided
                     args.append(kwargs.get("path", ""))
+                elif endpoint == "permissions":
+                    # PermissionsHandler.get(actor_id, peer_id)
+                    args.append(kwargs.get("peer_id", ""))
                 elif endpoint == "properties":
                     # PropertiesHandler.get(actor_id, name) - name defaults to "" if not provided
                     args.append(kwargs.get("name", ""))

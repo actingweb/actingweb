@@ -339,3 +339,22 @@ class Config:
     def new_token(length: int = 40) -> str:
         tok = binascii.hexlify(os.urandom(int(length // 2)))
         return tok.decode("utf-8")
+
+    def update_supported_options(self) -> None:
+        """Update aw_supported based on enabled features.
+
+        This method is called when features are dynamically enabled after
+        Config initialization (e.g., via ActingWebApp builder methods).
+        """
+        # Parse existing options into a set
+        current_options = set(self.aw_supported.split(","))
+
+        # Add permission-related option tags if peer permissions caching is enabled
+        if getattr(self, "peer_permissions_caching", False):
+            # permissioncallback - supports receiving permission change notifications
+            current_options.add("permissioncallback")
+            # permissionquery - supports GET /{actor_id}/permissions/{peer_id}
+            current_options.add("permissionquery")
+
+        # Update aw_supported with the new set of options
+        self.aw_supported = ",".join(sorted(current_options))

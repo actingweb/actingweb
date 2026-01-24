@@ -35,14 +35,23 @@ Add library-level permission caching infrastructure to ActingWeb:
 | - | Unit tests for peer_permissions | ✅ DONE | 45 tests in test_peer_permissions_unit.py |
 | - | CHANGELOG.rst updated | ✅ DONE | Breaking changes + features documented |
 
-### NOT STARTED
+### PARTIALLY COMPLETE
 
 | Phase | Task | Status | Notes |
 |-------|------|--------|-------|
-| 4.1 | Fix subscription diff callbacks (list: prefix) | ⬜ TODO | Review actor.py register_diffs() |
-| 4.2 | Block GET /properties/list:* access | ⬜ TODO | Add validation in handlers/properties.py |
-| 4.4 | Reject list: keys in Property class | ⬜ TODO | Add validation in property.py |
+| 4.1 | Fix subscription diff callbacks (list: prefix) | ⬜ TODO | `interface/property_store.py:269` uses `subtarget=f"list:{name}"` |
+| 4.2 | Block GET /properties/list:* access | ✅ DONE | `handlers/properties.py:154` blocks access |
+| 4.4 | Reject list: keys in Property class | ✅ DONE | `property.py:75-88` raises ValueError |
 | - | Additional library tests | ⬜ TODO | test_callback_processor.py, test_remote_storage.py |
+
+### NOT STARTED - Required for actingweb_mcp Migration
+
+| Phase | Task | Status | Notes |
+|-------|------|--------|-------|
+| 5.1 | Add `notify_peer_on_change` config option | ⬜ TODO | Add to Config class and with_peer_permissions() |
+| 5.2 | Auto-notify peer in TrustPermissionStore.store_permissions() | ⬜ TODO | Call _notify_peer() when configured |
+| 5.3 | Add _notify_peer() method to TrustPermissionStore | ⬜ TODO | Fire-and-forget POST to /callbacks/permissions |
+| 5.4 | Add async variants: store_permissions_async(), _notify_peer_async() | ⬜ TODO | Non-blocking versions |
 
 ### DOCUMENTATION NOT STARTED
 
@@ -513,13 +522,140 @@ The spec already documents the `/trust/{relationship}/{peerid}/permissions` endp
 
 ## Remaining Work Summary
 
-### Priority 1: Fix "list:" Prefix Leakage (Phase 4)
+### Priority 1: Fix "list:" Prefix Leakage (Phase 4.1)
 
-1. **handlers/properties.py**: Block `GET /properties/list:*` with 404
-2. **property.py**: Raise error for `list:` prefixed keys in `__getitem__`
-3. **actor.py**: Review `register_diffs()` for list property handling
+**File**: `actingweb/interface/property_store.py:267-272`
 
-### Priority 2: Documentation Updates
+The `NotifyingListProperty._register_diff()` method currently uses the `list:` prefix in the subtarget:
+
+```python
+# CURRENT (leaks prefix)
+self._actor.register_diffs(
+    target="properties",
+    subtarget=f"list:{self._list_name}",  # ⚠️ Leaks "list:" prefix
+    ...
+)
+
+# FIXED (clean subtarget)
+self._actor.register_diffs(
+    target="properties",
+    subtarget=self._list_name,  # Clean name - diff_info already has "list" key
+    ...
+)
+```
+
+**Note**: The diff blob already contains `"list": self._list_name` (line 253), so receivers can identify this as a list operation without the subtarget containing the prefix.
+
+**Already done**:
+- ✅ `handlers/properties.py:154`: Blocks `GET /properties/list:*` with 404
+- ✅ `property.py:75-88`: Raises error for `list:` prefixed keys in `__getitem__` and `__setitem__`
+
+### Priority 2: Automatic Peer Notification (Phase 5 - NEW)
+
+Required to support actingweb_mcp migration. See: `actingweb_mcp/thoughts/shared/plans/2026-01-23-unified-permission-handling-migration.md`
+
+**5.1 Add Config Option**
+
+**File**: `actingweb/config.py` (after line 83)
+
+```python
+# When True, automatically notify peers when their permissions change
+# Only applies when peer_permissions_caching is enabled
+self.notify_peer_on_change: bool = True
+```
+
+**File**: `actingweb/interface/app.py` - Update `with_peer_permissions()`:
+
+```python
+def with_peer_permissions(
+    self,
+    enable: bool = True,
+    auto_delete_on_revocation: bool = False,
+    notify_peer_on_change: bool = True,  # NEW parameter
+) -> "ActingWebApp":
+```
+
+**5.2 & 5.3 Auto-Notify Peer in TrustPermissionStore**
+
+**File**: `actingweb/trust_permissions.py`
+
+```python
+def store_permissions(self, permissions: TrustPermissions) -> bool:
+    """Store trust relationship permissions.
+
+    If notify_peer_on_change is enabled (default), automatically sends
+    a permission callback to the affected peer.
+    """
+    # ... existing validation and storage code ...
+
+    if success:
+        self._cache[cache_key] = permissions
+        logger.info(f"Stored trust permissions: {cache_key}")
+
+        # Auto-notify peer if configured
+        if getattr(self.config, "notify_peer_on_change", True):
+            self._notify_peer(permissions)
+
+        return True
+    return False
+
+def _notify_peer(self, permissions: TrustPermissions) -> None:
+    """Send permission callback to the affected peer.
+
+    This is fire-and-forget - failures are logged but don't affect storage.
+    """
+    try:
+        from datetime import UTC, datetime
+        from .aw_proxy import AwProxy
+
+        proxy = AwProxy(
+            peer_target={
+                "id": permissions.actor_id,
+                "peerid": permissions.peer_id,
+                "passphrase": None,
+            },
+            config=self.config,
+        )
+
+        if not proxy.trust:
+            logger.warning(f"Cannot notify peer {permissions.peer_id}: no trust")
+            return
+
+        callback_data = {
+            "id": permissions.actor_id,
+            "target": "permissions",
+            "type": "permission",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "data": {
+                "properties": permissions.properties,
+                "methods": permissions.methods,
+                "actions": permissions.actions,
+                "tools": permissions.tools,
+                "resources": permissions.resources,
+                "prompts": permissions.prompts,
+            },
+        }
+
+        # POST to peer's /callbacks/permissions/{our_actor_id}
+        response = proxy.create_resource(
+            path=f"callbacks/permissions/{permissions.actor_id}",
+            data=callback_data,
+        )
+
+        if response and "error" not in response:
+            logger.debug(f"Notified peer {permissions.peer_id} of permission change")
+        else:
+            logger.warning(f"Failed to notify peer {permissions.peer_id}: {response}")
+
+    except Exception as e:
+        logger.warning(f"Error notifying peer {permissions.peer_id}: {e}")
+```
+
+**5.4 Add Async Variants**
+
+Add `store_permissions_async()` and `_notify_peer_async()` using httpx for non-blocking operations.
+
+### Priority 3: Documentation Updates
 
 1. **docs/migration/v3.10.rst**:
    - Add "Breaking Change: Bucket Naming Convention" section documenting `_` prefix
@@ -549,6 +685,8 @@ The spec already documents the `/trust/{relationship}/{peerid}/permissions` endp
 
 - ✅ PeerPermissionStore successfully caches full TrustPermissions structure
 - ✅ Permission changes flow through subscription callback system
-- ⬜ "list:" prefix never exposed via HTTP or callbacks
+- ⬜ "list:" prefix never exposed via HTTP or callbacks (Phase 4.1 - diff subtarget still uses prefix)
 - ✅ Subscription creation automatically fetches permission baseline
 - ✅ Unit tests pass (45 tests)
+- ⬜ Automatic peer notification when permissions change (Phase 5 - required for actingweb_mcp)
+- ⬜ Async variants for permission storage and notification (Phase 5.4)

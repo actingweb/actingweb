@@ -5,18 +5,6 @@ CHANGELOG
 Unreleased
 ----------
 
-ADDED
-~~~~~
-
-- **Auto-Delete Cached Peer Data on Permission Revocation**: Added optional automatic deletion of cached peer data when permissions are revoked.
-
-  - New parameter: ``ActingWebApp.with_peer_permissions(auto_delete_on_revocation=True)``
-  - New helper functions in ``actingweb.peer_permissions``: ``detect_revoked_property_patterns()``, ``detect_permission_changes()``
-  - Permission callback hooks now receive ``permission_changes`` dict with revocation details
-  - When enabled, cached data in ``RemotePeerStore`` matching revoked property patterns is automatically deleted
-  - Disabled by default for backwards compatibility
-
-
 v3.10.0a5: Jan 23, 2026
 -----------------------
 
@@ -42,6 +30,14 @@ BREAKING CHANGES
 
 ADDED
 ~~~~~
+
+- **Auto-Delete Cached Peer Data on Permission Revocation**: Added optional automatic deletion of cached peer data when permissions are revoked.
+
+  - New parameter: ``ActingWebApp.with_peer_permissions(auto_delete_on_revocation=True)``
+  - New helper functions in ``actingweb.peer_permissions``: ``detect_revoked_property_patterns()``, ``detect_permission_changes()``
+  - Permission callback hooks now receive ``permission_changes`` dict with revocation details
+  - When enabled, cached data in ``RemotePeerStore`` matching revoked property patterns is automatically deleted
+  - Disabled by default for backwards compatibility
 
 - **Peer Profile Caching**: Added first-class support for caching profile attributes from peer actors with trust relationships. This enables applications to access peer information (displayname, email, etc.) without making repeated API calls.
 

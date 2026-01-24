@@ -312,6 +312,145 @@ Hook Execution
         ▼
     Result returned through chain
 
+Inter-Actor Communication
+-------------------------
+
+ActingWeb enables distributed communication between actors. This section shows the
+complete flow when Actor A establishes trust with Actor B, creates subscriptions,
+and receives callbacks when Actor B's data changes.
+
+**1. Trust Establishment**
+
+.. code-block::
+
+    Actor A                                          Actor B
+    ─────────                                        ─────────
+    TrustHandler.post()
+      └─> TrustManager.create_relationship()
+            └─> Actor.create_reciprocal_trust()
+                  ├─> GET {B}/                       ← Verify peer exists
+                  ├─> Create local trust (approved=True)
+                  └─> POST {B}/trust/{rel}  ────────> TrustRelationshipHandler.post()
+                                                        └─> create_verified_trust()
+                                                              ├─> GET {A}/trust/{rel}/{B}
+                                                              └─> Create local trust record
+
+    [trust_initiated hook]                          [trust_request_received hook]
+
+    If auto-approved:
+      modify_trust_and_notify() ─────────────────────> [trust_fully_approved_remote hook]
+                                                        └─> Can trigger sync_peer_async()
+
+**2. Subscription Creation (A subscribes to B)**
+
+.. code-block::
+
+    Actor A                                          Actor B
+    ─────────                                        ─────────
+    SubscriptionRootHandler.post()
+      └─> subscribe_to_peer()
+            └─> create_remote_subscription()
+                  └─> POST {B}/subscriptions/{A} ──> SubscriptionRelationshipHandler.post()
+                        [callback=True locally]         └─> create_local_subscription()
+                                                              [callback=False - sends TO A]
+
+**3. Peer Sync (A pulls data from B after trust approval)**
+
+.. code-block::
+
+    Actor A                                          Actor B
+    ─────────                                        ─────────
+    sync_peer_async(peer_id=B)
+      ├─> Optionally: refresh_peer_profile_async()
+      ├─> Optionally: refresh_peer_capabilities_async()
+      ├─> Optionally: fetch_peer_permissions_async() ──> GET {B}/permissions/{A}
+      └─> For each subscription:
+            sync_subscription_async()
+              ├─> GET {B}/subscriptions/{A}/{subid}  ──> Returns diffs
+              ├─> CallbackProcessor.process_callback()
+              ├─> RemotePeerStore.apply_callback_data()
+              └─> PUT {B}/subscriptions/{A}/{subid}  ──> Clear processed diffs
+
+**4. Property Change Callback (B notifies A in real-time)**
+
+.. code-block::
+
+    Actor B (publisher)                              Actor A (subscriber)
+    ───────────────────                              ────────────────────
+    Property changed (PUT /properties/foo)
+      └─> register_diffs(target="properties", subtarget="foo")
+            ├─> Check if subscription suspended
+            ├─> Get subscriptions (callback=False - inbound)
+            └─> For each subscription:
+                  ├─> Filter by peer permissions
+                  ├─> add_diff() to subscription
+                  └─> callback_subscription()
+                        └─> POST {A}/callbacks/subscriptions/{B}/{subid}
+                                                    └─> CallbacksHandler.post()
+                                                          └─> CallbackProcessor.process_callback()
+                                                                └─> RemotePeerStore.apply_callback_data()
+                                                                └─> [subscription hook]
+
+**5. Permission Change Callback (B grants/revokes permissions to A)**
+
+.. code-block::
+
+    Actor B                                          Actor A
+    ─────────                                        ─────────
+    Permission modified for A
+      └─> POST {A}/callbacks/permissions/{B}  ────> CallbacksHandler.post()
+                                                      ├─> PeerPermissionStore.store_permissions()
+                                                      ├─> detect_permission_changes()
+                                                      ├─> Auto-delete if revoked (if configured)
+                                                      └─> [permissions callback hook]
+
+**6. Subscription Suspension & Resync**
+
+.. code-block::
+
+    Actor B                                          Actor A
+    ─────────                                        ─────────
+    subscriptions.suspend(target, subtarget)
+      └─> Diffs NOT registered during suspension
+
+    ... bulk operations ...
+
+    subscriptions.resume(target, subtarget)
+      └─> For each affected subscription:
+            └─> callback_subscription_resync()
+                  └─> POST resync callback ────────> CallbackProcessor._handle_resync()
+                                                      └─> Clear pending, reset state
+                                                      └─> RemotePeerStore.apply_resync_data()
+
+Key Implementation Files
+------------------------
+
+The following table maps components to their implementation files:
+
++---------------------------+------------------------------------------------+----------------------------------+
+| Component                 | File                                           | Purpose                          |
++===========================+================================================+==================================+
+| Trust handling            | ``actingweb/actor.py:922-1250``                | Trust creation/verification      |
++---------------------------+------------------------------------------------+----------------------------------+
+| Trust handler             | ``actingweb/handlers/trust.py``                | HTTP endpoints                   |
++---------------------------+------------------------------------------------+----------------------------------+
+| Subscription              | ``actingweb/subscription.py``                  | Subscription storage             |
++---------------------------+------------------------------------------------+----------------------------------+
+| Subscription handler      | ``actingweb/handlers/subscription.py``         | HTTP endpoints                   |
++---------------------------+------------------------------------------------+----------------------------------+
+| Subscription manager      | ``actingweb/interface/subscription_manager.py``| High-level API                   |
++---------------------------+------------------------------------------------+----------------------------------+
+| Callback processor        | ``actingweb/callback_processor.py``            | Sequencing, gaps, resync         |
++---------------------------+------------------------------------------------+----------------------------------+
+| Remote storage            | ``actingweb/remote_storage.py``                | Store peer data locally          |
++---------------------------+------------------------------------------------+----------------------------------+
+| Peer permissions          | ``actingweb/peer_permissions.py``              | Cache what peers grant us        |
++---------------------------+------------------------------------------------+----------------------------------+
+| Fan-out                   | ``actingweb/fanout.py``                        | Parallel delivery, circuit break |
++---------------------------+------------------------------------------------+----------------------------------+
+| Suspension                | ``actingweb/db/*/subscription_suspension.py``  | Pause diff registration          |
++---------------------------+------------------------------------------------+----------------------------------+
+
 Key Design Patterns
 ===================
 
@@ -340,5 +479,7 @@ See Also
 
 - :doc:`../sdk/handler-architecture` - Handler internals
 - :doc:`../sdk/developer-api` - Developer API guide
+- :doc:`../guides/subscriptions` - Subscription guide
+- :doc:`../guides/trust-relationships` - Trust relationships guide
 - :doc:`style-guide` - Code style conventions
 - :doc:`testing` - Testing guide

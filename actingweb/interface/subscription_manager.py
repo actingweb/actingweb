@@ -1334,6 +1334,33 @@ class SubscriptionManager:
                     f"Failed to refresh peer capabilities during sync (async): {e}"
                 )
 
+        # Refresh peer permissions if configured (async)
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_permissions_caching", False)
+        ):
+            try:
+                from ..peer_permissions import (
+                    fetch_peer_permissions_async,
+                    get_peer_permission_store,
+                )
+
+                permissions = await fetch_peer_permissions_async(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                )
+                store = get_peer_permission_store(actor_config)
+                store.store_permissions(permissions)
+                logger.debug(
+                    f"Refreshed peer permissions (async) during sync_peer for {peer_id}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to refresh peer permissions during sync (async): {e}"
+                )
+
         return PeerSyncResult(
             peer_id=peer_id,
             success=all_success,

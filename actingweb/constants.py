@@ -100,20 +100,30 @@ OAUTH2_SYSTEM_ACTOR = "_actingweb_oauth2"
 # Standard Bucket Names for Global Data
 # =====================================
 # These bucket names are used consistently across the system
+#
+# IMPORTANT: All library-internal buckets use "_" prefix to avoid namespace
+# collisions with user-defined buckets. Application code can create arbitrary
+# buckets via Attributes(actor_id=..., bucket="mydata"). Without a reserved
+# prefix, a user's bucket="peer_permissions" would collide with the library's.
+#
+# Convention:
+#   - "_" prefix = library-internal, managed by ActingWeb
+#   - No prefix = application/user data
 
-# Trust and relationship management
-TRUST_TYPES_BUCKET = "trust_types"
-TRUST_PERMISSIONS_BUCKET = "trust_permissions"
-PEER_PROFILES_BUCKET = "peer_profiles"
-PEER_CAPABILITIES_BUCKET = "peer_capabilities"
+# Trust and relationship management (library-internal)
+TRUST_TYPES_BUCKET = "_trust_types"
+TRUST_PERMISSIONS_BUCKET = "_trust_permissions"
+PEER_PROFILES_BUCKET = "_peer_profiles"
+PEER_CAPABILITIES_BUCKET = "_peer_capabilities"
+PEER_PERMISSIONS_BUCKET = "_peer_permissions"  # Cached permissions from peers
 
-# OAuth2 and authentication indexes
-AUTH_CODE_INDEX_BUCKET = "auth_code_index"
-ACCESS_TOKEN_INDEX_BUCKET = "access_token_index"
-REFRESH_TOKEN_INDEX_BUCKET = "refresh_token_index"
-CLIENT_INDEX_BUCKET = "client_index"
+# OAuth2 and authentication indexes (library-internal)
+AUTH_CODE_INDEX_BUCKET = "_auth_code_index"
+ACCESS_TOKEN_INDEX_BUCKET = "_access_token_index"
+REFRESH_TOKEN_INDEX_BUCKET = "_refresh_token_index"
+CLIENT_INDEX_BUCKET = "_client_index"
 OAUTH_SESSION_BUCKET = (
-    "oauth_sessions"  # Temporary OAuth sessions for postponed actor creation
+    "_oauth_sessions"  # Temporary OAuth sessions for postponed actor creation
 )
 
 # OAuth2 token storage (per-trust)

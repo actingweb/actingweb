@@ -149,6 +149,13 @@ class PropertiesHandler(base_handler.BaseHandler):
             self.listall(myself, check)
             return
 
+        # Block direct access to list: prefixed properties
+        # The "list:" prefix is an internal implementation detail
+        if name.startswith("list:"):
+            if self.response:
+                self.response.set_status(404, "Not found")
+            return
+
         # Check if this is a list property first
         if (
             myself

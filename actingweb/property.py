@@ -71,9 +71,21 @@ class PropertyStore:
         self.__initialised = True
 
     def __getitem__(self, k: str) -> Any:
+        # Block access to list: prefixed keys - use property_lists instead
+        if k.startswith("list:"):
+            raise ValueError(
+                f"Cannot access list properties via [] operator. "
+                f"Use property_lists.{k[5:]} instead."
+            )
         return self.__getattr__(k)
 
     def __setitem__(self, k: str, v: Any) -> None:
+        # Block access to list: prefixed keys - use property_lists instead
+        if k.startswith("list:"):
+            raise ValueError(
+                f"Cannot access list properties via [] operator. "
+                f"Use property_lists.{k[5:]} instead."
+            )
         return self.__setattr__(k, v)
 
     def __setattr__(self, k: str, v: Any) -> None:

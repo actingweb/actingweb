@@ -5,8 +5,40 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.10.0a4: Jan 22, 2026
+ADDED
+~~~~~
+
+- **Auto-Delete Cached Peer Data on Permission Revocation**: Added optional automatic deletion of cached peer data when permissions are revoked.
+
+  - New parameter: ``ActingWebApp.with_peer_permissions(auto_delete_on_revocation=True)``
+  - New helper functions in ``actingweb.peer_permissions``: ``detect_revoked_property_patterns()``, ``detect_permission_changes()``
+  - Permission callback hooks now receive ``permission_changes`` dict with revocation details
+  - When enabled, cached data in ``RemotePeerStore`` matching revoked property patterns is automatically deleted
+  - Disabled by default for backwards compatibility
+
+
+v3.10.0a5: Jan 23, 2026
 -----------------------
+
+BREAKING CHANGES
+~~~~~~~~~~~~~~~~
+
+- **Library Bucket Naming Convention**: All library-internal buckets now use ``_`` prefix to avoid namespace collisions with user-defined buckets. Application code can create arbitrary buckets via ``Attributes(actor_id=..., bucket="mydata")``. Without a reserved prefix, a user's ``bucket="peer_permissions"`` would collide with the library's.
+
+  **Renamed buckets** (old -> new):
+
+  - ``trust_types`` -> ``_trust_types``
+  - ``trust_permissions`` -> ``_trust_permissions``
+  - ``peer_profiles`` -> ``_peer_profiles``
+  - ``peer_capabilities`` -> ``_peer_capabilities``
+  - ``auth_code_index`` -> ``_auth_code_index``
+  - ``access_token_index`` -> ``_access_token_index``
+  - ``refresh_token_index`` -> ``_refresh_token_index``
+  - ``client_index`` -> ``_client_index``
+  - ``oauth_sessions`` -> ``_oauth_sessions``
+
+  **Migration**: Existing data in old bucket names will need to be migrated. For most deployments, the data is transient (OAuth sessions, token indexes) and will naturally be recreated. Trust types and permissions may need explicit migration if you have existing trust relationships.
+
 
 ADDED
 ~~~~~
@@ -31,6 +63,88 @@ ADDED
   - Capabilities refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
   - Both sync and async fetch functions: ``fetch_peer_methods_and_actions()``, ``fetch_peer_methods_and_actions_async()``
   - New constant: ``PEER_CAPABILITIES_BUCKET`` for attribute storage
+
+- **Peer Permissions Caching**: Added first-class support for caching permissions that peer actors have granted us. This is distinct from TrustPermissions which stores what WE grant to peers; PeerPermissions stores what PEERS grant to us.
+
+  - New module: ``actingweb.peer_permissions`` - ``PeerPermissions`` dataclass and ``PeerPermissionStore`` for storage
+  - New configuration method: ``ActingWebApp.with_peer_permissions(enable=True)``
+  - Automatic permissions fetch on trust approval via lifecycle hooks
+  - Automatic permissions cleanup on trust deletion via ``trust_deleted`` hook
+  - Permissions refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
+  - Both sync and async fetch functions: ``fetch_peer_permissions()``, ``fetch_peer_permissions_async()``
+  - Permission access checking methods: ``has_property_access()``, ``has_method_access()``, ``has_tool_access()``
+  - New constant: ``PEER_PERMISSIONS_BUCKET`` for attribute storage
+
+- **Permission Callback Type**: Added support for permission callbacks in the subscription callback system. Permission callbacks notify peers when their granted permissions change, enabling reactive permission synchronization without polling.
+
+  - New ``CallbackType.PERMISSION`` enum value in ``callback_processor.py``
+  - Permission callbacks use URL pattern ``/callbacks/permissions/{granting_actor_id}``
+  - Permission callbacks are idempotent and use full replacement (not diffs)
+  - Automatic storage in ``PeerPermissionStore`` when callbacks are received
+  - App-specific handling via ``@app.callback_hook("permissions")`` decorator
+  - New ``RemotePeerStore.apply_permission_data()`` method for programmatic permission updates
+
+- **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
+
+  - New module: ``actingweb.callback_processor`` - Processes incoming subscription callbacks with sequence validation
+  - New module: ``actingweb.remote_storage`` - Manages storing remote subscription data locally
+  - New module: ``actingweb.peer_capabilities`` - Peer capability negotiation during trust establishment
+  - New module: ``actingweb.subscription_config`` - Configuration for subscription behavior (gap thresholds, resync policies)
+  - New module: ``actingweb.fanout`` - Fan-out delivery for subscription callbacks
+  - Enhanced ``Trust`` model with ``peer_capabilities`` field for storing negotiated capabilities
+  - Automatic resync request when sequence gaps exceed configured thresholds
+  - Subscription suspension support for temporary delivery failures
+  - Circuit breaker pattern for handling unresponsive subscribers
+
+- **Pull-Based Subscription Sync API**: Added ``sync_subscription()`` and ``sync_peer()`` methods to ``SubscriptionManager`` for explicitly fetching and processing pending diffs from peers.
+
+  - New method: ``sync_subscription(peer_id, subscription_id, config?)`` - Sync a single subscription
+  - New method: ``sync_peer(peer_id, config?)`` - Sync all outbound subscriptions to a peer
+  - Async variants: ``sync_subscription_async()`` and ``sync_peer_async()``
+  - New dataclass: ``SubscriptionSyncResult`` - Result of syncing a single subscription
+  - New dataclass: ``PeerSyncResult`` - Aggregate result of syncing all subscriptions to a peer
+  - Supports configurable processing via ``SubscriptionProcessingConfig``
+  - Complements push-based callbacks for manual "Sync All" workflows
+
+- **Subscription Suspension**: Added suspension/resume support for subscription delivery failures.
+
+  - New database table: ``SubscriptionSuspension`` for tracking suspended subscriptions
+  - DynamoDB and PostgreSQL backends with migration support
+  - Automatic suspension on repeated delivery failures
+  - Resync triggered on subscription resume
+  - Scoped suspensions by subtarget for granular control
+
+- **Passphrase-to-SPA-Token Exchange**: Added ``grant_type="passphrase"`` to the ``POST /oauth/spa/token`` endpoint for exchanging a valid creator passphrase for SPA tokens. This enables automated testing tools like Playwright to obtain authenticated access without going through the full OAuth2 flow.
+
+  - Devtest-mode only (returns 403 if ``config.devtest=False``) for security
+  - Returns ``access_token`` and ``refresh_token`` with standard OAuth2 response format
+  - Supports all token delivery modes: ``json``, ``cookie``, ``hybrid``
+  - Tokens can be used immediately to access actor resources via Bearer authentication
+
+- **Attribute List Storage**: Added ``ListAttribute`` and ``AttributeListStore`` for storing distributed lists in internal attributes (not exposed via REST API). This provides the same API as ``ListProperty``/``PropertyListStore`` but stores data in attribute buckets instead of properties, bypassing the 400KB property size limit while maintaining list semantics.
+
+  - New class: ``ListAttribute`` - Distributed list implementation using attributes
+  - New class: ``AttributeListStore`` - Per-actor-per-bucket list management
+  - Supports all standard list operations: append, extend, insert, pop, remove, index, count, clear, delete
+  - Metadata support with ``get_description()``, ``set_description()``, ``get_explanation()``, ``set_explanation()``, and ``get_metadata()`` for accessing list metadata (created_at, updated_at, version, etc.)
+  - Discovery methods: ``exists()``, ``list_all()``
+  - Bucket isolation: Same list name can exist independently in different buckets
+  - Lazy loading with ``ListAttributeIterator`` for efficient iteration
+  - Attribute naming pattern: ``list:{name}:{index}`` for items, ``list:{name}:meta`` for metadata
+  - Comprehensive test coverage: 12 unit tests for ListAttribute, 21 unit tests for AttributeListStore, 18 integration tests
+
+- **List Metadata Access**: Added ``get_metadata()`` method to both ``ListProperty`` and ``ListAttribute`` to expose internal metadata (created_at, updated_at, version, item_type, chunk_size, length). Previously, users needed to access private ``_load_metadata()`` method to get timestamps and other readonly metadata fields.
+
+- **Comprehensive Integration Tests for Subscriptions**: Added extensive test coverage for subscription handling flows.
+
+  - ``test_subscription_processing_flow.py``: Callback sequencing, gap detection, resync handling
+  - ``test_fanout_flow.py``: Fan-out delivery, large payloads, concurrent changes, circuit breaker
+  - ``test_subscription_suspension_flow.py``: Suspension/resume, subtarget scoping, multiple subscribers
+  - New test fixtures: ``callback_sender``, ``trust_helper`` for subscription testing
+
+- **CI/CD Documentation Build**: Added documentation build job to GitHub Actions workflow.
+
+- **Configurable AwProxy Timeout**: Added ``timeout`` parameter to ``AwProxy`` constructor for configurable HTTP request timeouts. Accepts either a single value (used for both connect and read) or a tuple ``(connect_timeout, read_timeout)``. Default changed from hardcoded ``(5, 10)`` to ``(5, 20)`` seconds for better handling of slow peer responses.
 
 SECURITY
 ~~~~~~~~
@@ -64,74 +178,6 @@ FIXED
 - **Baseline data fetch for new subscriptions**: Fixed ``sync_subscription()`` and ``sync_subscription_async()`` to fetch baseline data from the target resource when no diffs exist. Previously, syncing a fresh subscription with 0 diffs would do nothing, leaving the remote storage empty. Now it properly establishes baseline data via ``RemotePeerStore.apply_resync_data()``, enabling features like Remote Memory to work immediately after subscription creation. The baseline fetch respects subscription scope by including subtarget and resource in the fetch path (e.g., ``/properties/myProp`` for scoped subscriptions, ``/properties?metadata=true`` for collection-level subscriptions).
 
 - **Subscription authorization path patterns**: Changed authorization path pattern from ``<id>/<id>`` to ``<id>/<subid>`` in ``handlers/subscription.py`` for clarity and consistency with other handlers.
-
-v3.10.0a3: Jan 22, 2026
------------------------
-
-ADDED
-~~~~~
-
-- **Passphrase-to-SPA-Token Exchange**: Added ``grant_type="passphrase"`` to the ``POST /oauth/spa/token`` endpoint for exchanging a valid creator passphrase for SPA tokens. This enables automated testing tools like Playwright to obtain authenticated access without going through the full OAuth2 flow.
-
-  - Devtest-mode only (returns 403 if ``config.devtest=False``) for security
-  - Returns ``access_token`` and ``refresh_token`` with standard OAuth2 response format
-  - Supports all token delivery modes: ``json``, ``cookie``, ``hybrid``
-  - Tokens can be used immediately to access actor resources via Bearer authentication
-
-- **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
-
-  - New module: ``actingweb.callback_processor`` - Processes incoming subscription callbacks with sequence validation
-  - New module: ``actingweb.remote_storage`` - Manages storing remote subscription data locally
-  - New module: ``actingweb.peer_capabilities`` - Peer capability negotiation during trust establishment
-  - New module: ``actingweb.subscription_config`` - Configuration for subscription behavior (gap thresholds, resync policies)
-  - New module: ``actingweb.fanout`` - Fan-out delivery for subscription callbacks
-  - Enhanced ``Trust`` model with ``peer_capabilities`` field for storing negotiated capabilities
-  - Automatic resync request when sequence gaps exceed configured thresholds
-  - Subscription suspension support for temporary delivery failures
-  - Circuit breaker pattern for handling unresponsive subscribers
-
-- **Pull-Based Subscription Sync API**: Added ``sync_subscription()`` and ``sync_peer()`` methods to ``SubscriptionManager`` for explicitly fetching and processing pending diffs from peers.
-
-  - New method: ``sync_subscription(peer_id, subscription_id, config?)`` - Sync a single subscription
-  - New method: ``sync_peer(peer_id, config?)`` - Sync all outbound subscriptions to a peer
-  - Async variants: ``sync_subscription_async()`` and ``sync_peer_async()``
-  - New dataclass: ``SubscriptionSyncResult`` - Result of syncing a single subscription
-  - New dataclass: ``PeerSyncResult`` - Aggregate result of syncing all subscriptions to a peer
-  - Supports configurable processing via ``SubscriptionProcessingConfig``
-  - Complements push-based callbacks for manual "Sync All" workflows
-
-- **Subscription Suspension**: Added suspension/resume support for subscription delivery failures.
-
-  - New database table: ``SubscriptionSuspension`` for tracking suspended subscriptions
-  - DynamoDB and PostgreSQL backends with migration support
-  - Automatic suspension on repeated delivery failures
-  - Resync triggered on subscription resume
-  - Scoped suspensions by subtarget for granular control
-
-- **Comprehensive Integration Tests for Subscriptions**: Added extensive test coverage for subscription handling flows.
-
-  - ``test_subscription_processing_flow.py``: Callback sequencing, gap detection, resync handling
-  - ``test_fanout_flow.py``: Fan-out delivery, large payloads, concurrent changes, circuit breaker
-  - ``test_subscription_suspension_flow.py``: Suspension/resume, subtarget scoping, multiple subscribers
-  - New test fixtures: ``callback_sender``, ``trust_helper`` for subscription testing
-
-- **CI/CD Documentation Build**: Added documentation build job to GitHub Actions workflow.
-
-- **Configurable AwProxy Timeout**: Added ``timeout`` parameter to ``AwProxy`` constructor for configurable HTTP request timeouts. Accepts either a single value (used for both connect and read) or a tuple ``(connect_timeout, read_timeout)``. Default changed from hardcoded ``(5, 10)`` to ``(5, 20)`` seconds for better handling of slow peer responses.
-
-- **Attribute List Storage**: Added ``ListAttribute`` and ``AttributeListStore`` for storing distributed lists in internal attributes (not exposed via REST API). This provides the same API as ``ListProperty``/``PropertyListStore`` but stores data in attribute buckets instead of properties, bypassing the 400KB property size limit while maintaining list semantics.
-
-  - New class: ``ListAttribute`` - Distributed list implementation using attributes
-  - New class: ``AttributeListStore`` - Per-actor-per-bucket list management
-  - Supports all standard list operations: append, extend, insert, pop, remove, index, count, clear, delete
-  - Metadata support with ``get_description()``, ``set_description()``, ``get_explanation()``, ``set_explanation()``, and ``get_metadata()`` for accessing list metadata (created_at, updated_at, version, etc.)
-  - Discovery methods: ``exists()``, ``list_all()``
-  - Bucket isolation: Same list name can exist independently in different buckets
-  - Lazy loading with ``ListAttributeIterator`` for efficient iteration
-  - Attribute naming pattern: ``list:{name}:{index}`` for items, ``list:{name}:meta`` for metadata
-  - Comprehensive test coverage: 12 unit tests for ListAttribute, 21 unit tests for AttributeListStore, 18 integration tests
-
-- **List Metadata Access**: Added ``get_metadata()`` method to both ``ListProperty`` and ``ListAttribute`` to expose internal metadata (created_at, updated_at, version, item_type, chunk_size, length). Previously, users needed to access private ``_load_metadata()`` method to get timestamps and other readonly metadata fields.
 
 v3.9.2: Jan 16, 2026
 --------------------

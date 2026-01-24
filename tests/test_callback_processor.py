@@ -721,6 +721,160 @@ class TestCallbackTypeEnum:
         """Test CallbackType enum values."""
         assert CallbackType.DIFF.value == "diff"
         assert CallbackType.RESYNC.value == "resync"
+        assert CallbackType.PERMISSION.value == "permission"
+
+
+class TestPermissionCallbackProcessing:
+    """Test permission callback handling."""
+
+    def test_permission_callback_bypasses_sequencing(
+        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+    ) -> None:
+        """Test that permission callbacks bypass sequence tracking."""
+        processor = CallbackProcessor(mock_actor)
+
+        # Process a permission callback with arbitrary sequence
+        result = asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="",  # Permission callbacks don't use subscription_id
+                sequence=0,  # Permission callbacks don't use sequence
+                data={
+                    "properties": {"patterns": ["memory_*"], "operations": ["read"]},
+                    "methods": {"allowed": ["sync_*"], "denied": []},
+                },
+                callback_type="permission",
+            )
+        )
+
+        assert result == ProcessResult.PROCESSED
+
+    def test_permission_callback_invokes_handler(
+        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+    ) -> None:
+        """Test that permission callbacks invoke handler with correct type."""
+        processor = CallbackProcessor(mock_actor)
+        received_callback: ProcessedCallback | None = None
+
+        async def handler(cb: ProcessedCallback) -> None:
+            nonlocal received_callback
+            received_callback = cb
+
+        asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="",
+                sequence=0,
+                data={
+                    "properties": {"patterns": ["*"], "operations": ["read", "write"]},
+                },
+                callback_type="permission",
+                handler=handler,
+            )
+        )
+
+        assert received_callback is not None
+        assert received_callback.callback_type == CallbackType.PERMISSION
+        assert received_callback.peer_id == "peer1"
+        assert "properties" in received_callback.data
+
+    def test_permission_callback_does_not_affect_subscription_state(
+        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+    ) -> None:
+        """Test that permission callbacks don't affect subscription state."""
+        processor = CallbackProcessor(mock_actor)
+
+        # Set up subscription state
+        asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="sub1",
+                sequence=1,
+                data={"value": "test"},
+            )
+        )
+
+        state_before = processor.get_state_info("peer1", "sub1")
+        assert state_before["last_seq"] == 1
+
+        # Process a permission callback
+        asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="",
+                sequence=0,
+                data={"properties": {"patterns": ["*"]}},
+                callback_type="permission",
+            )
+        )
+
+        # Subscription state should be unchanged
+        state_after = processor.get_state_info("peer1", "sub1")
+        assert state_after["last_seq"] == 1
+
+    def test_permission_callback_sync_version(
+        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+    ) -> None:
+        """Test synchronous permission callback processing."""
+        processor = CallbackProcessor(mock_actor)
+        received_callback: ProcessedCallback | None = None
+
+        def handler(cb: ProcessedCallback) -> None:
+            nonlocal received_callback
+            received_callback = cb
+
+        result = processor.process_callback_sync(
+            peer_id="peer1",
+            subscription_id="",
+            sequence=0,
+            data={"tools": {"allowed": ["search"], "denied": []}},
+            callback_type="permission",
+            handler=handler,
+        )
+
+        assert result == ProcessResult.PROCESSED
+        assert received_callback is not None
+        assert received_callback.callback_type == CallbackType.PERMISSION
+
+    def test_permission_callback_with_full_permission_structure(
+        self, mock_actor: MagicMock, mock_attributes: tuple[MagicMock, dict[str, Any]]  # noqa: ARG002
+    ) -> None:
+        """Test permission callback with complete permission structure."""
+        processor = CallbackProcessor(mock_actor)
+        received_callback: ProcessedCallback | None = None
+
+        async def handler(cb: ProcessedCallback) -> None:
+            nonlocal received_callback
+            received_callback = cb
+
+        permission_data = {
+            "properties": {
+                "patterns": ["memory_*", "profile/*"],
+                "operations": ["read", "subscribe"],
+                "excluded_patterns": ["memory_private_*"],
+            },
+            "methods": {"allowed": ["sync_*"], "denied": []},
+            "actions": {"allowed": ["*"], "denied": ["delete_*"]},
+            "tools": {"allowed": ["search", "fetch"], "denied": []},
+            "resources": {"allowed": ["data://*"], "denied": []},
+            "prompts": {"allowed": ["*"]},
+        }
+
+        asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="",
+                sequence=0,
+                data=permission_data,
+                callback_type="permission",
+                handler=handler,
+            )
+        )
+
+        assert received_callback is not None
+        assert received_callback.data == permission_data
+        assert received_callback.data["properties"]["patterns"] == ["memory_*", "profile/*"]
+        assert received_callback.data["tools"]["allowed"] == ["search", "fetch"]
 
 
 class TestProcessResultEnum:

@@ -2720,6 +2720,127 @@ On receiving a resync callback, the peer SHOULD:
 3. Update local sequence tracking to the callback's sequence number
 4. Respond with ``204 No Content``
 
+Permission Callback (OPTIONAL)
+------------------------------
+
+Actors MAY support permission callbacks to notify peers when their granted
+permissions change. This enables reactive permission synchronization without
+polling.
+
+**Option Tag**: ``permissioncallback``
+
+**Callback URL Pattern**
+
+The callback URL follows the existing ``/callbacks/{type}/{identifier}`` pattern
+used by subscription callbacks::
+
+  /callbacks/permissions/{granting_actor_id}
+
+Where:
+
+- ``permissions`` is the callback type (analogous to ``subscriptions`` for subscription callbacks)
+- ``granting_actor_id`` is the ID of the actor who granted/modified permissions
+
+**Rationale for URL Pattern:**
+
+Unlike subscription callbacks which use ``/callbacks/subscriptions/{peer_id}/{subscription_id}``,
+permission callbacks omit the subscription_id because:
+
+1. Permissions are tied to trust relationships, not subscriptions
+2. Each trust relationship has exactly one set of permissions
+3. The granting actor's ID uniquely identifies the permission source
+
+This parallels how the trust endpoint uses ``/trust/{relationship}/{peer_id}/permissions``
+rather than requiring a separate permission ID.
+
+**Callback URL Comparison:**
+
++------------------------+------------------------------------------------+
+| Callback Type          | URL Pattern                                    |
++========================+================================================+
+| Subscription           | ``/callbacks/subscriptions/{peer_id}/{sub_id}``|
++------------------------+------------------------------------------------+
+| Permission             | ``/callbacks/permissions/{granting_actor_id}`` |
++------------------------+------------------------------------------------+
+
+**Permission Callback Format**
+
+Permission callbacks use target ``"permissions"`` and include the full
+permission grant structure::
+
+  POST /{receiving_actor_id}/callbacks/permissions/{granting_actor_id}
+  Content-Type: application/json
+  Authorization: Bearer {bearer_token}
+
+  {
+    "id": "granting_actor_id",
+    "target": "permissions",
+    "timestamp": "2026-01-15T12:00:00.000000Z",
+    "type": "permission",
+    "data": {
+      "properties": {
+        "patterns": ["memory_*", "profile/*"],
+        "operations": ["read", "subscribe"],
+        "excluded_patterns": ["memory_private_*"]
+      },
+      "methods": {
+        "allowed": ["sync_*"],
+        "denied": []
+      },
+      "tools": {
+        "allowed": ["search", "fetch"],
+        "denied": ["delete_*"]
+      },
+      "resources": {
+        "allowed": ["data://*"],
+        "denied": []
+      },
+      "prompts": {
+        "allowed": ["*"]
+      }
+    }
+  }
+
+**Key Characteristics:**
+
+- Permission callbacks do NOT use sequence numbers (sequence field is 0 or absent)
+- Permission callbacks are idempotent - receiving the same permissions multiple times is safe
+- The ``data`` field contains the FULL current permissions, not a diff
+- Receivers should replace cached permissions entirely, not merge
+
+**Callback Type Field**
+
+The ``type`` field distinguishes permission callbacks:
+
+- ``"permission"`` - Full permission grant/update
+- ``"diff"`` or absent - Normal subscription callback
+- ``"resync"`` - Resync callback
+
+**Triggering Permission Callbacks**
+
+Permission callbacks SHOULD be sent when:
+
+1. Trust relationship permissions are modified via ``PUT /trust/{rel}/{peerid}/permissions``
+2. Trust type default permissions change (bulk notification to all affected peers)
+3. An actor explicitly revokes specific permissions
+
+**Receiver Behavior**
+
+On receiving a permission callback, the receiver SHOULD:
+
+1. Validate the callback is from a trusted peer
+2. Store the received permissions in local cache
+3. Trigger any application-specific reactions (e.g., sync newly-granted data)
+4. Clean up local data for revoked permissions (OPTIONAL)
+5. Respond with ``204 No Content``
+
+**Timestamp-Based Ordering**
+
+Because permission callbacks use full replacement semantics without sequence numbers,
+receivers SHOULD compare the ``timestamp`` field to prevent stale updates from
+overwriting newer permissions. If the received timestamp is older than the cached
+timestamp, the callback SHOULD be ignored.
+
 Granularity Selection Guidelines
 --------------------------------
 

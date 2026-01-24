@@ -24,6 +24,9 @@ from .constants import TRUST_PERMISSIONS_BUCKET
 
 logger = logging.getLogger(__name__)
 
+# Timeout for peer notification HTTP requests (seconds)
+PEER_NOTIFICATION_TIMEOUT = 10.0
+
 
 @dataclass
 class TrustPermissions:
@@ -102,6 +105,67 @@ class TrustPermissionStore:
             )
             return None
 
+    def _store_permissions_internal(self, permissions: TrustPermissions) -> bool:
+        """Internal storage logic shared by sync and async methods.
+
+        Args:
+            permissions: The TrustPermissions to store.
+
+        Returns:
+            True if storage succeeded, False otherwise.
+        """
+        if not permissions.validate():
+            logger.error(
+                f"Invalid trust permissions definition: {permissions.get_permission_key()}"
+            )
+            return False
+
+        bucket = self._get_permissions_bucket(permissions.actor_id)
+        if not bucket:
+            logger.error(
+                f"Cannot access trust permissions bucket for actor {permissions.actor_id}"
+            )
+            return False
+
+        try:
+            # Store permissions data in attribute bucket
+            permission_key = permissions.get_permission_key()
+            permissions_data = permissions.to_dict()
+
+            success = bucket.set_attr(
+                name=permission_key, data=json.dumps(permissions_data)
+            )
+
+            if success:
+                # Update cache
+                cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
+                self._cache[cache_key] = permissions
+                logger.info(f"Stored trust permissions: {cache_key}")
+                return True
+            else:
+                logger.error(f"Failed to store trust permissions {permission_key}")
+                return False
+
+        except Exception as e:
+            logger.error(
+                f"Error storing trust permissions {permissions.get_permission_key()}: {e}"
+            )
+            return False
+
+    def _should_notify_peer(self, notify_peer: bool | None) -> bool:
+        """Determine if peer should be notified based on parameter and config.
+
+        Args:
+            notify_peer: Override for peer notification. If None (default),
+                uses config.notify_peer_on_change.
+
+        Returns:
+            True if peer should be notified, False otherwise.
+        """
+        if notify_peer is not None:
+            return notify_peer
+        return getattr(self.config, "notify_peer_on_change", True)
+
     def store_permissions(
         self, permissions: TrustPermissions, notify_peer: bool | None = None
     ) -> bool:
@@ -119,53 +183,24 @@ class TrustPermissionStore:
         Returns:
             True if storage succeeded. Notification failures are logged but
             don't affect the return value.
+
+        Performance Notes:
+            Sync version: Notification uses blocking HTTP request. For high-throughput
+            scenarios, use store_permissions_async() instead.
         """
-        if not permissions.validate():
-            logger.error(
-                f"Invalid trust permissions definition: {permissions.get_permission_key()}"
-            )
-            return False
+        success = self._store_permissions_internal(permissions)
 
-        bucket = self._get_permissions_bucket(permissions.actor_id)
-        if not bucket:
-            logger.error(
-                f"Cannot access trust permissions bucket for actor {permissions.actor_id}"
-            )
-            return False
+        if success and self._should_notify_peer(notify_peer):
+            try:
+                self._notify_peer(permissions)
+            except Exception as e:
+                # Fire-and-forget: log but don't affect return value
+                logger.warning(
+                    f"Exception during peer notification for {permissions.actor_id}: {e}",
+                    exc_info=True,
+                )
 
-        try:
-            # Store permissions data in attribute bucket
-            permission_key = permissions.get_permission_key()
-            permissions_data = permissions.to_dict()
-
-            success = bucket.set_attr(
-                name=permission_key, data=json.dumps(permissions_data)
-            )
-
-            if success:
-                # Update cache
-                cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
-                self._cache[cache_key] = permissions
-                logger.info(f"Stored trust permissions: {cache_key}")
-
-                # Auto-notify peer if configured
-                should_notify = notify_peer
-                if should_notify is None:
-                    should_notify = getattr(self.config, "notify_peer_on_change", True)
-
-                if should_notify:
-                    self._notify_peer(permissions)
-
-                return True
-            else:
-                logger.error(f"Failed to store trust permissions {permission_key}")
-                return False
-
-        except Exception as e:
-            logger.error(
-                f"Error storing trust permissions {permissions.get_permission_key()}: {e}"
-            )
-            return False
+        return success
 
     async def store_permissions_async(
         self, permissions: TrustPermissions, notify_peer: bool | None = None
@@ -182,53 +217,24 @@ class TrustPermissionStore:
         Returns:
             True if storage succeeded. Notification failures are logged but
             don't affect the return value.
+
+        Performance Notes:
+            Async version: Notification is non-blocking but still awaited. For true
+            fire-and-forget, consider using a background task queue.
         """
-        if not permissions.validate():
-            logger.error(
-                f"Invalid trust permissions definition: {permissions.get_permission_key()}"
-            )
-            return False
+        success = self._store_permissions_internal(permissions)
 
-        bucket = self._get_permissions_bucket(permissions.actor_id)
-        if not bucket:
-            logger.error(
-                f"Cannot access trust permissions bucket for actor {permissions.actor_id}"
-            )
-            return False
+        if success and self._should_notify_peer(notify_peer):
+            try:
+                await self._notify_peer_async(permissions)
+            except Exception as e:
+                # Fire-and-forget: log but don't affect return value
+                logger.warning(
+                    f"Exception during async peer notification for {permissions.actor_id}: {e}",
+                    exc_info=True,
+                )
 
-        try:
-            # Store permissions data in attribute bucket
-            permission_key = permissions.get_permission_key()
-            permissions_data = permissions.to_dict()
-
-            success = bucket.set_attr(
-                name=permission_key, data=json.dumps(permissions_data)
-            )
-
-            if success:
-                # Update cache
-                cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
-                self._cache[cache_key] = permissions
-                logger.info(f"Stored trust permissions: {cache_key}")
-
-                # Auto-notify peer if configured
-                should_notify = notify_peer
-                if should_notify is None:
-                    should_notify = getattr(self.config, "notify_peer_on_change", True)
-
-                if should_notify:
-                    await self._notify_peer_async(permissions)
-
-                return True
-            else:
-                logger.error(f"Failed to store trust permissions {permission_key}")
-                return False
-
-        except Exception as e:
-            logger.error(
-                f"Error storing trust permissions {permissions.get_permission_key()}: {e}"
-            )
-            return False
+        return success
 
     def _notify_peer(self, permissions: TrustPermissions) -> None:
         """Send permission callback to the affected peer.
@@ -236,16 +242,26 @@ class TrustPermissionStore:
         This is fire-and-forget - failures are logged but don't affect
         the store operation.
 
+        Uses AwProxy which handles trust relationship lookup and HTTP
+        communication internally.
+
         Args:
             permissions: The TrustPermissions that were stored.
         """
+        actor_id = permissions.actor_id
+        peer_id = permissions.peer_id
+
+        logger.debug(
+            f"Notifying peer {peer_id} of permission change from actor {actor_id}"
+        )
+
         try:
             from .aw_proxy import AwProxy
 
             proxy = AwProxy(
                 peer_target={
-                    "id": permissions.actor_id,
-                    "peerid": permissions.peer_id,
+                    "id": actor_id,
+                    "peerid": peer_id,
                     "passphrase": None,
                 },
                 config=self.config,
@@ -253,7 +269,8 @@ class TrustPermissionStore:
 
             if not proxy.trust:
                 logger.warning(
-                    f"Cannot notify peer {permissions.peer_id}: no trust relationship"
+                    f"Cannot notify peer {peer_id} from actor {actor_id}: "
+                    "no trust relationship"
                 )
                 return
 
@@ -261,21 +278,25 @@ class TrustPermissionStore:
 
             # POST to peer's /callbacks/permissions/{our_actor_id}
             response = proxy.create_resource(
-                path=f"callbacks/permissions/{permissions.actor_id}",
+                path=f"callbacks/permissions/{actor_id}",
                 params=callback_data,
             )
 
             if response and "error" not in response:
                 logger.debug(
-                    f"Notified peer {permissions.peer_id} of permission change"
+                    f"Successfully notified peer {peer_id} of permission change "
+                    f"from actor {actor_id}"
                 )
             else:
                 logger.warning(
-                    f"Failed to notify peer {permissions.peer_id}: {response}"
+                    f"Failed to notify peer {peer_id} from actor {actor_id}: {response}"
                 )
 
         except Exception as e:
-            logger.warning(f"Error notifying peer {permissions.peer_id}: {e}")
+            logger.warning(
+                f"Error notifying peer {peer_id} from actor {actor_id}: {e}",
+                exc_info=True,
+            )
 
     async def _notify_peer_async(self, permissions: TrustPermissions) -> None:
         """Send permission callback to the affected peer asynchronously.
@@ -283,9 +304,20 @@ class TrustPermissionStore:
         This is fire-and-forget - failures are logged but don't affect
         the store operation.
 
+        Note: Uses Trust directly instead of AwProxy because AwProxy doesn't
+        support async HTTP. This approach manually constructs the callback URL
+        and uses httpx.AsyncClient for non-blocking HTTP requests.
+
         Args:
             permissions: The TrustPermissions that were stored.
         """
+        actor_id = permissions.actor_id
+        peer_id = permissions.peer_id
+
+        logger.debug(
+            f"Notifying peer {peer_id} of permission change from actor {actor_id} (async)"
+        )
+
         try:
             import httpx
 
@@ -293,15 +325,16 @@ class TrustPermissionStore:
 
             # Get trust relationship to find peer URL and secret
             trust = Trust(
-                actor_id=permissions.actor_id,
-                peerid=permissions.peer_id,
+                actor_id=actor_id,
+                peerid=peer_id,
                 config=self.config,
             )
             trust_info = trust.get()
 
             if not trust_info:
                 logger.warning(
-                    f"Cannot notify peer {permissions.peer_id}: no trust relationship"
+                    f"Cannot notify peer {peer_id} from actor {actor_id}: "
+                    "no trust relationship"
                 )
                 return
 
@@ -310,18 +343,21 @@ class TrustPermissionStore:
 
             if not peer_baseuri:
                 logger.warning(
-                    f"Cannot notify peer {permissions.peer_id}: no baseuri in trust"
+                    f"Cannot notify peer {peer_id} from actor {actor_id}: "
+                    "no baseuri in trust"
                 )
                 return
 
-            callback_url = f"{peer_baseuri.rstrip('/')}/callbacks/permissions/{permissions.actor_id}"
+            callback_url = (
+                f"{peer_baseuri.rstrip('/')}/callbacks/permissions/{actor_id}"
+            )
             callback_data = self._build_callback_data(permissions)
 
             headers = {"Content-Type": "application/json"}
             if peer_secret:
                 headers["Authorization"] = f"Bearer {peer_secret}"
 
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=PEER_NOTIFICATION_TIMEOUT) as client:
                 response = await client.post(
                     callback_url,
                     json=callback_data,
@@ -330,16 +366,20 @@ class TrustPermissionStore:
 
                 if response.status_code in (200, 201, 202, 204):
                     logger.debug(
-                        f"Notified peer {permissions.peer_id} of permission change"
+                        f"Successfully notified peer {peer_id} of permission change "
+                        f"from actor {actor_id} (async)"
                     )
                 else:
                     logger.warning(
-                        f"Failed to notify peer {permissions.peer_id}: "
+                        f"Failed to notify peer {peer_id} from actor {actor_id}: "
                         f"status={response.status_code}"
                     )
 
         except Exception as e:
-            logger.warning(f"Error notifying peer {permissions.peer_id}: {e}")
+            logger.warning(
+                f"Error notifying peer {peer_id} from actor {actor_id}: {e}",
+                exc_info=True,
+            )
 
     def _build_callback_data(self, permissions: TrustPermissions) -> dict[str, Any]:
         """Build the callback data payload for permission notification.

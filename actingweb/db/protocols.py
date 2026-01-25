@@ -34,9 +34,7 @@ class DbActorProtocol(Protocol):
         """
         ...
 
-    def get_by_creator(
-        self, creator: str | None = None
-    ) -> list[dict[str, Any]] | None:
+    def get_by_creator(self, creator: str | None = None) -> list[dict[str, Any]] | None:
         """
         Get actors by creator field.
 

@@ -306,21 +306,24 @@ def get_subscription_diff_list(config: "Config") -> "DbSubscriptionDiffListProto
 # =============================================================================
 
 
-def get_subscription_suspension(config: "Config") -> "SubscriptionSuspensionProtocol":
+def get_subscription_suspension(
+    config: "Config", actor_id: str
+) -> "SubscriptionSuspensionProtocol":
     """Create a DbSubscriptionSuspension instance for suspension state management.
 
     Args:
         config: ActingWeb configuration instance
+        actor_id: The actor ID
 
     Returns:
         DbSubscriptionSuspension instance
 
     Example:
         >>> from actingweb.db import get_subscription_suspension
-        >>> db = get_subscription_suspension(config)
+        >>> db = get_subscription_suspension(config, actor_id="my-actor")
         >>> db.suspend(target="properties", subtarget="email")
     """
-    return config.DbSubscriptionSuspension.DbSubscriptionSuspension()
+    return config.DbSubscriptionSuspension.DbSubscriptionSuspension(actor_id)
 
 
 # =============================================================================

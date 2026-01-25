@@ -1899,10 +1899,10 @@ class Actor:
         Returns:
             True if suspended, False otherwise
         """
-        if not self.config:
+        if not self.config or not self.id:
             return False
         try:
-            db = get_subscription_suspension(self.config)
+            db = get_subscription_suspension(self.config, self.id)
             return db.is_suspended(target, subtarget)
         except Exception as e:
             logger.error(f"Error checking suspension: {e}")
@@ -1921,10 +1921,10 @@ class Actor:
         Returns:
             True if newly suspended, False if already suspended
         """
-        if not self.config:
+        if not self.config or not self.id:
             return False
         try:
-            db = get_subscription_suspension(self.config)
+            db = get_subscription_suspension(self.config, self.id)
             return db.suspend(target, subtarget)
         except Exception as e:
             logger.error(f"Error suspending subscriptions: {e}")
@@ -1943,10 +1943,10 @@ class Actor:
         Returns:
             The number of resync callbacks sent
         """
-        if not self.config:
+        if not self.config or not self.id:
             return 0
         try:
-            db = get_subscription_suspension(self.config)
+            db = get_subscription_suspension(self.config, self.id)
             if not db.resume(target, subtarget):
                 return 0  # Wasn't suspended
 

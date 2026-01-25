@@ -130,7 +130,6 @@ class TestAccessorSignatures:
             get_peer_trustee,
             get_subscription,
             get_subscription_diff,
-            get_subscription_suspension,
             get_attribute,
         ]
 
@@ -142,6 +141,21 @@ class TestAccessorSignatures:
             assert len(sig.parameters) == 1, (
                 f"{accessor.__name__} should have exactly one parameter"
             )
+
+    def test_subscription_suspension_accessor_signature(self) -> None:
+        """Test get_subscription_suspension takes config and actor_id parameters."""
+        import inspect
+
+        sig = inspect.signature(get_subscription_suspension)
+        assert "config" in sig.parameters, (
+            "get_subscription_suspension should have a 'config' parameter"
+        )
+        assert "actor_id" in sig.parameters, (
+            "get_subscription_suspension should have an 'actor_id' parameter"
+        )
+        assert len(sig.parameters) == 2, (
+            "get_subscription_suspension should have exactly two parameters"
+        )
 
     def test_all_list_accessors_take_config_param(self) -> None:
         """Test all list accessors take a config parameter."""

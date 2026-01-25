@@ -5,6 +5,26 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Database Accessor Pattern**: Added factory functions in ``actingweb.db`` module for creating database instances with configuration automatically injected. This ensures all DB objects respect application settings like ``indexed_properties`` and ``use_lookup_table``.
+
+  - New accessor functions: ``get_property()``, ``get_property_list()``, ``get_actor()``, ``get_actor_list()``, ``get_trust()``, ``get_trust_list()``, ``get_peer_trustee()``, ``get_peer_trustee_list()``, ``get_subscription()``, ``get_subscription_list()``, ``get_subscription_diff()``, ``get_subscription_diff_list()``, ``get_subscription_suspension()``, ``get_attribute()``, ``get_attribute_bucket_list()``
+  - New utility function: ``get_db_accessors()`` returns dictionary of all accessor functions
+  - New protocol definitions in ``actingweb.db.protocols`` for all database interfaces
+  - Improved type safety: Full IDE autocomplete and type checking support
+  - Simplified usage pattern: ``db = get_property(config)`` instead of ``db = config.DbProperty.DbProperty()``
+
+FIXED
+~~~~~
+
+- Fixed ``DbSubscriptionSuspension`` initialization: ``get_subscription_suspension()`` now requires ``actor_id`` parameter to properly initialize the suspension instance
+- Fixed type annotations across database layer to eliminate pyright errors
+- Fixed ``DbTrustProtocol.modify()`` signature to include missing parameters: ``aw_supported``, ``aw_version``, ``capabilities_fetched_at``
+- Fixed ``DbAttributeBucketListProtocol`` to include ``fetch_timestamps()`` method
+- Fixed return type handling for ``PeerTrustee.get()`` to properly handle ``bool | dict | None`` returns
+
 v3.10.0a5: Jan 24, 2026
 -----------------------
 

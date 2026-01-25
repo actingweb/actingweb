@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from typing import Any
 
 from actingweb.db.postgresql.connection import get_connection
@@ -37,8 +38,6 @@ class DbProperty:
         if use_lookup_table is not None:
             self._use_lookup_table = use_lookup_table
         else:
-            import os
-
             self._use_lookup_table = (
                 os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
             )
@@ -46,8 +45,6 @@ class DbProperty:
         if indexed_properties is not None:
             self._indexed_properties = indexed_properties
         else:
-            import os
-
             self._indexed_properties = ["oauthId", "email", "externalUserId"]
             if os.getenv("INDEXED_PROPERTIES"):
                 env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")

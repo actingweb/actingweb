@@ -9,7 +9,6 @@ These tests verify that:
 """
 
 import asyncio
-import json
 
 import pytest
 
@@ -62,7 +61,7 @@ class TestAsyncMCPHandler:
             creator = "test@example.com"
             properties = {}
 
-        return ActorInterface(MockActor())
+        return ActorInterface(MockActor())  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_async_tool_hook_same_event_loop(self, app, test_config, webobj):
@@ -88,7 +87,7 @@ class TestAsyncMCPHandler:
             creator = "test@example.com"
             properties = {}
 
-        mock_actor = ActorInterface(MockActorObj())
+        mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
 
         # Call the async tool
@@ -105,9 +104,9 @@ class TestAsyncMCPHandler:
         assert hook_called, "Hook should have been called"
 
         # Verify same event loop = no thread pool was used
-        assert (
-            hook_event_loop_id == main_event_loop_id
-        ), f"Expected same event loop (main={main_event_loop_id}, hook={hook_event_loop_id})"
+        assert hook_event_loop_id == main_event_loop_id, (
+            f"Expected same event loop (main={main_event_loop_id}, hook={hook_event_loop_id})"
+        )
 
         # Verify result
         assert result["jsonrpc"] == "2.0"
@@ -136,7 +135,7 @@ class TestAsyncMCPHandler:
             creator = "test@example.com"
             properties = {}
 
-        mock_actor = ActorInterface(MockActorObj())
+        mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
 
         # Call the sync tool
@@ -181,7 +180,7 @@ class TestAsyncMCPHandler:
             creator = "test@example.com"
             properties = {}
 
-        mock_actor = ActorInterface(MockActorObj())
+        mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
 
         # Call the async prompt
@@ -198,9 +197,9 @@ class TestAsyncMCPHandler:
         assert hook_called, "Async prompt hook should have been called"
 
         # Verify same event loop
-        assert (
-            hook_event_loop_id == main_event_loop_id
-        ), "Async prompt hook should execute in same event loop"
+        assert hook_event_loop_id == main_event_loop_id, (
+            "Async prompt hook should execute in same event loop"
+        )
 
         # Verify result
         assert result["jsonrpc"] == "2.0"
@@ -237,7 +236,7 @@ class TestAsyncMCPHandler:
             creator = "test@example.com"
             properties = {}
 
-        mock_actor = ActorInterface(MockActorObj())
+        mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
 
         # Call sync tool
@@ -344,7 +343,7 @@ class TestAsyncMCPHandler:
             creator = "test@example.com"
             properties = {}
 
-        mock_actor = ActorInterface(MockActorObj())
+        mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
 
         request_data = {
@@ -387,7 +386,7 @@ class TestAsyncMCPHandler:
             creator = "test@example.com"
             properties = {}
 
-        mock_actor = ActorInterface(MockActorObj())
+        mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
 
         # Call 3 tools concurrently

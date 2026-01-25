@@ -294,7 +294,9 @@ class AsyncMCPHandler(MCPHandler):
                                     },
                                 }
                             except Exception as e:
-                                logger.error(f"Error executing prompt {prompt_name}: {e}")
+                                logger.error(
+                                    f"Error executing prompt {prompt_name}: {e}"
+                                )
                                 return self._create_jsonrpc_error(
                                     request_id,
                                     -32603,
@@ -312,7 +314,9 @@ class AsyncMCPHandler(MCPHandler):
         uri = params.get("uri")
 
         if not uri:
-            return self._create_jsonrpc_error(request_id, -32602, "Missing resource URI")
+            return self._create_jsonrpc_error(
+                request_id, -32602, "Missing resource URI"
+            )
 
         if not self.hooks:
             return self._create_jsonrpc_error(
@@ -382,7 +386,10 @@ class AsyncMCPHandler(MCPHandler):
                                             result = hook(actor, method_name, arguments)
 
                                         # Check if result is already properly structured MCP content
-                                        if isinstance(result, dict) and "contents" in result:
+                                        if (
+                                            isinstance(result, dict)
+                                            and "contents" in result
+                                        ):
                                             # Result is already MCP-formatted, use it directly
                                             return {
                                                 "jsonrpc": "2.0",

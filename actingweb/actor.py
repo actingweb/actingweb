@@ -493,14 +493,22 @@ class Actor:
                 actor_id=self.id, peerid=peerid, config=self.config
             )
             peer_data = new_peer.get()
-            if isinstance(peer_data, bool) or not peer_data or (isinstance(peer_data, dict) and len(peer_data) == 0):
+            if (
+                isinstance(peer_data, bool)
+                or not peer_data
+                or (isinstance(peer_data, dict) and len(peer_data) == 0)
+            ):
                 return False
         elif shorttype:
             new_peer = peertrustee.PeerTrustee(
                 actor_id=self.id, short_type=shorttype, config=self.config
             )
             peer_data = new_peer.get()
-            if isinstance(peer_data, bool) or not peer_data or (isinstance(peer_data, dict) and len(peer_data) == 0):
+            if (
+                isinstance(peer_data, bool)
+                or not peer_data
+                or (isinstance(peer_data, dict) and len(peer_data) == 0)
+            ):
                 return False
         if not peer_data or isinstance(peer_data, bool):
             return False

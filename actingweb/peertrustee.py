@@ -15,7 +15,11 @@ class PeerTrustee:
             False: When multiple peer trustees of same type exist (ambiguous lookup)
             None: When no peer trustee found or required parameters missing
         """
-        if self.peertrustee and not isinstance(self.peertrustee, bool) and len(self.peertrustee) > 0:
+        if (
+            self.peertrustee
+            and not isinstance(self.peertrustee, bool)
+            and len(self.peertrustee) > 0
+        ):
             return self.peertrustee
         if self.handle:
             self.peertrustee = self.handle.get(

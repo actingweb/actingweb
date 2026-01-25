@@ -273,16 +273,12 @@ class PeerPermissionStore:
 
         # Check cache first
         if cache_key in self._cache:
-            logger.debug(
-                f"Retrieved peer permissions from cache: {cache_key}"
-            )
+            logger.debug(f"Retrieved peer permissions from cache: {cache_key}")
             return self._cache[cache_key]
 
         bucket = self._get_permissions_bucket(actor_id)
         if not bucket:
-            logger.warning(
-                f"Could not get permissions bucket for actor {actor_id}"
-            )
+            logger.warning(f"Could not get permissions bucket for actor {actor_id}")
             return None
 
         try:
@@ -292,9 +288,7 @@ class PeerPermissionStore:
             attr_data = bucket.get_attr(name=perm_key)
 
             if not attr_data or "data" not in attr_data:
-                logger.debug(
-                    f"No permissions found in storage for {cache_key}"
-                )
+                logger.debug(f"No permissions found in storage for {cache_key}")
                 return None
 
             # Parse JSON and create PeerPermissions
@@ -304,9 +298,7 @@ class PeerPermissionStore:
             # Cache the result
             self._cache[cache_key] = permissions
 
-            logger.debug(
-                f"Retrieved peer permissions from storage: {cache_key}"
-            )
+            logger.debug(f"Retrieved peer permissions from storage: {cache_key}")
 
             return permissions
 

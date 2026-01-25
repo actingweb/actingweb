@@ -52,11 +52,19 @@ Directory Structure
     │       ├── flask_integration.py # Flask support
     │       └── fastapi_integration.py # FastAPI support
     │
-    └── db_dynamodb/             # DynamoDB backend
-        ├── db_actor.py          # Actor storage
-        ├── db_property.py       # Property storage
-        ├── db_trust.py          # Trust storage
-        └── db_subscription.py   # Subscription storage
+    └── db/                      # Database abstraction layer
+        ├── __init__.py          # Config-aware DB accessors
+        ├── protocols.py         # Database interface protocols
+        ├── dynamodb/            # DynamoDB backend
+        │   ├── actor.py         # Actor storage
+        │   ├── property.py      # Property storage
+        │   ├── trust.py         # Trust storage
+        │   └── subscription.py  # Subscription storage
+        └── postgresql/          # PostgreSQL backend
+            ├── actor.py         # Actor storage
+            ├── property.py      # Property storage
+            ├── trust.py         # Trust storage
+            └── subscription.py  # Subscription storage
 
 Core Classes
 ============
@@ -451,6 +459,54 @@ The following table maps components to their implementation files:
 | Suspension                | ``actingweb/db/*/subscription_suspension.py``  | Pause diff registration          |
 +---------------------------+------------------------------------------------+----------------------------------+
 
+Database Layer
+==============
+
+ActingWeb uses a pluggable database architecture supporting both DynamoDB and PostgreSQL backends.
+
+Config-Aware DB Accessors
+--------------------------
+
+**For Contributors**: When working with database classes, use the config-aware accessor functions from ``actingweb.db`` instead of directly instantiating classes. This ensures proper configuration injection.
+
+**Recommended Pattern**:
+
+.. code-block:: python
+
+    from actingweb.db import get_property, get_actor, get_trust
+
+    # Good - configuration is automatically injected
+    db_property = get_property(config)
+    db_actor = get_actor(config)
+    db_trust = get_trust(config)
+
+**Avoid Direct Instantiation**:
+
+.. code-block:: python
+
+    # Avoid - bypasses configuration injection
+    db_property = config.DbProperty.DbProperty()
+
+**Why This Matters**:
+
+- Property lookup table settings (``use_lookup_table``, ``indexed_properties``) must be properly configured
+- Accessor functions provide type-safe, testable interfaces
+- Clearer dependency on configuration
+
+**Available Accessors**:
+
+- ``get_property(config)`` - Property database operations
+- ``get_property_list(config)`` - Batch property operations
+- ``get_actor(config)`` - Actor database operations
+- ``get_actor_list(config)`` - Batch actor operations
+- ``get_trust(config)`` - Trust database operations
+- ``get_trust_list(config)`` - Batch trust operations
+- ``get_peer_trustee(config)`` - PeerTrustee operations
+- ``get_subscription(config)`` - Subscription operations
+- ``get_attribute(config)`` - Attribute/bucket operations
+
+See ``actingweb/db/__init__.py`` for complete list with documentation.
+
 Key Design Patterns
 ===================
 
@@ -461,6 +517,7 @@ Key Design Patterns
 2. **Dependency Injection**
 
    Handlers receive webobj, config, hooks
+   DB classes receive configuration via accessor functions
 
 3. **Adapter Pattern**
 
@@ -473,6 +530,10 @@ Key Design Patterns
 5. **Hook Pattern**
 
    Extensible business logic via decorators
+
+6. **Factory Pattern**
+
+   DB accessor functions create properly configured instances
 
 See Also
 ========

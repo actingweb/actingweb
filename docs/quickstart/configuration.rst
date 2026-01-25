@@ -423,10 +423,10 @@ Finding an actor by OAuth ID:
 
 .. code-block:: python
 
-    from actingweb.db import get_db
+    from actingweb.db import get_property
 
-    # Get property database interface
-    db_property = get_db().DbProperty()
+    # Get property database interface with configuration
+    db_property = get_property(config)
 
     # Reverse lookup: find actor by OAuth ID
     actor_id = db_property.get_actor_id_from_property(
@@ -440,6 +440,11 @@ Finding an actor by OAuth ID:
 The lookup happens automatically when you set indexed properties:
 
 .. code-block:: python
+
+    from actingweb.db import get_property
+
+    # Get property database interface
+    db_property = get_property(config)
 
     # Setting an indexed property creates lookup entry automatically
     db_property.set(

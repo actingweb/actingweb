@@ -2,6 +2,13 @@ import datetime
 import logging
 from typing import Any
 
+from actingweb.db import (
+    get_subscription,
+    get_subscription_diff,
+    get_subscription_diff_list,
+    get_subscription_list,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,7 +105,7 @@ class Subscription:
             return False
         if not self.config:
             return False
-        diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
+        diff = get_subscription_diff(self.config)
         diff.create(
             actor_id=self.actor_id,
             subid=self.subid,
@@ -122,21 +129,21 @@ class Subscription:
             return None
         if not self.config:
             return None
-        diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
+        diff = get_subscription_diff(self.config)
         return diff.get(actor_id=self.actor_id, subid=self.subid, seqnr=seqnr)
 
     def get_diffs(self):
         """Get all the diffs available for this subscription ordered by the timestamp, oldest first"""
         if not self.config:
             return []
-        diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
+        diff_list = get_subscription_diff_list(self.config)
         return diff_list.fetch(actor_id=self.actor_id, subid=self.subid)
 
     def clear_diff(self, seqnr):
         """Clears one specific diff"""
         if not self.config:
             return False
-        diff = self.config.DbSubscriptionDiff.DbSubscriptionDiff()
+        diff = get_subscription_diff(self.config)
         diff.get(actor_id=self.actor_id, subid=self.subid, seqnr=seqnr)
         return diff.delete()
 
@@ -144,7 +151,7 @@ class Subscription:
         """Clear all diffs up to and including a seqnr"""
         if not self.config:
             return False
-        diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
+        diff_list = get_subscription_diff_list(self.config)
         diff_list.fetch(actor_id=self.actor_id, subid=self.subid)
         diff_list.delete(seqnr=seqnr)
 
@@ -153,7 +160,7 @@ class Subscription:
     ):
         self.config = config
         if self.config:
-            self.handle = self.config.DbSubscription.DbSubscription()
+            self.handle = get_subscription(self.config)
         else:
             self.handle = None
         self.subscription = {}
@@ -178,7 +185,7 @@ class Subscriptions:
         if self.subscriptions is not None:
             return self.subscriptions
         if not self.list and self.config:
-            self.list = self.config.DbSubscription.DbSubscriptionList()
+            self.list = get_subscription_list(self.config)
         if not self.subscriptions and self.list:
             self.subscriptions = self.list.fetch(actor_id=self.actor_id)
         return self.subscriptions
@@ -191,7 +198,7 @@ class Subscriptions:
             for sub in self.subscriptions:
                 if not self.config:
                     continue
-                diff_list = self.config.DbSubscriptionDiff.DbSubscriptionDiffList()
+                diff_list = get_subscription_diff_list(self.config)
                 diff_list.fetch(actor_id=self.actor_id, subid=sub["subscriptionid"])
                 diff_list.delete()
         self.list.delete()
@@ -207,7 +214,7 @@ class Subscriptions:
             logger.debug("No actor_id in initialisation of subscriptions")
             return
         if self.config:
-            self.list = self.config.DbSubscription.DbSubscriptionList()
+            self.list = get_subscription_list(self.config)
         else:
             self.list = None
         self.actor_id = actor_id

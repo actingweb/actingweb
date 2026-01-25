@@ -21,6 +21,8 @@ import re
 from enum import Enum
 from typing import Any
 
+from actingweb.db import get_trust
+
 from . import config as config_class
 from .trust_permissions import get_trust_permission_store, merge_permissions
 from .trust_type_registry import get_registry as get_trust_type_registry
@@ -381,7 +383,7 @@ class PermissionEvaluator:
             if not self.config or not hasattr(self.config, "DbTrust"):
                 logger.error("Database backend (DbTrust) not configured")
                 return None
-            db_trust = self.config.DbTrust.DbTrust()
+            db_trust = get_trust(self.config)
             if not db_trust:
                 logger.error("Failed to instantiate database backend")
                 return None

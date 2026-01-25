@@ -2,6 +2,7 @@ import json
 import logging
 
 from actingweb import actor
+from actingweb.db import get_actor
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
@@ -265,7 +266,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
             # Check if this is a unique creator constraint violation
             if self.config and self.config.unique_creator and creator:
                 # Check if creator already exists
-                in_db = self.config.DbActor.DbActor()
+                in_db = get_actor(self.config)
                 exists = in_db.get_by_creator(creator=creator)
                 if exists:
                     self.response.set_status(403, "Creator already exists")

@@ -1,5 +1,7 @@
 import logging
 
+from actingweb.db import get_peer_trustee
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +20,7 @@ class PeerTrustee:
     def create(self, baseuri=None, passphrase=None):
         if not self.handle:
             if self.config:
-                self.handle = self.config.DbPeerTrustee.DbPeerTrustee()
+                self.handle = get_peer_trustee(self.config)
             else:
                 return False
         if not self.actor_id or not self.peerid:
@@ -48,7 +50,7 @@ class PeerTrustee:
     ):
         self.config = config
         if self.config:
-            self.handle = self.config.DbPeerTrustee.DbPeerTrustee()
+            self.handle = get_peer_trustee(self.config)
         else:
             self.handle = None
         self.peertrustee = {}

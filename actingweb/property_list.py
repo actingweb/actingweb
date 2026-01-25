@@ -10,6 +10,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from actingweb.db import get_property
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ class ListProperty:
         self.name = name
         self.config = config
         self._meta_cache: dict[str, Any] | None = None
-        self._db = self.config.DbProperty.DbProperty() if self.config else None
+        self._db = get_property(self.config) if self.config else None
 
     def _get_meta_property_name(self) -> str:
         """Get the metadata property name."""
@@ -68,7 +70,7 @@ class ListProperty:
             return self._create_default_metadata()
 
         # Use fresh DB instance to avoid handle conflicts
-        meta_db = self.config.DbProperty.DbProperty()
+        meta_db = get_property(self.config)
         meta_str = meta_db.get(
             actor_id=self.actor_id, name=self._get_meta_property_name()
         )
@@ -121,7 +123,7 @@ class ListProperty:
             meta_property_name = self._get_meta_property_name()
             meta_json = json.dumps(meta)
             # Use fresh DB instance to avoid handle conflicts
-            meta_db = self.config.DbProperty.DbProperty()
+            meta_db = get_property(self.config)
             meta_db.set(
                 actor_id=self.actor_id, name=meta_property_name, value=meta_json
             )
@@ -207,7 +209,7 @@ class ListProperty:
 
         item_property_name = self._get_item_property_name(index)
         # Use fresh DB instance to avoid handle conflicts
-        item_db = self.config.DbProperty.DbProperty()
+        item_db = get_property(self.config)
         item_str = item_db.get(actor_id=self.actor_id, name=item_property_name)
 
         if item_str is None:
@@ -239,7 +241,7 @@ class ListProperty:
             value_str = str(value)
 
         # Use fresh DB instance to avoid handle conflicts
-        item_db = self.config.DbProperty.DbProperty()
+        item_db = get_property(self.config)
         item_db.set(
             actor_id=self.actor_id,
             name=self._get_item_property_name(index),
@@ -264,7 +266,7 @@ class ListProperty:
             raise RuntimeError("No database connection available")
 
         # Delete the item at index
-        prop = self.config.DbProperty.DbProperty()
+        prop = get_property(self.config)
         prop.set(
             actor_id=self.actor_id,
             name=self._get_item_property_name(index),
@@ -274,14 +276,14 @@ class ListProperty:
         # Shift all items after index down by one
         for i in range(index + 1, length):
             # Use fresh DB instance to avoid handle conflicts
-            item_db = self.config.DbProperty.DbProperty()
+            item_db = get_property(self.config)
             item_value = item_db.get(
                 actor_id=self.actor_id, name=self._get_item_property_name(i)
             )
 
             if item_value is not None:
                 # Move item from position i to position i-1
-                move_db = self.config.DbProperty.DbProperty()
+                move_db = get_property(self.config)
                 move_db.set(
                     actor_id=self.actor_id,
                     name=self._get_item_property_name(i - 1),
@@ -289,7 +291,7 @@ class ListProperty:
                 )
 
                 # Delete the old position
-                delete_db = self.config.DbProperty.DbProperty()
+                delete_db = get_property(self.config)
                 delete_db.set(
                     actor_id=self.actor_id,
                     name=self._get_item_property_name(i),
@@ -320,7 +322,7 @@ class ListProperty:
 
         # Store the new item - use fresh DB instance to avoid handle conflicts
         item_property_name = self._get_item_property_name(length)
-        item_db = self.config.DbProperty.DbProperty()
+        item_db = get_property(self.config)
         item_db.set(actor_id=self.actor_id, name=item_property_name, value=item_str)
         logger.debug(
             f"append(): Stored item at '{item_property_name}' with value: {item_str}"
@@ -345,7 +347,7 @@ class ListProperty:
 
         # Delete all item properties
         for i in range(length):
-            item_db = self.config.DbProperty.DbProperty()
+            item_db = get_property(self.config)
             item_db.set(
                 actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
             )
@@ -363,13 +365,13 @@ class ListProperty:
 
         # Delete all item properties
         for i in range(length):
-            item_db = self.config.DbProperty.DbProperty()
+            item_db = get_property(self.config)
             item_db.set(
                 actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
             )
 
         # Delete metadata
-        meta_db = self.config.DbProperty.DbProperty()
+        meta_db = get_property(self.config)
         meta_db.set(
             actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
         )

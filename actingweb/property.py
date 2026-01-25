@@ -1,5 +1,7 @@
 from typing import Any
 
+from actingweb.db import get_property, get_property_list
+
 from .property_list import ListProperty
 
 
@@ -19,7 +21,7 @@ class PropertyListStore:
         """Check if a list property exists without creating it."""
         try:
             if self._config:
-                db = self._config.DbProperty.DbProperty()
+                db = get_property(self._config)
                 meta = db.get(actor_id=self._actor_id, name=f"list:{name}-meta")
                 return meta is not None
         except Exception:
@@ -31,7 +33,7 @@ class PropertyListStore:
         list_names = []
         try:
             if self._config:
-                db_list = self._config.DbProperty.DbPropertyList()
+                db_list = get_property_list(self._config)
                 all_props = (
                     db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
                 )
@@ -97,7 +99,7 @@ class PropertyStore:
         else:
             self.__dict__[k] = v
         # Re-init property to avoid overwrite
-        self.__dict__["_db"] = self.__dict__["_config"].DbProperty.DbProperty()
+        self.__dict__["_db"] = get_property(self.__dict__["_config"])
         # set() will retrieve an attribute and delete it if value = None
         self.__dict__["_db"].set(actor_id=self.__dict__["_actor_id"], name=k, value=v)
 
@@ -105,7 +107,7 @@ class PropertyStore:
         try:
             return self.__dict__[k]
         except KeyError:
-            self.__dict__["_db"] = self.__dict__["_config"].DbProperty.DbProperty()
+            self.__dict__["_db"] = get_property(self.__dict__["_config"])
             self.__dict__[k] = self.__dict__["_db"].get(
                 actor_id=self.__dict__["_actor_id"], name=k
             )
@@ -115,7 +117,7 @@ class PropertyStore:
         """Fetch all properties from the database and return as dictionary."""
         if not self._actor_id or not self._config:
             return {}
-        db_list = self._config.DbProperty.DbPropertyList()
+        db_list = get_property_list(self._config)
         props = db_list.fetch(actor_id=self._actor_id)
         if isinstance(props, dict):
             return props
@@ -135,7 +137,7 @@ class Property:
         if not self.dbprop:
             # New property after a delete()
             if self.config:
-                self.dbprop = self.config.DbProperty.DbProperty()
+                self.dbprop = get_property(self.config)
             else:
                 self.dbprop = None
             self.value = None
@@ -150,7 +152,7 @@ class Property:
         if not self.dbprop:
             # New property after a delete()
             if self.config:
-                self.dbprop = self.config.DbProperty.DbProperty()
+                self.dbprop = get_property(self.config)
             else:
                 self.dbprop = None
         if not self.actor_id or not self.name:
@@ -194,7 +196,7 @@ class Property:
         """
         self.config = config
         if self.config:
-            self.dbprop = self.config.DbProperty.DbProperty()
+            self.dbprop = get_property(self.config)
         else:
             self.dbprop = None
         self.name = name
@@ -230,7 +232,7 @@ class Properties:
         if self.props is not None:
             return self.props
         self.props = self.list.fetch(actor_id=self.actor_id)
-        return self.props
+        return self.props if self.props is not None else False
 
     def delete(self) -> bool:
         if not self.list:
@@ -247,7 +249,7 @@ class Properties:
             self.list = None
             return
         if self.config:
-            self.list = self.config.DbProperty.DbPropertyList()
+            self.list = get_property_list(self.config)
         else:
             self.list = None
         self.actor_id = actor_id

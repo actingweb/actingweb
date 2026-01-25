@@ -1,5 +1,7 @@
 from typing import Any
 
+from actingweb.db import get_attribute, get_attribute_bucket_list
+
 
 class InternalStore:
     """Access to internal attributes using .prop notation"""
@@ -182,7 +184,7 @@ class Attributes:
             return False
         if self.dbprop.delete_bucket(actor_id=self.actor_id, bucket=self.bucket):
             if self.config:
-                self.dbprop = self.config.DbAttribute.DbAttribute()
+                self.dbprop = get_attribute(self.config)
             else:
                 self.dbprop = None
             self.data = {}
@@ -199,7 +201,7 @@ class Attributes:
         """A attribute must be initialised with actor_id and bucket"""
         self.config = config
         if self.config:
-            self.dbprop = self.config.DbAttribute.DbAttribute()
+            self.dbprop = get_attribute(self.config)
         else:
             self.dbprop = None
         self.bucket = bucket
@@ -235,7 +237,7 @@ class Buckets:
             return False
         self.list.delete(actor_id=self.actor_id)
         if self.config:
-            self.list = self.config.DbAttribute.DbAttributeBucketList()
+            self.list = get_attribute_bucket_list(self.config)
         else:
             self.list = None
         return True
@@ -247,7 +249,7 @@ class Buckets:
             self.list = None
             return
         if self.config:
-            self.list = self.config.DbAttribute.DbAttributeBucketList()
+            self.list = get_attribute_bucket_list(self.config)
         else:
             self.list = None
         self.actor_id = actor_id

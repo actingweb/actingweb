@@ -10,6 +10,7 @@ from actingweb import attribute, peertrustee, property, subscription, trust
 from actingweb.constants import (
     DEFAULT_CREATOR,
 )
+from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class Actor:
         self.last_response_message: str = ""
         self.id: str | None = actor_id
         if self.config:
-            self.handle = self.config.DbActor.DbActor()
+            self.handle = get_actor(self.config)
         else:
             self.handle = None
         if actor_id and config:
@@ -274,7 +275,7 @@ class Actor:
             return False
 
         lookup_creator = creator.lower() if "@" in creator else creator
-        exists = self.config.DbActor.DbActor().get_by_creator(creator=lookup_creator)
+        exists = get_actor(self.config).get_by_creator(creator=lookup_creator)
         if not exists:
             return False
 
@@ -325,7 +326,7 @@ class Actor:
         else:
             self.creator = DEFAULT_CREATOR
         if self.config and self.config.unique_creator:
-            in_db = self.config.DbActor.DbActor()
+            in_db = get_actor(self.config)
             exists = in_db.get_by_creator(creator=self.creator)
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
@@ -363,7 +364,7 @@ class Actor:
         else:
             self.id = self.config.new_uuid(seed) if self.config else ""
         if not self.handle and self.config:
-            self.handle = self.config.DbActor.DbActor()
+            self.handle = get_actor(self.config)
         if self.handle:
             self.handle.create(
                 creator=self.creator, passphrase=self.passphrase, actor_id=self.id
@@ -1901,7 +1902,7 @@ class Actor:
         if not self.config:
             return False
         try:
-            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            db = get_subscription_suspension(self.config)
             return db.is_suspended(target, subtarget)
         except Exception as e:
             logger.error(f"Error checking suspension: {e}")
@@ -1923,7 +1924,7 @@ class Actor:
         if not self.config:
             return False
         try:
-            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            db = get_subscription_suspension(self.config)
             return db.suspend(target, subtarget)
         except Exception as e:
             logger.error(f"Error suspending subscriptions: {e}")
@@ -1945,7 +1946,7 @@ class Actor:
         if not self.config:
             return 0
         try:
-            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            db = get_subscription_suspension(self.config)
             if not db.resume(target, subtarget):
                 return 0  # Wasn't suspended
 
@@ -2372,7 +2373,7 @@ class Actors:
     def __init__(self, config=None):
         self.config = config
         if self.config:
-            self.list = self.config.DbActor.DbActorList()
+            self.list = get_actor_list(self.config)
         else:
             self.list = None
         self.actors = None

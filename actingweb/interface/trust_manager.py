@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
+from actingweb.db import get_trust
+
 from ..actor import Actor as CoreActor
 from ..trust import canonical_connection_method
 
@@ -474,7 +476,7 @@ class TrustManager:
                 ):
                     logger.error("Database backend (DbTrust) not configured")
                     return False
-                db = self._core_actor.config.DbTrust.DbTrust()
+                db = get_trust(self._core_actor.config)
                 if not db:
                     logger.error("Failed to instantiate database backend")
                     return False
@@ -529,7 +531,7 @@ class TrustManager:
                 ):
                     logger.error("Database backend (DbTrust) not configured")
                     return False
-                db = self._core_actor.config.DbTrust.DbTrust()
+                db = get_trust(self._core_actor.config)
                 if not db:
                     logger.error("Failed to instantiate database backend")
                     return False

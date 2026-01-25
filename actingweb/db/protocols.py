@@ -813,7 +813,7 @@ class DbAttributeBucketListProtocol(Protocol):
     @staticmethod
     def fetch_timestamps(
         actor_id: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any] | bool:
         """
         Retrieve timestamps for all attribute buckets.
 
@@ -821,7 +821,7 @@ class DbAttributeBucketListProtocol(Protocol):
             actor_id: The actor ID
 
         Returns:
-            Dict of {bucket: timestamp}, or None
+            Dict of {bucket: timestamp}, or False on error
         """
         ...
 

@@ -227,19 +227,21 @@ class Buckets:
     in .props as a dictionary
     """
 
-    def fetch(self) -> dict[str, dict[str, dict[str, Any]]] | None:
+    def fetch(self) -> dict[str, dict[str, dict[str, Any]]] | bool:
         if not self.actor_id:
-            return None
+            return False
         if self.list:
-            return self.list.fetch(actor_id=self.actor_id)
-        return None
+            result = self.list.fetch(actor_id=self.actor_id)
+            return result if result is not None else False
+        return False
 
-    def fetch_timestamps(self) -> dict[str, Any] | None:
+    def fetch_timestamps(self) -> dict[str, Any] | bool:
         if not self.actor_id:
-            return None
+            return False
         if self.list:
-            return self.list.fetch_timestamps(actor_id=self.actor_id)
-        return None
+            result = self.list.fetch_timestamps(actor_id=self.actor_id)
+            return result if result is not None else False
+        return False
 
     def delete(self) -> bool:
         if not self.list:

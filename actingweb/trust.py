@@ -171,6 +171,7 @@ class Trust:
         if not self.handle:
             logger.debug("Attempted modifcation of trust without handle")
             return False
+        assert self.trust is not None  # Always initialized in __init__
         if baseuri:
             self.trust["baseuri"] = baseuri
         if secret:

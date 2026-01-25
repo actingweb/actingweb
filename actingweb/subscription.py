@@ -69,6 +69,7 @@ class Subscription:
             callback=self.callback,
         ):
             return False
+        assert self.subscription is not None  # Always initialized in __init__
         self.subscription["id"] = self.actor_id
         self.subscription["subscriptionid"] = self.subid
         self.subscription["peerid"] = self.peerid
@@ -95,6 +96,7 @@ class Subscription:
                 "Attempted increase_seq without subscription retrieved from storage"
             )
             return False
+        assert self.subscription is not None  # Always initialized in __init__
         self.subscription["sequence"] += 1
         return self.handle.modify(seqnr=self.subscription["sequence"])
 
@@ -105,6 +107,7 @@ class Subscription:
             return False
         if not self.config:
             return False
+        assert self.subscription is not None  # Always initialized in __init__
         diff = get_subscription_diff(self.config)
         diff.create(
             actor_id=self.actor_id,
@@ -114,10 +117,7 @@ class Subscription:
         )
         if not self.increase_seq():
             logger.error(
-                "Failed increasing sequence number for subscription "
-                + self.subid
-                + " for peer "
-                + self.peerid
+                f"Failed increasing sequence number for subscription {self.subid} for peer {self.peerid}"
             )
         return diff.get()
 

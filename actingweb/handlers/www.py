@@ -2,6 +2,7 @@
 import json
 import logging
 
+from actingweb.db import get_property
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
@@ -371,7 +372,7 @@ class WwwHandler(base_handler.BaseHandler):
                         and hasattr(myself.property, "_config")
                         and myself.property._config is not None
                     ):
-                        db = myself.property._config.DbProperty.DbProperty()
+                        db = get_property(myself.property._config)
                         meta = db.get(actor_id=myself.id, name=f"{prop_name}-meta")
                         if meta is not None:
                             # This is an old-style list property

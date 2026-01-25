@@ -10,6 +10,7 @@ from actingweb import attribute, peertrustee, property, subscription, trust
 from actingweb.constants import (
     DEFAULT_CREATOR,
 )
+from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class Actor:
         self.last_response_message: str = ""
         self.id: str | None = actor_id
         if self.config:
-            self.handle = self.config.DbActor.DbActor()
+            self.handle = get_actor(self.config)
         else:
             self.handle = None
         if actor_id and config:
@@ -274,7 +275,7 @@ class Actor:
             return False
 
         lookup_creator = creator.lower() if "@" in creator else creator
-        exists = self.config.DbActor.DbActor().get_by_creator(creator=lookup_creator)
+        exists = get_actor(self.config).get_by_creator(creator=lookup_creator)
         if not exists:
             return False
 
@@ -325,7 +326,7 @@ class Actor:
         else:
             self.creator = DEFAULT_CREATOR
         if self.config and self.config.unique_creator:
-            in_db = self.config.DbActor.DbActor()
+            in_db = get_actor(self.config)
             exists = in_db.get_by_creator(creator=self.creator)
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
@@ -363,7 +364,7 @@ class Actor:
         else:
             self.id = self.config.new_uuid(seed) if self.config else ""
         if not self.handle and self.config:
-            self.handle = self.config.DbActor.DbActor()
+            self.handle = get_actor(self.config)
         if self.handle:
             self.handle.create(
                 creator=self.creator, passphrase=self.passphrase, actor_id=self.id
@@ -492,16 +493,16 @@ class Actor:
                 actor_id=self.id, peerid=peerid, config=self.config
             )
             peer_data = new_peer.get()
-            if not peer_data or len(peer_data) == 0:
+            if isinstance(peer_data, bool) or not peer_data or (isinstance(peer_data, dict) and len(peer_data) == 0):
                 return False
         elif shorttype:
             new_peer = peertrustee.PeerTrustee(
                 actor_id=self.id, short_type=shorttype, config=self.config
             )
             peer_data = new_peer.get()
-            if not peer_data or len(peer_data) == 0:
+            if isinstance(peer_data, bool) or not peer_data or (isinstance(peer_data, dict) and len(peer_data) == 0):
                 return False
-        if not peer_data:
+        if not peer_data or isinstance(peer_data, bool):
             return False
         logger.info(f"Deleting peer actor at {peer_data['baseuri']}")
         u_p = b"trustee:" + peer_data["passphrase"].encode("utf-8")
@@ -562,7 +563,7 @@ class Actor:
                 actor_id=self.id, short_type=shorttype, config=self.config
             )
         peer_data = new_peer.get()
-        if peer_data and len(peer_data) > 0:
+        if peer_data and not isinstance(peer_data, bool) and len(peer_data) > 0:
             logger.debug("Found peer in getPeer, now checking existing trust...")
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=peer_data["peerid"], config=self.config
@@ -580,7 +581,7 @@ class Actor:
         ):
             factory = self.config.actors[shorttype]["factory"]
         # If peer did not exist, create it as trustee
-        if not peer_data or len(peer_data) == 0:
+        if not peer_data or isinstance(peer_data, bool) or len(peer_data) == 0:
             if len(factory) == 0:
                 logger.error(
                     f"Peer actor of shorttype({shorttype}) does not have factory set."
@@ -666,7 +667,7 @@ class Actor:
                 return None
         # Now peer exists, create trust
         new_peer_data = new_peer.get()
-        if not new_peer_data:
+        if not new_peer_data or isinstance(new_peer_data, bool):
             return None
         secret = self.config.new_token() if self.config else ""
         relationship = ""
@@ -1898,10 +1899,10 @@ class Actor:
         Returns:
             True if suspended, False otherwise
         """
-        if not self.config:
+        if not self.config or not self.id:
             return False
         try:
-            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            db = get_subscription_suspension(self.config, self.id)
             return db.is_suspended(target, subtarget)
         except Exception as e:
             logger.error(f"Error checking suspension: {e}")
@@ -1920,10 +1921,10 @@ class Actor:
         Returns:
             True if newly suspended, False if already suspended
         """
-        if not self.config:
+        if not self.config or not self.id:
             return False
         try:
-            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            db = get_subscription_suspension(self.config, self.id)
             return db.suspend(target, subtarget)
         except Exception as e:
             logger.error(f"Error suspending subscriptions: {e}")
@@ -1942,10 +1943,10 @@ class Actor:
         Returns:
             The number of resync callbacks sent
         """
-        if not self.config:
+        if not self.config or not self.id:
             return 0
         try:
-            db = self.config.DbSubscriptionSuspension.DbSubscriptionSuspension(self.id)
+            db = get_subscription_suspension(self.config, self.id)
             if not db.resume(target, subtarget):
                 return 0  # Wasn't suspended
 
@@ -2372,7 +2373,7 @@ class Actors:
     def __init__(self, config=None):
         self.config = config
         if self.config:
-            self.list = self.config.DbActor.DbActorList()
+            self.list = get_actor_list(self.config)
         else:
             self.list = None
         self.actors = None

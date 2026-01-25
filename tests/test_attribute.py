@@ -147,6 +147,8 @@ class TestAttributesSetAttr:
         result = attrs.set_attr(name="key", data="value", timestamp="2023-01-01")
 
         assert result is True
+        assert attrs.data is not None  # Type narrowing for pyright
+        assert attrs.data["key"] is not None  # Type narrowing for pyright
         assert attrs.data["key"]["data"] == "value"
         assert attrs.data["key"]["timestamp"] == "2023-01-01"
         mock_db_attr.set_attr.assert_called_once_with(

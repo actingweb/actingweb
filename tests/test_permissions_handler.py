@@ -124,9 +124,7 @@ class TestPermissionsHandler:
         with patch(
             "actingweb.handlers.permissions.get_trust_permission_store", mock_store
         ):
-            with patch(
-                "actingweb.handlers.permissions.get_registry", mock_registry
-            ):
+            with patch("actingweb.handlers.permissions.get_registry", mock_registry):
                 handler.get("actor123", "peer456")
 
                 # Verify response
@@ -136,7 +134,9 @@ class TestPermissionsHandler:
 
                 assert response["source"] == "trust_type_default"
                 assert response["trust_type"] == "subscriber"
-                assert "displayname" in response["permissions"]["properties"]["patterns"]
+                assert (
+                    "displayname" in response["permissions"]["properties"]["patterns"]
+                )
 
     def test_get_permissions_no_trust_relationship(self, handler):
         """Test querying permissions with no trust relationship."""
@@ -236,9 +236,7 @@ class TestPermissionsHandler:
         with patch(
             "actingweb.handlers.permissions.get_trust_permission_store", mock_store
         ):
-            with patch(
-                "actingweb.handlers.permissions.get_registry", mock_registry
-            ):
+            with patch("actingweb.handlers.permissions.get_registry", mock_registry):
                 handler.get("actor123", "peer456")
 
                 # Verify 500 response

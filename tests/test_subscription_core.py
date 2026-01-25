@@ -147,6 +147,7 @@ class TestSubscriptionCRUD:
 
         assert result is True
         mock_db_subscription.create.assert_called_once()
+        assert sub.subscription is not None  # Type narrowing for pyright
         assert sub.subscription["target"] == "properties"
         assert sub.subscription["subtarget"] == "config"
 
@@ -231,6 +232,7 @@ class TestSubscriptionDiffs:
         result = sub.increase_seq()
 
         assert result is True
+        assert sub.subscription is not None  # Type narrowing for pyright
         assert sub.subscription["sequence"] == 6
         mock_db_subscription.modify.assert_called_once_with(seqnr=6)
 

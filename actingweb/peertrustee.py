@@ -1,11 +1,21 @@
 import logging
+from typing import Any
+
+from actingweb.db import get_peer_trustee
 
 logger = logging.getLogger(__name__)
 
 
 class PeerTrustee:
-    def get(self):
-        if self.peertrustee and len(self.peertrustee) > 0:
+    def get(self) -> dict[str, Any] | bool | None:
+        """Retrieve peer trustee from database.
+
+        Returns:
+            dict[str, Any]: Peer trustee data if exactly one match found
+            False: When multiple peer trustees of same type exist (ambiguous lookup)
+            None: When no peer trustee found or required parameters missing
+        """
+        if self.peertrustee and not isinstance(self.peertrustee, bool) and len(self.peertrustee) > 0:
             return self.peertrustee
         if self.handle:
             self.peertrustee = self.handle.get(
@@ -18,7 +28,7 @@ class PeerTrustee:
     def create(self, baseuri=None, passphrase=None):
         if not self.handle:
             if self.config:
-                self.handle = self.config.DbPeerTrustee.DbPeerTrustee()
+                self.handle = get_peer_trustee(self.config)
             else:
                 return False
         if not self.actor_id or not self.peerid:
@@ -48,7 +58,7 @@ class PeerTrustee:
     ):
         self.config = config
         if self.config:
-            self.handle = self.config.DbPeerTrustee.DbPeerTrustee()
+            self.handle = get_peer_trustee(self.config)
         else:
             self.handle = None
         self.peertrustee = {}

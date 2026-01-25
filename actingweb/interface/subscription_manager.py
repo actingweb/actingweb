@@ -1322,13 +1322,25 @@ class SubscriptionManager:
 
                             # Convert to string for standard profile attributes
                             if attr == "displayname":
-                                profile.displayname = str(actual_value) if actual_value is not None else None
+                                profile.displayname = (
+                                    str(actual_value)
+                                    if actual_value is not None
+                                    else None
+                                )
                                 profile_extracted = True
                             elif attr == "email":
-                                profile.email = str(actual_value) if actual_value is not None else None
+                                profile.email = (
+                                    str(actual_value)
+                                    if actual_value is not None
+                                    else None
+                                )
                                 profile_extracted = True
                             elif attr == "description":
-                                profile.description = str(actual_value) if actual_value is not None else None
+                                profile.description = (
+                                    str(actual_value)
+                                    if actual_value is not None
+                                    else None
+                                )
                                 profile_extracted = True
                             else:
                                 # Store in extra_attributes (keep original type)

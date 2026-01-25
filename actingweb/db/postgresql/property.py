@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from typing import Any
 
 from actingweb.db.postgresql.connection import get_connection
@@ -21,22 +22,43 @@ class DbProperty:
 
     handle: dict[str, Any] | None
 
-    def __init__(self) -> None:
-        """Initialize DbProperty (no auto-table creation, use migrations)."""
+    def __init__(
+        self,
+        use_lookup_table: bool | None = None,
+        indexed_properties: list[str] | None = None,
+    ) -> None:
+        """Initialize DbProperty.
+
+        Args:
+            use_lookup_table: Whether to use property lookup table. If None, reads from env.
+            indexed_properties: List of property names to index. If None, uses defaults.
+        """
         self.handle = None
+        # Store configuration for lookup table
+        if use_lookup_table is not None:
+            self._use_lookup_table = use_lookup_table
+        else:
+            self._use_lookup_table = (
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
+            )
+
+        if indexed_properties is not None:
+            self._indexed_properties = indexed_properties
+        else:
+            self._indexed_properties = ["oauthId", "email", "externalUserId"]
+            if os.getenv("INDEXED_PROPERTIES"):
+                env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
+                self._indexed_properties = [p.strip() for p in env_props if p.strip()]
 
     def _should_index_property(self, name: str) -> bool:
         """
         Check if property should be indexed in lookup table.
 
         Returns True if:
-        1. Lookup table mode is enabled (config.use_lookup_table)
+        1. Lookup table mode is enabled
         2. Property name is in configured indexed_properties list
         """
-        from actingweb.config import Config
-
-        config = Config()
-        return config.use_lookup_table and name in config.indexed_properties
+        return self._use_lookup_table and name in self._indexed_properties
 
     def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
         """

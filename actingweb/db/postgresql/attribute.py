@@ -395,6 +395,52 @@ class DbAttributeBucketList:
             return None
 
     @staticmethod
+    def fetch_timestamps(
+        actor_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Retrieve timestamps for all attribute buckets.
+
+        Args:
+            actor_id: The actor ID
+
+        Returns:
+            Dict of {bucket: timestamp}, or None
+        """
+        if not actor_id:
+            return None
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT bucket, MAX(timestamp) as max_timestamp
+                        FROM attributes
+                        WHERE id = %s
+                        GROUP BY bucket
+                        ORDER BY bucket
+                        """,
+                        (actor_id,),
+                    )
+                    rows = cur.fetchall()
+
+                    if not rows:
+                        return None
+
+                    ret: dict[str, Any] = {}
+                    for row in rows:
+                        bucket = row[0]
+                        timestamp = row[1]
+                        ret[bucket] = timestamp
+
+                    return ret
+
+        except Exception as e:
+            logger.error(f"Error fetching timestamps for actor {actor_id}: {e}")
+            return None
+
+    @staticmethod
     def delete(actor_id: str | None = None) -> bool:
         """
         Delete all attributes for an actor.

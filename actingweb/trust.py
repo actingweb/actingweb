@@ -1,6 +1,8 @@
 import logging
 from typing import Any
 
+from actingweb.db import get_trust, get_trust_list
+
 logger = logging.getLogger(__name__)
 
 
@@ -169,6 +171,7 @@ class Trust:
         if not self.handle:
             logger.debug("Attempted modifcation of trust without handle")
             return False
+        assert self.trust is not None  # Always initialized in __init__
         if baseuri:
             self.trust["baseuri"] = baseuri
         if secret:
@@ -246,7 +249,7 @@ class Trust:
             self.trust["secret"] = secret
         # Be absolutely sure that the secret is not already used
         if self.config:
-            testhandle = self.config.DbTrust.DbTrust()
+            testhandle = get_trust(self.config)
             if testhandle.is_token_in_db(
                 actor_id=self.actor_id, token=self.trust["secret"]
             ):
@@ -298,7 +301,7 @@ class Trust:
     ) -> None:
         self.config = config
         if self.config:
-            self.handle = self.config.DbTrust.DbTrust()
+            self.handle = get_trust(self.config)
         else:
             self.handle = None
         self.trust = {}
@@ -327,11 +330,11 @@ class Trusts:
     in .trusts as a dictionary
     """
 
-    def fetch(self) -> dict[str, Any] | None:
+    def fetch(self) -> list[dict[str, Any]] | list[Any] | None:
         if self.trusts is not None:
             return self.trusts
         if not self.list and self.config:
-            self.list = self.config.DbTrust.DbTrustList()
+            self.list = get_trust_list(self.config)
         if not self.trusts and self.list:
             self.trusts = self.list.fetch(actor_id=self.actor_id)
         return self.trusts
@@ -354,5 +357,5 @@ class Trusts:
             logger.debug("No actor_id in initialisation of trusts")
             return
         if self.config:
-            self.list = self.config.DbTrust.DbTrustList()
+            self.list = get_trust_list(self.config)
         self.fetch()

@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from actingweb.db import get_peer_trustee
 
@@ -6,8 +7,8 @@ logger = logging.getLogger(__name__)
 
 
 class PeerTrustee:
-    def get(self):
-        if self.peertrustee and len(self.peertrustee) > 0:
+    def get(self) -> dict[str, Any] | bool | None:
+        if self.peertrustee and not isinstance(self.peertrustee, bool) and len(self.peertrustee) > 0:
             return self.peertrustee
         if self.handle:
             self.peertrustee = self.handle.get(

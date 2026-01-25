@@ -258,6 +258,21 @@ class DbAttributeBucketList:
         return ret
 
     @staticmethod
+    def fetch_timestamps(actor_id=None):
+        """Retrieves timestamps for all buckets of an actor_id"""
+        if not actor_id:
+            return None
+        try:
+            query = Attribute.query(actor_id)
+        except Exception:  # PynamoDB DoesNotExist exception
+            return None
+        ret = {}
+        for t in query:
+            if t.bucket not in ret:
+                ret[t.bucket] = t.timestamp
+        return ret
+
+    @staticmethod
     def delete(actor_id=None):
         """Deletes all the attributes in the database"""
         if not actor_id:

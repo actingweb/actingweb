@@ -36,7 +36,7 @@ class DbActorProtocol(Protocol):
 
     def get_by_creator(
         self, creator: str | None = None
-    ) -> dict[str, Any] | list[dict[str, Any]] | None:
+    ) -> list[dict[str, Any]] | None:
         """
         Get actors by creator field.
 
@@ -44,7 +44,7 @@ class DbActorProtocol(Protocol):
             creator: The creator email to search for
 
         Returns:
-            Single dict if one found, list of dicts if multiple found, None if none found
+            List of dicts (possibly empty), or None if error or no creator provided
         """
         ...
 
@@ -267,6 +267,10 @@ class DbTrustProtocol(Protocol):
         client_version: str | None = None,
         client_platform: str | None = None,
         oauth_client_id: str | None = None,
+        # Peer capability tracking
+        aw_supported: str | None = None,
+        aw_version: str | None = None,
+        capabilities_fetched_at: str | datetime | None = None,
     ) -> bool:
         """
         Modify trust using self.handle.
@@ -284,7 +288,7 @@ class DbTrustProtocol(Protocol):
         peer_type: str = "",
         relationship: str = "",
         secret: str = "",
-        approved: str = "",
+        approved: bool = False,
         verified: bool = False,
         peer_approved: bool = False,
         verification_token: str = "",
@@ -803,6 +807,21 @@ class DbAttributeBucketListProtocol(Protocol):
 
         Returns:
             Dict of {bucket: {name: {"data": ..., "timestamp": ...}}}, or None
+        """
+        ...
+
+    @staticmethod
+    def fetch_timestamps(
+        actor_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Retrieve timestamps for all attribute buckets.
+
+        Args:
+            actor_id: The actor ID
+
+        Returns:
+            Dict of {bucket: timestamp}, or None
         """
         ...
 

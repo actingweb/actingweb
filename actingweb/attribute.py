@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 from actingweb.db import get_attribute, get_attribute_bucket_list
 
@@ -59,12 +59,15 @@ class Attributes:
         """Retrieves the attribute bucket from the database"""
         if not self.data or len(self.data) == 0:
             if self.dbprop:
-                self.data = self.dbprop.get_bucket(
+                fetched_data = self.dbprop.get_bucket(
                     actor_id=self.actor_id, bucket=self.bucket
                 )
                 # PostgreSQL backend returns None for non-existent buckets
-                if self.data is None:
+                if fetched_data is None:
                     self.data = {}
+                else:
+                    # Cast needed due to dict invariance in value types
+                    self.data = cast(dict[str, dict[str, Any] | None], fetched_data)
             else:
                 self.data = {}
         return self.data
@@ -101,15 +104,18 @@ class Attributes:
             ttl_seconds: Optional TTL in seconds. If provided, DynamoDB will
                          automatically delete this item after expiry.
         """
-        if not self.actor_id or not self.bucket:
+        if not self.actor_id or not self.bucket or not name:
             return False
         # Ensure self.data is initialized (defensive check)
         if self.data is None:
             self.data = {}
+        assert self.data is not None  # Type narrowing for pyright
         if name not in self.data or self.data[name] is None:
             self.data[name] = {}
-        self.data[name]["data"] = data
-        self.data[name]["timestamp"] = timestamp
+        attr_data = self.data[name]
+        assert attr_data is not None  # Type narrowing for pyright
+        attr_data["data"] = data
+        attr_data["timestamp"] = timestamp
         if self.dbprop:
             return self.dbprop.set_attr(
                 actor_id=self.actor_id,
@@ -160,17 +166,20 @@ class Attributes:
         if success:
             if self.data is None:
                 self.data = {}
+            assert self.data is not None  # Type narrowing for pyright
             if name not in self.data or self.data[name] is None:
                 self.data[name] = {}
-            self.data[name]["data"] = new_data
-            self.data[name]["timestamp"] = timestamp
+            attr_data = self.data[name]
+            assert attr_data is not None  # Type narrowing for pyright
+            attr_data["data"] = new_data
+            attr_data["timestamp"] = timestamp
 
         return success
 
     def delete_attr(self, name: str | None = None) -> bool:
         if not name:
             return False
-        if "name" in self.data:
+        if self.data and name in self.data:
             del self.data[name]
         if self.dbprop:
             return self.dbprop.delete_attr(
@@ -206,7 +215,7 @@ class Attributes:
             self.dbprop = None
         self.bucket = bucket
         self.actor_id = actor_id
-        self.data = {}
+        self.data: dict[str, dict[str, Any] | None] = {}
         if actor_id and bucket and len(bucket) > 0 and config:
             self.get_bucket()
 
@@ -218,19 +227,19 @@ class Buckets:
     in .props as a dictionary
     """
 
-    def fetch(self) -> dict[str, Any] | bool:
+    def fetch(self) -> dict[str, dict[str, dict[str, Any]]] | None:
         if not self.actor_id:
-            return False
+            return None
         if self.list:
             return self.list.fetch(actor_id=self.actor_id)
-        return False
+        return None
 
-    def fetch_timestamps(self) -> dict[str, Any] | bool:
+    def fetch_timestamps(self) -> dict[str, Any] | None:
         if not self.actor_id:
-            return False
+            return None
         if self.list:
             return self.list.fetch_timestamps(actor_id=self.actor_id)
-        return False
+        return None
 
     def delete(self) -> bool:
         if not self.list:

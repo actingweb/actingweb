@@ -329,7 +329,7 @@ class Trusts:
     in .trusts as a dictionary
     """
 
-    def fetch(self) -> dict[str, Any] | None:
+    def fetch(self) -> list[dict[str, Any]] | list[Any] | None:
         if self.trusts is not None:
             return self.trusts
         if not self.list and self.config:

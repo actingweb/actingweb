@@ -493,16 +493,16 @@ class Actor:
                 actor_id=self.id, peerid=peerid, config=self.config
             )
             peer_data = new_peer.get()
-            if not peer_data or len(peer_data) == 0:
+            if isinstance(peer_data, bool) or not peer_data or (isinstance(peer_data, dict) and len(peer_data) == 0):
                 return False
         elif shorttype:
             new_peer = peertrustee.PeerTrustee(
                 actor_id=self.id, short_type=shorttype, config=self.config
             )
             peer_data = new_peer.get()
-            if not peer_data or len(peer_data) == 0:
+            if isinstance(peer_data, bool) or not peer_data or (isinstance(peer_data, dict) and len(peer_data) == 0):
                 return False
-        if not peer_data:
+        if not peer_data or isinstance(peer_data, bool):
             return False
         logger.info(f"Deleting peer actor at {peer_data['baseuri']}")
         u_p = b"trustee:" + peer_data["passphrase"].encode("utf-8")
@@ -563,7 +563,7 @@ class Actor:
                 actor_id=self.id, short_type=shorttype, config=self.config
             )
         peer_data = new_peer.get()
-        if peer_data and len(peer_data) > 0:
+        if peer_data and not isinstance(peer_data, bool) and len(peer_data) > 0:
             logger.debug("Found peer in getPeer, now checking existing trust...")
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=peer_data["peerid"], config=self.config
@@ -581,7 +581,7 @@ class Actor:
         ):
             factory = self.config.actors[shorttype]["factory"]
         # If peer did not exist, create it as trustee
-        if not peer_data or len(peer_data) == 0:
+        if not peer_data or isinstance(peer_data, bool) or len(peer_data) == 0:
             if len(factory) == 0:
                 logger.error(
                     f"Peer actor of shorttype({shorttype}) does not have factory set."
@@ -667,7 +667,7 @@ class Actor:
                 return None
         # Now peer exists, create trust
         new_peer_data = new_peer.get()
-        if not new_peer_data:
+        if not new_peer_data or isinstance(new_peer_data, bool):
             return None
         secret = self.config.new_token() if self.config else ""
         relationship = ""

@@ -555,7 +555,7 @@ class TrustManager:
                 # For OAuth2 clients, determine approval based on established_via
                 if source == "oauth2_client":
                     # OAuth2 client trust: actor approves client creation, but client must authenticate to be peer_approved
-                    local_approved = str(True)  # Actor approves the client
+                    local_approved = True  # Actor approves the client
                     remote_approved = (
                         False  # Client not approved until successful authentication
                     )
@@ -563,7 +563,7 @@ class TrustManager:
                     desc = f"OAuth2 client: {desc_name}"
                 else:
                     # Regular OAuth2 user trust: both sides approved after successful OAuth flow
-                    local_approved = str(True)  # Actor approves the user
+                    local_approved = True  # Actor approves the user
                     remote_approved = True  # User already authenticated via OAuth
                     desc = f"OAuth trust for {email}"
 

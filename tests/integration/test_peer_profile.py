@@ -277,7 +277,9 @@ class TestPeerProfileTrustIntegration:
         assert response.status_code == 201
         TestPeerProfileTrustIntegration.actor1_url = response.headers.get("Location")
         TestPeerProfileTrustIntegration.actor1_id = response.json()["id"]
-        TestPeerProfileTrustIntegration.actor1_passphrase = response.json()["passphrase"]
+        TestPeerProfileTrustIntegration.actor1_passphrase = response.json()[
+            "passphrase"
+        ]
 
     def test_002_create_actor2(self, http_client):
         """Create the second test actor."""
@@ -290,7 +292,9 @@ class TestPeerProfileTrustIntegration:
         assert response.status_code == 201
         TestPeerProfileTrustIntegration.actor2_url = response.headers.get("Location")
         TestPeerProfileTrustIntegration.actor2_id = response.json()["id"]
-        TestPeerProfileTrustIntegration.actor2_passphrase = response.json()["passphrase"]
+        TestPeerProfileTrustIntegration.actor2_passphrase = response.json()[
+            "passphrase"
+        ]
 
     def test_003_set_actor2_properties(self, http_client):
         """Set properties on actor2 that can be cached in peer profile."""

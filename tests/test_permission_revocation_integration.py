@@ -92,7 +92,10 @@ class TestPermissionRevocationIntegration:
             actor_id="actor1",
             peer_id="peer1",
             properties={
-                "patterns": ["memory_*", "profile_*"],  # settings revoked, profile added
+                "patterns": [
+                    "memory_*",
+                    "profile_*",
+                ],  # settings revoked, profile added
                 "operations": ["read"],
             },
         )

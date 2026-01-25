@@ -764,7 +764,9 @@ class TestSubscriptionActorFlow:
                         sub_data = response.json()
 
                         # Verify top-level sequence field (spec v1.4 requirement)
-                        assert "sequence" in sub_data, "Response must include 'sequence'"
+                        assert "sequence" in sub_data, (
+                            "Response must include 'sequence'"
+                        )
                         assert isinstance(sub_data["sequence"], int)
 
                         if "data" in sub_data and len(sub_data["data"]) >= 2:
@@ -860,7 +862,9 @@ class TestSubscriptionActorFlow:
                             sub_data = response.json()
 
                             # Verify top-level sequence (spec v1.4 requirement)
-                            assert "sequence" in sub_data, "Response must include 'sequence'"
+                            assert "sequence" in sub_data, (
+                                "Response must include 'sequence'"
+                            )
                             assert isinstance(sub_data["sequence"], int)
 
                             if "data" in sub_data and len(sub_data["data"]) > 0:

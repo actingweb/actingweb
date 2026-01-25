@@ -758,7 +758,9 @@ class TestSuspensionWithSubtarget:
 
         TestSuspensionWithSubtarget.subscriber_url = response.headers.get("Location")
         TestSuspensionWithSubtarget.subscriber_id = response.json()["id"]
-        TestSuspensionWithSubtarget.subscriber_passphrase = response.json()["passphrase"]
+        TestSuspensionWithSubtarget.subscriber_passphrase = response.json()[
+            "passphrase"
+        ]
 
     def test_002_establish_trust_and_subscription(self, http_client):
         """
@@ -788,12 +790,19 @@ class TestSuspensionWithSubtarget:
         # Grant permissions and create subscription
         requests.put(
             f"{self.publisher_url}/trust/friend/{self.subscriber_id}/permissions",
-            json={"properties": {"patterns": ["*"], "operations": ["read", "subscribe"]}},
+            json={
+                "properties": {"patterns": ["*"], "operations": ["read", "subscribe"]}
+            },
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
         requests.post(
             f"{self.subscriber_url}/subscriptions",
-            json={"peerid": self.publisher_id, "target": "properties", "subtarget": "", "granularity": "high"},
+            json={
+                "peerid": self.publisher_id,
+                "target": "properties",
+                "subtarget": "",
+                "granularity": "high",
+            },
             auth=(self.subscriber_creator, self.subscriber_passphrase),  # type: ignore[arg-type]
         )
 
@@ -805,13 +814,20 @@ class TestSuspensionWithSubtarget:
         if response.status_code == 200:
             data = response.json()
             if "data" in data and len(data["data"]) > 0:
-                TestSuspensionWithSubtarget.subscription_id = data["data"][0]["subscriptionid"]
+                TestSuspensionWithSubtarget.subscription_id = data["data"][0][
+                    "subscriptionid"
+                ]
 
     def test_010_create_properties_in_subtargets(self, http_client):
         """
         Create properties in different subtargets.
         """
-        for name, value in [("config/a", "1"), ("config/b", "2"), ("data/x", "x"), ("data/y", "y")]:
+        for name, value in [
+            ("config/a", "1"),
+            ("config/b", "2"),
+            ("data/x", "x"),
+            ("data/y", "y"),
+        ]:
             requests.put(
                 f"{self.publisher_url}/properties/{name}",
                 data=value,
@@ -915,12 +931,19 @@ class TestResyncOnResume:
         )
         requests.put(
             f"{self.publisher_url}/trust/friend/{self.subscriber_id}/permissions",
-            json={"properties": {"patterns": ["*"], "operations": ["read", "subscribe"]}},
+            json={
+                "properties": {"patterns": ["*"], "operations": ["read", "subscribe"]}
+            },
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
         requests.post(
             f"{self.subscriber_url}/subscriptions",
-            json={"peerid": self.publisher_id, "target": "properties", "subtarget": "", "granularity": "high"},
+            json={
+                "peerid": self.publisher_id,
+                "target": "properties",
+                "subtarget": "",
+                "granularity": "high",
+            },
             auth=(self.subscriber_creator, self.subscriber_passphrase),  # type: ignore[arg-type]
         )
 
@@ -973,7 +996,10 @@ class TestResyncOnResume:
         response = requests.post(
             callback_url,
             json=payload,
-            headers={"Authorization": f"Bearer {self.trust_secret}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {self.trust_secret}",
+                "Content-Type": "application/json",
+            },
         )
         # 204 = callback accepted
         assert response.status_code in [204, 400]
@@ -1027,9 +1053,13 @@ class TestMultipleSubscribersSuspension:
             headers={"Content-Type": "application/json"},
         )
         assert response.status_code == 201
-        TestMultipleSubscribersSuspension.publisher_url = response.headers.get("Location")
+        TestMultipleSubscribersSuspension.publisher_url = response.headers.get(
+            "Location"
+        )
         TestMultipleSubscribersSuspension.publisher_id = response.json()["id"]
-        TestMultipleSubscribersSuspension.publisher_passphrase = response.json()["passphrase"]
+        TestMultipleSubscribersSuspension.publisher_passphrase = response.json()[
+            "passphrase"
+        ]
 
     def test_002_create_multiple_subscribers(self, http_client):
         """Create multiple subscriber actors."""
@@ -1044,12 +1074,14 @@ class TestMultipleSubscribersSuspension:
                 headers={"Content-Type": "application/json"},
             )
             assert response.status_code == 201
-            TestMultipleSubscribersSuspension.subscribers.append({
-                "url": response.headers.get("Location"),
-                "id": response.json()["id"],
-                "passphrase": response.json()["passphrase"],
-                "creator": creator,
-            })
+            TestMultipleSubscribersSuspension.subscribers.append(
+                {
+                    "url": response.headers.get("Location"),
+                    "id": response.json()["id"],
+                    "passphrase": response.json()["passphrase"],
+                    "creator": creator,
+                }
+            )
 
     def test_003_establish_trusts(self, http_client):
         """Establish trust with all subscribers."""
@@ -1079,14 +1111,24 @@ class TestMultipleSubscribersSuspension:
             )
             requests.put(
                 f"{self.publisher_url}/trust/friend/{sub['id']}/permissions",
-                json={"properties": {"patterns": ["*"], "operations": ["read", "subscribe"]}},
+                json={
+                    "properties": {
+                        "patterns": ["*"],
+                        "operations": ["read", "subscribe"],
+                    }
+                },
                 auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
             )
 
             # Create subscription
             requests.post(
                 f"{sub['url']}/subscriptions",
-                json={"peerid": self.publisher_id, "target": "properties", "subtarget": "", "granularity": "high"},
+                json={
+                    "peerid": self.publisher_id,
+                    "target": "properties",
+                    "subtarget": "",
+                    "granularity": "high",
+                },
                 auth=(sub["creator"], sub["passphrase"]),  # type: ignore[arg-type]
             )
 
@@ -1100,7 +1142,9 @@ class TestMultipleSubscribersSuspension:
             if response.status_code == 200:
                 data = response.json()
                 if "data" in data and len(data["data"]) > 0:
-                    TestMultipleSubscribersSuspension.subscription_ids.append(data["data"][0]["subscriptionid"])
+                    TestMultipleSubscribersSuspension.subscription_ids.append(
+                        data["data"][0]["subscriptionid"]
+                    )
 
     def test_010_property_change_fans_out(self, http_client):
         """Test that property changes fan out to all subscribers."""

@@ -167,7 +167,9 @@ class OAuth2StateManager:
             f"Extracting MCP context from state: {state_param[:50]}... (truncated)"
         )
         state_data = self.validate_and_extract_state(state_param)
-        logger.debug(f"Validated state data with flow_type: {state_data.get('flow_type') if state_data else None}")
+        logger.debug(
+            f"Validated state data with flow_type: {state_data.get('flow_type') if state_data else None}"
+        )
         if not state_data:
             logger.warning("State validation failed")
             return None

@@ -199,9 +199,7 @@ class PeerPermissionStore:
         self.config = config
         self._cache: dict[str, PeerPermissions] = {}
 
-    def _get_permissions_bucket(
-        self, actor_id: str
-    ) -> attribute.Attributes | None:
+    def _get_permissions_bucket(self, actor_id: str) -> attribute.Attributes | None:
         """Get the peer permissions attribute bucket for an actor."""
         try:
             return attribute.Attributes(
@@ -254,7 +252,10 @@ class PeerPermissionStore:
             if success:
                 # Update cache
                 self._cache[cache_key] = permissions
-                logger.debug(f"Stored peer permissions: {cache_key}")
+                logger.debug(
+                    f"Stored peer permissions: {cache_key}, "
+                    f"has_properties={permissions.properties is not None}"
+                )
                 return True
             else:
                 logger.error(f"Failed to store peer permissions {perm_key}")
@@ -266,18 +267,22 @@ class PeerPermissionStore:
             )
             return False
 
-    def get_permissions(
-        self, actor_id: str, peer_id: str
-    ) -> PeerPermissions | None:
+    def get_permissions(self, actor_id: str, peer_id: str) -> PeerPermissions | None:
         """Get cached peer permissions."""
         cache_key = f"{actor_id}:{peer_id}"
 
         # Check cache first
         if cache_key in self._cache:
+            logger.debug(
+                f"Retrieved peer permissions from cache: {cache_key}"
+            )
             return self._cache[cache_key]
 
         bucket = self._get_permissions_bucket(actor_id)
         if not bucket:
+            logger.warning(
+                f"Could not get permissions bucket for actor {actor_id}"
+            )
             return None
 
         try:
@@ -287,6 +292,9 @@ class PeerPermissionStore:
             attr_data = bucket.get_attr(name=perm_key)
 
             if not attr_data or "data" not in attr_data:
+                logger.debug(
+                    f"No permissions found in storage for {cache_key}"
+                )
                 return None
 
             # Parse JSON and create PeerPermissions
@@ -295,6 +303,10 @@ class PeerPermissionStore:
 
             # Cache the result
             self._cache[cache_key] = permissions
+
+            logger.debug(
+                f"Retrieved peer permissions from storage: {cache_key}"
+            )
 
             return permissions
 
@@ -486,7 +498,10 @@ async def fetch_peer_permissions_async(
     Fetch permissions from a peer actor (async version).
 
     Uses AwProxy.get_resource_async to call the peer's /permissions/{actor_id}
-    endpoint without blocking the event loop.
+    endpoint to query what permissions the peer has granted to us.
+
+    This supports proactive permission discovery, complementing the reactive
+    callback-based push mechanism.
 
     Args:
         actor_id: The actor requesting the permissions
@@ -495,6 +510,10 @@ async def fetch_peer_permissions_async(
 
     Returns:
         PeerPermissions with fetched data (or error info if fetch failed)
+
+    Note:
+        Returns PeerPermissions with fetch_error set if the endpoint returns 404
+        or any other error. The caller should check fetch_error before storing.
     """
     from .aw_proxy import AwProxy
 
@@ -539,6 +558,13 @@ async def fetch_peer_permissions_async(
 
         # Extract permission data from response
         perm_data = response.get("permissions", response)
+
+        # Log response source for debugging
+        source = response.get("source", "unknown")
+        logger.debug(
+            f"Fetched permissions from {peer_id}: source={source}, "
+            f"trust_type={response.get('trust_type', 'unknown')}"
+        )
 
         # Map response to PeerPermissions fields
         if "properties" in perm_data:

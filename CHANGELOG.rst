@@ -5,19 +5,7 @@ CHANGELOG
 Unreleased
 ----------
 
-ADDED
-~~~~~
-
-- **Auto-Delete Cached Peer Data on Permission Revocation**: Added optional automatic deletion of cached peer data when permissions are revoked.
-
-  - New parameter: ``ActingWebApp.with_peer_permissions(auto_delete_on_revocation=True)``
-  - New helper functions in ``actingweb.peer_permissions``: ``detect_revoked_property_patterns()``, ``detect_permission_changes()``
-  - Permission callback hooks now receive ``permission_changes`` dict with revocation details
-  - When enabled, cached data in ``RemotePeerStore`` matching revoked property patterns is automatically deleted
-  - Disabled by default for backwards compatibility
-
-
-v3.10.0a5: Jan 23, 2026
+v3.10.0a5: Jan 24, 2026
 -----------------------
 
 BREAKING CHANGES
@@ -42,6 +30,14 @@ BREAKING CHANGES
 
 ADDED
 ~~~~~
+
+- **Auto-Delete Cached Peer Data on Permission Revocation**: Added optional automatic deletion of cached peer data when permissions are revoked.
+
+  - New parameter: ``ActingWebApp.with_peer_permissions(auto_delete_on_revocation=True)``
+  - New helper functions in ``actingweb.peer_permissions``: ``detect_revoked_property_patterns()``, ``detect_permission_changes()``
+  - Permission callback hooks now receive ``permission_changes`` dict with revocation details
+  - When enabled, cached data in ``RemotePeerStore`` matching revoked property patterns is automatically deleted
+  - Disabled by default for backwards compatibility
 
 - **Peer Profile Caching**: Added first-class support for caching profile attributes from peer actors with trust relationships. This enables applications to access peer information (displayname, email, etc.) without making repeated API calls.
 
@@ -83,6 +79,14 @@ ADDED
   - Automatic storage in ``PeerPermissionStore`` when callbacks are received
   - App-specific handling via ``@app.callback_hook("permissions")`` decorator
   - New ``RemotePeerStore.apply_permission_data()`` method for programmatic permission updates
+
+- **Automatic Peer Notification on Permission Change**: Added automatic notification of peers when their permissions are changed via ``TrustPermissionStore.store_permissions()``.
+
+  - New configuration option: ``ActingWebApp.with_peer_permissions(notify_peer_on_change=True)`` (default: ``True``)
+  - New ``TrustPermissionStore`` methods: ``store_permissions_async()``, ``_notify_peer()``, ``_notify_peer_async()``
+  - Notifications are fire-and-forget (failures logged but don't block storage)
+  - Sends POST to peer's ``/callbacks/permissions/{actor_id}`` endpoint
+  - Can be disabled per-call via ``store_permissions(permissions, notify_peer=False)``
 
 - **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
 
@@ -146,6 +150,33 @@ ADDED
 
 - **Configurable AwProxy Timeout**: Added ``timeout`` parameter to ``AwProxy`` constructor for configurable HTTP request timeouts. Accepts either a single value (used for both connect and read) or a tuple ``(connect_timeout, read_timeout)``. Default changed from hardcoded ``(5, 10)`` to ``(5, 20)`` seconds for better handling of slow peer responses.
 
+- **Permission Query Endpoint**: Added ``GET /{actor_id}/permissions/{peer_id}`` endpoint allowing peers to query what permissions they've been granted. This supports proactive permission discovery, complementing the reactive callback-based push mechanism.
+
+  - New handler: ``actingweb.handlers.permissions.PermissionsHandler``
+  - Returns custom permission overrides or trust type defaults
+  - Includes metadata: ``source`` (custom_override or trust_type_default), ``trust_type``, ``created_by``, ``updated_at``, ``notes``
+  - Authentication required: peer must authenticate as the ``peer_id`` in the URL
+  - Authorization: peer can only query their own granted permissions
+  - Error responses: 404 (no trust relationship), 403 (not authorized), 500 (retrieval failed)
+  - Both Flask and FastAPI integrations supported
+  - Comprehensive test coverage in ``tests/test_permissions_handler.py``
+
+- **Permission Protocol Option Tags**: Added automatic advertisement of permission-related capabilities via ActingWeb protocol option tags in ``/meta/actingweb/supported`` endpoint.
+
+  - New option tag: ``permissioncallback`` - indicates support for receiving permission change notifications
+  - New option tag: ``permissionquery`` - indicates support for ``GET /{actor_id}/permissions/{peer_id}`` endpoint
+  - Tags automatically added when ``ActingWebApp.with_peer_permissions(enable=True)`` is called
+  - New method: ``Config.update_supported_options()`` - dynamically updates option tags based on enabled features
+  - Complies with ActingWeb Protocol Specification v1.4 requirements (spec lines 2064-2065, 2830)
+
+- **Peer Profile Extraction from Subscriptions**: Added automatic extraction of peer profile attributes from synced subscription data in ``sync_peer()`` and ``sync_peer_async()``. When peer permissions caching is enabled and a subscription exists for profile properties, the profile is extracted from the cached subscription data before falling back to a direct HTTP fetch. This reduces unnecessary API calls and improves performance.
+
+  - Profile attributes extracted from ``RemotePeerStore`` when available
+  - Handles wrapped property values (``{"value": ...}``) correctly
+  - Type conversion to strings for standard profile fields (displayname, email, description)
+  - Extra attributes stored with original types preserved
+  - Graceful fallback to HTTP fetch if extraction fails
+
 SECURITY
 ~~~~~~~~
 
@@ -178,6 +209,10 @@ FIXED
 - **Baseline data fetch for new subscriptions**: Fixed ``sync_subscription()`` and ``sync_subscription_async()`` to fetch baseline data from the target resource when no diffs exist. Previously, syncing a fresh subscription with 0 diffs would do nothing, leaving the remote storage empty. Now it properly establishes baseline data via ``RemotePeerStore.apply_resync_data()``, enabling features like Remote Memory to work immediately after subscription creation. The baseline fetch respects subscription scope by including subtarget and resource in the fetch path (e.g., ``/properties/myProp`` for scoped subscriptions, ``/properties?metadata=true`` for collection-level subscriptions).
 
 - **Subscription authorization path patterns**: Changed authorization path pattern from ``<id>/<id>`` to ``<id>/<subid>`` in ``handlers/subscription.py`` for clarity and consistency with other handlers.
+
+- **List property subscription diff callbacks**: Fixed ``list:`` prefix leakage in subscription diff callbacks. Previously, list property changes registered diffs with ``subtarget="list:myList"`` which exposed the internal ``list:`` prefix in callbacks sent to subscribers. Now uses clean subtarget (``subtarget="myList"``) - the diff blob already contains ``"list": "myList"`` to identify list operations. Subscribers no longer need to strip the prefix when processing list property callbacks.
+
+- **Profile attribute type conversion in sync**: Fixed type conversion when extracting peer profile attributes from synced subscription data. Profile attributes retrieved from ``RemotePeerStore`` are now properly unwrapped from ``{"value": ...}`` format and converted to strings for standard profile fields (displayname, email, description). This fixes type errors where dict values were being assigned to string-typed profile fields.
 
 v3.9.2: Jan 16, 2026
 --------------------

@@ -194,7 +194,9 @@ class TestPeerPermissionsAccessChecking:
         )
 
         # memory_private_* is excluded
-        assert permissions.has_property_access("memory_private_journal", "read") is False
+        assert (
+            permissions.has_property_access("memory_private_journal", "read") is False
+        )
         # memory_* is allowed but not memory_private_*
         assert permissions.has_property_access("memory_travel", "read") is True
 
@@ -446,8 +448,11 @@ class TestPeerPermissionsSerialization:
 
         assert permissions.actor_id == "actor123"
         assert permissions.peer_id == "peer456"
+        assert permissions.properties is not None
         assert permissions.properties["patterns"] == ["memory_*"]
+        assert permissions.methods is not None
         assert permissions.methods["allowed"] == ["sync_*"]
+        assert permissions.tools is not None
         assert permissions.tools["allowed"] == ["search"]
         assert permissions.fetched_at == "2026-01-22T10:00:00Z"
 
@@ -946,7 +951,10 @@ class TestDetectPermissionChanges:
             actor_id="actor123",
             peer_id="peer456",
             properties={
-                "patterns": ["memory_*", "profile_*"],  # settings_* revoked, profile_* added
+                "patterns": [
+                    "memory_*",
+                    "profile_*",
+                ],  # settings_* revoked, profile_* added
                 "operations": ["read"],
             },
         )

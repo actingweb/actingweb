@@ -150,6 +150,11 @@ class ActingWebApp:
         # Auto-delete on revocation configuration
         if hasattr(self, "_auto_delete_on_revocation"):
             self._config.auto_delete_on_revocation = self._auto_delete_on_revocation
+        # Notify peer on change configuration
+        if hasattr(self, "_notify_peer_on_change"):
+            self._config.notify_peer_on_change = self._notify_peer_on_change
+        # Update supported options based on enabled features
+        self._config.update_supported_options()
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -502,6 +507,7 @@ class ActingWebApp:
         self,
         enable: bool = True,
         auto_delete_on_revocation: bool = False,
+        notify_peer_on_change: bool = True,
     ) -> "ActingWebApp":
         """Enable peer permissions caching for trust relationships.
 
@@ -522,6 +528,11 @@ class ActingWebApp:
                 access. This ensures that when a peer revokes access to certain
                 data (e.g., memory_* properties), the locally cached copies are
                 deleted. Default False.
+            notify_peer_on_change: When True (default), automatically notify
+                peers when their permissions change. This sends a callback to
+                the peer's /callbacks/permissions/{actor_id} endpoint. The
+                notification is fire-and-forget (failures logged but don't
+                block the store operation).
 
         Returns:
             Self for method chaining.
@@ -532,7 +543,8 @@ class ActingWebApp:
                 ActingWebApp(...)
                 .with_peer_permissions(
                     enable=True,
-                    auto_delete_on_revocation=True  # Delete cached data on revocation
+                    auto_delete_on_revocation=True,  # Delete cached data on revocation
+                    notify_peer_on_change=True       # Auto-notify peers (default)
                 )
             )
 
@@ -546,6 +558,7 @@ class ActingWebApp:
         """
         self._peer_permissions_caching = enable
         self._auto_delete_on_revocation = auto_delete_on_revocation
+        self._notify_peer_on_change = notify_peer_on_change
         self._apply_runtime_changes_to_config()
 
         # Register lifecycle hooks when permissions caching is enabled
@@ -588,9 +601,7 @@ class ActingWebApp:
                 )
                 store = get_peer_permission_store(config)
                 store.store_permissions(permissions)
-                logger.debug(
-                    f"Cached peer permissions for {peer_id} on trust approval"
-                )
+                logger.debug(f"Cached peer permissions for {peer_id} on trust approval")
             except Exception as e:
                 logger.warning(f"Failed to cache peer permissions for {peer_id}: {e}")
 

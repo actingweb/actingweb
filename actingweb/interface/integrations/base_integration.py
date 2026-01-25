@@ -54,6 +54,7 @@ class BaseActingWebIntegration:
             devtest,
             meta,
             methods,
+            permissions,
             properties,
             resources,
             root,
@@ -70,6 +71,9 @@ class BaseActingWebIntegration:
             "meta": lambda: meta.MetaHandler(webobj, config, hooks=self.aw_app.hooks),
             "www": lambda: www.WwwHandler(webobj, config, hooks=self.aw_app.hooks),
             "properties": lambda: properties.PropertiesHandler(
+                webobj, config, hooks=self.aw_app.hooks
+            ),
+            "permissions": lambda: permissions.PermissionsHandler(
                 webobj, config, hooks=self.aw_app.hooks
             ),
             "resources": lambda: resources.ResourcesHandler(

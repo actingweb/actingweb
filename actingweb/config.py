@@ -81,6 +81,10 @@ class Config:
         # When True, automatically delete cached peer data when permissions are revoked
         # Only applies when peer_permissions_caching is enabled
         self.auto_delete_on_revocation: bool = False
+        # When True, automatically notify peers when their permissions change
+        # Sends a callback to /callbacks/permissions/{actor_id} on the peer
+        # Only applies when peer_permissions_caching is enabled
+        self.notify_peer_on_change: bool = True
         #########
         # Configurable ActingWeb settings for this app
         #########
@@ -182,6 +186,11 @@ class Config:
             ("friend", "actions", "", "a"),
             ("partner", "actions", "", "a"),
             ("admin", "actions", "", "a"),
+            # Allow peers to query permissions granted to them
+            ("associate", "permissions/<id>", "GET", "a"),
+            ("friend", "permissions/<id>", "GET", "a"),
+            ("partner", "permissions/<id>", "GET", "a"),
+            ("admin", "permissions/<id>", "GET", "a"),
             # Allow service management for actor owners and administrators
             ("creator", "services", "", "a"),
             ("trustee", "services", "", "a"),
@@ -335,3 +344,22 @@ class Config:
     def new_token(length: int = 40) -> str:
         tok = binascii.hexlify(os.urandom(int(length // 2)))
         return tok.decode("utf-8")
+
+    def update_supported_options(self) -> None:
+        """Update aw_supported based on enabled features.
+
+        This method is called when features are dynamically enabled after
+        Config initialization (e.g., via ActingWebApp builder methods).
+        """
+        # Parse existing options into a set
+        current_options = set(self.aw_supported.split(","))
+
+        # Add permission-related option tags if peer permissions caching is enabled
+        if getattr(self, "peer_permissions_caching", False):
+            # permissioncallback - supports receiving permission change notifications
+            current_options.add("permissioncallback")
+            # permissionquery - supports GET /{actor_id}/permissions/{peer_id}
+            current_options.add("permissionquery")
+
+        # Update aw_supported with the new set of options
+        self.aw_supported = ",".join(sorted(current_options))

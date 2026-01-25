@@ -1481,7 +1481,9 @@ class TestPeerCapabilitiesIntegration:
 
         TestPeerCapabilitiesIntegration.actor1_url = response.headers.get("Location")
         TestPeerCapabilitiesIntegration.actor1_id = response.json()["id"]
-        TestPeerCapabilitiesIntegration.actor1_passphrase = response.json()["passphrase"]
+        TestPeerCapabilitiesIntegration.actor1_passphrase = response.json()[
+            "passphrase"
+        ]
 
         # Create actor 2
         peer_url = getattr(http_client, "peer_url", http_client.base_url)
@@ -1494,7 +1496,9 @@ class TestPeerCapabilitiesIntegration:
 
         TestPeerCapabilitiesIntegration.actor2_url = response.headers.get("Location")
         TestPeerCapabilitiesIntegration.actor2_id = response.json()["id"]
-        TestPeerCapabilitiesIntegration.actor2_passphrase = response.json()["passphrase"]
+        TestPeerCapabilitiesIntegration.actor2_passphrase = response.json()[
+            "passphrase"
+        ]
 
     def test_002_establish_trust(self, http_client):
         """
@@ -1594,7 +1598,9 @@ class TestPeerCapabilitiesIntegration:
         trust_data = response.json()
 
         # Get peer's baseuri
-        peer_url = trust_data.get("baseuri") or trust_data.get("peerurl") or self.actor2_url
+        peer_url = (
+            trust_data.get("baseuri") or trust_data.get("peerurl") or self.actor2_url
+        )
 
         # Fetch capabilities from peer
         response = requests.get(f"{peer_url}/meta/actingweb/supported")
@@ -1769,7 +1775,9 @@ class TestCleanupOnTrustDeletion:
         data = response.json()
 
         if "data" in data and len(data["data"]) > 0:
-            TestCleanupOnTrustDeletion.subscription_id = data["data"][0]["subscriptionid"]
+            TestCleanupOnTrustDeletion.subscription_id = data["data"][0][
+                "subscriptionid"
+            ]
 
     def test_010_create_subscription_data(self, http_client):
         """

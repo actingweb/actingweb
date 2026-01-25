@@ -376,7 +376,11 @@ class RemotePeerStore:
             actor_id = self._actor.id
             if actor_id is None:
                 logger.error("Cannot apply permission data: actor has no ID")
-                return {"operation": "permission_update", "success": False, "error": "Actor has no ID"}
+                return {
+                    "operation": "permission_update",
+                    "success": False,
+                    "error": "Actor has no ID",
+                }
 
             store = get_peer_permission_store(self._actor.config)
 

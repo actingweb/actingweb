@@ -654,12 +654,16 @@ class ActingWebTokenManager:
             # Look up which actor has this token
             found_actor_data = index_bucket.get_attr(name=token)
             if not found_actor_data or "data" not in found_actor_data:
-                logger.debug(f"Access token {_mask_token(token)} not found in global index")
+                logger.debug(
+                    f"Access token {_mask_token(token)} not found in global index"
+                )
                 return None
 
             found_actor_id = found_actor_data["data"]
             if not found_actor_id:
-                logger.debug(f"Access token {_mask_token(token)} has no actor ID in global index")
+                logger.debug(
+                    f"Access token {_mask_token(token)} has no actor ID in global index"
+                )
                 return None
 
             # Load the actual token data from private attributes
@@ -678,10 +682,14 @@ class ActingWebTokenManager:
 
             token_data = token_attr["data"]
             if isinstance(token_data, dict):
-                logger.debug(f"Found access token {_mask_token(token)} in actor {found_actor_id}")
+                logger.debug(
+                    f"Found access token {_mask_token(token)} in actor {found_actor_id}"
+                )
                 return token_data
             else:
-                logger.warning(f"Invalid access token data format for {_mask_token(token)}")
+                logger.warning(
+                    f"Invalid access token data format for {_mask_token(token)}"
+                )
                 return None
 
         except Exception as e:
@@ -704,12 +712,16 @@ class ActingWebTokenManager:
             # Look up which actor has this token
             found_actor_data = index_bucket.get_attr(name=token)
             if not found_actor_data or "data" not in found_actor_data:
-                logger.debug(f"Refresh token {_mask_token(token)} not found in global index")
+                logger.debug(
+                    f"Refresh token {_mask_token(token)} not found in global index"
+                )
                 return None
 
             found_actor_id = found_actor_data["data"]
             if not found_actor_id:
-                logger.debug(f"Refresh token {_mask_token(token)} has no actor ID in global index")
+                logger.debug(
+                    f"Refresh token {_mask_token(token)} has no actor ID in global index"
+                )
                 return None
 
             # Load the actual token data from private attributes
@@ -730,10 +742,14 @@ class ActingWebTokenManager:
 
             token_data = token_attr["data"]
             if isinstance(token_data, dict):
-                logger.debug(f"Found refresh token {_mask_token(token)} in actor {found_actor_id}")
+                logger.debug(
+                    f"Found refresh token {_mask_token(token)} in actor {found_actor_id}"
+                )
                 return token_data
             else:
-                logger.warning(f"Invalid refresh token data format for {_mask_token(token)}")
+                logger.warning(
+                    f"Invalid refresh token data format for {_mask_token(token)}"
+                )
                 return None
 
         except Exception as e:
@@ -851,7 +867,9 @@ class ActingWebTokenManager:
 
             # Remove from global index
             index_bucket.delete_attr(name=token)
-            logger.debug(f"Removed refresh token {_mask_token(token)} from global index")
+            logger.debug(
+                f"Removed refresh token {_mask_token(token)} from global index"
+            )
 
         except Exception as e:
             logger.error(f"Error removing refresh token {_mask_token(token)}: {e}")

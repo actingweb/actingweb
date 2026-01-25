@@ -1964,6 +1964,106 @@ endpoints provide dedicated permission management:
 ``DELETE /{actorid}/trust/{relationship}/{peerid}/permissions``
   Remove permission overrides, reverting to trust type defaults.
 
+Permission Query Endpoint (OPTIONAL)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Actors MAY provide an endpoint for peers to query what permissions they've been granted.
+This supports proactive permission discovery, complementing the reactive callback-based
+push mechanism.
+
+``GET /{actorid}/permissions/{peerid}``
+  Query what permissions the actor has granted to a specific peer.
+
+**Authorization:**
+  - Requires trust relationship between ``{actorid}`` and ``{peerid}``
+  - The requesting peer must authenticate as ``{peerid}``
+  - Only the peer can query their own granted permissions
+
+**Request:**
+
+.. code-block:: http
+
+   GET /{actorid}/permissions/{peerid} HTTP/1.1
+   Host: example.com
+   Authorization: Bearer {bearer_token}
+
+**Response (200 OK):**
+
+.. code-block:: json
+
+   {
+     "actor_id": "actor-uuid-123",
+     "peer_id": "peer-uuid-456",
+     "permissions": {
+       "properties": {
+         "patterns": ["memory_*", "profile/*"],
+         "operations": ["read", "write"],
+         "excluded_patterns": ["memory_private_*"]
+       },
+       "methods": {
+         "allowed": ["sync_*", "get_*"],
+         "denied": ["delete_*"]
+       },
+       "actions": {
+         "allowed": ["refresh", "export"],
+         "denied": []
+       },
+       "tools": {
+         "allowed": ["search", "fetch"],
+         "denied": []
+       },
+       "resources": {
+         "patterns": ["data://*"],
+         "operations": ["read"],
+         "excluded_patterns": []
+       },
+       "prompts": {
+         "allowed": ["*"]
+       }
+     },
+     "source": "custom_override",
+     "trust_type": "subscriber"
+   }
+
+**Response Fields:**
+
+``source`` (string)
+  Indicates the source of permissions:
+  - ``"custom_override"`` for custom permissions
+  - ``"trust_type_default"`` for default permissions from trust type registry
+
+``trust_type`` (string)
+  The trust relationship type (e.g., "subscriber", "friend", "mcp_client")
+
+**Error Responses:**
+
+- **404 Not Found**: Trust relationship does not exist
+- **403 Forbidden**: Peer not authorized to query permissions
+- **500 Internal Server Error**: Permission retrieval failed
+
+**Use Cases:**
+
+1. **Initial Permission Discovery**: When trust is established, peers can query
+   their initial permissions to understand what they can access.
+
+2. **Permission Refresh**: Peers can periodically refresh cached permissions to
+   ensure consistency.
+
+3. **Callback Recovery**: If a permission callback is missed, peers can query
+   to get current permissions.
+
+**Relationship with Permission Callbacks:**
+
+This query endpoint provides **pull-based** permission discovery, complementing
+the **push-based** permission callback mechanism (see Permission Callback section).
+Together they form a robust hybrid architecture:
+
+- **Callbacks**: Real-time notifications when permissions change
+- **Query Endpoint**: On-demand permission discovery and refresh
+
+Applications supporting both mechanisms advertise both ``permissioncallback``
+and ``permissionquery`` in their ``/meta/actingweb/supported`` endpoint.
+
 **Permission Structure**
 
 Permission overrides SHOULD follow this structure to ensure interoperability:

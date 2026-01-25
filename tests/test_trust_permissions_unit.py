@@ -9,6 +9,8 @@ References:
 - actingweb/permission_evaluator.py:442-498 - Pattern matching logic
 """
 
+from typing import Any
+
 
 class TestTrustPermissionsPatternMatching:
     """Test pattern matching with wildcards."""
@@ -343,3 +345,331 @@ class TestMergePermissionsFunction:
         assert result["properties"]["patterns"] == ["public/*"]
         # New category added
         assert result["tools"]["allowed"] == ["search", "export"]
+
+
+class TestTrustPermissionStoreNotifications:
+    """
+    Unit tests for TrustPermissionStore notification functionality.
+
+    These tests verify:
+    - Peer notification is called when store_permissions() succeeds
+    - Notification can be disabled via notify_peer=False
+    - Notification failures don't affect storage success
+    - Config-based notification control works correctly
+
+    Uses mocks to avoid actual HTTP calls and DynamoDB access.
+    """
+
+    def _create_mock_config(self, notify_peer_on_change: bool = True) -> Any:
+        """Create a mock config object."""
+        from unittest.mock import Mock
+
+        config = Mock()
+        config.notify_peer_on_change = notify_peer_on_change
+        config.database = "dynamodb"
+        return config
+
+    def _create_permissions(self) -> Any:
+        """Create a test TrustPermissions object."""
+        from actingweb.trust_permissions import TrustPermissions
+
+        return TrustPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            trust_type="friend",
+            properties={"patterns": ["public/*"]},
+        )
+
+    def test_store_permissions_calls_notify_peer_by_default(self):
+        """
+        Test that store_permissions() calls _notify_peer when storage succeeds.
+
+        Default behavior: notify_peer_on_change=True in config.
+        """
+        from unittest.mock import patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(
+                store, "_store_permissions_internal", return_value=True
+            ) as mock_store,
+            patch.object(store, "_notify_peer") as mock_notify,
+        ):
+            result = store.store_permissions(permissions)
+
+            assert result is True
+            mock_store.assert_called_once_with(permissions)
+            mock_notify.assert_called_once_with(permissions)
+
+    def test_store_permissions_skips_notify_when_storage_fails(self):
+        """
+        Test that _notify_peer is not called when storage fails.
+        """
+        from unittest.mock import patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(
+                store, "_store_permissions_internal", return_value=False
+            ) as mock_store,
+            patch.object(store, "_notify_peer") as mock_notify,
+        ):
+            result = store.store_permissions(permissions)
+
+            assert result is False
+            mock_store.assert_called_once_with(permissions)
+            mock_notify.assert_not_called()
+
+    def test_store_permissions_respects_notify_peer_false_override(self):
+        """
+        Test that notify_peer=False parameter disables notification.
+        """
+        from unittest.mock import patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(store, "_notify_peer") as mock_notify,
+        ):
+            result = store.store_permissions(permissions, notify_peer=False)
+
+            assert result is True
+            mock_notify.assert_not_called()
+
+    def test_store_permissions_respects_notify_peer_true_override(self):
+        """
+        Test that notify_peer=True parameter enables notification even when config disables it.
+        """
+        from unittest.mock import patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=False)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(store, "_notify_peer") as mock_notify,
+        ):
+            result = store.store_permissions(permissions, notify_peer=True)
+
+            assert result is True
+            mock_notify.assert_called_once_with(permissions)
+
+    def test_store_permissions_skips_notify_when_config_disables(self):
+        """
+        Test that notification is skipped when config.notify_peer_on_change=False.
+        """
+        from unittest.mock import patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=False)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(store, "_notify_peer") as mock_notify,
+        ):
+            result = store.store_permissions(permissions)
+
+            assert result is True
+            mock_notify.assert_not_called()
+
+    def test_notification_failure_does_not_affect_storage_result(self):
+        """
+        Test that _notify_peer exceptions don't affect store_permissions return value.
+
+        This is the fire-and-forget behavior requirement.
+        """
+        from unittest.mock import patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(store, "_notify_peer", side_effect=Exception("Network error")),
+        ):
+            # Should not raise, and should still return True
+            result = store.store_permissions(permissions)
+            assert result is True
+
+    def test_should_notify_peer_returns_param_when_provided(self):
+        """
+        Test that _should_notify_peer returns the parameter when explicitly provided.
+        """
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+
+        assert store._should_notify_peer(True) is True
+        assert store._should_notify_peer(False) is False
+
+    def test_should_notify_peer_returns_config_when_param_is_none(self):
+        """
+        Test that _should_notify_peer returns config value when param is None.
+        """
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config_enabled = self._create_mock_config(notify_peer_on_change=True)
+        store_enabled = TrustPermissionStore(config_enabled)
+        assert store_enabled._should_notify_peer(None) is True
+
+        config_disabled = self._create_mock_config(notify_peer_on_change=False)
+        store_disabled = TrustPermissionStore(config_disabled)
+        assert store_disabled._should_notify_peer(None) is False
+
+    def test_build_callback_data_structure(self):
+        """
+        Test that _build_callback_data returns the expected payload structure.
+        """
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config()
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        callback_data = store._build_callback_data(permissions)
+
+        assert callback_data["id"] == "actor123"
+        assert callback_data["target"] == "permissions"
+        assert callback_data["type"] == "permission"
+        assert "timestamp" in callback_data
+        assert "data" in callback_data
+        assert callback_data["data"]["properties"] == {"patterns": ["public/*"]}
+
+
+class TestTrustPermissionStoreAsyncNotifications:
+    """
+    Unit tests for async notification functionality.
+
+    Uses pytest-asyncio for async test support.
+    """
+
+    def _create_mock_config(self, notify_peer_on_change: bool = True) -> Any:
+        """Create a mock config object."""
+        from unittest.mock import Mock
+
+        config = Mock()
+        config.notify_peer_on_change = notify_peer_on_change
+        config.database = "dynamodb"
+        return config
+
+    def _create_permissions(self) -> Any:
+        """Create a test TrustPermissions object."""
+        from actingweb.trust_permissions import TrustPermissions
+
+        return TrustPermissions(
+            actor_id="actor123",
+            peer_id="peer456",
+            trust_type="friend",
+            properties={"patterns": ["public/*"]},
+        )
+
+    async def test_store_permissions_async_calls_notify_peer_async(self):
+        """
+        Test that store_permissions_async() calls _notify_peer_async when storage succeeds.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        # Track created tasks so we can await them
+        created_tasks = []
+        # Save original create_task to avoid recursion
+        original_create_task = asyncio.create_task
+
+        def mock_create_task(coro):
+            task = original_create_task(coro)
+            created_tasks.append(task)
+            return task
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(
+                store, "_notify_peer_async", new_callable=AsyncMock
+            ) as mock_notify,
+            patch("asyncio.create_task", side_effect=mock_create_task),
+        ):
+            result = await store.store_permissions_async(permissions)
+
+            assert result is True
+
+            # Wait for the background task to complete
+            if created_tasks:
+                await asyncio.gather(*created_tasks)
+
+            mock_notify.assert_called_once_with(permissions)
+
+    async def test_store_permissions_async_skips_notify_when_storage_fails(self):
+        """
+        Test that _notify_peer_async is not called when storage fails.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=False),
+            patch.object(
+                store, "_notify_peer_async", new_callable=AsyncMock
+            ) as mock_notify,
+        ):
+            result = await store.store_permissions_async(permissions)
+
+            assert result is False
+            mock_notify.assert_not_called()
+
+    async def test_store_permissions_async_respects_notify_peer_override(self):
+        """
+        Test that notify_peer parameter overrides config in async version.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(
+                store, "_notify_peer_async", new_callable=AsyncMock
+            ) as mock_notify,
+        ):
+            result = await store.store_permissions_async(permissions, notify_peer=False)
+
+            assert result is True
+            mock_notify.assert_not_called()

@@ -647,8 +647,9 @@ class TestCachedPeerCapabilities:
             actor_id="actor1", peer_id="peer1", methods=[method1, method2]
         )
 
-        assert caps.get_method("get_data") is not None
-        assert caps.get_method("get_data").name == "get_data"
+        method = caps.get_method("get_data")
+        assert method is not None
+        assert method.name == "get_data"
         assert caps.get_method("unknown") is None
 
     def test_get_action(self):
@@ -658,8 +659,9 @@ class TestCachedPeerCapabilities:
             actor_id="actor1", peer_id="peer1", actions=[action1]
         )
 
-        assert caps.get_action("reset") is not None
-        assert caps.get_action("reset").name == "reset"
+        action = caps.get_action("reset")
+        assert action is not None
+        assert action.name == "reset"
         assert caps.get_action("unknown") is None
 
     def test_get_method_names(self):

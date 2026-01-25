@@ -378,7 +378,9 @@ class DbPropertyList:
                     lookup = PropertyLookup.get(name, value)
                     lookup.delete()
                 except Exception as e:
-                    logger.warning(f"Failed to delete lookup entry for property {name}: {e}")
+                    logger.warning(
+                        f"Failed to delete lookup entry for property {name}: {e}"
+                    )
 
         self.handle = None
         return True

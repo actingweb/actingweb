@@ -478,7 +478,9 @@ class TestSyncPeer:
 
             result = manager.sync_peer(peer_id="peer_1", config=config)
 
-        assert result.success is False  # Overall failure due to one subscription failing
+        assert (
+            result.success is False
+        )  # Overall failure due to one subscription failing
         assert result.subscriptions_synced == 1  # One succeeded
         assert result.total_diffs_processed == 1
 
@@ -557,7 +559,11 @@ class TestSyncSubscriptionAsync:
                 return {
                     "sequence": 5,
                     "data": [
-                        {"sequence": 5, "timestamp": "2024-01-01T00:00:00Z", "data": {}},
+                        {
+                            "sequence": 5,
+                            "timestamp": "2024-01-01T00:00:00Z",
+                            "data": {},
+                        },
                     ],
                 }
 

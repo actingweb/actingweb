@@ -784,7 +784,9 @@ def subscriber_app(docker_services, setup_database, worker_info):  # pylint: dis
 
     # Run in background thread with uvicorn
     def run_app():
-        uvicorn.run(fastapi_app, host="0.0.0.0", port=subscriber_port, log_level="error")
+        uvicorn.run(
+            fastapi_app, host="0.0.0.0", port=subscriber_port, log_level="error"
+        )
 
     thread = Thread(target=run_app, daemon=True)
     thread.start()

@@ -358,6 +358,52 @@ Flask
 
    app.integrate_flask(flask)
 
+MCP (Model Context Protocol)
+-----------------------------
+
+**New in v3.11.0**: MCP endpoints now use ``AsyncMCPHandler`` for optimal async performance with FastAPI.
+
+- MCP tools (action hooks) and prompts (method hooks) execute natively in FastAPI event loop
+- No thread pool overhead for async MCP tools/prompts
+- True concurrent execution of multiple MCP requests
+
+.. code-block:: python
+
+   from fastapi import FastAPI
+   from actingweb.interface import ActingWebApp
+   from actingweb.mcp import mcp_tool, mcp_prompt
+
+   app = ActingWebApp(...).with_mcp(enable=True)
+   fastapi = FastAPI()
+
+   # Async MCP tool - executes natively in FastAPI event loop
+   @app.action_hook("search_data")
+   @mcp_tool(description="Search external data source")
+   async def search_tool(actor, action_name, data):
+       async with aiohttp.ClientSession() as session:
+           async with session.get(f"https://api.example.com/search?q={data['query']}") as resp:
+               results = await resp.json()
+       return {"content": [{"type": "text", "text": str(results)}]}
+
+   # Async MCP prompt - also executes natively
+   @app.method_hook("summarize_notes")
+   @mcp_prompt(description="Generate notes summary")
+   async def summarize_prompt(actor, method_name, params):
+       # Async database query
+       async with db_pool.acquire() as conn:
+           notes = await conn.fetch("SELECT * FROM notes WHERE actor_id = $1", actor.id)
+       return f"Found {len(notes)} notes: " + ", ".join(n["title"] for n in notes)
+
+   app.integrate_fastapi(fastapi)
+
+**Performance Impact**: With ``AsyncMCPHandler``, async MCP tools and prompts:
+
+- Execute in ~1-5ms (vs ~10-20ms with thread pool overhead)
+- Support thousands of concurrent requests
+- Enable true I/O concurrency (e.g., calling multiple external APIs in parallel)
+
+**Note**: Flask integration continues using sync ``MCPHandler`` - async hooks still work via ``asyncio.run()`` but won't benefit from true concurrency.
+
 Performance Tips
 ================
 

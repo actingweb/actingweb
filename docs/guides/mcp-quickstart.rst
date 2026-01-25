@@ -72,6 +72,23 @@ Minimal App
 
    # Run: uvicorn app_mcp:api --reload --port 5000
 
+.. note::
+   **Async Hook Support**: MCP tools and prompts can be async functions for optimal performance.
+   FastAPI automatically uses ``AsyncMCPHandler`` which executes async hooks natively in the
+   event loop without thread pool overhead. This enables true concurrent execution and significantly
+   better performance for I/O-bound operations (database queries, API calls, etc.).
+
+   .. code-block:: python
+
+      # Async MCP tool - optimal for I/O operations
+      @aw.action_hook("fetch_external_data")
+      @mcp_tool(description="Fetch data from external API")
+      async def fetch_data_tool(actor: ActorInterface, action_name: str, data: dict):
+          async with aiohttp.ClientSession() as session:
+              async with session.get(f"https://api.example.com/data/{data['id']}") as resp:
+                  result = await resp.json()
+          return {"content": [{"type": "text", "text": str(result)}]}
+
 Testing with JSON‑RPC
 ---------------------
 

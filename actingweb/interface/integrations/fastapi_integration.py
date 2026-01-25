@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from ...aw_web_request import AWWebObj
-from ...handlers import bot, factory, mcp, services
+from ...handlers import bot, factory, services
 from .base_integration import BaseActingWebIntegration
 
 if TYPE_CHECKING:
@@ -2114,7 +2114,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         return self._create_fastapi_response(webobj, request)
 
     async def _handle_mcp_request(self, request: Request) -> Response:
-        """Handle MCP requests."""
+        """Handle MCP requests with async handler for optimal performance."""
         req_data = await self._normalize_request(request)
         webobj = AWWebObj(
             url=req_data["url"],
@@ -2124,15 +2124,16 @@ class FastAPIIntegration(BaseActingWebIntegration):
             cookies=req_data["cookies"],
         )
 
-        handler = mcp.MCPHandler(
+        # Use async MCP handler for FastAPI - no thread pool needed!
+        from ...handlers.async_mcp import AsyncMCPHandler
+
+        handler = AsyncMCPHandler(
             webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
         )
 
-        # Execute appropriate method based on request method
+        # Execute async methods directly - no thread pool bouncing
         if request.method == "GET":
-            # Run the synchronous handler in a thread pool
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self.executor, handler.get)
+            result = await handler.get_async()
         elif request.method == "POST":
             # Parse JSON body for POST requests
             try:
@@ -2143,9 +2144,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             except (json.JSONDecodeError, ValueError):
                 data = {}
 
-            # Run the synchronous handler in a thread pool
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self.executor, handler.post, data)
+            result = await handler.post_async(data)
         else:
             raise HTTPException(status_code=405, detail="Method not allowed")
 

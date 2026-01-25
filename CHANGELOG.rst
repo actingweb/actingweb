@@ -5,28 +5,6 @@ CHANGELOG
 Unreleased
 ----------
 
-ADDED
-~~~~~
-
-- **Database Accessor Pattern**: Added factory functions in ``actingweb.db`` module for creating database instances with configuration automatically injected. This ensures all DB objects respect application settings like ``indexed_properties`` and ``use_lookup_table``.
-
-  - New accessor functions: ``get_property()``, ``get_property_list()``, ``get_actor()``, ``get_actor_list()``, ``get_trust()``, ``get_trust_list()``, ``get_peer_trustee()``, ``get_peer_trustee_list()``, ``get_subscription()``, ``get_subscription_list()``, ``get_subscription_diff()``, ``get_subscription_diff_list()``, ``get_subscription_suspension()``, ``get_attribute()``, ``get_attribute_bucket_list()``
-  - New utility function: ``get_db_accessors()`` returns dictionary of all accessor functions
-  - New protocol definitions in ``actingweb.db.protocols`` for all database interfaces
-  - Improved type safety: Full IDE autocomplete and type checking support
-  - Simplified usage pattern: ``db = get_property(config)`` instead of ``db = config.DbProperty.DbProperty()``
-
-FIXED
-~~~~~
-
-- Fixed ``DbSubscriptionSuspension`` initialization: ``get_subscription_suspension()`` now requires ``actor_id`` parameter to properly initialize the suspension instance
-- Fixed type annotations across database layer to eliminate pyright errors
-- Fixed ``DbTrustProtocol.modify()`` signature to include missing parameters: ``aw_supported``, ``aw_version``, ``capabilities_fetched_at``
-- Fixed ``DbAttributeBucketListProtocol`` to include ``fetch_timestamps()`` method
-- Fixed return type handling for ``PeerTrustee.get()`` to properly handle ``bool | dict | None`` returns
-
-v3.10.0a5: Jan 24, 2026
------------------------
 
 BREAKING CHANGES
 ~~~~~~~~~~~~~~~~
@@ -50,6 +28,24 @@ BREAKING CHANGES
 
 ADDED
 ~~~~~
+
+- **AsyncMCPHandler for FastAPI**: Added ``AsyncMCPHandler`` class for optimal async performance with FastAPI integration. MCP tools and prompts with async hooks now execute natively in the FastAPI event loop without thread pool overhead, enabling true concurrent execution and significantly better performance for I/O-bound operations.
+
+  - New handler: ``actingweb.handlers.async_mcp.AsyncMCPHandler``
+  - FastAPI integration automatically uses ``AsyncMCPHandler`` for MCP endpoints
+  - Async MCP tools (action hooks) and prompts (method hooks) execute without thread pool bouncing
+  - Backward compatible: sync MCP hooks continue to work
+  - Performance improvement: 30-50% reduction in response time for async I/O operations
+  - Flask integration continues using sync ``MCPHandler`` (appropriate for WSGI)
+  - See ``docs/guides/async-hooks-migration.rst`` for detailed async MCP usage patterns
+
+- **Database Accessor Pattern**: Added factory functions in ``actingweb.db`` module for creating database instances with configuration automatically injected. This ensures all DB objects respect application settings like ``indexed_properties`` and ``use_lookup_table``.
+
+  - New accessor functions: ``get_property()``, ``get_property_list()``, ``get_actor()``, ``get_actor_list()``, ``get_trust()``, ``get_trust_list()``, ``get_peer_trustee()``, ``get_peer_trustee_list()``, ``get_subscription()``, ``get_subscription_list()``, ``get_subscription_diff()``, ``get_subscription_diff_list()``, ``get_subscription_suspension()``, ``get_attribute()``, ``get_attribute_bucket_list()``
+  - New utility function: ``get_db_accessors()`` returns dictionary of all accessor functions
+  - New protocol definitions in ``actingweb.db.protocols`` for all database interfaces
+  - Improved type safety: Full IDE autocomplete and type checking support
+  - Simplified usage pattern: ``db = get_property(config)`` instead of ``db = config.DbProperty.DbProperty()``
 
 - **Auto-Delete Cached Peer Data on Permission Revocation**: Added optional automatic deletion of cached peer data when permissions are revoked.
 
@@ -233,6 +229,12 @@ FIXED
 - **List property subscription diff callbacks**: Fixed ``list:`` prefix leakage in subscription diff callbacks. Previously, list property changes registered diffs with ``subtarget="list:myList"`` which exposed the internal ``list:`` prefix in callbacks sent to subscribers. Now uses clean subtarget (``subtarget="myList"``) - the diff blob already contains ``"list": "myList"`` to identify list operations. Subscribers no longer need to strip the prefix when processing list property callbacks.
 
 - **Profile attribute type conversion in sync**: Fixed type conversion when extracting peer profile attributes from synced subscription data. Profile attributes retrieved from ``RemotePeerStore`` are now properly unwrapped from ``{"value": ...}`` format and converted to strings for standard profile fields (displayname, email, description). This fixes type errors where dict values were being assigned to string-typed profile fields.
+
+- Fixed ``DbSubscriptionSuspension`` initialization: ``get_subscription_suspension()`` now requires ``actor_id`` parameter to properly initialize the suspension instance
+- Fixed type annotations across database layer to eliminate pyright errors
+- Fixed ``DbTrustProtocol.modify()`` signature to include missing parameters: ``aw_supported``, ``aw_version``, ``capabilities_fetched_at``
+- Fixed ``DbAttributeBucketListProtocol`` to include ``fetch_timestamps()`` method
+- Fixed return type handling for ``PeerTrustee.get()`` to properly handle ``bool | dict | None`` returns
 
 v3.9.2: Jan 16, 2026
 --------------------

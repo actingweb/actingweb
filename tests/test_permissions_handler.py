@@ -176,7 +176,11 @@ class TestPermissionsHandler:
         auth_result = MagicMock()
         auth_result.success = True
         auth_result.actor = MagicMock()
-        auth_result.authorize = MagicMock(return_value=False)
+
+        # Mock auth_obj.check_authorisation to return False
+        mock_auth_obj = MagicMock()
+        mock_auth_obj.check_authorisation = MagicMock(return_value=False)
+        auth_result.auth_obj = mock_auth_obj
 
         # Mock actor interface with trust relationship
         mock_actor_interface = MagicMock()
@@ -189,8 +193,16 @@ class TestPermissionsHandler:
 
         handler.get("actor123", "peer456")
 
-        # Verify authorization was checked
-        auth_result.authorize.assert_called_with("GET", "permissions", "peer456")
+        # Verify authorization was checked with correct parameters
+        mock_auth_obj.check_authorisation.assert_called_once_with(
+            path="permissions",
+            subpath="<id>",
+            method="GET",
+            peerid="peer456",
+        )
+
+        # Verify 403 response was set
+        handler.response.set_status.assert_called_with(403, "Forbidden")
 
     def test_get_permissions_trust_type_not_found(self, handler):
         """Test querying permissions when trust type is not found in registry."""

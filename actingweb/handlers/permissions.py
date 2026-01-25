@@ -70,10 +70,12 @@ class PermissionsHandler(base_handler.BaseHandler):
             return
 
         # Check authorization - peer must be requesting their own permissions
+        # Note: We pass subpath="<id>" (the template literal) to match the ACL pattern
+        # "permissions/<id>". The actual peer_id is passed as peerid for ownership checks.
         check = auth_result.auth_obj
         if not check or not check.check_authorisation(
             path="permissions",
-            subpath=peer_id,
+            subpath="<id>",
             method="GET",
             peerid=peer_id,
         ):

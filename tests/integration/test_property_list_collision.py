@@ -1,5 +1,7 @@
 """Integration tests for property/list name collision detection."""
 
+import os
+
 import pytest
 
 from actingweb.interface import ActorInterface
@@ -13,7 +15,7 @@ def test_actor(test_app):
     config = Config(
         aw_type="urn:actingweb:example.com:testapp",
         actor_id=None,
-        database="dynamodb",
+        database=os.environ.get("DATABASE_BACKEND", "dynamodb"),
     )
     actor = ActorInterface.create(
         creator="collision@example.com",
@@ -27,6 +29,7 @@ def test_actor(test_app):
         pass  # Best effort cleanup
 
 
+@pytest.mark.xdist_group(name="property_list_collision")
 class TestPropertyListCollisionDetection:
     """Test that lists take precedence over properties when names collide."""
 

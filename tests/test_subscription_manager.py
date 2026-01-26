@@ -629,3 +629,249 @@ class TestSubscriptionManagerCallbackMethods:
         )
         assert regular_sub is not None
         assert regular_sub.is_callback is False
+
+
+class TestBaselineTransformation:
+    """Test suite for _transform_baseline_list_properties() method."""
+
+    def test_transform_baseline_list_metadata(self):
+        """Test transforming list metadata to items."""
+        actor = FakeCoreActor()
+
+        # Mock proxy that returns list items
+        class MockProxy:
+            def __init__(self):
+                self.trust = {"verified": True}  # Mock trust object
+
+            def get_resource(self, path: str) -> Any:
+                # Return list items for properties/memory_travel
+                if path == "properties/memory_travel":
+                    return [
+                        {"id": "1", "location": "Paris"},
+                        {"id": "2", "location": "Tokyo"},
+                        {"id": "3", "location": "NYC"},
+                    ]
+                return None
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        # Baseline data with list metadata
+        baseline_data = {
+            "scalar_prop": {"value": "test"},
+            "memory_travel": {"_list": True, "count": 3},
+        }
+
+        # Transform
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Verify scalar property unchanged
+        assert result["scalar_prop"] == {"value": "test"}
+
+        # Verify list property transformed
+        assert result["memory_travel"]["_list"] is True
+        assert "items" in result["memory_travel"]
+        assert len(result["memory_travel"]["items"]) == 3
+        assert result["memory_travel"]["items"][0]["location"] == "Paris"
+
+    def test_transform_baseline_mixed_properties(self):
+        """Test mix of scalar and list properties."""
+        actor = FakeCoreActor()
+
+        class MockProxy:
+            def __init__(self):
+                self.trust = {"verified": True}
+
+            def get_resource(self, path: str) -> Any:
+                if path == "properties/list1":
+                    return [{"id": "1"}]
+                elif path == "properties/list2":
+                    return [{"id": "2"}, {"id": "3"}]
+                return None
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        baseline_data = {
+            "scalar1": {"value": "test1"},
+            "list1": {"_list": True, "count": 1},
+            "scalar2": {"value": "test2"},
+            "list2": {"_list": True, "count": 2},
+        }
+
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Verify scalars unchanged
+        assert result["scalar1"] == {"value": "test1"}
+        assert result["scalar2"] == {"value": "test2"}
+
+        # Verify lists transformed
+        assert len(result["list1"]["items"]) == 1
+        assert len(result["list2"]["items"]) == 2
+
+    def test_transform_baseline_empty_list(self):
+        """Test handling empty lists."""
+        actor = FakeCoreActor()
+
+        class MockProxy:
+            def __init__(self):
+                self.trust = {"verified": True}
+
+            def get_resource(self, path: str) -> Any:
+                if path == "properties/empty_list":
+                    return []
+                return None
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        baseline_data = {"empty_list": {"_list": True, "count": 0}}
+
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Verify empty list stored correctly
+        assert result["empty_list"]["_list"] is True
+        assert result["empty_list"]["items"] == []
+
+    def test_transform_baseline_permission_denied(self):
+        """Test handling 403 from remote peer."""
+        actor = FakeCoreActor()
+
+        class MockProxy:
+            def __init__(self):
+                self.trust = {"verified": True}
+
+            def get_resource(self, path: str) -> Any:
+                # Return error response for permission denied
+                if path == "properties/restricted":
+                    return {"error": "Permission denied"}
+                return None
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        baseline_data = {
+            "public_prop": {"value": "test"},
+            "restricted": {"_list": True, "count": 5},
+        }
+
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Verify public property unchanged
+        assert result["public_prop"] == {"value": "test"}
+
+        # Verify restricted list kept as metadata (not transformed)
+        assert result["restricted"] == {"_list": True, "count": 5}
+        assert "items" not in result["restricted"]
+
+    def test_transform_baseline_fetch_error(self):
+        """Test handling network/protocol errors."""
+        actor = FakeCoreActor()
+
+        class MockProxy:
+            def __init__(self):
+                self.trust = {"verified": True}
+
+            def get_resource(self, path: str) -> Any:
+                # Simulate network error
+                if path == "properties/failing_list":
+                    raise Exception("Network timeout")
+                return None
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        baseline_data = {
+            "good_prop": {"value": "test"},
+            "failing_list": {"_list": True, "count": 10},
+        }
+
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Verify good property unchanged
+        assert result["good_prop"] == {"value": "test"}
+
+        # Verify failing list kept as metadata (graceful failure)
+        assert result["failing_list"] == {"_list": True, "count": 10}
+        assert "items" not in result["failing_list"]
+
+    def test_transform_baseline_no_trust(self):
+        """Test handling when no trust relationship exists."""
+        actor = FakeCoreActor()
+
+        class MockProxy:
+            def __init__(self):
+                self.trust = None  # No trust
+
+            def get_resource(self, path: str) -> Any:
+                return None
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        baseline_data = {"list_prop": {"_list": True, "count": 3}}
+
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Should return original data unchanged
+        assert result == baseline_data
+
+    def test_transform_baseline_already_has_items(self):
+        """Test that lists with items already present are not refetched."""
+        actor = FakeCoreActor()
+
+        class MockProxy:
+            def __init__(self):
+                self.trust = {"verified": True}
+
+            def get_resource(self, path: str) -> Any:
+                # Should not be called
+                raise Exception("Should not fetch when items already present")
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        baseline_data = {
+            "list_with_items": {"_list": True, "items": [{"id": "1"}]},
+        }
+
+        # Should not raise exception since it shouldn't call get_resource
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Should return original data unchanged
+        assert result == baseline_data

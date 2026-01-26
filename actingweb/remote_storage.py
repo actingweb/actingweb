@@ -325,7 +325,18 @@ class RemotePeerStore:
         # Apply all new data
         for key, value in data.items():
             try:
-                if key.startswith("list:") and isinstance(value, list):
+                # Check for flag-based list format (preferred)
+                if isinstance(value, dict) and value.get("_list") is True:
+                    # Extract items from flag-based format
+                    items = value.get("items", [])
+                    self.set_list(key, items)
+                    results[key] = {
+                        "operation": "resync",
+                        "items": len(items),
+                        "success": True,
+                    }
+                # Keep "list:" prefix detection for backward compatibility
+                elif key.startswith("list:") and isinstance(value, list):
                     # Full list replacement
                     list_name = key[5:]
                     self.set_list(list_name, value)

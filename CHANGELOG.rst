@@ -239,6 +239,14 @@ FIXED
 - Fixed ``DbAttributeBucketListProtocol`` to include ``fetch_timestamps()`` method
 - Fixed return type handling for ``PeerTrustee.get()`` to properly handle ``bool | dict | None`` returns
 
+- **Subscription Baseline Sync for List Properties**: Fixed a bug where subscription baseline sync (when no diffs are available) did not properly fetch and store list property items. The baseline fetch now correctly detects list metadata from the remote peer and fetches the actual list items via ActingWeb protocol, transforming them to the format expected by ``RemotePeerStore``.
+
+  - Added ``SubscriptionManager._transform_baseline_list_properties()`` method to fetch list items from remote peer
+  - Updated ``RemotePeerStore.apply_resync_data()`` to support flag-based list format (``{"_list": true, "items": [...]}``)
+  - Maintains backward compatibility with legacy ``"list:"`` prefix format
+  - Permission filtering happens automatically via remote peer's property hooks
+  - Graceful error handling: skips lists on fetch errors without crashing sync
+
 v3.9.2: Jan 16, 2026
 --------------------
 

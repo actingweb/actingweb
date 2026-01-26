@@ -388,21 +388,21 @@ class PropertiesHandler(base_handler.BaseHandler):
             for list_name in list_names:
                 list_prop = getattr(actor_interface.property_lists, list_name)
                 pair[list_name] = {
-                    "is_list": True,
-                    "item_count": len(list_prop),
+                    "_list": True,
+                    "count": len(list_prop),
                     "description": list_prop.get_description(),
                     "explanation": list_prop.get_explanation(),
                 }
 
-            # Wrap non-list properties with is_list: false
+            # Wrap non-list properties with _list: false
             for name in list(pair.keys()):
                 if name not in list_names:
                     current_value = pair[name]
-                    if isinstance(current_value, dict) and "is_list" in current_value:
+                    if isinstance(current_value, dict) and "_list" in current_value:
                         continue  # Already wrapped
                     pair[name] = {
                         "value": current_value,
-                        "is_list": False,
+                        "_list": False,
                     }
         else:
             # Minimal format for list properties (without metadata)
@@ -432,6 +432,103 @@ class PropertiesHandler(base_handler.BaseHandler):
             name = path[0]
             if len(path) >= 2 and len(path[1]) > 0:
                 resource = path[1]
+
+        # Check if this is a list operation (indicated by index parameter)
+        # Note: request.get() may return None or "" when parameter is not present
+        index_param = self.request.get("index")
+        if index_param:
+            # This is a list item operation - handle it appropriately
+            if not (
+                myself
+                and hasattr(myself, "property_lists")
+                and myself.property_lists is not None
+                and myself.property_lists.exists(name)
+            ):
+                if self.response:
+                    self.response.set_status(
+                        404, f"List property '{name}' not found"
+                    )
+                return
+
+            # Check write permission
+            property_path = "/".join(path) if path else ""
+            if not check or not self._check_property_permission(
+                actor_id, check, property_path, "write"
+            ):
+                if self.response:
+                    self.response.set_status(403)
+                return
+
+            # Parse the body
+            body = self.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "ignore")
+            elif body is None:
+                body = ""
+
+            try:
+                item_value = json.loads(body)
+            except (TypeError, ValueError, KeyError):
+                item_value = body
+
+            # Get the list property and set the item at the specified index
+            try:
+                index = int(index_param)
+                if index < 0:
+                    if self.response:
+                        self.response.set_status(
+                            400, f"Invalid index: {index} (must be >= 0)"
+                        )
+                    return
+
+                list_prop = getattr(myself.property_lists, name)
+
+                # Extend list if needed
+                while len(list_prop) <= index:
+                    list_prop.append(None)
+
+                # Execute property put hook if available
+                if self.hooks:
+                    actor_interface = self._get_actor_interface(myself)
+                    if actor_interface:
+                        auth_context = self._create_auth_context(check, "write")
+                        transformed = self.hooks.execute_property_hooks(
+                            name,
+                            "put",
+                            actor_interface,
+                            item_value,
+                            [name, str(index)],
+                            auth_context,
+                        )
+                        if transformed is not None:
+                            item_value = transformed
+                        else:
+                            if self.response:
+                                self.response.set_status(400, "Item rejected by hooks")
+                            return
+
+                # Set the item at the index
+                list_prop[index] = item_value
+
+                # Register diff
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps({"index": index, "value": item_value}),
+                )
+
+                if self.response:
+                    self.response.set_status(204)
+                return
+
+            except (ValueError, IndexError) as e:
+                logger.error(f"Error setting list item at index {index_param}: {e}")
+                if self.response:
+                    self.response.set_status(
+                        400, f"Error setting list item: {str(e)}"
+                    )
+                return
+
         # Use unified access control system for permission checking
         property_path = "/".join(path) if path else ""
         if not check or not self._check_property_permission(
@@ -1151,8 +1248,8 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         list_prop = getattr(myself.property_lists, name)
         metadata = {
             "name": name,
-            "is_list": True,
-            "item_count": len(list_prop),
+            "_list": True,
+            "count": len(list_prop),
             "description": list_prop.get_description(),
             "explanation": list_prop.get_explanation(),
         }

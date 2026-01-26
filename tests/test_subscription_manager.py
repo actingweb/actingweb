@@ -875,3 +875,50 @@ class TestBaselineTransformation:
 
         # Should return original data unchanged
         assert result == baseline_data
+
+    def test_transform_baseline_with_full_metadata(self):
+        """Test transforming list metadata with full metadata format (from ?metadata=true)."""
+        actor = FakeCoreActor()
+
+        # Mock proxy that returns list items
+        class MockProxy:
+            def __init__(self):
+                self.trust = {"verified": True}
+
+            def get_resource(self, path: str) -> Any:
+                # Return list items for properties/tags
+                if path == "properties/tags":
+                    return ["python", "asyncio", "fastapi"]
+                return None
+
+        def mock_get_peer_proxy(peer_id: str) -> MockProxy:
+            return MockProxy()
+
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        manager._get_peer_proxy = mock_get_peer_proxy  # type: ignore[assignment]
+
+        # Baseline data with full metadata format (from ?metadata=true)
+        # Note: Uses _list consistently now (not is_list)
+        baseline_data = {
+            "scalar_prop": {"value": "test"},
+            "tags": {
+                "_list": True,
+                "count": 3,
+                "description": "User tags",
+                "explanation": "List of tags",
+            },
+        }
+
+        # Transform
+        result = manager._transform_baseline_list_properties(
+            baseline_data=baseline_data, peer_id="peer_1", target="properties"
+        )
+
+        # Verify scalar property unchanged
+        assert result["scalar_prop"] == {"value": "test"}
+
+        # Verify list property transformed
+        assert result["tags"]["_list"] is True
+        assert "items" in result["tags"]
+        assert len(result["tags"]["items"]) == 3
+        assert "python" in result["tags"]["items"]

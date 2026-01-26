@@ -58,9 +58,9 @@ class TestPropertiesMetadataAPI:
         data = response.json()
         # Should return simple key-value format for regular properties
         assert "test_prop" in data
-        # Regular property should be simple value, not wrapped with is_list metadata
+        # Regular property should be simple value, not wrapped with _list metadata
         assert data["test_prop"] == {"value": "test_value"}
-        assert "is_list" not in data.get("test_prop", {})
+        assert "_list" not in data.get("test_prop", {})
 
     def test_003b_create_list_property(self, http_client):
         """Create a list property for testing list inclusion without metadata."""
@@ -107,9 +107,7 @@ class TestPropertiesMetadataAPI:
         assert "test_list" in data
         assert data["test_list"]["_list"] is True
         assert data["test_list"]["count"] == 2
-        # Should NOT have full metadata fields
-        assert "is_list" not in data["test_list"]
-        assert "item_count" not in data["test_list"]
+        # Should NOT have full metadata fields (not requested)
         assert "description" not in data["test_list"]
         assert "explanation" not in data["test_list"]
 
@@ -122,20 +120,18 @@ class TestPropertiesMetadataAPI:
         assert response.status_code == 200
         data = response.json()
 
-        # Regular property should be wrapped with is_list: false
+        # Regular property should be wrapped with _list: false
         assert "test_prop" in data
-        assert data["test_prop"]["is_list"] is False
+        assert data["test_prop"]["_list"] is False
         assert data["test_prop"]["value"] == {"value": "test_value"}
 
         # List property should have full metadata format
+        # Now uses _list and count consistently
         assert "test_list" in data
-        assert data["test_list"]["is_list"] is True
-        assert data["test_list"]["item_count"] == 2
+        assert data["test_list"]["_list"] is True
+        assert data["test_list"]["count"] == 2
         assert "description" in data["test_list"]
         assert "explanation" in data["test_list"]
-        # Should NOT have minimal format fields
-        assert "_list" not in data["test_list"]
-        assert "count" not in data["test_list"]
 
     def test_099_cleanup_actor(self, http_client):
         """Delete test actor."""

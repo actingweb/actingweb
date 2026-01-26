@@ -907,8 +907,12 @@ class SubscriptionManager:
 
         # Process each property in baseline data
         for property_name, value in baseline_data.items():
-            # Skip if not a list metadata dict
-            if not isinstance(value, dict) or not value.get("_list"):
+            # Skip if not a dict
+            if not isinstance(value, dict):
+                continue
+
+            # Check for list metadata format: {"_list": true, "count": N}
+            if not value.get("_list"):
                 continue
 
             # Skip if already has items

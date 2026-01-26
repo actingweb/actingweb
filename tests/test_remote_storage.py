@@ -930,17 +930,18 @@ class TestApplyResyncData:
             assert results["empty_list"]["operation"] == "resync"
 
     def test_apply_resync_data_flag_list_without_items(self, mock_actor):
-        """Test flag-based list without items field (defaults to empty)."""
+        """Test flag-based list without items field (skipped to avoid data loss)."""
         with patch("actingweb.attribute.Attributes"):
             store = RemotePeerStore(
                 mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False
             )
 
-            # Apply resync data with list flag but no items
-            data = {"list_without_items": {"_list": True, "count": 0}}
+            # Apply resync data with list flag but no items (transformation failure scenario)
+            data = {"list_without_items": {"_list": True, "count": 5}}
 
             results = store.apply_resync_data(data)
 
-            # Should default to empty list
-            assert results["list_without_items"]["success"] is True
-            assert results["list_without_items"]["items"] == 0
+            # Should skip to avoid treating metadata as empty list (data loss)
+            assert results["list_without_items"]["success"] is False
+            assert results["list_without_items"]["operation"] == "skip"
+            assert results["list_without_items"]["reason"] == "metadata_without_items"

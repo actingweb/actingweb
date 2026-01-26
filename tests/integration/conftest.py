@@ -298,12 +298,12 @@ def setup_database(docker_services, worker_info):
 
     # Cleanup PostgreSQL schemas after tests
     if DATABASE_BACKEND == "postgresql":
+        schema_name = f"{worker_info['db_prefix']}public"
         try:
             import psycopg
             from psycopg import sql
 
             conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
-            schema_name = f"{worker_info['db_prefix']}public"
 
             with psycopg.connect(conninfo) as conn:
                 with conn.cursor() as cur:

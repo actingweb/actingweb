@@ -133,6 +133,7 @@ class TestPropertyListCollisionDetection:
 
         # Mock PropertyListStore.exists() to return True (list exists)
         from unittest.mock import patch
+
         import pytest
 
         with patch(

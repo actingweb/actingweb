@@ -66,7 +66,7 @@ class TestGetHookMetadata:
             description="Test method",
             input_schema={"type": "object"},
         )
-        sample_hook._hook_metadata = expected
+        sample_hook._hook_metadata = expected  # type: ignore[attr-defined]
 
         result = get_hook_metadata(sample_hook)
         # Note: result may be a new object due to auto-schema filling, so check values
@@ -89,7 +89,7 @@ class TestGetHookMetadata:
             "output_schema": {"type": "array"},
             "annotations": {"destructiveHint": False},
         }
-        sample_hook._mcp_metadata = mcp_metadata
+        sample_hook._mcp_metadata = mcp_metadata  # type: ignore[attr-defined]
 
         result = get_hook_metadata(sample_hook)
         assert result.description == "MCP description"
@@ -108,8 +108,8 @@ class TestGetHookMetadata:
 
         hook_metadata = HookMetadata(description="Hook description")
         mcp_metadata = {"description": "MCP description"}
-        sample_hook._hook_metadata = hook_metadata
-        sample_hook._mcp_metadata = mcp_metadata
+        sample_hook._hook_metadata = hook_metadata  # type: ignore[attr-defined]
+        sample_hook._mcp_metadata = mcp_metadata  # type: ignore[attr-defined]
 
         result = get_hook_metadata(sample_hook)
         assert result.description == "Hook description"
@@ -136,7 +136,7 @@ class TestGetHookMetadata:
             "description": None,
             "input_schema": {"type": "object"},
         }
-        sample_hook._mcp_metadata = mcp_metadata
+        sample_hook._mcp_metadata = mcp_metadata  # type: ignore[attr-defined]
 
         result = get_hook_metadata(sample_hook)
         assert result.description == ""
@@ -167,12 +167,12 @@ class TestHookRegistryMetadataLists:
         def method2(actor, name, data):
             return {"result": 2}
 
-        method1._hook_metadata = HookMetadata(
+        method1._hook_metadata = HookMetadata(  # type: ignore[attr-defined]
             description="Method 1 description",
             input_schema={"type": "object"},
             annotations={"readOnlyHint": True},
         )
-        method2._hook_metadata = HookMetadata(description="Method 2 description")
+        method2._hook_metadata = HookMetadata(description="Method 2 description")  # type: ignore[attr-defined]
 
         registry.register_method_hook("method1", method1)
         registry.register_method_hook("method2", method2)
@@ -198,7 +198,7 @@ class TestHookRegistryMetadataLists:
         def action1(actor, name, data):
             return {"status": "ok"}
 
-        action1._hook_metadata = HookMetadata(
+        action1._hook_metadata = HookMetadata(  # type: ignore[attr-defined]
             description="Action 1 description", annotations={"destructiveHint": True}
         )
 
@@ -220,8 +220,8 @@ class TestHookRegistryMetadataLists:
         def specific_method(actor, name, data):
             return {"result": "specific"}
 
-        wildcard_method._hook_metadata = HookMetadata(description="Wildcard")
-        specific_method._hook_metadata = HookMetadata(description="Specific")
+        wildcard_method._hook_metadata = HookMetadata(description="Wildcard")  # type: ignore[attr-defined]
+        specific_method._hook_metadata = HookMetadata(description="Specific")  # type: ignore[attr-defined]
 
         registry.register_method_hook("*", wildcard_method)
         registry.register_method_hook("specific", specific_method)
@@ -258,8 +258,8 @@ class TestHookRegistryMetadataLists:
         def second_hook(actor, name, data):
             return {"result": "second"}
 
-        first_hook._hook_metadata = HookMetadata(description="First hook")
-        second_hook._hook_metadata = HookMetadata(description="Second hook")
+        first_hook._hook_metadata = HookMetadata(description="First hook")  # type: ignore[attr-defined]
+        second_hook._hook_metadata = HookMetadata(description="Second hook")  # type: ignore[attr-defined]
 
         registry.register_method_hook("mymethod", first_hook)
         registry.register_method_hook("mymethod", second_hook)
@@ -420,7 +420,7 @@ class TestAutoSchemaGeneration:
             "type": "object",
             "properties": {"explicit_field": {"type": "number"}},
         }
-        my_method._hook_metadata = HookMetadata(input_schema=explicit_schema)
+        my_method._hook_metadata = HookMetadata(input_schema=explicit_schema)  # type: ignore[attr-defined]
 
         metadata = get_hook_metadata(my_method)
 
@@ -442,7 +442,7 @@ class TestAutoSchemaGeneration:
             return {"status": "ok"}
 
         # Set explicit metadata with only description, no schemas
-        my_action._hook_metadata = HookMetadata(description="My action")
+        my_action._hook_metadata = HookMetadata(description="My action")  # type: ignore[attr-defined]
 
         metadata = get_hook_metadata(my_action)
 

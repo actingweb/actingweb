@@ -445,9 +445,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 and myself.property_lists.exists(name)
             ):
                 if self.response:
-                    self.response.set_status(
-                        404, f"List property '{name}' not found"
-                    )
+                    self.response.set_status(404, f"List property '{name}' not found")
                 return
 
             # Check write permission
@@ -524,9 +522,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")
                 if self.response:
-                    self.response.set_status(
-                        400, f"Error setting list item: {str(e)}"
-                    )
+                    self.response.set_status(400, f"Error setting list item: {str(e)}")
                 return
 
         # Use unified access control system for permission checking

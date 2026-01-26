@@ -1,6 +1,7 @@
 """Integration tests for property/list name collision detection."""
 
 import pytest
+
 from actingweb.interface import ActorInterface
 
 

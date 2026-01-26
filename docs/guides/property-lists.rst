@@ -67,6 +67,25 @@ When to Use
 - Regular properties: small key–value data, under ~50KB
 - Property lists: growing collections, list ops, complex items, or large datasets
 
+Namespace Collision Detection
+------------------------------
+
+Property names and list property names share the same namespace. Attempting to create a property when a list with the same name exists, or vice versa, will raise a ``ValueError``:
+
+.. code-block:: python
+
+   # This will raise ValueError if a list named 'notes' already exists
+   actor.properties.notes = "some value"
+
+   # This will raise ValueError if a property named 'tags' already exists
+   tags = actor.property_lists.tags
+   tags.append("python")
+
+To resolve collisions:
+
+- Delete the existing property/list first, or
+- Use a different name for the new property/list
+
 Migration Example
 -----------------
 
@@ -80,10 +99,45 @@ Migration Example
    for n in ["Note 1", "Note 2"]:
        notes.append(n)
 
-REST API (Lists)
-----------------
+REST API
+--------
 
-Lists integrate with the standard properties endpoints. See the Properties handler docs for detailed request/response formats.
+List properties integrate with the standard ``/properties`` endpoints:
+
+**GET all items**::
+
+  GET /{actor_id}/properties/{list_name}
+  # Returns: [item1, item2, ...]
+
+**GET with metadata**::
+
+  GET /{actor_id}/properties?metadata=true
+  # Returns list metadata: {"_list": true, "count": N, "description": "...", ...}
+
+**POST new item** (append to end)::
+
+  POST /{actor_id}/properties/{list_name}/items
+  Content-Type: application/json
+  {"action": "add", "item_value": {...}}
+
+**PUT item at index**::
+
+  PUT /{actor_id}/properties/{list_name}?index=0
+  Content-Type: application/json
+  {...item data...}
+
+**DELETE entire list**::
+
+  DELETE /{actor_id}/properties/{list_name}
+
+**GET/PUT metadata**::
+
+  GET /{actor_id}/properties/{list_name}/metadata
+  PUT /{actor_id}/properties/{list_name}/metadata
+  Content-Type: application/json
+  {"description": "...", "explanation": "..."}
+
+See the ActingWeb specification and Properties handler documentation for complete API details.
 
 Web UI
 ------

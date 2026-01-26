@@ -76,6 +76,16 @@ class ListProperty:
         )
 
         if meta_str is None:
+            # No metadata exists - this is a new list
+            # Check for property collision - error if property exists
+            prop_db = get_property(self.config)
+            existing_prop = prop_db.get(actor_id=self.actor_id, name=self.name)
+            if existing_prop is not None:
+                raise ValueError(
+                    f"Cannot create list '{self.name}': a property with this name already exists. "
+                    f"Delete the property first or use a different name."
+                )
+
             # No metadata exists, create default
             # Don't save yet - let the caller save via set_description/set_explanation
             meta = self._create_default_metadata()

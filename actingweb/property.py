@@ -97,6 +97,18 @@ class PropertyStore:
             if k in self.__dict__:
                 self.__delattr__(k)
         else:
+            # Check for list collision - error if list exists
+            if self.__dict__.get("_config"):
+                list_store = PropertyListStore(
+                    actor_id=self.__dict__.get("_actor_id"),
+                    config=self.__dict__["_config"],
+                )
+                if list_store.exists(k):
+                    raise ValueError(
+                        f"Cannot create property '{k}': a list with this name already exists. "
+                        f"Delete the list first or use a different name."
+                    )
+
             self.__dict__[k] = v
         # Re-init property to avoid overwrite
         self.__dict__["_db"] = get_property(self.__dict__["_config"])

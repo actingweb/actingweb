@@ -854,7 +854,7 @@ If the actor supports list properties (see *listproperties* option tag), a GET
 request to /properties MAY include a query parameter ``metadata=true`` to return
 an enhanced response that includes metadata for list properties. When
 metadata=true, the response SHOULD include ``description``, ``explanation``, and
-``item_count`` fields for each list property, in addition to the items::
+``count`` fields for each list property, in addition to the items::
 
   GET /app/78hjh76yug/properties?metadata=true
 
@@ -864,7 +864,7 @@ metadata=true, the response SHOULD include ``description``, ``explanation``, and
       "notes": {
         "description": "Personal notes",
         "explanation": "Store notes and reminders",
-        "item_count": 1,
+        "count": 1,
         "items": [{"id": "1", "content": "Remember to call"}]
       }
     }
@@ -962,6 +962,16 @@ If the list property does not exist, a 404 Not Found MUST be returned. If the
 list property exists but is empty, a 200 OK with an empty array ``[]`` MUST be
 returned. Authorization requirements are the same as for regular properties.
 
+**List Property and Regular Property Namespace**
+
+Property names and list property names share the same namespace under
+``/properties``. An actor MUST NOT allow both a regular property and a list
+property to exist with the same name. Attempting to create a list property when
+a regular property with that name exists SHOULD result in a 409 Conflict error.
+Similarly, attempting to create a regular property when a list property with that
+name exists SHOULD also result in a 409 Conflict error. This ensures namespace
+exclusivity and prevents ambiguity in property access.
+
 **List Property POST**
 
 A POST request to a list property appends a new item to the end of the list.
@@ -1023,12 +1033,12 @@ GET ``/properties/{name}/metadata`` returns the metadata for a list property::
     "name": "notes",
     "description": "Personal notes and reminders",
     "explanation": "Use this to store important notes",
-    "item_count": 2
+    "count": 2
   }
 
 PUT ``/properties/{name}/metadata`` updates the metadata. Only the ``description``
 and ``explanation`` fields are writable; other fields such as ``name`` and
-``item_count`` are read-only::
+``count`` are read-only::
 
   PUT /app/78hjh76yug/properties/notes/metadata
   Content-Type: application/json

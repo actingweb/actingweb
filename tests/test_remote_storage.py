@@ -822,3 +822,126 @@ class TestRemotePeerStorePermissionData:
                 assert result["success"] is False
                 assert "error" in result
                 assert "Database error" in result["error"]
+
+
+class TestApplyResyncData:
+    """Test apply_resync_data with flag-based list format."""
+
+    @pytest.fixture
+    def mock_actor(self):
+        """Create a mock ActorInterface."""
+        actor = MagicMock()
+        actor.id = "actor123"
+        actor.config = MagicMock()
+        return actor
+
+    def test_apply_resync_data_flag_based_list(self, mock_actor):
+        """Test new flag-based list format {"_list": true, "items": [...]}."""
+        with patch("actingweb.attribute.Attributes"):
+            store = RemotePeerStore(
+                mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False
+            )
+
+            # Apply resync data with flag-based list
+            data = {
+                "scalar_prop": {"value": "test"},
+                "memory_travel": {
+                    "_list": True,
+                    "items": [
+                        {"id": "1", "location": "Paris"},
+                        {"id": "2", "location": "Tokyo"},
+                        {"id": "3", "location": "NYC"},
+                    ],
+                },
+            }
+
+            results = store.apply_resync_data(data)
+
+            # Verify results
+            assert results["scalar_prop"]["success"] is True
+            assert results["memory_travel"]["success"] is True
+            assert results["memory_travel"]["items"] == 3
+            assert results["memory_travel"]["operation"] == "resync"
+
+    def test_apply_resync_data_legacy_list_prefix(self, mock_actor):
+        """Test backward compatibility with legacy "list:" prefix format."""
+        with patch("actingweb.attribute.Attributes"):
+            store = RemotePeerStore(
+                mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False
+            )
+
+            # Apply resync data with legacy list: prefix
+            data = {
+                "scalar_prop": {"value": "test"},
+                "list:memory_travel": [
+                    {"id": "1", "location": "Paris"},
+                    {"id": "2", "location": "Tokyo"},
+                ],
+            }
+
+            results = store.apply_resync_data(data)
+
+            # Verify results (note: key is "memory_travel" without "list:" prefix)
+            assert results["scalar_prop"]["success"] is True
+            assert results["memory_travel"]["success"] is True
+            assert results["memory_travel"]["items"] == 2
+            assert results["memory_travel"]["operation"] == "resync"
+
+    def test_apply_resync_data_mixed_format(self, mock_actor):
+        """Test both flag-based and legacy formats work together."""
+        with patch("actingweb.attribute.Attributes"):
+            store = RemotePeerStore(
+                mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False
+            )
+
+            # Apply resync data with mixed formats
+            data = {
+                "scalar1": {"value": "test1"},
+                "new_list": {"_list": True, "items": [{"id": "1"}]},
+                "scalar2": {"value": "test2"},
+                "list:legacy_list": [{"id": "2"}, {"id": "3"}],
+            }
+
+            results = store.apply_resync_data(data)
+
+            # Verify all formats processed correctly
+            assert results["scalar1"]["success"] is True
+            assert results["new_list"]["success"] is True
+            assert results["new_list"]["items"] == 1
+            assert results["scalar2"]["success"] is True
+            assert results["legacy_list"]["success"] is True
+            assert results["legacy_list"]["items"] == 2
+
+    def test_apply_resync_data_empty_flag_based_list(self, mock_actor):
+        """Test empty list in flag-based format."""
+        with patch("actingweb.attribute.Attributes"):
+            store = RemotePeerStore(
+                mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False
+            )
+
+            # Apply resync data with empty list
+            data = {"empty_list": {"_list": True, "items": []}}
+
+            results = store.apply_resync_data(data)
+
+            # Verify empty list handled correctly
+            assert results["empty_list"]["success"] is True
+            assert results["empty_list"]["items"] == 0
+            assert results["empty_list"]["operation"] == "resync"
+
+    def test_apply_resync_data_flag_list_without_items(self, mock_actor):
+        """Test flag-based list without items field (skipped to avoid data loss)."""
+        with patch("actingweb.attribute.Attributes"):
+            store = RemotePeerStore(
+                mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", validate_peer_id=False
+            )
+
+            # Apply resync data with list flag but no items (transformation failure scenario)
+            data = {"list_without_items": {"_list": True, "count": 5}}
+
+            results = store.apply_resync_data(data)
+
+            # Should skip to avoid treating metadata as empty list (data loss)
+            assert results["list_without_items"]["success"] is False
+            assert results["list_without_items"]["operation"] == "skip"
+            assert results["list_without_items"]["reason"] == "metadata_without_items"

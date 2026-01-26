@@ -6,7 +6,7 @@ Unreleased
 ----------
 
 
-v3.10.0a5: Jan 25, 2026
+v3.10.0a5: Jan 26, 2026
 -----------------------
 
 BREAKING CHANGES
@@ -158,6 +158,16 @@ ADDED
 
 - **List Metadata Access**: Added ``get_metadata()`` method to both ``ListProperty`` and ``ListAttribute`` to expose internal metadata (created_at, updated_at, version, item_type, chunk_size, length). Previously, users needed to access private ``_load_metadata()`` method to get timestamps and other readonly metadata fields.
 
+- **Property/List Name Collision Detection**: Added automatic collision detection to enforce namespace exclusivity between properties and lists. Creating a property or list with a name that already exists as the other type raises a ``ValueError`` to prevent ambiguity and data loss.
+
+  - List creation error: Attempting to create a list when a property with the same name exists raises ``ValueError``
+  - Property creation error: Attempting to set a property when a list with the same name exists raises ``ValueError``
+  - Clear error messages: Exception messages indicate the conflict and suggest deleting the existing item or using a different name
+  - Clean namespace: Property names and list names are strictly mutually exclusive
+  - Internal ``list:`` prefix remains an implementation detail, never exposed in public APIs
+  - List operations: PUT requests with ``?index=N`` parameter correctly route to list item operations instead of triggering collision detection
+  - Comprehensive test coverage: 4 unit tests in ``tests/test_property_list.py``, 4 integration tests in ``tests/integration/test_property_list_collision.py``
+
 - **Comprehensive Integration Tests for Subscriptions**: Added extensive test coverage for subscription handling flows.
 
   - ``test_subscription_processing_flow.py``: Callback sequencing, gap detection, resync handling
@@ -220,7 +230,7 @@ CHANGED
 
 - **Debug logging cleanup**: Removed 7 commented-out debug statements in ``handlers/properties.py`` that were logging JSON data and paths.
 
-- **List properties in non-metadata responses**: The ``GET /properties`` endpoint now includes list properties even without ``?metadata=true``. List properties are represented with a minimal marker format ``{"_list": true, "count": N}`` to allow clients to detect them without requesting full metadata. With ``?metadata=true``, the full format ``{"is_list": true, "item_count": N, "description": "...", "explanation": "..."}`` is returned.
+- **List properties in non-metadata responses**: The ``GET /properties`` endpoint now includes list properties even without ``?metadata=true``. List properties are represented with a minimal marker format ``{"_list": true, "count": N}`` to allow clients to detect them without requesting full metadata. With ``?metadata=true``, the full format ``{"_list": true, "count": N, "description": "...", "explanation": "..."}`` is returned. The ``_list`` key is used consistently in both minimal and full metadata formats.
 
 FIXED
 ~~~~~
@@ -238,6 +248,14 @@ FIXED
 - Fixed ``DbTrustProtocol.modify()`` signature to include missing parameters: ``aw_supported``, ``aw_version``, ``capabilities_fetched_at``
 - Fixed ``DbAttributeBucketListProtocol`` to include ``fetch_timestamps()`` method
 - Fixed return type handling for ``PeerTrustee.get()`` to properly handle ``bool | dict | None`` returns
+
+- **Subscription Baseline Sync for List Properties**: Fixed a bug where subscription baseline sync (when no diffs are available) did not properly fetch and store list property items. The baseline fetch now correctly detects list metadata from the remote peer and fetches the actual list items via ActingWeb protocol, transforming them to the format expected by ``RemotePeerStore``.
+
+  - Added ``SubscriptionManager._transform_baseline_list_properties()`` method to fetch list items from remote peer
+  - Updated ``RemotePeerStore.apply_resync_data()`` to support flag-based list format (``{"_list": true, "items": [...]}``)
+  - Maintains backward compatibility with legacy ``"list:"`` prefix format
+  - Permission filtering happens automatically via remote peer's property hooks
+  - Graceful error handling: skips lists on fetch errors without crashing sync
 
 v3.9.2: Jan 16, 2026
 --------------------

@@ -228,7 +228,15 @@ class DbAttribute:
 
     def __init__(self):
         if not Attribute.exists():
-            Attribute.create_table(wait=True)
+            try:
+                Attribute.create_table(wait=True)
+            except Exception as e:
+                # Handle race condition where another process created the table
+                # between our exists() check and create_table() call
+                if "ResourceInUseException" in str(e):
+                    pass  # Table was created by another process, continue
+                else:
+                    raise
 
 
 class DbAttributeBucketList:
@@ -287,4 +295,12 @@ class DbAttributeBucketList:
 
     def __init__(self):
         if not Attribute.exists():
-            Attribute.create_table(wait=True)
+            try:
+                Attribute.create_table(wait=True)
+            except Exception as e:
+                # Handle race condition where another process created the table
+                # between our exists() check and create_table() call
+                if "ResourceInUseException" in str(e):
+                    pass  # Table was created by another process, continue
+                else:
+                    raise

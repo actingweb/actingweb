@@ -429,7 +429,15 @@ class DbTrust:
     def __init__(self):
         self.handle = None
         if not Trust.exists():
-            Trust.create_table(wait=True)
+            try:
+                Trust.create_table(wait=True)
+            except Exception as e:
+                # Handle race condition where another process created the table
+                # between our exists() check and create_table() call
+                if "ResourceInUseException" in str(e):
+                    pass  # Table was created by another process, continue
+                else:
+                    raise
 
 
 class DbTrustList:
@@ -523,4 +531,12 @@ class DbTrustList:
         self.actor_id = None
         self.trusts = []
         if not Trust.exists():
-            Trust.create_table(wait=True)
+            try:
+                Trust.create_table(wait=True)
+            except Exception as e:
+                # Handle race condition where another process created the table
+                # between our exists() check and create_table() call
+                if "ResourceInUseException" in str(e):
+                    pass  # Table was created by another process, continue
+                else:
+                    raise

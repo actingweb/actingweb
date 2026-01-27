@@ -79,7 +79,15 @@ class DbProperty:
         """
         self.handle: Property | None = None
         if not Property.exists():
-            Property.create_table(wait=True)
+            try:
+                Property.create_table(wait=True)
+            except Exception as e:
+                # Handle race condition where another process created the table
+                # between our exists() check and create_table() call
+                if "ResourceInUseException" in str(e):
+                    pass  # Table was created by another process, continue
+                else:
+                    raise
 
         # Store configuration for lookup table
         if use_lookup_table is not None:
@@ -325,7 +333,15 @@ class DbPropertyList:
         self.actor_id: str | None = None
         self.props: dict[str, str] | None = None
         if not Property.exists():
-            Property.create_table(wait=True)
+            try:
+                Property.create_table(wait=True)
+            except Exception as e:
+                # Handle race condition where another process created the table
+                # between our exists() check and create_table() call
+                if "ResourceInUseException" in str(e):
+                    pass  # Table was created by another process, continue
+                else:
+                    raise
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
         """Retrieves the properties of an actor_id from the database"""

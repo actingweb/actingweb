@@ -984,10 +984,114 @@ no additional configuration. Peers must have a valid trust relationship to query
 This pull-based query endpoint complements the push-based permission callback mechanism,
 forming a robust hybrid architecture for permission discovery and synchronization
 
-Logging
--------
+Logging and Request Correlation
+---------------------------------
 
-- ``logLevel``: ``DEBUG``, ``INFO``, or ``WARN``; defaults can be overridden with env var ``LOG_LEVEL``.
+ActingWeb provides comprehensive logging with automatic request correlation, making it easy to trace requests across distributed actor-to-actor communication.
+
+Quick Setup
+~~~~~~~~~~~
+
+.. code-block:: python
+
+    from actingweb.logging_config import (
+        configure_actingweb_logging,
+        enable_request_context_filter
+    )
+    import logging
+
+    # Configure base logging
+    configure_actingweb_logging(logging.INFO)
+
+    # Enable automatic context injection
+    enable_request_context_filter()
+
+This configuration automatically adds request context to every log statement::
+
+    2024-01-15 10:23:45,123 [a1b2c3d4:actor123:peer456] actingweb.handlers:INFO: Property updated
+
+Where:
+
+- ``a1b2c3d4``: Request ID (last 8 chars)
+- ``actor123``: Actor handling the request
+- ``peer456``: Peer making the request (or ``-`` if creator/trustee)
+
+Convenience Functions
+~~~~~~~~~~~~~~~~~~~~~
+
+Pre-configured logging setups:
+
+.. code-block:: python
+
+    from actingweb.logging_config import (
+        configure_production_logging,
+        configure_development_logging,
+        configure_testing_logging
+    )
+
+    # Production: WARNING level, minimal output
+    configure_production_logging()
+
+    # Development: DEBUG level, verbose output
+    configure_development_logging()
+
+    # Testing: WARNING level, suppress most output
+    configure_testing_logging()
+
+Per-Component Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Control logging levels for specific components:
+
+.. code-block:: python
+
+    configure_actingweb_logging(
+        level=logging.INFO,            # Default level
+        db_level=logging.WARNING,      # Database operations
+        auth_level=logging.INFO,       # Authentication
+        handlers_level=logging.INFO,   # Request handlers
+        proxy_level=logging.DEBUG      # Peer communication
+    )
+
+Request Correlation
+~~~~~~~~~~~~~~~~~~~
+
+ActingWeb automatically tracks requests through multiple layers:
+
+1. **Incoming Requests**: Extract or generate request ID from ``X-Request-ID`` header
+2. **Request Context**: Store request ID, actor ID, and peer ID
+3. **Logging**: Automatically inject context into every log statement
+4. **Outgoing Requests**: Propagate request IDs to peer actors with parent tracking
+
+This enables easy grepping and request chain tracing:
+
+.. code-block:: bash
+
+    # Find all logs for a specific request
+    grep "a1b2c3d4" application.log
+
+    # Find all logs for a specific actor
+    grep ":actor123:" application.log
+
+    # Find child requests
+    grep "parent_id=a1b2c3d4" application.log
+
+Environment Variables
+~~~~~~~~~~~~~~~~~~~~~
+
+Configure logging via environment:
+
+.. code-block:: bash
+
+    export ACTINGWEB_LOG_LEVEL=INFO
+    export ACTINGWEB_DB_LOG_LEVEL=WARNING
+
+Legacy Configuration
+~~~~~~~~~~~~~~~~~~~~
+
+- ``logLevel``: ``DEBUG``, ``INFO``, or ``WARN``; can be overridden with env var ``LOG_LEVEL``
+
+For detailed information including grepping patterns, request chain tracing, and framework integration, see :doc:`../guides/logging-and-correlation`.
 
 Environment Variables
 ---------------------

@@ -11,13 +11,16 @@ import concurrent.futures
 import inspect
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
+from ... import request_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, services
 from .base_integration import BaseActingWebIntegration
@@ -389,6 +392,78 @@ async def get_json_body(request: Request) -> dict[str, Any]:
         return {}
 
 
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware for automatic request context management in FastAPI.
+
+    This middleware automatically sets up and tears down request context for
+    each request, enabling logging correlation across async request handlers.
+
+    The middleware:
+    - Extracts or generates a request ID from X-Request-ID header
+    - Extracts actor_id from URL path if present
+    - Sets up context at the start of request processing
+    - Adds X-Request-ID to response headers
+    - Clears context in finally block to prevent leakage
+
+    Usage:
+        app.add_middleware(RequestContextMiddleware)
+    """
+
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        """
+        Process request and manage context lifecycle.
+
+        Args:
+            request: The incoming request
+            call_next: The next middleware/handler in the chain
+
+        Returns:
+            Response with X-Request-ID header added
+        """
+        # Get or generate request ID from header
+        req_id = request.headers.get("X-Request-ID")
+
+        # Extract actor_id from URL path if present
+        # Only matches patterns like: /<actor_id>/...  (must have path after actor)
+        actor_id = None
+        path = request.url.path
+        if path and len(path) > 1:
+            # Match actor_id only when followed by another path segment
+            match = re.match(r"^/([^/]+)/.+", path)
+            if match:
+                potential_actor = match.group(1)
+                # Skip known non-actor paths
+                if potential_actor not in [
+                    "oauth",
+                    "static",
+                    "health",
+                    "docs",
+                    "redoc",
+                    "openapi.json",
+                    "favicon.ico",
+                ]:
+                    actor_id = potential_actor
+
+        # Set context (generates request ID if not provided)
+        actual_req_id = request_context.set_request_context(
+            request_id=req_id, actor_id=actor_id, generate_id=True
+        )
+
+        try:
+            # Process request
+            response = await call_next(request)
+
+            # Add request ID to response headers for client correlation
+            if actual_req_id:
+                response.headers["X-Request-ID"] = actual_req_id
+
+            return response
+        finally:
+            # Always clear context to prevent leakage between requests
+            request_context.clear_request_context()
+
+
 class FastAPIIntegration(BaseActingWebIntegration):
     """
     FastAPI integration for ActingWeb applications.
@@ -413,6 +488,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=10, thread_name_prefix="aw-handler"
         )
+        # Add request context middleware for logging correlation
+        self.fastapi_app.add_middleware(RequestContextMiddleware)
 
     def _prefer_async_handlers(self) -> bool:
         """Override to indicate FastAPI should use async handlers.

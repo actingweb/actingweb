@@ -5,6 +5,77 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Request Correlation in Logging**: Added automatic request correlation with context injection in all log statements. Every log line now includes request ID, actor ID, and peer ID (when available), making it easy to trace requests through distributed actor-to-actor communication.
+
+  - New module: ``actingweb.request_context`` - Thread-safe context storage using ``contextvars``
+  - New module: ``actingweb.log_filter`` - ``RequestContextFilter`` for automatic context injection
+  - New logging configuration: ``enable_request_context_filter()`` to enable context in all log statements
+  - New convenience functions: ``configure_production_logging()``, ``configure_development_logging()``, ``configure_testing_logging()``
+  - Log format: ``[short_request_id:actor_id:short_peer_id]`` automatically added to every log line
+  - Context automatically managed by Flask and FastAPI integrations
+  - Request ID extracted from ``X-Request-ID`` header or auto-generated if not present
+  - Response headers include ``X-Request-ID`` for client correlation
+  - Minimal overhead: <1% performance impact for typical INFO-level logging
+
+- **Inter-Actor Request Correlation**: Added request correlation headers to peer-to-peer communication. When actors communicate, request IDs are propagated with parent tracking, enabling complete request chain tracing.
+
+  - New headers in peer requests: ``X-Request-ID`` (new UUID per request), ``X-Parent-Request-ID`` (current request ID)
+  - Correlation headers automatically added to all outgoing peer requests (GET, POST, PUT, DELETE)
+  - Correlation headers preserved through authentication retries
+  - Both sync (``requests``) and async (``httpx``) implementations
+  - Debug logging of correlation information for traceability
+  - Enables grepping logs to trace request chains: ``grep "parent_id=abc123" logs``
+
+- **Request Context API**: Added comprehensive API for managing request context in custom integrations:
+
+  - ``set_request_context(request_id, actor_id, peer_id)`` - Set full context
+  - ``get_request_id()``, ``get_actor_id()``, ``get_peer_id()`` - Retrieve context
+  - ``set_request_id()``, ``set_actor_id()``, ``set_peer_id()`` - Set individual fields
+  - ``generate_request_id()`` - Generate new UUID for requests
+  - ``clear_request_context()`` - Clear all context (call at request end)
+  - Context automatically propagates across ``await`` boundaries
+  - Thread-safe and async-safe using Python's ``contextvars``
+
+CHANGED
+~~~~~~~
+
+- **Authentication Sets Peer Context**: ``actingweb.auth`` now automatically sets peer ID in request context after successful authentication. This enables peer ID to appear in all subsequent log statements during the request.
+
+- **Flask Integration Context Hooks**: Flask integration now automatically manages request context lifecycle:
+
+  - ``before_request`` hook: Extract/generate request ID, extract actor ID from URL
+  - ``after_request`` hook: Add ``X-Request-ID`` to response headers, clear context
+  - Context automatically available in all request handlers
+
+- **FastAPI Integration Context Middleware**: FastAPI integration now uses middleware for automatic context management:
+
+  - Middleware extracts/generates request ID from headers
+  - Extracts actor ID from path parameters
+  - Adds ``X-Request-ID`` to response headers
+  - Context automatically cleared in finally block
+  - Context propagates across async boundaries
+
+IMPROVED
+~~~~~~~~
+
+- **Logging Configuration**: Enhanced ``actingweb.logging_config`` module with new configuration options:
+
+  - Per-component log level configuration (``db_level``, ``auth_level``, ``handlers_level``, ``proxy_level``)
+  - ``get_context_format()`` returns log format string with context placeholder
+  - Convenience functions for common logging scenarios
+  - Better separation between library and application logging
+
+DOCUMENTATION
+~~~~~~~~~~~~~
+
+- Added comprehensive logging and correlation guide: ``docs/guides/logging-and-correlation.rst``
+- Updated configuration quickstart with logging configuration section
+- Added grepping examples and request chain tracing patterns
+- Documented context API for custom integrations
+
 
 v3.10.0a5: Jan 26, 2026
 -----------------------

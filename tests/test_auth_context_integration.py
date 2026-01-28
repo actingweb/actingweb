@@ -143,7 +143,7 @@ class TestBasicAuthContext:
         handler = logging.StreamHandler()
         logger.addHandler(handler)
         add_context_filter_to_logger(logger)
-        formatter = logging.Formatter(get_context_format())
+        formatter = logging.Formatter(get_context_format(include_context=True))
         handler.setFormatter(formatter)
 
         # Authenticate
@@ -224,7 +224,7 @@ class TestTokenAuthContext:
         handler = logging.StreamHandler()
         logger.addHandler(handler)
         add_context_filter_to_logger(logger)
-        formatter = logging.Formatter(get_context_format())
+        formatter = logging.Formatter(get_context_format(include_context=True))
         handler.setFormatter(formatter)
 
         # Authenticate

@@ -17,11 +17,11 @@ class TestGetContextFormat:
     """Tests for get_context_format() function."""
 
     def test_default_format(self) -> None:
-        """Test default format includes all components."""
+        """Test default format includes all components except context."""
         format_str = get_context_format()
 
         assert "%(asctime)s" in format_str
-        assert "%(context)s" in format_str
+        assert "%(context)s" not in format_str  # Context is opt-in
         assert "%(name)s" in format_str
         assert "%(levelname)s" in format_str
         assert "%(message)s" in format_str
@@ -31,7 +31,17 @@ class TestGetContextFormat:
         format_str = get_context_format(include_timestamp=False)
 
         assert "%(asctime)s" not in format_str
+        assert "%(context)s" not in format_str  # Context is opt-in by default
+        assert "%(message)s" in format_str
+
+    def test_format_with_context(self) -> None:
+        """Test format with context enabled."""
+        format_str = get_context_format(include_context=True)
+
+        assert "%(asctime)s" in format_str
         assert "%(context)s" in format_str
+        assert "%(name)s" in format_str
+        assert "%(levelname)s" in format_str
         assert "%(message)s" in format_str
 
     def test_format_without_context(self) -> None:
@@ -247,7 +257,7 @@ class TestIntegrationWithActualLogging:
         enable_request_context_filter(logger=logger)
 
         # Update formatter to include context
-        formatter = logging.Formatter(get_context_format())
+        formatter = logging.Formatter(get_context_format(include_context=True))
         handler.setFormatter(formatter)
 
         # Set context and log
@@ -284,7 +294,7 @@ class TestIntegrationWithActualLogging:
         # Add filter after handler is attached
         enable_request_context_filter(logger=logger)
 
-        formatter = logging.Formatter(get_context_format())
+        formatter = logging.Formatter(get_context_format(include_context=True))
         handler.setFormatter(formatter)
 
         # Clear context and log

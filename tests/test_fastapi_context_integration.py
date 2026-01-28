@@ -290,7 +290,7 @@ class TestFastAPILoggingIntegration:
         add_context_filter_to_logger(test_logger)
 
         # Update formatter to include context
-        formatter = logging.Formatter(get_context_format())
+        formatter = logging.Formatter(get_context_format(include_context=True))
         handler.setFormatter(formatter)
 
         @fastapi_app.get("/test")

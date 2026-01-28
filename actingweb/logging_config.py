@@ -196,7 +196,7 @@ def configure_testing_logging(*, debug: bool = False) -> None:
 def get_context_format(
     *,
     include_timestamp: bool = True,
-    include_context: bool = True,
+    include_context: bool = False,
     include_logger: bool = True,
     include_level: bool = True,
 ) -> str:
@@ -207,9 +207,13 @@ def get_context_format(
     When include_context is True, the format includes a %(context)s placeholder
     that will be populated by RequestContextFilter.
 
+    IMPORTANT: If include_context=True, you MUST add RequestContextFilter to
+    your handlers using enable_request_context_filter() or add_context_filter_to_handler(),
+    otherwise formatting will fail with "Formatting field not found in record: 'context'".
+
     Args:
         include_timestamp: Include timestamp in format (default: True)
-        include_context: Include request context placeholder (default: True)
+        include_context: Include request context placeholder (default: False)
         include_logger: Include logger name (default: True)
         include_level: Include log level (default: True)
 
@@ -218,6 +222,8 @@ def get_context_format(
 
     Example:
         >>> get_context_format()
+        '%(asctime)s %(name)s:%(levelname)s: %(message)s'
+        >>> get_context_format(include_context=True)
         '%(asctime)s %(context)s %(name)s:%(levelname)s: %(message)s'
         >>> get_context_format(include_timestamp=False, include_context=False)
         '%(name)s:%(levelname)s: %(message)s'

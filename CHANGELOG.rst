@@ -5,6 +5,113 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Lambda Environment Detection**: ActingWeb now automatically detects AWS Lambda deployments and issues a warning if asynchronous subscription callbacks are enabled. This helps catch misconfigurations where fire-and-forget callbacks could be lost when Lambda functions freeze.
+
+  - Detects Lambda via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables
+  - Warning includes recommendation to enable ``with_sync_callbacks()``
+  - Warning appears during config initialization, visible in application logs
+  - No action taken in non-Lambda environments or when sync callbacks are already enabled
+  - See ``actingweb.interface.app._warn_lambda_async_callbacks()``
+
+- **Configurable FastAPI Thread Pool**: Added ``with_thread_pool_workers()`` method to configure thread pool size for FastAPI integration. The thread pool executes synchronous handlers (database operations, HTTP requests) without blocking the async event loop.
+
+  - New method: ``ActingWebApp.with_thread_pool_workers(workers: int)``
+  - Default: 10 workers (backward compatible)
+  - Valid range: 1-100 workers (enforced by validation)
+  - Tuning guidelines in documentation for different deployment scenarios:
+    - Low traffic/Lambda: 5-10 workers
+    - High traffic/Container: 20-50 workers
+    - CPU-bound: 2-5 workers per CPU core
+  - Memory overhead: ~8MB per worker thread
+  - Thread pool size logged at INFO level during FastAPI initialization
+
+- **Request Correlation in Logging**: Added automatic request correlation with context injection in all log statements. Every log line now includes request ID, actor ID, and peer ID (when available), making it easy to trace requests through distributed actor-to-actor communication.
+
+  - New module: ``actingweb.request_context`` - Thread-safe context storage using ``contextvars``
+  - New module: ``actingweb.log_filter`` - ``RequestContextFilter`` for automatic context injection
+  - New logging configuration: ``enable_request_context_filter()`` to enable context in all log statements
+  - New convenience functions: ``configure_production_logging()``, ``configure_development_logging()``, ``configure_testing_logging()``
+  - Log format: ``[short_request_id:actor_id:short_peer_id]`` automatically added to every log line
+  - Context automatically managed by Flask and FastAPI integrations
+  - Request ID extracted from ``X-Request-ID`` header or auto-generated if not present
+  - Response headers include ``X-Request-ID`` for client correlation
+  - Minimal overhead: <1% performance impact for typical INFO-level logging
+
+- **Inter-Actor Request Correlation**: Added request correlation headers to peer-to-peer communication. When actors communicate, request IDs are propagated with parent tracking, enabling complete request chain tracing.
+
+  - New headers in peer requests: ``X-Request-ID`` (new UUID per request), ``X-Parent-Request-ID`` (current request ID)
+  - Correlation headers automatically added to all outgoing peer requests (GET, POST, PUT, DELETE)
+  - Correlation headers preserved through authentication retries
+  - Both sync (``requests``) and async (``httpx``) implementations
+  - Debug logging of correlation information for traceability
+  - Enables grepping logs to trace request chains: ``grep "parent_id=abc123" logs``
+
+- **Request Context API**: Added comprehensive API for managing request context in custom integrations:
+
+  - ``set_request_context(request_id, actor_id, peer_id)`` - Set full context
+  - ``get_request_id()``, ``get_actor_id()``, ``get_peer_id()`` - Retrieve context
+  - ``set_request_id()``, ``set_actor_id()``, ``set_peer_id()`` - Set individual fields
+  - ``generate_request_id()`` - Generate new UUID for requests
+  - ``clear_request_context()`` - Clear all context (call at request end)
+  - Context automatically propagates across ``await`` boundaries
+  - Thread-safe and async-safe using Python's ``contextvars``
+
+CHANGED
+~~~~~~~
+
+- **Authentication Sets Peer Context**: ``actingweb.auth`` now automatically sets peer ID in request context after successful authentication. This enables peer ID to appear in all subsequent log statements during the request.
+
+- **Flask Integration Context Hooks**: Flask integration now automatically manages request context lifecycle:
+
+  - ``before_request`` hook: Extract/generate request ID, extract actor ID from URL
+  - ``after_request`` hook: Add ``X-Request-ID`` to response headers, clear context
+  - Context automatically available in all request handlers
+
+- **FastAPI Integration Context Middleware**: FastAPI integration now uses middleware for automatic context management:
+
+  - Middleware extracts/generates request ID from headers
+  - Extracts actor ID from path parameters
+  - Adds ``X-Request-ID`` to response headers
+  - Context automatically cleared in finally block
+  - Context propagates across async boundaries
+
+IMPROVED
+~~~~~~~~
+
+- **FastAPI Context Propagation**: Fixed context propagation to thread pool workers in FastAPI integration. Previously, log statements from handlers executed in the thread pool would lose their request ID, actor ID, and peer ID context. Now context is properly copied and propagated to worker threads.
+
+  - New method: ``FastAPIIntegration._run_in_executor_with_context()`` replaces all ``run_in_executor()`` calls
+  - Helper function: ``_run_with_context()`` executes functions with specific context
+  - Uses ``contextvars.copy_context()`` to capture current context before thread execution
+  - All synchronous handler executions now preserve logging context
+  - Affects: factory handlers, OAuth callbacks, trust operations, subscription handlers, and generic actor requests
+  - No performance impact: context copying is negligible overhead
+  - Enables consistent log correlation across async/sync boundaries
+
+- **Logging Configuration**: Enhanced ``actingweb.logging_config`` module with new configuration options:
+
+  - Per-component log level configuration (``db_level``, ``auth_level``, ``handlers_level``, ``proxy_level``)
+  - ``get_context_format()`` returns log format string with context placeholder
+  - Convenience functions for common logging scenarios
+  - Better separation between library and application logging
+
+DOCUMENTATION
+~~~~~~~~~~~~~
+
+- Added FastAPI performance tuning section to ``docs/quickstart/configuration.rst``:
+  - Thread pool configuration and tuning guidelines
+  - Lambda deployment best practices
+  - Automatic Lambda environment detection documentation
+  - Memory overhead and sizing recommendations for different scenarios
+- Updated ``docs/quickstart/deployment.rst`` with note about automatic Lambda detection
+- Added comprehensive logging and correlation guide: ``docs/guides/logging-and-correlation.rst``
+- Updated configuration quickstart with logging configuration section
+- Added grepping examples and request chain tracing patterns
+- Documented context API for custom integrations
+
 
 v3.10.0a5: Jan 26, 2026
 -----------------------

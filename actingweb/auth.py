@@ -5,7 +5,7 @@ from datetime import datetime
 
 from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 
-from actingweb import actor, trust
+from actingweb import actor, request_context, trust
 from actingweb import config as config_class
 from actingweb.constants import TRUSTEE_CREATOR
 
@@ -161,6 +161,7 @@ class Auth:
         self.acl["authenticated"] = True
         self.response["code"] = 200
         self.response["text"] = "Ok"
+        request_context.set_peer_id("")  # Creator has no peer_id
         return True
 
     def _record_trust_usage(self, trust_record, via_hint: str | None = None) -> None:
@@ -254,6 +255,7 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = self.actor.passphrase if self.actor else None
+                    request_context.set_peer_id("")
                     return True
             else:
                 logger.warning(
@@ -280,6 +282,7 @@ class Auth:
             self.token = new_trust["secret"]
             self.trust = new_trust
             self._record_trust_usage(new_trust, via_hint=via_hint or "trust")
+            request_context.set_peer_id(new_trust["peerid"])
             return True
         else:
             return False
@@ -331,6 +334,7 @@ class Auth:
                 self.response["code"] = 200
                 self.response["text"] = "Ok"
                 self.token = token
+                request_context.set_peer_id("")
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f"OAuth2 authentication successful for {email}")
                 return True
@@ -353,6 +357,7 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = token
+                    request_context.set_peer_id("")
                     logger.debug(
                         f"OAuth2 authentication successful for {email} (no specific actor)"
                     )
@@ -410,6 +415,7 @@ class Auth:
             self.response["code"] = 200
             self.response["text"] = "Ok"
             self.token = token
+            request_context.set_peer_id("")
             logger.debug(f"SPA token authentication successful for actor {actor_id}")
             return True
 
@@ -573,6 +579,7 @@ class Auth:
                     self.response["code"] = 200
                     self.response["text"] = "Ok"
                     self.token = self.actor.passphrase if self.actor else None
+                    request_context.set_peer_id("")
                     return True
             else:
                 logger.warning(
@@ -599,6 +606,7 @@ class Auth:
             self.token = new_trust["secret"]
             self.trust = new_trust
             self._record_trust_usage(new_trust, via_hint=via_hint or "trust")
+            request_context.set_peer_id(new_trust["peerid"])
             return True
         else:
             return False

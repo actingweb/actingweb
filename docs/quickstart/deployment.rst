@@ -52,6 +52,9 @@ In Lambda/serverless environments, async fire-and-forget callbacks may be lost w
 
 This makes callbacks use blocking HTTP requests instead of async tasks, guaranteeing delivery at the cost of slightly longer response times.
 
+.. note::
+   ActingWeb automatically detects Lambda environments (via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables) and logs a warning if sync callbacks are not enabled. This helps catch misconfigurations during development and deployment.
+
 Serverless config example:
 
 .. code-block:: yaml

@@ -5,11 +5,13 @@ Automatically generates Flask routes and handles request/response transformation
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from flask import Flask, Response, redirect, render_template, request
 from werkzeug.wrappers import Response as WerkzeugResponse
 
+from ... import request_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, mcp, services
 from .base_integration import BaseActingWebIntegration
@@ -31,6 +33,60 @@ class FlaskIntegration(BaseActingWebIntegration):
     def __init__(self, aw_app: "ActingWebApp", flask_app: Flask):
         super().__init__(aw_app)
         self.flask_app = flask_app
+        self._setup_context_hooks()
+
+    def _setup_context_hooks(self) -> None:
+        """
+        Setup request context management hooks.
+
+        This configures Flask's before_request and after_request hooks to
+        automatically manage request context (request ID, actor ID) for logging
+        correlation.
+        """
+
+        @self.flask_app.before_request
+        def _before_request() -> None:  # pyright: ignore[reportUnusedFunction]
+            """Set up request context at the start of each request."""
+            # Get or generate request ID from header
+            req_id = request.headers.get("X-Request-ID")
+
+            # Extract actor_id from URL path if present
+            # Only matches patterns like: /<actor_id>/...  (must have path after actor)
+            actor_id = None
+            path = request.path
+            if path and len(path) > 1:
+                # Match actor_id only when followed by another path segment
+                match = re.match(r"^/([^/]+)/.+", path)
+                if match:
+                    potential_actor = match.group(1)
+                    # Skip known non-actor paths
+                    if potential_actor not in [
+                        "oauth",
+                        "static",
+                        "health",
+                        "favicon.ico",
+                    ]:
+                        actor_id = potential_actor
+
+            # Set context (generates request ID if not provided)
+            request_context.set_request_context(
+                request_id=req_id, actor_id=actor_id, generate_id=True
+            )
+
+        @self.flask_app.after_request
+        def _after_request(
+            response: Response | WerkzeugResponse,
+        ) -> Response | WerkzeugResponse:  # pyright: ignore[reportUnusedFunction]
+            """Add request ID to response headers and clear context."""
+            # Add request ID to response headers for client correlation
+            req_id = request_context.get_request_id()
+            if req_id:
+                response.headers["X-Request-ID"] = req_id
+
+            # Clear context to prevent leakage between requests
+            request_context.clear_request_context()
+
+            return response
 
     def setup_routes(self) -> None:
         """Setup all ActingWeb routes in Flask."""

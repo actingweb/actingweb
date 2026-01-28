@@ -984,10 +984,197 @@ no additional configuration. Peers must have a valid trust relationship to query
 This pull-based query endpoint complements the push-based permission callback mechanism,
 forming a robust hybrid architecture for permission discovery and synchronization
 
-Logging
--------
+FastAPI Performance Tuning
+--------------------------
 
-- ``logLevel``: ``DEBUG``, ``INFO``, or ``WARN``; defaults can be overridden with env var ``LOG_LEVEL``.
+When using FastAPI integration, you can configure the thread pool size to optimize performance for your deployment scenario.
+
+Thread Pool Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ActingWeb uses a thread pool to execute synchronous handlers (database operations, HTTP requests) without blocking the async event loop:
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_thread_pool_workers(20)
+
+**Tuning Guidelines:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 15 55
+
+   * - Deployment Scenario
+     - Workers
+     - Rationale
+   * - Default
+     - 10
+     - Suitable for most applications
+   * - Low traffic / Lambda
+     - 5-10
+     - Reduces memory overhead, matches Lambda concurrency
+   * - High traffic / Container
+     - 20-50
+     - Handles more concurrent requests
+   * - Container (CPU-bound)
+     - 2-5 per CPU core
+     - Balances CPU utilization
+   * - Development
+     - 5
+     - Minimal resource usage
+
+**Memory Overhead:** Approximately 8MB per worker thread on average.
+
+**Valid Range:** 1-100 workers (enforced by validation).
+
+Lambda Deployment
+~~~~~~~~~~~~~~~~~
+
+When deploying to AWS Lambda or other serverless platforms, ActingWeb automatically detects the environment and issues a warning if asynchronous subscription callbacks are enabled (the default). This is because fire-and-forget callbacks may be lost when the Lambda function freezes after returning a response.
+
+**Recommended Lambda Configuration:**
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_sync_callbacks(enable=True)  # Required for Lambda
+     .with_thread_pool_workers(5)       # Optional: reduce memory usage
+
+**Detection:** The library automatically detects Lambda via these environment variables:
+
+- ``AWS_LAMBDA_FUNCTION_NAME``
+- ``AWS_EXECUTION_ENV`` (starts with ``AWS_Lambda_``)
+
+**Warning Message:** If running in Lambda without sync callbacks, you'll see::
+
+    WARNING: Running in AWS Lambda with async subscription callbacks enabled.
+    Fire-and-forget callbacks may be lost when Lambda function freezes.
+    Consider enabling sync callbacks with .with_sync_callbacks()
+
+**Why Sync Callbacks for Lambda:**
+
+- Lambda freezes execution after the response is sent
+- Asynchronous (fire-and-forget) callbacks may not complete before freeze
+- Synchronous callbacks block until HTTP request completes
+- Guarantees callback delivery before function freeze
+
+Logging and Request Correlation
+---------------------------------
+
+ActingWeb provides comprehensive logging with automatic request correlation, making it easy to trace requests across distributed actor-to-actor communication.
+
+Quick Setup
+~~~~~~~~~~~
+
+.. code-block:: python
+
+    from actingweb.logging_config import (
+        configure_actingweb_logging,
+        enable_request_context_filter
+    )
+    import logging
+
+    # Configure base logging
+    configure_actingweb_logging(logging.INFO)
+
+    # Enable automatic context injection
+    enable_request_context_filter()
+
+This configuration automatically adds request context to every log statement::
+
+    2024-01-15 10:23:45,123 [a1b2c3d4:actor123:peer456] actingweb.handlers:INFO: Property updated
+
+Where:
+
+- ``a1b2c3d4``: Request ID (last 8 chars)
+- ``actor123``: Actor handling the request
+- ``peer456``: Peer making the request (or ``-`` if creator/trustee)
+
+Convenience Functions
+~~~~~~~~~~~~~~~~~~~~~
+
+Pre-configured logging setups:
+
+.. code-block:: python
+
+    from actingweb.logging_config import (
+        configure_production_logging,
+        configure_development_logging,
+        configure_testing_logging
+    )
+
+    # Production: WARNING level, minimal output
+    configure_production_logging()
+
+    # Development: DEBUG level, verbose output
+    configure_development_logging()
+
+    # Testing: WARNING level, suppress most output
+    configure_testing_logging()
+
+Per-Component Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Control logging levels for specific components:
+
+.. code-block:: python
+
+    configure_actingweb_logging(
+        level=logging.INFO,            # Default level
+        db_level=logging.WARNING,      # Database operations
+        auth_level=logging.INFO,       # Authentication
+        handlers_level=logging.INFO,   # Request handlers
+        proxy_level=logging.DEBUG      # Peer communication
+    )
+
+Request Correlation
+~~~~~~~~~~~~~~~~~~~
+
+ActingWeb automatically tracks requests through multiple layers:
+
+1. **Incoming Requests**: Extract or generate request ID from ``X-Request-ID`` header
+2. **Request Context**: Store request ID, actor ID, and peer ID
+3. **Logging**: Automatically inject context into every log statement
+4. **Outgoing Requests**: Propagate request IDs to peer actors with parent tracking
+
+This enables easy grepping and request chain tracing:
+
+.. code-block:: bash
+
+    # Find all logs for a specific request
+    grep "a1b2c3d4" application.log
+
+    # Find all logs for a specific actor
+    grep ":actor123:" application.log
+
+    # Find child requests
+    grep "parent_id=a1b2c3d4" application.log
+
+Environment Variables
+~~~~~~~~~~~~~~~~~~~~~
+
+Configure logging via environment:
+
+.. code-block:: bash
+
+    export ACTINGWEB_LOG_LEVEL=INFO
+    export ACTINGWEB_DB_LOG_LEVEL=WARNING
+
+Legacy Configuration
+~~~~~~~~~~~~~~~~~~~~
+
+- ``logLevel``: ``DEBUG``, ``INFO``, or ``WARN``; can be overridden with env var ``LOG_LEVEL``
+
+For detailed information including grepping patterns, request chain tracing, and framework integration, see :doc:`../guides/logging-and-correlation`.
 
 Environment Variables
 ---------------------

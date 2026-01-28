@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import requests
 
-from actingweb import trust
+from actingweb import request_context, trust
 
 logger = logging.getLogger(__name__)
 
@@ -89,18 +89,50 @@ class AwProxy:
                 if not self.trust or len(self.trust) == 0:
                     self.trust = None
 
+    def _add_correlation_headers(self, headers: dict[str, str]) -> dict[str, str]:
+        """Add request correlation headers for tracing peer-to-peer requests.
+
+        Generates a new request ID for the outgoing request and includes the
+        current request ID as the parent for request chain tracking.
+
+        Args:
+            headers: Existing headers dictionary to add correlation headers to
+
+        Returns:
+            Updated headers dictionary with correlation headers
+        """
+        # Generate new request ID for the outgoing peer request
+        new_request_id = request_context.generate_request_id()
+        headers["X-Request-ID"] = new_request_id
+
+        # Add parent request ID if we're in a request context
+        parent_request_id = request_context.get_request_id()
+        if parent_request_id:
+            headers["X-Parent-Request-ID"] = parent_request_id
+            # Log correlation for traceability
+            logger.debug(
+                f"Peer request correlation: new_id={new_request_id[:8]}... "
+                f"parent_id={parent_request_id[:8]}..."
+            )
+        else:
+            logger.debug(f"Peer request: new_id={new_request_id[:8]}... (no parent)")
+
+        return headers
+
     def _bearer_headers(self):
-        return (
+        headers = (
             {"Authorization": "Bearer " + self.trust["secret"]}
             if self.trust and self.trust.get("secret")
             else {}
         )
+        return self._add_correlation_headers(headers)
 
     def _basic_headers(self):
         if not self.peer_passphrase:
-            return {}
+            return self._add_correlation_headers({})
         u_p = ("trustee:" + self.peer_passphrase).encode("utf-8")
-        return {"Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8")}
+        headers = {"Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8")}
+        return self._add_correlation_headers(headers)
 
     def _maybe_retry_with_basic(self, method, url, data=None, headers=None):
         # Only retry if we have a peer passphrase available
@@ -108,6 +140,12 @@ class AwProxy:
             return None
         try:
             bh = self._basic_headers()
+            # If original headers had correlation headers, preserve them in retry
+            if headers:
+                if "X-Request-ID" in headers:
+                    bh["X-Request-ID"] = headers["X-Request-ID"]
+                if "X-Parent-Request-ID" in headers:
+                    bh["X-Parent-Request-ID"] = headers["X-Parent-Request-ID"]
             if data is None:
                 if method == "GET":
                     return requests.get(url=url, headers=bh, timeout=self.timeout)
@@ -148,7 +186,7 @@ class AwProxy:
             response = requests.get(url=url, headers=headers, timeout=self.timeout)
             # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
             if response.status_code in (302, 401, 403):
-                retry = self._maybe_retry_with_basic("GET", url)
+                retry = self._maybe_retry_with_basic("GET", url, headers=headers)
                 if retry is not None:
                     response = retry
             self.last_response_code = response.status_code
@@ -192,7 +230,7 @@ class AwProxy:
                 url=url, data=data, headers=headers, timeout=self.timeout
             )
             if response.status_code in (302, 401, 403):
-                retry = self._maybe_retry_with_basic("POST", url, data=data)
+                retry = self._maybe_retry_with_basic("POST", url, data=data, headers=headers)
                 if retry is not None:
                     response = retry
             self.last_response_code = response.status_code
@@ -230,10 +268,9 @@ class AwProxy:
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
         data = json.dumps(params)
-        headers = {
-            "Authorization": "Bearer " + self.trust["secret"],
-            "Content-Type": "application/json",
-        }
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
+        headers["Content-Type"] = "application/json"
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.debug(
             "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
@@ -243,7 +280,7 @@ class AwProxy:
                 url=url, data=data, headers=headers, timeout=self.timeout
             )
             if response.status_code in (302, 401, 403):
-                retry = self._maybe_retry_with_basic("PUT", url, data=data)
+                retry = self._maybe_retry_with_basic("PUT", url, data=data, headers=headers)
                 if retry is not None:
                     response = retry
             self.last_response_code = response.status_code
@@ -274,13 +311,14 @@ class AwProxy:
             return None
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
-        headers = {"Authorization": "Bearer " + self.trust["secret"]}
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.info(f"Deleting peer resource at {url}")
         try:
             response = requests.delete(url=url, headers=headers, timeout=self.timeout)
             if response.status_code in (302, 401, 403):
-                retry = self._maybe_retry_with_basic("DELETE", url)
+                retry = self._maybe_retry_with_basic("DELETE", url, headers=headers)
                 if retry is not None:
                     response = retry
             self.last_response_code = response.status_code
@@ -299,13 +337,19 @@ class AwProxy:
     # These are useful in async frameworks like FastAPI to avoid blocking the event loop
 
     async def _maybe_retry_with_basic_async(
-        self, method: str, url: str, data: str | None = None
+        self, method: str, url: str, data: str | None = None, headers: dict[str, str] | None = None
     ) -> httpx.Response | None:
         """Async retry with Basic auth if Bearer fails."""
         if not self.peer_passphrase:
             return None
         try:
             bh = self._basic_headers()
+            # If original headers had correlation headers, preserve them in retry
+            if headers:
+                if "X-Request-ID" in headers:
+                    bh["X-Request-ID"] = headers["X-Request-ID"]
+                if "X-Parent-Request-ID" in headers:
+                    bh["X-Parent-Request-ID"] = headers["X-Parent-Request-ID"]
             async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 if data is None:
                     if method == "GET":
@@ -313,11 +357,11 @@ class AwProxy:
                     if method == "DELETE":
                         return await client.delete(url, headers=bh)
                 else:
-                    headers = {**bh, "Content-Type": "application/json"}
+                    final_headers = {**bh, "Content-Type": "application/json"}
                     if method == "POST":
-                        return await client.post(url, content=data, headers=headers)
+                        return await client.post(url, content=data, headers=final_headers)
                     if method == "PUT":
-                        return await client.put(url, content=data, headers=headers)
+                        return await client.put(url, content=data, headers=final_headers)
         except Exception:
             return None
         return None
@@ -353,7 +397,7 @@ class AwProxy:
                 response = await client.get(url, headers=headers)
                 # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
                 if response.status_code in (302, 401, 403):
-                    retry = await self._maybe_retry_with_basic_async("GET", url)
+                    retry = await self._maybe_retry_with_basic_async("GET", url, headers=headers)
                     if retry is not None:
                         response = retry
                 self.last_response_code = response.status_code
@@ -439,7 +483,7 @@ class AwProxy:
                 response = await client.post(url, content=data, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async(
-                        "POST", url, data=data
+                        "POST", url, data=data, headers=headers
                     )
                     if retry is not None:
                         response = retry
@@ -520,10 +564,9 @@ class AwProxy:
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
         data = json.dumps(params)
-        headers = {
-            "Authorization": "Bearer " + self.trust["secret"],
-            "Content-Type": "application/json",
-        }
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
+        headers["Content-Type"] = "application/json"
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.debug(
             "Changing trust peer resource async at ("
@@ -537,7 +580,7 @@ class AwProxy:
                 response = await client.put(url, content=data, headers=headers)
                 if response.status_code in (302, 401, 403):
                     retry = await self._maybe_retry_with_basic_async(
-                        "PUT", url, data=data
+                        "PUT", url, data=data, headers=headers
                     )
                     if retry is not None:
                         response = retry
@@ -610,14 +653,15 @@ class AwProxy:
             return None
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
-        headers = {"Authorization": "Bearer " + self.trust["secret"]}
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.info(f"Deleting peer resource async at {url}")
         try:
             async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.delete(url, headers=headers)
                 if response.status_code in (302, 401, 403):
-                    retry = await self._maybe_retry_with_basic_async("DELETE", url)
+                    retry = await self._maybe_retry_with_basic_async("DELETE", url, headers=headers)
                     if retry is not None:
                         response = retry
                 self.last_response_code = response.status_code

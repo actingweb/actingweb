@@ -316,25 +316,48 @@ thoughts/shared/
 
 Check these before starting significant work to find existing patterns and context.
 
-## Logging
+## Logging and Request Correlation
 
-ActingWeb uses hierarchical logging with named loggers (`__name__`).
+ActingWeb uses hierarchical logging with named loggers (`__name__`) and automatic request correlation.
 
-**Quick setup**:
+**Quick setup with correlation**:
 ```python
-from actingweb.logging_config import configure_actingweb_logging
+from actingweb.logging_config import (
+    configure_actingweb_logging,
+    enable_request_context_filter
+)
 import logging
 
+# Configure base logging
 configure_actingweb_logging(logging.DEBUG)  # Development
 configure_actingweb_logging(logging.WARNING, db_level=logging.ERROR)  # Production
+
+# Enable automatic context injection (recommended)
+enable_request_context_filter()
 ```
 
+**Log format with context**:
+```
+2024-01-15 10:23:45,123 [a1b2c3d4:actor123:peer456] actingweb.handlers:INFO: Property updated
+```
+- `a1b2c3d4`: Request ID (last 8 chars)
+- `actor123`: Actor handling request
+- `peer456`: Peer making request (or `-` if creator/trustee)
+
 **Convenience functions**: `configure_production_logging()`, `configure_development_logging()`, `configure_testing_logging()`
+
+**Request correlation features**:
+- Request IDs automatically extracted from `X-Request-ID` header or generated
+- Context automatically managed by Flask and FastAPI integrations
+- Peer requests include correlation headers for request chain tracing
+- Easy grepping: `grep "a1b2c3d4" logs` or `grep ":actor123:" logs`
 
 **Performance-critical loggers** (use WARNING+ in production):
 - `actingweb.db.dynamodb`, `actingweb.auth`, `actingweb.handlers.properties`, `actingweb.aw_proxy`
 
-**See also**: `actingweb/logging_config.py` module docstrings for detailed configuration options.
+**See also**:
+- `actingweb/logging_config.py` module docstrings for detailed configuration
+- `docs/guides/logging-and-correlation.rst` for comprehensive guide with grepping patterns
 
 ## Security Notes
 

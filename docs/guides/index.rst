@@ -28,6 +28,7 @@ Contents
    service-integration
    database-maintenance
    postgresql-migration
+   logging-and-correlation
    troubleshooting
 
 Authentication & Authorization
@@ -65,6 +66,7 @@ Operations
 
 - **Database Maintenance** - TTL configuration and cleanup for both DynamoDB and PostgreSQL
 - **PostgreSQL Migration** - Complete guide for migrating from DynamoDB to PostgreSQL
+- **Logging and Request Correlation** - Request tracing and context-aware logging for debugging
 
 Troubleshooting
 ===============

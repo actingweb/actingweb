@@ -109,6 +109,10 @@ FIXED
 
 - **List property format parameter**: Added ``format`` query parameter to list property GET requests. Use ``GET /properties/list_name?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items, matching the format returned by ``GET /properties?metadata=true``.
 
+- Fix wrong path and sub-path creation for hook execution in the property handler.
+
+- Add storing of sync metadata on initial sync of a trust sync and storage for a remote peer.
+
 DOCUMENTATION
 ~~~~~~~~~~~~~
 
@@ -122,7 +126,6 @@ DOCUMENTATION
 - Updated configuration quickstart with logging configuration section
 - Added grepping examples and request chain tracing patterns
 - Documented context API for custom integrations
-
 
 v3.10.0a5: Jan 26, 2026
 -----------------------

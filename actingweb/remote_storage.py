@@ -7,6 +7,7 @@ using internal attributes (not exposed via HTTP).
 
 import logging
 import re
+from datetime import UTC
 from re import Pattern
 from typing import TYPE_CHECKING, Any
 
@@ -317,6 +318,8 @@ class RemotePeerStore:
         Returns:
             Dict of {property_name: operation_result}
         """
+        from datetime import datetime
+
         results: dict[str, Any] = {}
 
         # Delete existing data first
@@ -331,7 +334,16 @@ class RemotePeerStore:
                     # metadata-only dicts as empty lists (which causes data loss)
                     if "items" in value:
                         items = value.get("items", [])
-                        self.set_list(key, items)
+
+                        # Create sync metadata
+                        metadata = {
+                            "source_actor": self._peer_id,
+                            "source_property": key,
+                            "synced_at": datetime.now(UTC).isoformat(),
+                            "item_count": len(items),
+                        }
+
+                        self.set_list(key, items, metadata=metadata)
                         results[key] = {
                             "operation": "resync",
                             "items": len(items),
@@ -352,7 +364,16 @@ class RemotePeerStore:
                 elif key.startswith("list:") and isinstance(value, list):
                     # Full list replacement
                     list_name = key[5:]
-                    self.set_list(list_name, value)
+
+                    # Create sync metadata
+                    metadata = {
+                        "source_actor": self._peer_id,
+                        "source_property": list_name,
+                        "synced_at": datetime.now(UTC).isoformat(),
+                        "item_count": len(value),
+                    }
+
+                    self.set_list(list_name, value, metadata=metadata)
                     results[list_name] = {
                         "operation": "resync",
                         "items": len(value),

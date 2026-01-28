@@ -190,7 +190,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                         if self.hooks:
                             actor_interface = self._get_actor_interface(myself)
                             if actor_interface:
-                                hook_path = [name, str(index)]
+                                hook_path = [str(index)]
                                 auth_context = self._create_auth_context(check, "read")
                                 transformed = self.hooks.execute_property_hooks(
                                     name,
@@ -237,7 +237,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                             actor_interface = self._get_actor_interface(myself)
                             logger.info(f"Got actor_interface: {actor_interface is not None}")
                             if actor_interface:
-                                hook_path = [name]
+                                hook_path = []
                                 auth_context = self._create_auth_context(check, "read")
                                 logger.info(f"Executing property hooks for '{name}', items count={len(all_items)}")
                                 transformed = self.hooks.execute_property_hooks(
@@ -290,7 +290,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     actor_interface = self._get_actor_interface(myself)
                     if actor_interface:
                         # Use the original name for the hook, not the modified path
-                        hook_path = name.split("/") if name else []
+                        hook_path = path[1:] if len(path) > 1 else []
                         auth_context = self._create_auth_context(check, "read")
                         transformed = self.hooks.execute_property_hooks(
                             name or "*",

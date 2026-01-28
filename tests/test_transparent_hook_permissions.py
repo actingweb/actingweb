@@ -221,6 +221,142 @@ class TestTransparentHookPermissions(unittest.TestCase):
         self.assertEqual(result, "result")
         test_hook.assert_called_once()
 
+    @patch("actingweb.interface.hooks.get_permission_evaluator")
+    def test_property_hook_permission_list_property_full_access(
+        self, mock_get_evaluator
+    ):
+        """Verify property_path for full list access doesn't duplicate property name."""
+        mock_evaluator = Mock()
+        mock_evaluator.evaluate_property_access = Mock(
+            return_value=PermissionResult.ALLOWED
+        )
+        mock_get_evaluator.return_value = mock_evaluator
+
+        test_hook = Mock(return_value="transformed_value")
+        test_hook._operations = ["get"]
+        self.hook_registry.register_property_hook("memory_travel", test_hook)
+
+        actor = Mock()
+        actor.id = self.actor_id
+        auth_context = {
+            "peer_id": self.peer_id,
+            "config": self.config,
+            "operation": "get",
+        }
+
+        # Call with empty path for full list access
+        result = self.hook_registry.execute_property_hooks(
+            "memory_travel", "get", actor, ["item1", "item2"], [], auth_context
+        )
+
+        # Verify property_path is "memory_travel", not "memory_travel/memory_travel"
+        mock_evaluator.evaluate_property_access.assert_called_once_with(
+            self.actor_id, self.peer_id, "memory_travel", "read"
+        )
+        self.assertEqual(result, "transformed_value")
+
+    @patch("actingweb.interface.hooks.get_permission_evaluator")
+    def test_property_hook_permission_list_property_item_access(
+        self, mock_get_evaluator
+    ):
+        """Verify property_path for list item access is property_name/index."""
+        mock_evaluator = Mock()
+        mock_evaluator.evaluate_property_access = Mock(
+            return_value=PermissionResult.ALLOWED
+        )
+        mock_get_evaluator.return_value = mock_evaluator
+
+        test_hook = Mock(return_value="transformed_item")
+        test_hook._operations = ["get"]
+        self.hook_registry.register_property_hook("memory_travel", test_hook)
+
+        actor = Mock()
+        actor.id = self.actor_id
+        auth_context = {
+            "peer_id": self.peer_id,
+            "config": self.config,
+            "operation": "get",
+        }
+
+        # Call with [index] path for item access
+        result = self.hook_registry.execute_property_hooks(
+            "memory_travel", "get", actor, {"id": 1}, ["0"], auth_context
+        )
+
+        # Verify property_path is "memory_travel/0", not "memory_travel/memory_travel/0"
+        mock_evaluator.evaluate_property_access.assert_called_once_with(
+            self.actor_id, self.peer_id, "memory_travel/0", "read"
+        )
+        self.assertEqual(result, "transformed_item")
+
+    @patch("actingweb.interface.hooks.get_permission_evaluator")
+    def test_property_hook_permission_nested_property_access(self, mock_get_evaluator):
+        """Verify property_path for nested property is property_name/subpath."""
+        mock_evaluator = Mock()
+        mock_evaluator.evaluate_property_access = Mock(
+            return_value=PermissionResult.ALLOWED
+        )
+        mock_get_evaluator.return_value = mock_evaluator
+
+        test_hook = Mock(return_value="transformed_nested")
+        test_hook._operations = ["get"]
+        self.hook_registry.register_property_hook("notes", test_hook)
+
+        actor = Mock()
+        actor.id = self.actor_id
+        auth_context = {
+            "peer_id": self.peer_id,
+            "config": self.config,
+            "operation": "get",
+        }
+
+        # Call with ["work"] path for nested access to notes/work
+        result = self.hook_registry.execute_property_hooks(
+            "notes", "get", actor, {"content": "work notes"}, ["work"], auth_context
+        )
+
+        # Verify property_path is "notes/work", not "notes/notes/work"
+        mock_evaluator.evaluate_property_access.assert_called_once_with(
+            self.actor_id, self.peer_id, "notes/work", "read"
+        )
+        self.assertEqual(result, "transformed_nested")
+
+    @patch("actingweb.interface.hooks.get_permission_evaluator")
+    def test_property_hook_permission_pattern_matching_list_property(
+        self, mock_get_evaluator
+    ):
+        """Verify list property pattern matches correctly without duplication."""
+        mock_evaluator = Mock()
+        mock_evaluator.evaluate_property_access = Mock(
+            return_value=PermissionResult.DENIED
+        )
+        mock_get_evaluator.return_value = mock_evaluator
+
+        test_hook = Mock(return_value="should_not_be_called")
+        test_hook._operations = ["get"]
+        self.hook_registry.register_property_hook("memory_travel", test_hook)
+
+        actor = Mock()
+        actor.id = self.actor_id
+        auth_context = {
+            "peer_id": self.peer_id,
+            "config": self.config,
+            "operation": "get",
+        }
+
+        # Call with empty path - should be denied
+        result = self.hook_registry.execute_property_hooks(
+            "memory_travel", "get", actor, ["item1"], [], auth_context
+        )
+
+        # Verify it checked "memory_travel" and hook was NOT called due to denial
+        mock_evaluator.evaluate_property_access.assert_called_once_with(
+            self.actor_id, self.peer_id, "memory_travel", "read"
+        )
+        test_hook.assert_not_called()
+        # For get operation, should return original value when denied
+        self.assertEqual(result, ["item1"])
+
 
 if __name__ == "__main__":
     unittest.main()

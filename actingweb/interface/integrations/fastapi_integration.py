@@ -8,11 +8,12 @@ with async support.
 import asyncio
 import base64
 import concurrent.futures
+import contextvars
 import inspect
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -464,6 +465,25 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             request_context.clear_request_context()
 
 
+def _run_with_context(ctx: contextvars.Context, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """
+    Run a function with a specific context.
+
+    This helper ensures that contextvars (used for request context logging)
+    are properly propagated when running functions in thread pools.
+
+    Args:
+        ctx: The context to run the function in
+        func: The function to execute
+        *args: Positional arguments for the function
+        **kwargs: Keyword arguments for the function
+
+    Returns:
+        The result of the function call
+    """
+    return ctx.run(func, *args, **kwargs)
+
+
 class FastAPIIntegration(BaseActingWebIntegration):
     """
     FastAPI integration for ActingWeb applications.
@@ -477,6 +497,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         aw_app: "ActingWebApp",
         fastapi_app: FastAPI,
         templates_dir: str | None = None,
+        thread_pool_workers: int = 10,
     ):
         super().__init__(aw_app)
         self.fastapi_app = fastapi_app
@@ -485,11 +506,60 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
         self.logger = logging.getLogger(__name__)
         # Thread pool for running synchronous ActingWeb handlers
+        # Size is configurable via ActingWebApp.with_thread_pool_workers()
         self.executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=10, thread_name_prefix="aw-handler"
+            max_workers=thread_pool_workers, thread_name_prefix="aw-handler"
+        )
+        self.logger.info(
+            f"FastAPI thread pool initialized with {thread_pool_workers} workers"
         )
         # Add request context middleware for logging correlation
         self.fastapi_app.add_middleware(RequestContextMiddleware)
+
+    async def _run_in_executor_with_context(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any
+    ) -> Any:
+        """
+        Run a synchronous function in the thread pool with context propagation.
+
+        This method ensures that contextvars (used for request context logging)
+        are properly propagated from the async context to the thread pool workers.
+        Without this, log messages from thread pool execution would lose their
+        request ID, actor ID, and peer ID context.
+
+        Args:
+            func: The synchronous function to execute
+            *args: Positional arguments for the function
+            **kwargs: Keyword arguments for the function
+
+        Returns:
+            The result of the function call
+        """
+        # Copy current context (includes request_id, actor_id, peer_id from contextvars)
+        ctx = contextvars.copy_context()
+
+        # Get event loop
+        loop = asyncio.get_running_loop()
+
+        # Run function in thread pool with context
+        if kwargs:
+            # If we have kwargs, wrap in a lambda
+            return await loop.run_in_executor(
+                self.executor,
+                lambda: _run_with_context(ctx, func, *args, **kwargs)
+            )
+        else:
+            # No kwargs, simpler call
+            return await loop.run_in_executor(
+                self.executor,
+                _run_with_context,
+                ctx,
+                func,
+                *args
+            )
 
     def _prefer_async_handlers(self) -> bool:
         """Override to indicate FastAPI should use async handlers.
@@ -1430,8 +1500,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         if handler_method and callable(handler_method):
             # Run the synchronous handler in a thread pool to avoid blocking the event loop
             try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(self.executor, handler_method)
+                await self._run_in_executor_with_context(handler_method)
             except (KeyboardInterrupt, SystemExit):
                 # Don't catch system signals
                 raise
@@ -1511,8 +1580,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run handler in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(self.executor, handler.get)
+        await self._run_in_executor_with_context(handler.get)
 
         # Render template with populated values (including oauth_enabled, oauth_providers, etc.)
         if self.templates and webobj.response.template_values:
@@ -1638,8 +1706,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             )
 
             # Run the synchronous handler in a thread pool
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(self.executor, handler.post)
+            await self._run_in_executor_with_context(handler.post)
 
             # Handle template rendering for factory
             if webobj.response.status_code in [200, 201]:
@@ -1687,8 +1754,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, handler.get)
+        result = await self._run_in_executor_with_context(handler.get)
 
         # Handle redirect if needed
         if isinstance(result, dict) and result.get("redirect_required"):
@@ -1732,11 +1798,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
         if request.method == "POST":
-            await loop.run_in_executor(self.executor, handler.post)
+            await self._run_in_executor_with_context(handler.post)
         else:
-            await loop.run_in_executor(self.executor, handler.get)
+            await self._run_in_executor_with_context(handler.get)
 
         # Handle template rendering for email form
         if (
@@ -1815,11 +1880,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
         if request.method == "POST":
-            await loop.run_in_executor(self.executor, handler.post)
+            await self._run_in_executor_with_context(handler.post)
         else:
-            await loop.run_in_executor(self.executor, handler.get)
+            await self._run_in_executor_with_context(handler.get)
 
         # Handle template rendering for email verification
         if (
@@ -1900,15 +1964,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
         if request.method == "POST":
-            result = await loop.run_in_executor(self.executor, handler.post, endpoint)
+            result = await self._run_in_executor_with_context(handler.post, endpoint)
         elif request.method == "OPTIONS":
-            result = await loop.run_in_executor(
-                self.executor, handler.options, endpoint
-            )
+            result = await self._run_in_executor_with_context(handler.options, endpoint)
         else:
-            result = await loop.run_in_executor(self.executor, handler.get, endpoint)
+            result = await self._run_in_executor_with_context(handler.get, endpoint)
 
         # Check if handler set template values (for HTML response)
         if (
@@ -2041,15 +2102,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
         if request.method == "POST":
-            result = await loop.run_in_executor(self.executor, handler.post, endpoint)
+            result = await self._run_in_executor_with_context(handler.post, endpoint)
         elif request.method == "OPTIONS":
-            result = await loop.run_in_executor(
-                self.executor, handler.options, endpoint
-            )
+            result = await self._run_in_executor_with_context(handler.options, endpoint)
         else:
-            result = await loop.run_in_executor(self.executor, handler.get, endpoint)
+            result = await self._run_in_executor_with_context(handler.get, endpoint)
 
         # SPA endpoints always return JSON
         from fastapi.responses import JSONResponse
@@ -2185,8 +2243,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self.executor, handler.post, "/bot")
+        await self._run_in_executor_with_context(handler.post, "/bot")
 
         return self._create_fastapi_response(webobj, request)
 
@@ -2259,14 +2316,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
 
         # Run the synchronous handler in a thread pool
-        loop = asyncio.get_running_loop()
-
         if request.method == "OPTIONS":
-            result = await loop.run_in_executor(
-                self.executor, handler.options, endpoint
-            )
+            result = await self._run_in_executor_with_context(handler.options, endpoint)
         else:
-            result = await loop.run_in_executor(self.executor, handler.get, endpoint)
+            result = await self._run_in_executor_with_context(handler.get, endpoint)
 
         # Add CORS headers directly for OAuth2 discovery endpoints
         cors_headers = {
@@ -2386,14 +2439,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         await async_handler_method(*args)  # type: ignore
                 else:
                     # Fall back to sync handler in thread pool
-                    loop = asyncio.get_running_loop()
                     if extra_kwargs:
                         # For services endpoint, pass extra kwargs
-                        await loop.run_in_executor(
-                            self.executor, lambda: handler_method(*args, **extra_kwargs)
+                        await self._run_in_executor_with_context(
+                            handler_method, *args, **extra_kwargs
                         )
                     else:
-                        await loop.run_in_executor(self.executor, handler_method, *args)
+                        await self._run_in_executor_with_context(handler_method, *args)
             except (KeyboardInterrupt, SystemExit):
                 # Don't catch system signals
                 raise

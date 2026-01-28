@@ -8,6 +8,26 @@ Unreleased
 ADDED
 ~~~~~
 
+- **Lambda Environment Detection**: ActingWeb now automatically detects AWS Lambda deployments and issues a warning if asynchronous subscription callbacks are enabled. This helps catch misconfigurations where fire-and-forget callbacks could be lost when Lambda functions freeze.
+
+  - Detects Lambda via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables
+  - Warning includes recommendation to enable ``with_sync_callbacks()``
+  - Warning appears during config initialization, visible in application logs
+  - No action taken in non-Lambda environments or when sync callbacks are already enabled
+  - See ``actingweb.interface.app._warn_lambda_async_callbacks()``
+
+- **Configurable FastAPI Thread Pool**: Added ``with_thread_pool_workers()`` method to configure thread pool size for FastAPI integration. The thread pool executes synchronous handlers (database operations, HTTP requests) without blocking the async event loop.
+
+  - New method: ``ActingWebApp.with_thread_pool_workers(workers: int)``
+  - Default: 10 workers (backward compatible)
+  - Valid range: 1-100 workers (enforced by validation)
+  - Tuning guidelines in documentation for different deployment scenarios:
+    - Low traffic/Lambda: 5-10 workers
+    - High traffic/Container: 20-50 workers
+    - CPU-bound: 2-5 workers per CPU core
+  - Memory overhead: ~8MB per worker thread
+  - Thread pool size logged at INFO level during FastAPI initialization
+
 - **Request Correlation in Logging**: Added automatic request correlation with context injection in all log statements. Every log line now includes request ID, actor ID, and peer ID (when available), making it easy to trace requests through distributed actor-to-actor communication.
 
   - New module: ``actingweb.request_context`` - Thread-safe context storage using ``contextvars``
@@ -61,6 +81,16 @@ CHANGED
 IMPROVED
 ~~~~~~~~
 
+- **FastAPI Context Propagation**: Fixed context propagation to thread pool workers in FastAPI integration. Previously, log statements from handlers executed in the thread pool would lose their request ID, actor ID, and peer ID context. Now context is properly copied and propagated to worker threads.
+
+  - New method: ``FastAPIIntegration._run_in_executor_with_context()`` replaces all ``run_in_executor()`` calls
+  - Helper function: ``_run_with_context()`` executes functions with specific context
+  - Uses ``contextvars.copy_context()`` to capture current context before thread execution
+  - All synchronous handler executions now preserve logging context
+  - Affects: factory handlers, OAuth callbacks, trust operations, subscription handlers, and generic actor requests
+  - No performance impact: context copying is negligible overhead
+  - Enables consistent log correlation across async/sync boundaries
+
 - **Logging Configuration**: Enhanced ``actingweb.logging_config`` module with new configuration options:
 
   - Per-component log level configuration (``db_level``, ``auth_level``, ``handlers_level``, ``proxy_level``)
@@ -71,6 +101,12 @@ IMPROVED
 DOCUMENTATION
 ~~~~~~~~~~~~~
 
+- Added FastAPI performance tuning section to ``docs/quickstart/configuration.rst``:
+  - Thread pool configuration and tuning guidelines
+  - Lambda deployment best practices
+  - Automatic Lambda environment detection documentation
+  - Memory overhead and sizing recommendations for different scenarios
+- Updated ``docs/quickstart/deployment.rst`` with note about automatic Lambda detection
 - Added comprehensive logging and correlation guide: ``docs/guides/logging-and-correlation.rst``
 - Updated configuration quickstart with logging configuration section
 - Added grepping examples and request chain tracing patterns

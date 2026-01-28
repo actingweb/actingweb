@@ -984,6 +984,89 @@ no additional configuration. Peers must have a valid trust relationship to query
 This pull-based query endpoint complements the push-based permission callback mechanism,
 forming a robust hybrid architecture for permission discovery and synchronization
 
+FastAPI Performance Tuning
+--------------------------
+
+When using FastAPI integration, you can configure the thread pool size to optimize performance for your deployment scenario.
+
+Thread Pool Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ActingWeb uses a thread pool to execute synchronous handlers (database operations, HTTP requests) without blocking the async event loop:
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_thread_pool_workers(20)
+
+**Tuning Guidelines:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 15 55
+
+   * - Deployment Scenario
+     - Workers
+     - Rationale
+   * - Default
+     - 10
+     - Suitable for most applications
+   * - Low traffic / Lambda
+     - 5-10
+     - Reduces memory overhead, matches Lambda concurrency
+   * - High traffic / Container
+     - 20-50
+     - Handles more concurrent requests
+   * - Container (CPU-bound)
+     - 2-5 per CPU core
+     - Balances CPU utilization
+   * - Development
+     - 5
+     - Minimal resource usage
+
+**Memory Overhead:** Approximately 8MB per worker thread on average.
+
+**Valid Range:** 1-100 workers (enforced by validation).
+
+Lambda Deployment
+~~~~~~~~~~~~~~~~~
+
+When deploying to AWS Lambda or other serverless platforms, ActingWeb automatically detects the environment and issues a warning if asynchronous subscription callbacks are enabled (the default). This is because fire-and-forget callbacks may be lost when the Lambda function freezes after returning a response.
+
+**Recommended Lambda Configuration:**
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp
+
+    app = ActingWebApp(
+        aw_type="urn:actingweb:example.com:myapp",
+        fqdn="myapp.example.com"
+    ).with_sync_callbacks(enable=True)  # Required for Lambda
+     .with_thread_pool_workers(5)       # Optional: reduce memory usage
+
+**Detection:** The library automatically detects Lambda via these environment variables:
+
+- ``AWS_LAMBDA_FUNCTION_NAME``
+- ``AWS_EXECUTION_ENV`` (starts with ``AWS_Lambda_``)
+
+**Warning Message:** If running in Lambda without sync callbacks, you'll see::
+
+    WARNING: Running in AWS Lambda with async subscription callbacks enabled.
+    Fire-and-forget callbacks may be lost when Lambda function freezes.
+    Consider enabling sync callbacks with .with_sync_callbacks()
+
+**Why Sync Callbacks for Lambda:**
+
+- Lambda freezes execution after the response is sent
+- Asynchronous (fire-and-forget) callbacks may not complete before freeze
+- Synchronous callbacks block until HTTP request completes
+- Guarantees callback delivery before function freeze
+
 Logging and Request Correlation
 ---------------------------------
 

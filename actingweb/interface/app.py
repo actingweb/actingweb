@@ -66,6 +66,7 @@ class ActingWebApp:
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
         self._sync_subscription_callbacks = False  # Async by default
+        self._thread_pool_workers = 10  # Default thread pool size for FastAPI integration
 
         # Property lookup configuration
         self._indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
@@ -106,6 +107,29 @@ class ActingWebApp:
         # Always set attribute so downstream code can rely on it existing
         self._config.service_registry = self._service_registry  # type: ignore[attr-defined]
 
+    def _warn_lambda_async_callbacks(self) -> None:
+        """Warn if running in Lambda environment without sync callbacks enabled."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # Detect Lambda environment through AWS environment variables
+        # AWS_LAMBDA_FUNCTION_NAME is set in all Lambda functions
+        # AWS_EXECUTION_ENV contains runtime info (e.g., "AWS_Lambda_python3.11")
+        is_lambda = bool(
+            os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+            or os.environ.get("AWS_EXECUTION_ENV", "").startswith("AWS_Lambda_")
+        )
+
+        if is_lambda and not self._sync_subscription_callbacks:
+            logger.warning(
+                "Running in AWS Lambda with async subscription callbacks enabled. "
+                "Fire-and-forget callbacks may be lost when Lambda function freezes. "
+                "Consider enabling sync callbacks with .with_sync_callbacks() "
+                "to ensure callback delivery before function freeze. "
+                "See: https://docs.actingweb.org/guides/lambda-deployment.html"
+            )
+
     def _apply_runtime_changes_to_config(self) -> None:
         """Propagate builder changes to an existing Config instance.
 
@@ -138,6 +162,8 @@ class ActingWebApp:
         # Subscription callback mode
         if hasattr(self, "_sync_subscription_callbacks"):
             self._config.sync_subscription_callbacks = self._sync_subscription_callbacks
+            # Warn if running in Lambda without sync callbacks enabled
+            self._warn_lambda_async_callbacks()
         # Peer profile caching configuration
         if hasattr(self, "_peer_profile_attributes"):
             self._config.peer_profile_attributes = self._peer_profile_attributes
@@ -302,6 +328,40 @@ class ActingWebApp:
         """
         self._sync_subscription_callbacks = enable
         self._apply_runtime_changes_to_config()
+        return self
+
+    def with_thread_pool_workers(self, workers: int) -> "ActingWebApp":
+        """Configure thread pool size for FastAPI integration.
+
+        The thread pool is used to execute synchronous ActingWeb handlers
+        (database operations, HTTP requests) without blocking the async event loop.
+
+        Tuning guidelines:
+        - Default: 10 workers (suitable for most applications)
+        - Low traffic: 5 workers (reduces memory overhead)
+        - High traffic: 20-50 workers (handles more concurrent requests)
+        - Lambda: 5-10 workers (limited by function concurrency)
+        - Container: Scale based on CPU cores (e.g., 2-5 per core)
+
+        Memory overhead: ~8MB per worker thread on average.
+
+        Args:
+            workers: Number of thread pool workers. Must be between 1 and 100.
+
+        Returns:
+            Self for method chaining.
+
+        Raises:
+            ValueError: If workers is outside the valid range [1, 100].
+
+        Example:
+            >>> app = ActingWebApp(...).with_thread_pool_workers(20)
+        """
+        if not 1 <= workers <= 100:
+            raise ValueError(
+                f"Thread pool workers must be between 1 and 100, got {workers}"
+            )
+        self._thread_pool_workers = workers
         return self
 
     def with_peer_profile(
@@ -1167,7 +1227,9 @@ class ActingWebApp:
                 "Install with: pip install 'actingweb[fastapi]'"
             ) from e
 
-        integration = FastAPIIntegration(self, fastapi_app, templates_dir=templates_dir)
+        integration = FastAPIIntegration(
+            self, fastapi_app, templates_dir=templates_dir, thread_pool_workers=self._thread_pool_workers
+        )
         integration.setup_routes()
         return integration
 

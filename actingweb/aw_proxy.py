@@ -268,10 +268,9 @@ class AwProxy:
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
         data = json.dumps(params)
-        headers = {
-            "Authorization": "Bearer " + self.trust["secret"],
-            "Content-Type": "application/json",
-        }
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
+        headers["Content-Type"] = "application/json"
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.debug(
             "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
@@ -312,7 +311,8 @@ class AwProxy:
             return None
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
-        headers = {"Authorization": "Bearer " + self.trust["secret"]}
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.info(f"Deleting peer resource at {url}")
         try:
@@ -564,10 +564,9 @@ class AwProxy:
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
         data = json.dumps(params)
-        headers = {
-            "Authorization": "Bearer " + self.trust["secret"],
-            "Content-Type": "application/json",
-        }
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
+        headers["Content-Type"] = "application/json"
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.debug(
             "Changing trust peer resource async at ("
@@ -654,7 +653,8 @@ class AwProxy:
             return None
         if not self.trust or not self.trust["baseuri"] or not self.trust["secret"]:
             return None
-        headers = {"Authorization": "Bearer " + self.trust["secret"]}
+        # Use _bearer_headers() to include correlation headers
+        headers = self._bearer_headers()
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.info(f"Deleting peer resource async at {url}")
         try:

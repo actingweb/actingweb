@@ -221,7 +221,10 @@ class TestBearerHeaders:
 
         headers = proxy._bearer_headers()
 
-        assert headers == {"Authorization": "Bearer token123"}
+        # Check Authorization header is correct
+        assert headers["Authorization"] == "Bearer token123"
+        # Check correlation headers are present
+        assert "X-Request-ID" in headers
 
     def test_bearer_headers_without_trust(self):
         """Test _bearer_headers returns empty dict without trust."""
@@ -230,7 +233,9 @@ class TestBearerHeaders:
 
         headers = proxy._bearer_headers()
 
-        assert headers == {}
+        # Should still have correlation headers even without trust
+        assert "Authorization" not in headers
+        assert "X-Request-ID" in headers
 
     def test_bearer_headers_without_secret(self):
         """Test _bearer_headers returns empty dict when secret is missing."""
@@ -239,7 +244,9 @@ class TestBearerHeaders:
 
         headers = proxy._bearer_headers()
 
-        assert headers == {}
+        # Should still have correlation headers even without secret
+        assert "Authorization" not in headers
+        assert "X-Request-ID" in headers
 
 
 class TestBasicHeaders:
@@ -256,7 +263,9 @@ class TestBasicHeaders:
 
         # Expected: base64(trustee:secret123)
         expected_cred = base64.b64encode(b"trustee:secret123").decode("utf-8")
-        assert headers == {"Authorization": f"Basic {expected_cred}"}
+        assert headers["Authorization"] == f"Basic {expected_cred}"
+        # Check correlation headers are present
+        assert "X-Request-ID" in headers
 
     def test_basic_headers_without_passphrase(self):
         """Test _basic_headers returns empty dict without passphrase."""
@@ -265,7 +274,9 @@ class TestBasicHeaders:
 
         headers = proxy._basic_headers()
 
-        assert headers == {}
+        # Should still have correlation headers even without passphrase
+        assert "Authorization" not in headers
+        assert "X-Request-ID" in headers
 
 
 class TestGetResource:

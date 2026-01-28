@@ -98,6 +98,17 @@ IMPROVED
   - Convenience functions for common logging scenarios
   - Better separation between library and application logging
 
+FIXED
+~~~~~
+
+- **Subscription baseline sync for list properties**: Fixed issue where baseline synchronization would store metadata (``{"_list": true, "count": N}``) instead of actual list items. Now automatically fetches full list data from remote peers during sync, ensuring subscribers receive complete list contents. Only applies to full ``/properties`` subscriptions; subtarget subscriptions (``properties/list_name``) already worked correctly.
+
+- **Auto-sync after permission grants**: Added automatic synchronization when new permissions are granted to a peer. When a peer grants additional read permissions, the system now immediately fetches the newly accessible data instead of waiting for the next manual sync or diff notification. Configurable via ``SubscriptionProcessingConfig`` and only triggers when ``auto_storage`` is enabled.
+
+- **List property permission checks**: Fixed permission evaluation for list properties to remove incorrect ``list:`` prefix. Permission patterns now correctly match list property names directly (e.g., ``"todos"`` instead of ``"list:todos"``), aligning with user-facing property names and documentation.
+
+- **List property format parameter**: Added ``format`` query parameter to list property GET requests. Use ``GET /properties/list_name?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items, matching the format returned by ``GET /properties?metadata=true``.
+
 DOCUMENTATION
 ~~~~~~~~~~~~~
 

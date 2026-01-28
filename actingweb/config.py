@@ -9,11 +9,14 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from actingweb.interface.hooks import HookRegistry
+    from actingweb.subscription_config import SubscriptionProcessingConfig
 
 
 class Config:
     # Optional hook registry, set by ActingWebApp.get_config()
     _hooks: Optional["HookRegistry"]
+    # Optional subscription processing config, set by ActingWebApp.get_config()
+    _subscription_config: Optional["SubscriptionProcessingConfig"]
 
     # Database backend modules (dynamically loaded)
     # These are typed as ModuleType to enable IDE autocomplete while
@@ -33,6 +36,8 @@ class Config:
         #########
         # Hook registry (set by ActingWebApp.get_config(), None by default)
         self._hooks = None
+        # Subscription processing config (set by ActingWebApp.get_config(), None by default)
+        self._subscription_config = None
         # Values that can be changed as part of instantiating config
         # The host and domain, i.e. FQDN, of the URL
         self.fqdn = "demo.actingweb.io"

@@ -157,18 +157,30 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
 
         # Check if this is a list property first
+        logger.debug(f"Checking if '{name}' is a list property: has_lists={hasattr(myself, 'property_lists') if myself else False}")
+        if myself and hasattr(myself, "property_lists") and myself.property_lists is not None:
+            exists = myself.property_lists.exists(name)
+            logger.debug(f"property_lists.exists('{name}') = {exists}")
+
         if (
             myself
             and hasattr(myself, "property_lists")
             and myself.property_lists is not None
             and myself.property_lists.exists(name)
         ):
-            # This is a list property - handle index parameter
-            index_param = self.request.get("index")
+            # This is a list property - handle format and index parameters
+            logger.info(f"Processing list property '{name}'")
+            index_param = self.request.get("index") or None  # Convert empty string to None
+            format_param = self.request.get("format") or None  # Convert empty string to None
+
             try:
+                logger.info(f"Getting list property object for '{name}'")
                 list_prop = getattr(myself.property_lists, name)
+                logger.info(f"Got list_prop: {type(list_prop).__name__}, length={len(list_prop) if list_prop else 'N/A'}")
+                logger.info(f"index_param={index_param}, format_param={format_param}")
 
                 if index_param is not None:
+                    logger.info(f"Handling index access for index={index_param}")
                     # Get specific item by index
                     try:
                         index = int(index_param)
@@ -201,31 +213,51 @@ class PropertiesHandler(base_handler.BaseHandler):
                             self.response.set_status(404, "List item not found")
                         return
                 else:
-                    # Get all items
-                    all_items = list_prop.to_list()
+                    logger.info(f"Handling list access (not index), format_param={format_param}")
+                    # Determine response format
+                    if format_param == "short":
+                        logger.info("Using short format")
+                        # Short format: return metadata only
+                        # This matches the format used in GET /properties?metadata=true
+                        metadata = {
+                            "_list": True,
+                            "count": len(list_prop),
+                            "description": list_prop.get_description(),
+                            "explanation": list_prop.get_explanation(),
+                        }
+                        out = json.dumps(metadata)
+                    else:
+                        # Default (no format or format=full): return all items
+                        # This is the expected behavior for subscriptions
+                        all_items = list_prop.to_list()
 
-                    # Execute property hook if available
-                    if self.hooks:
-                        actor_interface = self._get_actor_interface(myself)
-                        if actor_interface:
-                            hook_path = [name]
-                            auth_context = self._create_auth_context(check, "read")
-                            transformed = self.hooks.execute_property_hooks(
-                                name,
-                                "get",
-                                actor_interface,
-                                all_items,
-                                hook_path,
-                                auth_context,
-                            )
-                            if transformed is not None:
-                                all_items = transformed
-                            else:
-                                if self.response:
-                                    self.response.set_status(404)
-                                return
+                        # Execute property hook if available
+                        logger.info(f"Checking hooks: has_hooks={self.hooks is not None}")
+                        if self.hooks:
+                            actor_interface = self._get_actor_interface(myself)
+                            logger.info(f"Got actor_interface: {actor_interface is not None}")
+                            if actor_interface:
+                                hook_path = [name]
+                                auth_context = self._create_auth_context(check, "read")
+                                logger.info(f"Executing property hooks for '{name}', items count={len(all_items)}")
+                                transformed = self.hooks.execute_property_hooks(
+                                    name,
+                                    "get",
+                                    actor_interface,
+                                    all_items,
+                                    hook_path,
+                                    auth_context,
+                                )
+                                logger.info(f"Hook result: transformed is None? {transformed is None}")
+                                if transformed is not None:
+                                    all_items = transformed
+                                else:
+                                    logger.warning(f"Property hook returned None for '{name}', returning 404")
+                                    if self.response:
+                                        self.response.set_status(404)
+                                    return
 
-                    out = json.dumps(all_items)
+                        out = json.dumps(all_items)
 
                 if self.response:
                     self.response.set_status(200, "Ok")

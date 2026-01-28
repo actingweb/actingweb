@@ -215,6 +215,46 @@ class CallbacksHandler(base_handler.BaseHandler):
                         permission_changes.get("revoked_patterns", []),
                     )
 
+                # Auto-sync when new permissions are granted
+                # This fetches the newly accessible data immediately
+                # Only perform auto-sync if subscription processing is enabled and auto_storage is on
+                subscription_config = getattr(myself.config, "_subscription_config", None)
+                if (
+                    permission_changes.get("granted_patterns")
+                    and subscription_config
+                    and subscription_config.enabled
+                    and subscription_config.auto_storage
+                ):
+                    logger.info(
+                        f"Auto-syncing peer {granting_actor_id} after permissions granted: "
+                        f"{permission_changes['granted_patterns']}"
+                    )
+                    try:
+                        sync_result = actor_interface.subscriptions.sync_peer(
+                            granting_actor_id, config=subscription_config
+                        )
+                        if sync_result.success:
+                            logger.info(
+                                f"Auto-sync completed for {granting_actor_id}: "
+                                f"{sync_result.subscriptions_synced} subscription(s), "
+                                f"{sync_result.total_diffs_processed} diffs processed"
+                            )
+                        else:
+                            logger.warning(
+                                f"Auto-sync failed for {granting_actor_id}: {sync_result.error}"
+                            )
+                    except Exception as sync_error:
+                        logger.error(
+                            f"Error during auto-sync for {granting_actor_id}: {sync_error}",
+                            exc_info=True,
+                        )
+                        # Don't fail the callback - sync is not critical
+                elif permission_changes.get("granted_patterns"):
+                    logger.debug(
+                        f"Skipping auto-sync for {granting_actor_id} "
+                        f"(subscription processing not enabled or auto_storage disabled)"
+                    )
+
             except Exception as e:
                 logger.error(f"Error storing permission callback: {e}")
                 self.response.set_status(500, "Internal error")

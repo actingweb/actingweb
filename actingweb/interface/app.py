@@ -1178,11 +1178,15 @@ class ActingWebApp:
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them
             self._config._hooks = self.hooks
+            # Attach subscription config so handlers can access it
+            self._config._subscription_config = self._subscription_config
         else:
             # If config already exists, keep it in sync with latest builder settings
             self._apply_runtime_changes_to_config()
             # Ensure hooks are attached even if config was created early
             self._config._hooks = self.hooks
+            # Ensure subscription config is attached even if config was created early
+            self._config._subscription_config = self._subscription_config
         return self._config
 
     def is_mcp_enabled(self) -> bool:

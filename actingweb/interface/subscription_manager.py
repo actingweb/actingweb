@@ -974,6 +974,107 @@ class SubscriptionManager:
 
         return result
 
+    async def _transform_baseline_list_properties_async(
+        self,
+        baseline_data: dict[str, Any],
+        peer_id: str,
+        target: str,
+    ) -> dict[str, Any]:
+        """
+        Async version: Transform list property metadata into actual list items for baseline sync.
+
+        When baseline fetch returns list metadata ({"_list": true, "count": N}),
+        this fetches the actual items from the remote peer via ActingWeb protocol
+        and transforms to the format expected by apply_resync_data().
+
+        Args:
+            baseline_data: Baseline response from remote peer (may contain list metadata)
+            peer_id: ID of remote peer we're syncing from
+            target: Subscription target (e.g., "properties")
+
+        Returns:
+            Transformed data with lists in format {"property_name": {"_list": true, "items": [...]}}
+        """
+        # Create result dict (shallow copy)
+        result = dict(baseline_data)
+
+        # Get proxy for fetching list items from remote peer
+        proxy = self._get_peer_proxy(peer_id)
+        if proxy is None or proxy.trust is None:
+            logger.warning(
+                f"No trust with peer {peer_id}, skipping list transformation"
+            )
+            return baseline_data
+
+        # Process each property in baseline data
+        for property_name, value in baseline_data.items():
+            # Skip if not a dict
+            if not isinstance(value, dict):
+                continue
+
+            # Check for list metadata format: {"_list": true, "count": N}
+            if not value.get("_list"):
+                continue
+
+            # Skip if already has items
+            if "items" in value:
+                continue
+
+            # Fetch actual list items from remote peer
+            try:
+                list_path = f"{target}/{property_name}"
+                logger.debug(
+                    f"Fetching list items for {property_name} from peer {peer_id} at {list_path}"
+                )
+
+                # Fetch via ActingWeb protocol (remote peer enforces permissions)
+                response = await proxy.get_resource_async(path=list_path)
+
+                # Validate response is a list
+                if response is None:
+                    logger.warning(
+                        f"No response when fetching list {property_name} from peer {peer_id}"
+                    )
+                    continue
+
+                if "error" in response:
+                    logger.warning(
+                        f"Error fetching list {property_name} from peer {peer_id}: {response.get('error')}"
+                    )
+                    continue
+
+                if not isinstance(response, list):
+                    logger.error(
+                        f"Invalid response for list {property_name} from peer {peer_id}: "
+                        f"expected list, got {type(response).__name__}"
+                    )
+                    continue
+
+                # Transform to flag-based format with items
+                result[property_name] = {"_list": True, "items": response}
+
+                # Log warning for large lists
+                if len(response) > 100:
+                    logger.warning(
+                        f"List property {property_name} from peer {peer_id} has {len(response)} items. "
+                        f"Consider using subtarget subscriptions for better performance."
+                    )
+
+                logger.debug(
+                    f"Successfully fetched {len(response)} items for list {property_name} from peer {peer_id}"
+                )
+
+            except Exception as e:
+                # Log error but continue processing other properties
+                logger.error(
+                    f"Error fetching list {property_name} from peer {peer_id}: {e}",
+                    exc_info=True,
+                )
+                # Keep metadata as-is (fail gracefully)
+                continue
+
+        return result
+
     def sync_peer(
         self,
         peer_id: str,
@@ -1212,6 +1313,22 @@ class SubscriptionManager:
                 log_path = f"{log_path}/{sub.resource}"
 
             if baseline_response and "error" not in baseline_response:
+                # For properties subscriptions, transform list metadata into actual items
+                # Only needed when subscribing to full /properties endpoint (no subtarget)
+                # Subtarget subscriptions (e.g., properties/list:name) already return full items
+                if (
+                    sub.target == "properties"
+                    and not sub.subtarget
+                    and not sub.resource
+                ):
+                    transformed_data = await self._transform_baseline_list_properties_async(
+                        baseline_data=baseline_response,
+                        peer_id=peer_id,
+                        target=sub.target,
+                    )
+                else:
+                    transformed_data = baseline_response
+
                 # Store baseline data
                 from .actor_interface import ActorInterface
 
@@ -1222,8 +1339,8 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                # Apply baseline as resync data
-                store.apply_resync_data(baseline_response)
+                # Apply transformed baseline as resync data
+                store.apply_resync_data(transformed_data)
                 logger.info(
                     f"Stored baseline data for subscription {subscription_id} from {log_path}"
                 )

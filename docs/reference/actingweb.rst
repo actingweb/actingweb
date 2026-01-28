@@ -101,3 +101,27 @@ actingweb.runtime\_context module
     :undoc-members:
     :show-inheritance:
     :no-index:
+
+actingweb.request\_context module
+----------------------------------
+
+.. automodule:: actingweb.request_context
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+actingweb.logging\_config module
+---------------------------------
+
+.. automodule:: actingweb.logging_config
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+actingweb.log\_filter module
+-----------------------------
+
+.. automodule:: actingweb.log_filter
+    :members:
+    :undoc-members:
+    :show-inheritance:

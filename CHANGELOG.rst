@@ -8,6 +8,14 @@ Unreleased
 ADDED
 ~~~~~
 
+- **Inbound subscription query method**: Added ``get_subscriptions_from_peer()`` method to ``SubscriptionManager`` for querying inbound subscriptions (where a peer has subscribed to our data). Complements existing ``get_subscriptions_to_peer()`` for outbound subscriptions.
+
+  - New method: ``SubscriptionManager.get_subscriptions_from_peer(peer_id: str)`` returns list of ``SubscriptionInfo``
+  - Returns subscriptions where the specified peer is subscribing to this actor's data
+  - Filters from ``inbound_subscriptions`` property
+  - Useful for understanding which peers are consuming your data
+  - Symmetric API: ``get_subscriptions_to_peer()`` for outbound, ``get_subscriptions_from_peer()`` for inbound
+
 - **Lambda Environment Detection**: ActingWeb now automatically detects AWS Lambda deployments and issues a warning if asynchronous subscription callbacks are enabled. This helps catch misconfigurations where fire-and-forget callbacks could be lost when Lambda functions freeze.
 
   - Detects Lambda via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables
@@ -81,6 +89,27 @@ CHANGED
 IMPROVED
 ~~~~~~~~
 
+- **Bulk property permission evaluation**: Optimized property permission checks to use bulk evaluation when filtering multiple properties. Significantly reduces logging verbosity and improves performance by fetching permissions once and evaluating all properties against cached rules.
+
+  - New method: ``PermissionEvaluator.evaluate_bulk_property_access()`` - evaluates multiple properties at once
+  - Updated: ``batch_check_property_access()`` now uses bulk evaluation internally
+  - Single log line for batch operations instead of one per property
+  - Logs summary: "N properties: X allowed, Y denied, Z not found"
+  - Only denied properties logged for security monitoring
+  - Reduces DEBUG log volume by 10-50x for bulk property access
+  - Applies to: ``PropertiesHandler`` GET operations with multiple properties (actingweb/handlers/properties.py:345-367)
+  - Backward compatible: individual evaluation still available
+
+- **Action and method list filtering**: Added peer permission filtering to action and method list endpoints. When a peer requests the list of available actions or methods, the response is now filtered to only show those they have permission to execute.
+
+  - Actions list (``GET /<actor_id>/actions``) filtered by peer permissions
+  - Methods list (``GET /<actor_id>/methods``) filtered by peer permissions
+  - Non-peer authentication (OAuth, basic) returns all actions/methods
+  - Uses ``PermissionEvaluator.evaluate_action_access()`` and ``evaluate_method_access()``
+  - Gracefully falls back to showing all on evaluation errors
+  - Prevents information disclosure of restricted capabilities
+  - Affects: ``ActionsHandler`` and ``MethodsHandler`` in actingweb/handlers/
+
 - **FastAPI Context Propagation**: Fixed context propagation to thread pool workers in FastAPI integration. Previously, log statements from handlers executed in the thread pool would lose their request ID, actor ID, and peer ID context. Now context is properly copied and propagated to worker threads.
 
   - New method: ``FastAPIIntegration._run_in_executor_with_context()`` replaces all ``run_in_executor()`` calls
@@ -98,8 +127,36 @@ IMPROVED
   - Convenience functions for common logging scenarios
   - Better separation between library and application logging
 
+SECURITY
+~~~~~~~~
+
+- **Remote Peer Data Sanitization**: Added comprehensive sanitization of all data received from remote peers to prevent JSON encoding failures from malformed Unicode. All data from subscription callbacks, resync operations, and remote storage operations is now automatically sanitized before storage.
+
+  - New function: ``actingweb.db.utils.sanitize_json_data()`` - recursively sanitizes strings, dicts, lists, and tuples
+  - Removes Unicode surrogate characters (invalid UTF-16 pairs like ``\uD800``) that break JSON encoding
+  - Replaces invalid UTF-8 sequences with Unicode replacement character (``\uFFFD``)
+  - Applied defensively to all remote peer data paths:
+    - ``RemotePeerStore.set_value()``, ``set_list()``, ``apply_callback_data()``, ``apply_resync_data()``
+    - ``DbAttribute.set_attr()``, ``compare_and_swap()`` (both DynamoDB and PostgreSQL)
+    - ``DbProperty.set()`` (both DynamoDB and PostgreSQL)
+  - Logs warnings when sanitization modifies data, including source peer ID
+  - Critical for handling untrusted data from remote actors
+
 FIXED
 ~~~~~
+
+- **Subscription resync callback URL construction**: Fixed subscription resync to construct callback URLs from trust relationship baseuri instead of relying on stored callback URL. This aligns with regular subscription callbacks and ensures correct URL even if trust baseuri changes.
+
+  - Fetches trust data once and reuses for both callback URL construction and authentication
+  - Constructs URL as: ``baseuri + "/callbacks/subscriptions/" + actor_id + "/" + subscription_id``
+  - Logs warning if trust relationship or baseuri is missing
+  - Affects: ``Actor._send_resync_callback()`` in actingweb/actor.py:2020-2035
+
+- **Subscription subtarget wildcard matching**: Fixed subscription subtarget matching to correctly handle empty subtargets as wildcards. A subscription with no subtarget now matches any subtarget filter, enabling broad property subscriptions.
+
+  - Empty ``sub_subtarget`` in subscription means "all subtargets" and matches any filter
+  - Only filters on subtarget when subscription explicitly specifies one
+  - Affects: ``Actor.resync_peer_subscriptions()`` in actingweb/actor.py:1991
 
 - **Subscription baseline sync for list properties**: Fixed issue where baseline synchronization would store metadata (``{"_list": true, "count": N}``) instead of actual list items. Now automatically fetches full list data from remote peers during sync, ensuring subscribers receive complete list contents. Only applies to full ``/properties`` subscriptions; subtarget subscriptions (``properties/list_name``) already worked correctly.
 

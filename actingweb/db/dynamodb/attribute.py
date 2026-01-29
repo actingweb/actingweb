@@ -122,6 +122,11 @@ class DbAttribute:
             # Add buffer for clock skew safety
             ttl_timestamp = int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
 
+        # Defensive sanitization of data before storing
+        from actingweb.db.utils import sanitize_json_data
+
+        data = sanitize_json_data(data, log_source="attribute")
+
         new = Attribute(
             id=actor_id,
             bucket_name=bucket + ":" + name,
@@ -172,6 +177,12 @@ class DbAttribute:
             return False
 
         bucket_name = bucket + ":" + name
+
+        # Defensive sanitization of data before storing
+        from actingweb.db.utils import sanitize_json_data
+
+        old_data = sanitize_json_data(old_data, log_source="attribute")
+        new_data = sanitize_json_data(new_data, log_source="attribute")
 
         try:
             # Get current item with consistent read

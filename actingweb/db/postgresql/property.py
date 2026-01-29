@@ -208,7 +208,11 @@ class DbProperty:
         # Convert non-string values to JSON strings for storage
         if value is not None and not isinstance(value, str):
             try:
-                value = json.dumps(value)
+                from actingweb.db.utils import sanitize_json_data
+
+                # Defensive sanitization of own data before JSON encoding
+                sanitized_value = sanitize_json_data(value, log_source="property")
+                value = json.dumps(sanitized_value)
             except (TypeError, ValueError):
                 value = str(value)
 

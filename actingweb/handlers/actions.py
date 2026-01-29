@@ -122,8 +122,31 @@ class ActionsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 if not name:
-                    # Return list of available actions with metadata
-                    result = {"actions": self.hooks.get_action_metadata_list()}
+                    # Return list of available actions with metadata, filtered by permissions
+                    all_actions = self.hooks.get_action_metadata_list()
+
+                    # Filter actions based on peer permissions
+                    peer_id = check.acl.get("peerid", "") if hasattr(check, "acl") else ""
+                    if peer_id:
+                        # For peer-based auth, filter by allowed actions
+                        try:
+                            evaluator = get_permission_evaluator(self.config)
+                            filtered_actions = []
+                            for action in all_actions:
+                                action_name = action.get("name", "")
+                                perm_result = evaluator.evaluate_action_access(
+                                    actor_id, peer_id, action_name
+                                )
+                                if perm_result == PermissionResult.ALLOWED:
+                                    filtered_actions.append(action)
+                            result = {"actions": filtered_actions}
+                        except Exception as e:
+                            logger.error(f"Error filtering actions by permission: {e}")
+                            # Fall back to returning all actions on error
+                            result = {"actions": all_actions}
+                    else:
+                        # For non-peer auth (basic/oauth), return all actions
+                        result = {"actions": all_actions}
                 else:
                     auth_context = self._create_auth_context(check)
                     result = self.hooks.execute_action_hooks(

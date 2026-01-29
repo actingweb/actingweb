@@ -117,9 +117,14 @@ class RemotePeerStore:
         return attr.get("data") if attr else None
 
     def set_value(self, name: str, value: dict[str, Any]) -> None:
-        """Set a scalar value."""
+        """Set a scalar value from remote peer (sanitizes for security)."""
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted data from remote peer
+        sanitized_value = sanitize_json_data(value, log_source=f"peer:{self._peer_id}")
+
         db = self._get_attributes()
-        db.set_attr(name=name, data=value)
+        db.set_attr(name=name, data=sanitized_value)
 
     def delete_value(self, name: str) -> None:
         """Delete a scalar value."""
@@ -140,13 +145,27 @@ class RemotePeerStore:
         items: list[dict[str, Any]],
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Set a list (replaces all items)."""
+        """Set a list from remote peer (sanitizes for security)."""
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted data from remote peer
+        sanitized_items = sanitize_json_data(items, log_source=f"peer:{self._peer_id}")
+        sanitized_metadata = (
+            sanitize_json_data(metadata, log_source=f"peer:{self._peer_id}")
+            if metadata
+            else None
+        )
+
         store = self._get_list_store()
         list_attr = getattr(store, name)
         list_attr.clear()
-        list_attr.extend(items)
-        if metadata:
-            list_attr.set_metadata(metadata)
+        list_attr.extend(sanitized_items)
+        if sanitized_metadata:
+            # ListAttribute only supports setting description and explanation
+            if "description" in sanitized_metadata:
+                list_attr.set_description(sanitized_metadata["description"])
+            if "explanation" in sanitized_metadata:
+                list_attr.set_explanation(sanitized_metadata["explanation"])
 
     def delete_list(self, name: str) -> None:
         """Delete a list entirely."""
@@ -203,12 +222,19 @@ class RemotePeerStore:
         - Applies them to the appropriate list
         - Stores scalar values directly
 
+        SECURITY: Sanitizes untrusted data from remote peer before storage.
+
         Args:
             data: Callback data dict from subscription callback
 
         Returns:
             Dict of {property_name: operation_result} for each processed property
         """
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted callback data from remote peer
+        data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:callback")
+
         results: dict[str, Any] = {}
 
         for key, value in data.items():
@@ -312,6 +338,8 @@ class RemotePeerStore:
     def apply_resync_data(self, data: dict[str, Any]) -> dict[str, Any]:
         """Apply full resync data, replacing all existing data.
 
+        SECURITY: Sanitizes untrusted data from remote peer before storage.
+
         Args:
             data: Full state data from resync callback
 
@@ -319,6 +347,11 @@ class RemotePeerStore:
             Dict of {property_name: operation_result}
         """
         from datetime import datetime
+
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted resync data from remote peer
+        data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:resync")
 
         results: dict[str, Any] = {}
 

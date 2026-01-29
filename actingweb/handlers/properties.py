@@ -342,16 +342,20 @@ class PropertiesHandler(base_handler.BaseHandler):
                 except ValueError:
                     pair[name] = value
 
-        # Filter properties based on peer permissions
+        # Filter properties based on peer permissions (bulk evaluation)
         peer_id = check.acl.get("peerid", "") if hasattr(check, "acl") else ""
         if peer_id and actor_interface and actor_interface.id and pair:
             try:
                 evaluator = get_permission_evaluator(self.config)
+                # Use bulk evaluation to reduce logging verbosity
+                property_names = list(pair.keys())
+                results = evaluator.evaluate_bulk_property_access(
+                    actor_interface.id, peer_id, property_names, "read"
+                )
+                # Filter based on results
                 filtered_pair = {}
                 for prop_name, prop_value in pair.items():
-                    result = evaluator.evaluate_property_access(
-                        actor_interface.id, peer_id, prop_name, "read"
-                    )
+                    result = results.get(prop_name, PermissionResult.DENIED)
                     if result == PermissionResult.ALLOWED:
                         filtered_pair[prop_name] = prop_value
                     elif result == PermissionResult.NOT_FOUND:
@@ -392,14 +396,15 @@ class PropertiesHandler(base_handler.BaseHandler):
                 f"Found {len(all_list_names)} list properties: {all_list_names}"
             )
 
-            # Filter list properties based on peer permissions
+            # Filter list properties based on peer permissions (bulk evaluation)
             if peer_id and actor_interface and actor_interface.id:
                 try:
                     evaluator = get_permission_evaluator(self.config)
-                    for list_name in all_list_names:
-                        result = evaluator.evaluate_property_access(
-                            actor_interface.id, peer_id, list_name, "read"
-                        )
+                    # Use bulk evaluation to reduce logging verbosity
+                    results = evaluator.evaluate_bulk_property_access(
+                        actor_interface.id, peer_id, list(all_list_names), "read"
+                    )
+                    for list_name, result in results.items():
                         if (
                             result == PermissionResult.ALLOWED
                             or result == PermissionResult.NOT_FOUND

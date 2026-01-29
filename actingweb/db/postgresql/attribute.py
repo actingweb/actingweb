@@ -181,6 +181,11 @@ class DbAttribute:
             # Store as-is in JSONB (psycopg will handle conversion)
             data_json = data
 
+        # Defensive sanitization of data before JSON encoding
+        from actingweb.db.utils import sanitize_json_data
+
+        data_json = sanitize_json_data(data_json, log_source="attribute")
+
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -263,6 +268,12 @@ class DbAttribute:
             return False
 
         bucket_name = bucket + ":" + name
+
+        # Defensive sanitization of data before JSON encoding
+        from actingweb.db.utils import sanitize_json_data
+
+        new_data = sanitize_json_data(new_data, log_source="attribute")
+        old_data = sanitize_json_data(old_data, log_source="attribute")
 
         try:
             with get_connection() as conn:

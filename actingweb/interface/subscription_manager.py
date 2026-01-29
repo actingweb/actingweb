@@ -220,11 +220,25 @@ class SubscriptionManager:
         return [sub for sub in self.all_subscriptions if not sub.is_callback]
 
     def get_subscriptions_to_peer(self, peer_id: str) -> list[SubscriptionInfo]:
-        """Get all subscriptions to a specific peer."""
+        """Get all subscriptions to a specific peer (outbound subscriptions).
+
+        These are subscriptions we created to subscribe to their data.
+        """
         subscriptions = self._core_actor.get_subscriptions(peerid=peer_id)
         if subscriptions is None:
             return []
         return [SubscriptionInfo(sub) for sub in subscriptions if isinstance(sub, dict)]
+
+    def get_subscriptions_from_peer(self, peer_id: str) -> list[SubscriptionInfo]:
+        """Get all subscriptions from a specific peer (inbound subscriptions).
+
+        These are subscriptions they created to subscribe to our data.
+        Returns inbound subscriptions where the peer_id matches.
+        """
+        # Get all inbound subscriptions (callback=False means they subscribed to us)
+        all_inbound = self.inbound_subscriptions
+        # Filter to only those from the specific peer
+        return [sub for sub in all_inbound if sub.peer_id == peer_id]
 
     def get_subscriptions_for_target(
         self, target: str, subtarget: str = "", resource: str = ""

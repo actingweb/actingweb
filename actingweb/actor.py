@@ -1988,7 +1988,8 @@ class Actor:
                 continue
 
             # Match subtarget if specified
-            if subtarget is not None and sub_subtarget != subtarget:
+            # Empty subtarget in subscription means "all subtargets", so it matches any filter
+            if subtarget is not None and sub_subtarget and sub_subtarget != subtarget:
                 continue
 
             # Send resync callback
@@ -2016,12 +2017,32 @@ class Actor:
 
         peer_id = subscription.get("peerid", "")
         sub_id = subscription.get("subscriptionid", "")
-        callback_url = subscription.get("callback", "")
         target = subscription.get("target", "")
         sub_subtarget = subscription.get("subtarget")
 
-        if not callback_url:
-            logger.warning(f"No callback URL for subscription {sub_id}")
+        # Get trust relationship to construct callback URL
+        from .trust import Trust
+
+        trust = Trust(actor_id=self.id, peerid=peer_id, config=self.config)
+        trust_data = trust.get()
+
+        if not trust_data:
+            logger.warning(f"No trust found for peer {peer_id}")
+            return False
+
+        # Construct callback URL from trust relationship (same as callback_subscription)
+        callback_url = (
+            trust_data.get("baseuri", "")
+            + "/callbacks/subscriptions/"
+            + (self.id or "")
+            + "/"
+            + sub_id
+        )
+
+        if not callback_url or not trust_data.get("baseuri"):
+            logger.warning(
+                f"No callback URL for subscription {sub_id} - missing baseuri in trust"
+            )
             return False
 
         # Check if peer supports resync callbacks
@@ -2076,16 +2097,7 @@ class Actor:
                 f"sending low-granularity callback instead"
             )
 
-        # Get trust secret for authentication
-        from .trust import Trust
-
-        trust = Trust(actor_id=self.id, peerid=peer_id, config=self.config)
-        trust_data = trust.get()
-
-        if not trust_data:
-            logger.warning(f"No trust found for peer {peer_id}")
-            return False
-
+        # Get trust secret for authentication (already fetched above)
         secret = trust_data.get("secret", "")
 
         # Send callback

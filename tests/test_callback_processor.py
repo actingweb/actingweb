@@ -39,6 +39,48 @@ def mock_actor() -> MagicMock:
 
 
 @pytest.fixture
+def mock_subscription() -> Generator[tuple[MagicMock, dict[str, int]], None, None]:
+    """Create mock for Subscription class with sequence number storage.
+
+    Yields:
+        Tuple of (mock class, sequence storage dict keyed by "peer_id:sub_id")
+    """
+    with patch("actingweb.subscription.Subscription") as mock:
+        sequence_storage: dict[str, int] = {}
+
+        def subscription_init(
+            actor_id: str | None = None,  # noqa: ARG001
+            peerid: str | None = None,
+            subid: str | None = None,
+            callback: bool = False,  # noqa: ARG001, FBT001, FBT002
+            config: Any = None,  # noqa: ARG001, ANN401
+        ) -> MagicMock:
+            key = f"{peerid}:{subid}"
+            mock_instance = MagicMock()
+            mock_instance.handle = MagicMock()
+
+            # get() returns subscription data with sequence
+            def get_subscription() -> dict[str, Any]:
+                return {"sequence": sequence_storage.get(key, 0)}
+
+            mock_instance.get.side_effect = get_subscription
+
+            # handle.modify(seqnr=N) updates the sequence
+            def modify_sequence(seqnr: int | None = None) -> bool:
+                if seqnr is not None:
+                    sequence_storage[key] = seqnr
+                return True
+
+            mock_instance.handle.modify.side_effect = modify_sequence
+
+            return mock_instance
+
+        mock.side_effect = subscription_init
+
+        yield mock, sequence_storage
+
+
+@pytest.fixture
 def mock_attributes() -> Generator[tuple[MagicMock, dict[str, Any]], None, None]:
     """Create mock for Attributes class with simulated storage.
 
@@ -90,6 +132,7 @@ class TestCallbackProcessorSequencing:
     def test_process_first_callback_in_sequence(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test processing first callback (sequence 1)."""
@@ -114,6 +157,7 @@ class TestCallbackProcessorSequencing:
     def test_process_callback_in_order(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test processing callbacks in correct sequence order."""
@@ -147,6 +191,7 @@ class TestCallbackProcessorSequencing:
     def test_detect_duplicate_callback(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test duplicate callback detection."""
@@ -177,6 +222,7 @@ class TestCallbackProcessorSequencing:
     def test_detect_old_sequence_as_duplicate(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that sequences lower than last_seq are duplicates."""
@@ -208,6 +254,7 @@ class TestCallbackProcessorSequencing:
     def test_gap_adds_to_pending(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that gaps add callbacks to pending queue."""
@@ -243,6 +290,7 @@ class TestCallbackProcessorSequencing:
     def test_fill_gap_processes_pending(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that filling a gap processes pending callbacks."""
@@ -301,6 +349,7 @@ class TestCallbackProcessorPendingQueue:
     def test_pending_queue_limit(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test back-pressure when pending queue is full."""
@@ -343,6 +392,7 @@ class TestCallbackProcessorPendingQueue:
     def test_pending_callbacks_sorted(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that pending callbacks are sorted by sequence."""
@@ -375,6 +425,7 @@ class TestCallbackProcessorPendingQueue:
     def test_gap_timeout_triggers_resync(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that gap timeout triggers resync."""
@@ -426,6 +477,7 @@ class TestCallbackProcessorResync:
     def test_resync_resets_state(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that resync callback resets state."""
@@ -474,6 +526,7 @@ class TestCallbackProcessorResync:
     def test_resync_invokes_handler(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that resync invokes handler with correct type."""
@@ -504,7 +557,11 @@ class TestCallbackProcessorResync:
 class TestCallbackProcessorOptimisticLocking:
     """Test optimistic locking behavior."""
 
-    def test_version_conflict_retries(self, mock_actor: MagicMock) -> None:
+    def test_version_conflict_retries(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+    ) -> None:
         """Test that version conflicts trigger retries."""
         with patch("actingweb.attribute.Attributes") as mock:
             storage: dict[str, Any] = {}
@@ -575,6 +632,7 @@ class TestCallbackProcessorCleanup:
     def test_clear_state_removes_subscription_data(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test clearing state for a subscription."""
@@ -611,6 +669,7 @@ class TestCallbackProcessorCleanup:
     def test_clear_all_state_for_peer(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test clearing all state for a peer."""
@@ -656,6 +715,7 @@ class TestCallbackProcessorSyncVersion:
     def test_sync_process_callback(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test synchronous callback processing."""
@@ -676,6 +736,7 @@ class TestCallbackProcessorSyncVersion:
     def test_sync_handler_invoked(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test sync handler is invoked correctly."""
@@ -700,6 +761,7 @@ class TestCallbackProcessorSyncVersion:
     def test_sync_resync_processing(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test synchronous resync processing."""
@@ -762,6 +824,7 @@ class TestPermissionCallbackProcessing:
     def test_permission_callback_bypasses_sequencing(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that permission callbacks bypass sequence tracking."""
@@ -786,6 +849,7 @@ class TestPermissionCallbackProcessing:
     def test_permission_callback_invokes_handler(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that permission callbacks invoke handler with correct type."""
@@ -817,6 +881,7 @@ class TestPermissionCallbackProcessing:
     def test_permission_callback_does_not_affect_subscription_state(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test that permission callbacks don't affect subscription state."""
@@ -853,6 +918,7 @@ class TestPermissionCallbackProcessing:
     def test_permission_callback_sync_version(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test synchronous permission callback processing."""
@@ -879,6 +945,7 @@ class TestPermissionCallbackProcessing:
     def test_permission_callback_with_full_permission_structure(
         self,
         mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
         mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
     ) -> None:
         """Test permission callback with complete permission structure."""

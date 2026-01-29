@@ -37,7 +37,7 @@ class Subscription:
         subtarget: str | None = None,
         resource: str | None = None,
         granularity: str | None = None,
-        seqnr: int = 1,
+        seqnr: int = 0,
     ) -> bool:
         """Create new subscription and push it to db"""
         if self.subscription and len(self.subscription) > 0:
@@ -98,7 +98,10 @@ class Subscription:
             return False
         assert self.subscription is not None  # Always initialized in __init__
         self.subscription["sequence"] += 1
-        return self.handle.modify(seqnr=self.subscription["sequence"])
+        if not self.handle.modify(seqnr=self.subscription["sequence"]):
+            # Failed to update database
+            return False
+        return self.subscription["sequence"]
 
     def add_diff(self, blob=None):
         """Add a new diff for this subscription"""
@@ -108,6 +111,15 @@ class Subscription:
         if not self.config:
             return False
         assert self.subscription is not None  # Always initialized in __init__
+
+        # Increment sequence BEFORE creating diff so first diff gets sequence=1 per spec
+        if not self.increase_seq():
+            logger.error(
+                f"Failed increasing sequence number for subscription {self.subid} for peer {self.peerid}"
+            )
+            return False
+
+        # Now create diff with the incremented sequence number
         diff = get_subscription_diff(self.config)
         diff.create(
             actor_id=self.actor_id,
@@ -115,10 +127,6 @@ class Subscription:
             diff=blob,
             seqnr=self.subscription["sequence"],
         )
-        if not self.increase_seq():
-            logger.error(
-                f"Failed increasing sequence number for subscription {self.subid} for peer {self.peerid}"
-            )
         return diff.get()
 
     def get_diff(self, seqnr=0):

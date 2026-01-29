@@ -239,8 +239,17 @@ class RemotePeerStore:
 
         for key, value in data.items():
             try:
-                if key.startswith("list:") and isinstance(value, dict):
-                    # List operation
+                # Detect list operations per ActingWeb spec:
+                # List diff payloads have "list" and "operation" fields in the value
+                if isinstance(value, dict) and "list" in value and "operation" in value:
+                    # List operation (spec-compliant format)
+                    list_name = value.get("list", key)
+                    operation = value.get("operation", "unknown")
+                    results[list_name] = self._apply_list_operation(
+                        list_name, operation, value
+                    )
+                elif key.startswith("list:") and isinstance(value, dict):
+                    # Legacy format: key has "list:" prefix
                     list_name = value.get("list", key[5:])
                     operation = value.get("operation", "unknown")
                     results[list_name] = self._apply_list_operation(

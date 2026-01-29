@@ -282,11 +282,19 @@ class TestSyncSubscription:
             enabled=True, auto_sequence=False, auto_storage=False
         )
 
-        with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
             mock_proxy.get_resource.return_value = {"sequence": 5, "data": []}
             mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
 
             result = manager.sync_subscription(
                 peer_id="peer_1", subscription_id="sub_1", config=config
@@ -296,6 +304,8 @@ class TestSyncSubscription:
         assert result.diffs_fetched == 0
         assert result.diffs_processed == 0
         assert result.final_sequence == 5
+        # Verify sequence was updated
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=5)
 
     def test_success_with_diffs_no_sequence_tracking(self):
         """Test successful sync with diffs but no sequence tracking."""
@@ -312,7 +322,10 @@ class TestSyncSubscription:
             enabled=True, auto_sequence=False, auto_storage=False
         )
 
-        with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
             mock_proxy.get_resource.return_value = {
@@ -325,6 +338,11 @@ class TestSyncSubscription:
             }
             mock_proxy.change_resource.return_value = {}
             mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
 
             result = manager.sync_subscription(
                 peer_id="peer_1", subscription_id="sub_1", config=config
@@ -339,6 +357,8 @@ class TestSyncSubscription:
         mock_proxy.change_resource.assert_called_once()
         call_args = mock_proxy.change_resource.call_args
         assert call_args.kwargs["params"]["sequence"] == 10
+        # Verify sequence was updated
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=10)
 
     def test_clear_diffs_failure_still_succeeds(self):
         """Test that sync succeeds even if clearing diffs fails."""
@@ -355,7 +375,10 @@ class TestSyncSubscription:
             enabled=True, auto_sequence=False, auto_storage=False
         )
 
-        with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
             mock_proxy.get_resource.return_value = {
@@ -368,6 +391,11 @@ class TestSyncSubscription:
             mock_proxy.change_resource.return_value = {"error": {"code": 500}}
             mock_get_proxy.return_value = mock_proxy
 
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
             result = manager.sync_subscription(
                 peer_id="peer_1", subscription_id="sub_1", config=config
             )
@@ -376,6 +404,155 @@ class TestSyncSubscription:
         assert result.success is True
         assert result.diffs_fetched == 1
         assert result.diffs_processed == 1
+
+    def test_baseline_sync_updates_sequence(self):
+        """Test that baseline sync persists final sequence number to subscription."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "callback": True,
+            "sequence": 0,  # Start at 0
+        }
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            auto_storage=False,  # Disable to simplify test (not testing storage)
+            auto_sequence=True,
+        )
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
+            mock_proxy = MagicMock()
+            mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
+            # Return baseline data with sequence=5, no diffs
+            mock_proxy.get_resource.return_value = {
+                "sequence": 5,
+                "data": [],  # Empty diffs = baseline fetch will happen
+            }
+            # Mock baseline fetch
+            mock_proxy.get_property.return_value = {
+                "name": "test",
+                "value": "baseline_value",
+            }
+            mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        # Verify subscription sequence was updated to 5
+        assert result.success is True
+        assert result.final_sequence == 5
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=5)
+
+    def test_diff_sync_updates_sequence(self):
+        """Test that diff processing persists maximum sequence number to subscription."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "callback": True,
+            "sequence": 3,  # Start at 3
+        }
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            auto_storage=False,  # Disable to simplify test
+            auto_sequence=False,  # Disable to skip CallbackProcessor
+        )
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
+            mock_proxy = MagicMock()
+            mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
+            # Return 3 diffs: seq 4, 5, 6
+            mock_proxy.get_resource.return_value = {
+                "sequence": 6,
+                "data": [
+                    {"sequence": 4, "timestamp": "2024-01-01T00:00:00Z", "data": {}},
+                    {"sequence": 5, "timestamp": "2024-01-01T00:01:00Z", "data": {}},
+                    {"sequence": 6, "timestamp": "2024-01-01T00:02:00Z", "data": {}},
+                ],
+            }
+            mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        # Verify subscription sequence was updated to 6 (highest diff sequence)
+        assert result.success is True
+        assert result.diffs_fetched == 3
+        assert result.final_sequence == 6
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=6)
+
+    def test_no_diffs_updates_sequence(self):
+        """Test that even with no diffs, sequence is updated from response."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties/name",  # Subtarget = no baseline fetch
+            "callback": True,
+            "sequence": 0,
+        }
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            auto_storage=False,  # Disable auto_storage to skip baseline fetch
+            auto_sequence=True,
+        )
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
+            mock_proxy = MagicMock()
+            mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
+            # Return no diffs but sequence=3
+            mock_proxy.get_resource.return_value = {
+                "sequence": 3,
+                "data": [],
+            }
+            mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        # Verify subscription sequence was updated to 3 even with no diffs
+        assert result.success is True
+        assert result.diffs_processed == 0
+        assert result.final_sequence == 3
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=3)
 
 
 class TestSyncPeer:
@@ -415,7 +592,10 @@ class TestSyncPeer:
             enabled=True, auto_sequence=False, auto_storage=False
         )
 
-        with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
             # Return different diffs for different subscriptions
@@ -436,6 +616,11 @@ class TestSyncPeer:
             ]
             mock_proxy.change_resource.return_value = {}
             mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
 
             result = manager.sync_peer(peer_id="peer_1", config=config)
 
@@ -465,7 +650,10 @@ class TestSyncPeer:
             enabled=True, auto_sequence=False, auto_storage=False
         )
 
-        with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
             # First succeeds, second fails
@@ -475,6 +663,11 @@ class TestSyncPeer:
             ]
             mock_proxy.change_resource.return_value = {}
             mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
 
             result = manager.sync_peer(peer_id="peer_1", config=config)
 
@@ -550,7 +743,10 @@ class TestSyncSubscriptionAsync:
             enabled=True, auto_sequence=False, auto_storage=False
         )
 
-        with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
 
@@ -574,6 +770,11 @@ class TestSyncSubscriptionAsync:
             mock_proxy.change_resource_async = mock_change_resource_async
             mock_get_proxy.return_value = mock_proxy
 
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
             result = await manager.sync_subscription_async(
                 peer_id="peer_1", subscription_id="sub_1", config=config
             )
@@ -582,6 +783,101 @@ class TestSyncSubscriptionAsync:
         assert result.diffs_fetched == 1
         assert result.diffs_processed == 1
         assert result.final_sequence == 5
+        # Verify sequence was updated
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=5)
+
+    @pytest.mark.asyncio
+    async def test_baseline_sync_updates_sequence_async(self):
+        """Test that async baseline sync persists final sequence number."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "callback": True,
+            "sequence": 0,
+        }
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            auto_storage=False,  # Disable to simplify test (not testing storage)
+            auto_sequence=True,
+        )
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
+            mock_proxy = MagicMock()
+            mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
+            mock_proxy.get_resource.return_value = {
+                "sequence": 7,
+                "data": [],
+            }
+            mock_proxy.get_property.return_value = {
+                "name": "test",
+                "value": "baseline",
+            }
+            mock_get_proxy.return_value = mock_proxy
+
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
+            result = await manager.sync_subscription_async(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        assert result.success is True
+        assert result.final_sequence == 7
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=7)
+
+    @pytest.mark.asyncio
+    async def test_no_diffs_updates_sequence_async(self):
+        """Test that async sync updates sequence even with no diffs."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties/name",
+            "callback": True,
+            "sequence": 2,
+        }
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            auto_storage=False,
+            auto_sequence=True,
+        )
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
+            mock_proxy = MagicMock()
+            mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
+            mock_proxy.get_resource.return_value = {
+                "sequence": 8,
+                "data": [],
+            }
+            mock_get_proxy.return_value = mock_proxy
+
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
+            result = await manager.sync_subscription_async(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        assert result.success is True
+        assert result.diffs_processed == 0
+        assert result.final_sequence == 8
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=8)
 
 
 class TestSyncPeerAsync:
@@ -623,7 +919,10 @@ class TestSyncPeerAsync:
 
         call_count = 0
 
-        with patch.object(manager, "_get_peer_proxy") as mock_get_proxy:
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+        ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
 
@@ -647,6 +946,11 @@ class TestSyncPeerAsync:
             mock_proxy.get_resource_async = mock_get_resource_async
             mock_proxy.change_resource_async = mock_change_resource_async
             mock_get_proxy.return_value = mock_proxy
+
+            # Mock subscription for sequence update
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
 
             result = await manager.sync_peer_async(peer_id="peer_1", config=config)
 

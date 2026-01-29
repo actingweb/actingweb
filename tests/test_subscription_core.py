@@ -419,6 +419,64 @@ class TestSubscriptionDiffs:
 
         mock_diff_list.delete.assert_called_once_with(seqnr=5)
 
+    def test_subscription_modify_seqnr_zero(self):
+        """Test that seqnr=0 is correctly persisted (was silently skipped with falsy check)."""
+        mock_config = Mock()
+        mock_db_subscription = Mock()
+        mock_sub_data = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+            "peerid": "peer123",
+            "sequence": 5,
+        }
+        mock_db_subscription.get.return_value = mock_sub_data
+        mock_db_subscription.modify.return_value = True
+        mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
+
+        sub = Subscription(
+            actor_id="test_actor",
+            peerid="peer123",
+            subid="sub456",
+            config=mock_config,
+        )
+
+        # Directly call modify on handle with seqnr=0
+        assert sub.handle is not None  # Type narrowing
+        result = sub.handle.modify(seqnr=0)
+
+        assert result is True
+        # Verify modify was called with seqnr=0 (not skipped)
+        mock_db_subscription.modify.assert_called_once_with(seqnr=0)
+
+    def test_subscription_modify_seqnr_one(self):
+        """Test that seqnr=1 is correctly persisted (was silently skipped with falsy check)."""
+        mock_config = Mock()
+        mock_db_subscription = Mock()
+        mock_sub_data = {
+            "id": "test_actor",
+            "subscriptionid": "sub456",
+            "peerid": "peer123",
+            "sequence": 0,
+        }
+        mock_db_subscription.get.return_value = mock_sub_data
+        mock_db_subscription.modify.return_value = True
+        mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
+
+        sub = Subscription(
+            actor_id="test_actor",
+            peerid="peer123",
+            subid="sub456",
+            config=mock_config,
+        )
+
+        # Directly call modify on handle with seqnr=1
+        assert sub.handle is not None  # Type narrowing
+        result = sub.handle.modify(seqnr=1)
+
+        assert result is True
+        # Verify modify was called with seqnr=1 (not skipped)
+        mock_db_subscription.modify.assert_called_once_with(seqnr=1)
+
 
 class TestSubscriptionsCollection:
     """Test Subscriptions collection class."""

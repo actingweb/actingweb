@@ -7,6 +7,7 @@ from actingweb.handlers import base_handler
 
 if TYPE_CHECKING:
     from actingweb.interface.actor_interface import ActorInterface
+    from actingweb.subscription_config import SubscriptionProcessingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # Auto-sync when new permissions are granted
                 # This fetches the newly accessible data immediately
                 # Only perform auto-sync if subscription processing is enabled and auto_storage is on
-                subscription_config = getattr(myself.config, "_subscription_config", None)
+                subscription_config = getattr(
+                    myself.config, "_subscription_config", None
+                )
                 if (
                     permission_changes.get("granted_patterns")
                     and subscription_config
@@ -312,9 +315,30 @@ class CallbacksHandler(base_handler.BaseHandler):
                     self.response.set_status(400, "Error in json body")
                     return
 
-                # Execute subscription callback hook
+                # Process subscription callback internally FIRST (if configured)
+                # Check if subscription processing is enabled
+                subscription_config = getattr(
+                    myself.config, "_subscription_config", None
+                )
+
                 result = False
-                if self.hooks:
+                if (
+                    subscription_config
+                    and subscription_config.enabled
+                    and subscription_config.auto_sequence
+                ):
+                    # Internal library processing: CallbackProcessor + RemotePeerStore
+                    # Hooks are invoked inside the internal handler after validation
+                    result = self._process_subscription_callback_internal(
+                        actor_interface=actor_interface,
+                        peer_id=peerid,
+                        subscription_id=subid,
+                        subscription=sub,
+                        params=params,
+                        config=subscription_config,
+                    )
+                elif self.hooks:
+                    # Legacy fallback: just invoke user hooks directly (no internal processing)
                     hook_data = params.copy()
                     hook_data.update({"subscription": sub, "peerid": peerid})
                     hook_result = self.hooks.execute_callback_hooks(
@@ -368,6 +392,220 @@ class CallbacksHandler(base_handler.BaseHandler):
                 self.response.write(json.dumps(hook_result))
         else:
             self.response.set_status(403, "Forbidden")
+
+    def _process_subscription_callback_internal(
+        self,
+        actor_interface: "ActorInterface",
+        peer_id: str,
+        subscription_id: str,
+        subscription: dict,
+        params: dict,
+        config: "SubscriptionProcessingConfig",
+    ) -> bool:
+        """
+        Process subscription callback through CallbackProcessor (internal library logic).
+
+        This is the internal processing that happens BEFORE user hooks are invoked.
+        It handles sequence validation, gap detection, deduplication, storage, and
+        sequence number updates.
+
+        Args:
+            actor_interface: ActorInterface for the receiving actor
+            peer_id: ID of the peer sending the callback
+            subscription_id: ID of the subscription
+            subscription: Subscription info dict
+            params: Parsed callback request body
+            config: Subscription processing configuration
+
+        Returns:
+            True if processed successfully, False otherwise
+        """
+        from actingweb.callback_processor import (
+            CallbackProcessor,
+            CallbackType,
+            ProcessResult,
+        )
+        from actingweb.remote_storage import RemotePeerStore
+
+        if not config.enabled:
+            return False
+
+        # Extract callback data
+        callback_data = params.get("data", {})
+        sequence = params.get("sequence", 0)
+        callback_type = params.get("type", "diff")
+
+        logger.debug(
+            f"Processing subscription callback: peer={peer_id}, "
+            f"sub={subscription_id}, seq={sequence}, type={callback_type}"
+        )
+
+        try:
+            # Create processor
+            processor = CallbackProcessor(
+                actor_interface,
+                gap_timeout_seconds=config.gap_timeout_seconds,
+                max_pending=config.max_pending,
+            )
+
+            # Define handler for processed callbacks
+            def handler(cb):
+                """Handler invoked by CallbackProcessor after validation."""
+                # Auto-storage: store data in RemotePeerStore
+                if config.auto_storage:
+                    store = RemotePeerStore(
+                        actor_interface, peer_id, validate_peer_id=False
+                    )
+                    if cb.callback_type == CallbackType.RESYNC:
+                        store.apply_resync_data(cb.data)
+                    else:
+                        store.apply_callback_data(cb.data)
+
+                # Invoke subscription_data_hooks (from app.subscription_data_hook decorator)
+                target = subscription.get("target", "properties")
+                if config.subscription_data_hooks:
+                    import inspect
+
+                    # Invoke target-specific hooks
+                    if target in config.subscription_data_hooks:
+                        for hook in config.subscription_data_hooks[target]:
+                            try:
+                                if inspect.iscoroutinefunction(hook):
+                                    # Can't await in sync context, run via asyncio.run
+                                    import asyncio
+
+                                    asyncio.run(
+                                        hook(
+                                            actor_interface,
+                                            peer_id,
+                                            target,
+                                            cb.data,
+                                            cb.sequence,
+                                            cb.callback_type.value,
+                                        )
+                                    )
+                                else:
+                                    hook(
+                                        actor_interface,
+                                        peer_id,
+                                        target,
+                                        cb.data,
+                                        cb.sequence,
+                                        cb.callback_type.value,
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error in subscription_data_hook for {target}: {e}"
+                                )
+
+                    # Invoke wildcard hooks
+                    if "*" in config.subscription_data_hooks:
+                        for hook in config.subscription_data_hooks["*"]:
+                            try:
+                                if inspect.iscoroutinefunction(hook):
+                                    import asyncio
+
+                                    asyncio.run(
+                                        hook(
+                                            actor_interface,
+                                            peer_id,
+                                            target,
+                                            cb.data,
+                                            cb.sequence,
+                                            cb.callback_type.value,
+                                        )
+                                    )
+                                else:
+                                    hook(
+                                        actor_interface,
+                                        peer_id,
+                                        target,
+                                        cb.data,
+                                        cb.sequence,
+                                        cb.callback_type.value,
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error in subscription_data_hook wildcard: {e}"
+                                )
+
+                # Invoke legacy callback hooks (for backward compatibility)
+                if self.hooks:
+                    hook_data = {
+                        "peerid": peer_id,
+                        "subscription": subscription,
+                        "data": cb.data,
+                        "sequence": cb.sequence,
+                        "type": cb.callback_type.value,
+                    }
+                    self.hooks.execute_callback_hooks(
+                        "subscription", actor_interface, hook_data
+                    )
+
+            # Process through CallbackProcessor
+            result = processor.process_callback_sync(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                sequence=sequence,
+                data=callback_data,
+                callback_type=callback_type,
+                handler=handler,
+            )
+
+            # Accept PENDING and RESYNC_TRIGGERED as success
+            # PENDING: callback queued due to sequence gap (waiting for missing callbacks)
+            # RESYNC_TRIGGERED: gap timeout exceeded, subscriber needs to sync from publisher
+            # Per ActingWeb protocol, receiver handles gaps via polling, sender should not retry
+            success = result in (
+                ProcessResult.PROCESSED,
+                ProcessResult.DUPLICATE,
+                ProcessResult.PENDING,
+                ProcessResult.RESYNC_TRIGGERED,
+            )
+
+            if success:
+                logger.debug(
+                    f"Subscription callback processed: peer={peer_id}, "
+                    f"sub={subscription_id}, seq={sequence}, result={result.value}"
+                )
+            else:
+                logger.warning(
+                    f"Subscription callback rejected: peer={peer_id}, "
+                    f"sub={subscription_id}, seq={sequence}, result={result.value}"
+                )
+
+            # If resync was triggered, actively sync from publisher to resolve gap
+            if result == ProcessResult.RESYNC_TRIGGERED:
+                logger.info(
+                    f"Gap timeout triggered resync for {peer_id}:{subscription_id}, "
+                    f"initiating sync from publisher"
+                )
+                try:
+                    from ..interface.subscription_manager import SubscriptionManager
+
+                    mgr = SubscriptionManager(actor_interface._core_actor)
+                    sync_result = mgr.sync_subscription(peer_id, subscription_id)
+                    if sync_result.success:
+                        logger.info(
+                            f"Resync completed: {sync_result.diffs_processed} diffs, "
+                            f"sequence now at {sync_result.final_sequence}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Resync failed: {sync_result.error or 'unknown error'}"
+                        )
+                except Exception as e:
+                    logger.error(f"Error during automatic resync: {e}", exc_info=True)
+
+            return success
+
+        except Exception as e:
+            logger.error(
+                f"Error processing subscription callback: peer={peer_id}, "
+                f"sub={subscription_id}, seq={sequence}, error={e}",
+                exc_info=True,
+            )
+            return False
 
     def _delete_revoked_peer_data(
         self,

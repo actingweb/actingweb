@@ -1670,11 +1670,10 @@ class Actor:
                         f"Callback seq={diff.get('sequence')} returned {response.status_code}: "
                         f"{self.last_response_message[:200] if self.last_response_message else 'no message'}"
                     )
-                if response.status_code == 204 and sub["granularity"] == "high":
-                    if not sub_obj:
-                        logger.warning("About to clear diff without having subobj set")
-                    else:
-                        sub_obj.clear_diff(diff["sequence"])
+                # NOTE: Don't clear diffs immediately after 204 response. The subscriber
+                # might have added the callback to a pending queue (due to sequence gaps),
+                # and the diff would be lost. Diffs are cleared when the subscriber
+                # explicitly confirms processing via PUT /subscriptions/{id} with sequence.
             except (requests.RequestException, requests.Timeout, ConnectionError) as e:
                 logger.warning(
                     f"Callback seq={diff.get('sequence')} failed - peer did not respond: {e}"
@@ -1718,11 +1717,10 @@ class Actor:
                     if isinstance(response.content, bytes)
                     else str(response.content)
                 )
-                if response.status_code == 204 and sub["granularity"] == "high":
-                    if not sub_obj:
-                        logger.warning("About to clear diff without having subobj set")
-                    else:
-                        sub_obj.clear_diff(diff["sequence"])
+                # NOTE: Don't clear diffs immediately after 204 response. The subscriber
+                # might have added the callback to a pending queue (due to sequence gaps),
+                # and the diff would be lost. Diffs are cleared when the subscriber
+                # explicitly confirms processing via PUT /subscriptions/{id} with sequence.
             except (httpx.HTTPError, httpx.TimeoutException) as e:
                 logger.debug(f"Peer did not respond to callback on url({requrl}): {e}")
                 self.last_response_code = 0
@@ -2051,6 +2049,8 @@ class Actor:
 
         actor_interface = ActorInterface(self)
         caps = PeerCapabilities(actor_interface, peer_id)
+        # Ensure capabilities are loaded (fetches if not cached or expired)
+        caps.ensure_loaded()
         supports_resync = caps.supports_resync_callbacks()
 
         # Increment sequence number

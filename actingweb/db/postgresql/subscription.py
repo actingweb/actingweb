@@ -96,7 +96,7 @@ class DbSubscription:
         target: str | None = None,
         subtarget: str | None = None,
         resource: str | None = None,
-        seqnr: int = 1,
+        seqnr: int = 0,
         callback: bool = False,
     ) -> bool:
         """
@@ -110,7 +110,7 @@ class DbSubscription:
             target: Target
             subtarget: Subtarget
             resource: Resource
-            seqnr: Sequence number (default 1)
+            seqnr: Sequence number (default 0)
             callback: Callback flag (default False)
 
         Returns:

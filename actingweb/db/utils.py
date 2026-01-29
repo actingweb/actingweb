@@ -49,7 +49,6 @@ def sanitize_json_data(data: Any, *, log_source: str = "") -> Any:
         >>> sanitize_json_data(bad_str)
         'test\ufffddata'  # Surrogate replaced with replacement character
     """
-    modified = False
 
     if isinstance(data, str):
         try:
@@ -75,8 +74,6 @@ def sanitize_json_data(data: Any, *, log_source: str = "") -> Any:
             sanitized_key = sanitize_json_data(key, log_source=log_source)
             sanitized_value = sanitize_json_data(value, log_source=log_source)
             sanitized_dict[sanitized_key] = sanitized_value
-            if sanitized_key != key or sanitized_value != value:
-                modified = True
         return sanitized_dict
 
     elif isinstance(data, list):

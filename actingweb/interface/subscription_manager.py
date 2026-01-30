@@ -1693,10 +1693,12 @@ class SubscriptionManager:
                     and not sub.subtarget
                     and not sub.resource
                 ):
-                    transformed_data = await self._transform_baseline_list_properties_async(
-                        baseline_data=baseline_response,
-                        peer_id=peer_id,
-                        target=sub.target,
+                    transformed_data = (
+                        await self._transform_baseline_list_properties_async(
+                            baseline_data=baseline_response,
+                            peer_id=peer_id,
+                            target=sub.target,
+                        )
                     )
                 else:
                     transformed_data = baseline_response

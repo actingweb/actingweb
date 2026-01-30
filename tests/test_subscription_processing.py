@@ -1,9 +1,5 @@
 """Tests for subscription processing integration layer."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
 from actingweb.interface import (
     ActingWebApp,
     CallbackProcessor,
@@ -232,45 +228,6 @@ class TestSubscriptionDataHook:
             pass
 
         assert len(app._subscription_data_hooks["properties"]) == 2
-
-
-
-
-class TestCleanupHookRegistration:
-    """Tests for cleanup hook registration."""
-
-    def test_cleanup_hook_registered_when_auto_cleanup_true(self) -> None:
-        """Cleanup hook is registered when auto_cleanup is True."""
-        app = ActingWebApp(
-            aw_type="urn:actingweb:test",
-            database="dynamodb",
-            fqdn="test.example.com",
-        )
-
-        initial_hooks = len(app.hooks._lifecycle_hooks.get("trust_deleted", []))
-
-        app.with_subscription_processing(auto_cleanup=True)
-
-        after_hooks = len(app.hooks._lifecycle_hooks.get("trust_deleted", []))
-
-        assert after_hooks > initial_hooks
-
-    def test_cleanup_hook_not_registered_when_auto_cleanup_false(self) -> None:
-        """Cleanup hook is not registered when auto_cleanup is False."""
-        app = ActingWebApp(
-            aw_type="urn:actingweb:test",
-            database="dynamodb",
-            fqdn="test.example.com",
-        )
-
-        initial_hooks = len(app.hooks._lifecycle_hooks.get("trust_deleted", []))
-
-        app.with_subscription_processing(auto_cleanup=False)
-
-        after_hooks = len(app.hooks._lifecycle_hooks.get("trust_deleted", []))
-
-        # Should be same since we didn't register cleanup
-        assert after_hooks == initial_hooks
 
 
 class TestFullChain:

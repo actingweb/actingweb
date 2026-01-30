@@ -208,6 +208,16 @@ def create_mock_list_attr(list_data, list_metadata):
         def set_metadata(self, metadata):
             list_metadata[self.name] = metadata
 
+        def set_description(self, description):
+            if self.name not in list_metadata:
+                list_metadata[self.name] = {}
+            list_metadata[self.name]["description"] = description
+
+        def set_explanation(self, explanation):
+            if self.name not in list_metadata:
+                list_metadata[self.name] = {}
+            list_metadata[self.name]["explanation"] = explanation
+
     return MockListAttr
 
 
@@ -280,14 +290,22 @@ class TestRemotePeerStoreList:
         assert list_data["items"] == [{"id": 1}, {"id": 2}]
 
     def test_set_list_with_metadata(self, mock_actor, mock_list_store):
-        """Test setting a list with metadata."""
+        """Test setting a list with metadata (only description and explanation supported)."""
         _, list_data, list_metadata = mock_list_store
 
         store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        store.set_list("items", [{"id": 1}], metadata={"count": 1})
+        # ListAttribute only supports description and explanation metadata
+        store.set_list(
+            "items",
+            [{"id": 1}],
+            metadata={"description": "Test list", "explanation": "A list for testing"},
+        )
 
         assert list_data["items"] == [{"id": 1}]
-        assert list_metadata["items"] == {"count": 1}
+        assert list_metadata["items"] == {
+            "description": "Test list",
+            "explanation": "A list for testing",
+        }
 
     def test_delete_list(self, mock_actor, mock_list_store):
         """Test deleting a list."""

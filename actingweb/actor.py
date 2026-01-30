@@ -1341,6 +1341,94 @@ class Actor:
                 logger.warning(
                     f"Failed to delete trust permissions for {rel['peerid']}: {e}"
                 )
+
+            # Clean up remote peer data (RemotePeerStore)
+            # No config check needed - delete_all() is a no-op if no data exists
+            try:
+                from .remote_storage import RemotePeerStore
+
+                store = RemotePeerStore(
+                    self, rel["peerid"], validate_peer_id=False  # type: ignore[arg-type]
+                )
+                store.delete_all()
+                logger.debug(f"Cleaned up RemotePeerStore for peer {rel['peerid']}")
+            except ImportError:
+                pass  # RemotePeerStore not available
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cleanup RemotePeerStore for {rel['peerid']}: {e}"
+                )
+
+            # Clean up callback processor state
+            # No config check needed - clear operation is a no-op if no state exists
+            try:
+                from .callback_processor import CallbackProcessor
+
+                processor = CallbackProcessor(self)  # type: ignore[arg-type]
+                processor.clear_all_state_for_peer(rel["peerid"])
+                logger.debug(
+                    f"Cleaned up CallbackProcessor state for peer {rel['peerid']}"
+                )
+            except ImportError:
+                pass  # CallbackProcessor not available
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cleanup callback state for {rel['peerid']}: {e}"
+                )
+
+            # Clean up cached peer profile
+            # No config check needed - delete is a no-op if no profile exists
+            if self.config is not None and self.id is not None:
+                try:
+                    from .peer_profile import get_peer_profile_store
+
+                    profile_store = get_peer_profile_store(self.config)
+                    profile_store.delete_profile(self.id, rel["peerid"])
+                    logger.debug(f"Cleaned up peer profile for peer {rel['peerid']}")
+                except ImportError:
+                    pass  # Peer profile system not available
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to cleanup peer profile for {rel['peerid']}: {e}"
+                    )
+
+            # Clean up cached peer capabilities (methods/actions)
+            # No config check needed - delete is a no-op if nothing cached
+            if self.config is not None and self.id is not None:
+                try:
+                    from .peer_capabilities import get_cached_capabilities_store
+
+                    capabilities_store = get_cached_capabilities_store(self.config)
+                    capabilities_store.delete_capabilities(self.id, rel["peerid"])
+                    logger.debug(
+                        f"Cleaned up peer capabilities for peer {rel['peerid']}"
+                    )
+                except ImportError:
+                    pass  # Peer capabilities system not available
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to cleanup peer capabilities for {rel['peerid']}: {e}"
+                    )
+
+            # Clean up cached peer permissions
+            # No config check needed - delete is a no-op if nothing cached
+            if self.config is not None and self.id is not None:
+                try:
+                    from .peer_permissions import get_peer_permission_store
+
+                    peer_permissions_store = get_peer_permission_store(self.config)
+                    peer_permissions_store.delete_permissions(self.id, rel["peerid"])
+                    logger.debug(
+                        f"Cleaned up peer permissions cache for peer {rel['peerid']}"
+                    )
+                except ImportError:
+                    pass  # Peer permissions caching not available
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to cleanup peer permissions cache for {rel['peerid']}: {e}"
+                    )
+
+            # Finally, delete the trust record itself
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )

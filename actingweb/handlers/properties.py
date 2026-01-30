@@ -157,8 +157,14 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
 
         # Check if this is a list property first
-        logger.debug(f"Checking if '{name}' is a list property: has_lists={hasattr(myself, 'property_lists') if myself else False}")
-        if myself and hasattr(myself, "property_lists") and myself.property_lists is not None:
+        logger.debug(
+            f"Checking if '{name}' is a list property: has_lists={hasattr(myself, 'property_lists') if myself else False}"
+        )
+        if (
+            myself
+            and hasattr(myself, "property_lists")
+            and myself.property_lists is not None
+        ):
             exists = myself.property_lists.exists(name)
             logger.debug(f"property_lists.exists('{name}') = {exists}")
 
@@ -170,13 +176,19 @@ class PropertiesHandler(base_handler.BaseHandler):
         ):
             # This is a list property - handle format and index parameters
             logger.info(f"Processing list property '{name}'")
-            index_param = self.request.get("index") or None  # Convert empty string to None
-            format_param = self.request.get("format") or None  # Convert empty string to None
+            index_param = (
+                self.request.get("index") or None
+            )  # Convert empty string to None
+            format_param = (
+                self.request.get("format") or None
+            )  # Convert empty string to None
 
             try:
                 logger.info(f"Getting list property object for '{name}'")
                 list_prop = getattr(myself.property_lists, name)
-                logger.info(f"Got list_prop: {type(list_prop).__name__}, length={len(list_prop) if list_prop else 'N/A'}")
+                logger.info(
+                    f"Got list_prop: {type(list_prop).__name__}, length={len(list_prop) if list_prop else 'N/A'}"
+                )
                 logger.info(f"index_param={index_param}, format_param={format_param}")
 
                 if index_param is not None:
@@ -213,7 +225,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                             self.response.set_status(404, "List item not found")
                         return
                 else:
-                    logger.info(f"Handling list access (not index), format_param={format_param}")
+                    logger.info(
+                        f"Handling list access (not index), format_param={format_param}"
+                    )
                     # Determine response format
                     if format_param == "short":
                         logger.info("Using short format")
@@ -232,14 +246,20 @@ class PropertiesHandler(base_handler.BaseHandler):
                         all_items = list_prop.to_list()
 
                         # Execute property hook if available
-                        logger.info(f"Checking hooks: has_hooks={self.hooks is not None}")
+                        logger.info(
+                            f"Checking hooks: has_hooks={self.hooks is not None}"
+                        )
                         if self.hooks:
                             actor_interface = self._get_actor_interface(myself)
-                            logger.info(f"Got actor_interface: {actor_interface is not None}")
+                            logger.info(
+                                f"Got actor_interface: {actor_interface is not None}"
+                            )
                             if actor_interface:
                                 hook_path = []
                                 auth_context = self._create_auth_context(check, "read")
-                                logger.info(f"Executing property hooks for '{name}', items count={len(all_items)}")
+                                logger.info(
+                                    f"Executing property hooks for '{name}', items count={len(all_items)}"
+                                )
                                 transformed = self.hooks.execute_property_hooks(
                                     name,
                                     "get",
@@ -248,11 +268,15 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     hook_path,
                                     auth_context,
                                 )
-                                logger.info(f"Hook result: transformed is None? {transformed is None}")
+                                logger.info(
+                                    f"Hook result: transformed is None? {transformed is None}"
+                                )
                                 if transformed is not None:
                                     all_items = transformed
                                 else:
-                                    logger.warning(f"Property hook returned None for '{name}', returning 404")
+                                    logger.warning(
+                                        f"Property hook returned None for '{name}', returning 404"
+                                    )
                                     if self.response:
                                         self.response.set_status(404)
                                     return

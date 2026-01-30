@@ -109,7 +109,9 @@ class TestBasicAuthContext:
         # Set up basic auth request
         import base64
 
-        credentials = base64.b64encode(f"testuser:{passphrase}".encode()).decode("utf-8")
+        credentials = base64.b64encode(f"testuser:{passphrase}".encode()).decode(
+            "utf-8"
+        )
         appreq = MockAppRequest(headers={"Authorization": f"Basic {credentials}"})
 
         auth_obj = auth.Auth(actor_id, auth_type="basic", config=config)
@@ -125,7 +127,10 @@ class TestBasicAuthContext:
         request_context.clear_request_context()
 
     def test_basic_auth_appears_in_log_context(
-        self, test_actor: tuple[str, str], config: Config, caplog: pytest.LogCaptureFixture
+        self,
+        test_actor: tuple[str, str],
+        config: Config,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test that peer_id appears in log context after basic auth."""
         from actingweb.log_filter import add_context_filter_to_logger
@@ -149,7 +154,9 @@ class TestBasicAuthContext:
         # Authenticate
         import base64
 
-        credentials = base64.b64encode(f"testuser:{passphrase}".encode()).decode("utf-8")
+        credentials = base64.b64encode(f"testuser:{passphrase}".encode()).decode(
+            "utf-8"
+        )
         appreq = MockAppRequest(headers={"Authorization": f"Basic {credentials}"})
 
         auth_obj = auth.Auth(actor_id, auth_type="basic", config=config)
@@ -263,7 +270,9 @@ class TestTokenAuthContext:
 
         # Create a trustee-type actor with strong passphrase
         trustee_id = f"trustee_auth_{int(time.time() * 1000000)}"
-        trustee_passphrase = "veryLongAndSecurePassphraseWithHighEntropyForTesting12345!@#"
+        trustee_passphrase = (
+            "veryLongAndSecurePassphraseWithHighEntropyForTesting12345!@#"
+        )
 
         db_trustee = config.DbActor.DbActor()  # type: ignore[attr-defined]
         success = db_trustee.create(
@@ -356,7 +365,9 @@ class TestContextIsolationInAuth:
         # Second auth - basic auth with different actor
         import base64
 
-        credentials = base64.b64encode(f"testuser:{test_passphrase}".encode()).decode("utf-8")
+        credentials = base64.b64encode(f"testuser:{test_passphrase}".encode()).decode(
+            "utf-8"
+        )
         appreq2 = MockAppRequest(headers={"Authorization": f"Basic {credentials}"})
         auth_obj2 = auth.Auth(test_actor_id, auth_type="basic", config=config)
         auth_obj2.check_authentication(appreq=appreq2, path="/test")

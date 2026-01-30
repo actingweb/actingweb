@@ -294,7 +294,11 @@ class TestSyncSubscriptionCallbacks:
                 assert "No response from peer" in actor.last_response_message
 
     def test_sync_callback_clears_diff_on_204(self, mock_actor_sync):
-        """Test that sync callback clears diff when receiving 204 with high granularity."""
+        """Test that sync callback does NOT clear diff on 204 (behavior changed).
+
+        Diffs are now only cleared when subscriber sends PUT with sequence confirmation.
+        This prevents data loss when callbacks are queued due to gaps.
+        """
         actor = mock_actor_sync
 
         mock_sub_obj = Mock()
@@ -333,8 +337,8 @@ class TestSyncSubscriptionCallbacks:
                     blob='{"key": "value"}',
                 )
 
-                # Verify diff was cleared
-                mock_sub_obj.clear_diff.assert_called_once_with(5)
+                # Verify diff was NOT cleared on 204 (new behavior)
+                mock_sub_obj.clear_diff.assert_not_called()
 
     def test_sync_callback_does_not_clear_diff_on_non_204(self, mock_actor_sync):
         """Test that sync callback doesn't clear diff on non-204 responses."""

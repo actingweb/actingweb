@@ -134,7 +134,9 @@ class CallbackProcessor:
         state = attr.get("data") if attr else None
         return state or {"version": 0, "resync_pending": False}
 
-    def _update_last_seq(self, peer_id: str, subscription_id: str, new_seq: int) -> bool:
+    def _update_last_seq(
+        self, peer_id: str, subscription_id: str, new_seq: int
+    ) -> bool:
         """Update subscription sequence (single source of truth for last processed seq).
 
         Returns:
@@ -510,9 +512,15 @@ class CallbackProcessor:
         }
 
     def clear_state(self, peer_id: str, subscription_id: str) -> None:
-        """Clear all state for a subscription (e.g., when trust deleted)."""
+        """Clear all state for a subscription (e.g., when subscription/trust deleted).
+
+        Note: We don't reset the subscription sequence here because:
+        - If called from Subscription.delete(), the subscription is about to be deleted
+        - If called from trust deletion, subscriptions are already deleted
+        """
         from .attribute import Attributes
 
+        # Clear callback state attributes
         db = Attributes(
             actor_id=self._actor.id,
             bucket=self._state_bucket,
@@ -522,7 +530,11 @@ class CallbackProcessor:
         db.delete_attr(name=self._get_pending_key(peer_id, subscription_id))
 
     def clear_all_state_for_peer(self, peer_id: str) -> None:
-        """Clear all callback state for a peer (when trust deleted)."""
+        """Clear all callback state for a peer (when trust deleted).
+
+        Note: We don't reset subscription sequences here because subscriptions
+        are deleted before this method is called in delete_reciprocal_trust().
+        """
         from .attribute import Attributes
 
         db = Attributes(

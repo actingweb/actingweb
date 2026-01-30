@@ -172,7 +172,7 @@ class PermissionEvaluator:
                 logger.warning(
                     f"No effective permissions found for {actor_id}:{peer_id}"
                 )
-                return {path: PermissionResult.NOT_FOUND for path in property_paths}
+                return dict.fromkeys(property_paths, PermissionResult.NOT_FOUND)
 
             # Get the permission rules
             permission_rules = effective_perms.get(PermissionType.PROPERTIES.value)
@@ -180,7 +180,7 @@ class PermissionEvaluator:
                 logger.debug(
                     f"No properties permissions defined for {actor_id}:{peer_id}"
                 )
-                return {path: PermissionResult.NOT_FOUND for path in property_paths}
+                return dict.fromkeys(property_paths, PermissionResult.NOT_FOUND)
 
             # Evaluate each property (suppress individual logging for bulk operations)
             for property_path in property_paths:
@@ -189,9 +189,15 @@ class PermissionEvaluator:
                 )
 
             # Log summary instead of individual evaluations
-            allowed_count = sum(1 for r in results.values() if r == PermissionResult.ALLOWED)
-            denied_count = sum(1 for r in results.values() if r == PermissionResult.DENIED)
-            not_found_count = sum(1 for r in results.values() if r == PermissionResult.NOT_FOUND)
+            allowed_count = sum(
+                1 for r in results.values() if r == PermissionResult.ALLOWED
+            )
+            denied_count = sum(
+                1 for r in results.values() if r == PermissionResult.DENIED
+            )
+            not_found_count = sum(
+                1 for r in results.values() if r == PermissionResult.NOT_FOUND
+            )
 
             logger.debug(
                 f"Bulk property evaluation for {actor_id}:{peer_id} - "
@@ -201,7 +207,9 @@ class PermissionEvaluator:
 
             # Log only denied properties for security monitoring
             if denied_count > 0:
-                denied_props = [p for p, r in results.items() if r == PermissionResult.DENIED]
+                denied_props = [
+                    p for p, r in results.items() if r == PermissionResult.DENIED
+                ]
                 logger.warning(
                     f"Bulk property access denied for {actor_id}:{peer_id} -> "
                     f"{operation} on {denied_props}"
@@ -211,7 +219,7 @@ class PermissionEvaluator:
             logger.error(
                 f"Error in bulk property evaluation for {actor_id}:{peer_id}: {e}"
             )
-            return {path: PermissionResult.DENIED for path in property_paths}
+            return dict.fromkeys(property_paths, PermissionResult.DENIED)
 
         return results
 
@@ -720,8 +728,7 @@ def batch_check_property_access(
 
     # Return only the allowed property paths
     accessible = [
-        path for path, result in results.items()
-        if result == PermissionResult.ALLOWED
+        path for path, result in results.items() if result == PermissionResult.ALLOWED
     ]
 
     return accessible

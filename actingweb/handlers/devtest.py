@@ -131,17 +131,52 @@ class DevtestHandler(base_handler.BaseHandler):
         elif paths[0] == "ping":
             self.response.set_status(204)
             return
-        elif paths[0] == "attribute":
-            if len(paths) > 1:
+        elif paths[0] in (
+            "attribute",
+            "attributes",
+        ):  # Support both singular and plural
+            if len(paths) > 2:
+                # Get specific attribute: /devtest/attributes/{bucket}/{key}
+                bucket = attribute.Attributes(
+                    actor_id=myself.id, bucket=paths[1], config=self.config
+                )
+                attr = bucket.get_attr(paths[2])
+                if attr:
+                    # Return the attribute with timestamp formatted
+                    if "timestamp" in attr and attr["timestamp"]:
+                        try:
+                            attr["timestamp"] = attr["timestamp"].strftime(
+                                "%Y-%m-%d %H:%M:%S"
+                            )
+                        except AttributeError:
+                            # timestamp might be None or a string already
+                            pass
+                    out = json.dumps(attr)
+                    if self.response:
+                        self.response.write(out)
+                    self.response.headers["Content-Type"] = "application/json"
+                    self.response.set_status(200)
+                    return
+                else:
+                    if self.response:
+                        self.response.set_status(404)
+                    return
+            elif len(paths) > 1:
+                # Get entire bucket: /devtest/attributes/{bucket}
                 bucket = attribute.Attributes(
                     actor_id=myself.id, bucket=paths[1], config=self.config
                 )
                 params = bucket.get_bucket()
                 if params:
                     for k, v in params.items():
-                        params[k]["timestamp"] = v["timestamp"].strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        )
+                        if v.get("timestamp"):
+                            try:
+                                params[k]["timestamp"] = v["timestamp"].strftime(
+                                    "%Y-%m-%d %H:%M:%S"
+                                )
+                            except AttributeError:
+                                # timestamp might be None or a string already
+                                pass
                     out = json.dumps(params)
                     if self.response:
                         self.response.write(out)

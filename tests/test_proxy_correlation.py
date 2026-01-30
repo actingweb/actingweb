@@ -43,7 +43,9 @@ class TestProxyCorrelationHeaders:
         )
 
         # Create proxy
-        proxy = AwProxy(peer_target={"id": "actor1", "peerid": "peer123"}, config=config)
+        proxy = AwProxy(
+            peer_target={"id": "actor1", "peerid": "peer123"}, config=config
+        )
         proxy.trust = mock_trust
 
         # Get headers
@@ -93,7 +95,9 @@ class TestProxyCorrelationHeaders:
         request_context.clear_request_context()
 
         # Create proxy
-        proxy = AwProxy(peer_target={"id": "actor1", "peerid": "peer123"}, config=config)
+        proxy = AwProxy(
+            peer_target={"id": "actor1", "peerid": "peer123"}, config=config
+        )
         proxy.trust = mock_trust
 
         # Get headers
@@ -122,7 +126,9 @@ class TestProxyCorrelationHeaders:
         mock_get.return_value = mock_response
 
         # Create proxy and make request
-        proxy = AwProxy(peer_target={"id": "actor1", "peerid": "peer123"}, config=config)
+        proxy = AwProxy(
+            peer_target={"id": "actor1", "peerid": "peer123"}, config=config
+        )
         proxy.trust = mock_trust
         _ = proxy.get_resource(path="test/resource")
 
@@ -154,7 +160,9 @@ class TestProxyCorrelationHeaders:
         mock_post.return_value = mock_response
 
         # Create proxy and make request
-        proxy = AwProxy(peer_target={"id": "actor1", "peerid": "peer123"}, config=config)
+        proxy = AwProxy(
+            peer_target={"id": "actor1", "peerid": "peer123"}, config=config
+        )
         proxy.trust = mock_trust
         _ = proxy.create_resource(path="test/resource", params={"name": "test"})
 
@@ -252,7 +260,9 @@ class TestProxyCorrelationAsync:
             "baseuri": "https://peer.example.com/actor123",
             "secret": "test-secret-token-123",
         }
-        proxy = AwProxy(peer_target={"id": "actor1", "peerid": "peer123"}, config=config)
+        proxy = AwProxy(
+            peer_target={"id": "actor1", "peerid": "peer123"}, config=config
+        )
         proxy.trust = mock_trust
 
         _ = await proxy.get_resource_async(path="test/resource")
@@ -353,16 +363,22 @@ class TestCorrelationLogging:
             "baseuri": "https://peer.example.com/actor123",
             "secret": "test-secret",
         }
-        proxy = AwProxy(peer_target={"id": "actor1", "peerid": "peer123"}, config=config)
+        proxy = AwProxy(
+            peer_target={"id": "actor1", "peerid": "peer123"}, config=config
+        )
         proxy.trust = mock_trust
 
         with caplog.at_level(logging.DEBUG, logger="actingweb.aw_proxy"):
             _ = proxy._bearer_headers()
 
         # Check logs contain correlation info
-        assert any("Peer request correlation:" in record.message for record in caplog.records)
+        assert any(
+            "Peer request correlation:" in record.message for record in caplog.records
+        )
         # parent_id is truncated to first 8 chars
-        assert any("parent_id=logged-p..." in record.message for record in caplog.records)
+        assert any(
+            "parent_id=logged-p..." in record.message for record in caplog.records
+        )
 
     def test_correlation_logged_without_parent(
         self, config: Config, caplog: pytest.LogCaptureFixture
@@ -377,7 +393,9 @@ class TestCorrelationLogging:
             "baseuri": "https://peer.example.com/actor123",
             "secret": "test-secret",
         }
-        proxy = AwProxy(peer_target={"id": "actor1", "peerid": "peer123"}, config=config)
+        proxy = AwProxy(
+            peer_target={"id": "actor1", "peerid": "peer123"}, config=config
+        )
         proxy.trust = mock_trust
 
         with caplog.at_level(logging.DEBUG, logger="actingweb.aw_proxy"):

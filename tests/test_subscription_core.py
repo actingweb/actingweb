@@ -209,7 +209,7 @@ class TestSubscriptionDiffs:
     """Test diff management methods."""
 
     def test_subscription_increase_seq(self):
-        """Test increase_seq increments sequence number."""
+        """Test increase_seq increments sequence number and returns new sequence."""
         mock_config = Mock()
         mock_db_subscription = Mock()
         mock_sub_data = {
@@ -231,7 +231,8 @@ class TestSubscriptionDiffs:
 
         result = sub.increase_seq()
 
-        assert result is True
+        # increase_seq now returns the new sequence number (int), not boolean
+        assert result == 6
         assert sub.subscription is not None  # Type narrowing for pyright
         assert sub.subscription["sequence"] == 6
         mock_db_subscription.modify.assert_called_once_with(seqnr=6)

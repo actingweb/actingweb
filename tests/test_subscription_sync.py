@@ -812,14 +812,22 @@ class TestSyncSubscriptionAsync:
         ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
-            mock_proxy.get_resource.return_value = {
-                "sequence": 7,
-                "data": [],
-            }
-            mock_proxy.get_property.return_value = {
-                "name": "test",
-                "value": "baseline",
-            }
+
+            # Mock async methods
+            async def mock_get_resource_async(path):
+                return {
+                    "sequence": 7,
+                    "data": [],
+                }
+
+            async def mock_get_property_async(path):
+                return {
+                    "name": "test",
+                    "value": "baseline",
+                }
+
+            mock_proxy.get_resource_async = mock_get_resource_async
+            mock_proxy.get_property_async = mock_get_property_async
             mock_get_proxy.return_value = mock_proxy
 
             mock_sub_instance = MagicMock()
@@ -860,10 +868,15 @@ class TestSyncSubscriptionAsync:
         ):
             mock_proxy = MagicMock()
             mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
-            mock_proxy.get_resource.return_value = {
-                "sequence": 8,
-                "data": [],
-            }
+
+            # Mock async method
+            async def mock_get_resource_async(path):
+                return {
+                    "sequence": 8,
+                    "data": [],
+                }
+
+            mock_proxy.get_resource_async = mock_get_resource_async
             mock_get_proxy.return_value = mock_proxy
 
             mock_sub_instance = MagicMock()

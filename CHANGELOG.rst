@@ -196,6 +196,8 @@ FIXED
 
 - **List property format parameter**: Added ``format`` query parameter to list property GET requests. Use ``GET /properties/list_name?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items, matching the format returned by ``GET /properties?metadata=true``.
 
+- **Trust deletion cleanup architecture**: Refactored peer cleanup from lifecycle hooks to core implementation. Previously, cleanup of subscriptions, RemotePeerStore, CallbackProcessor state, peer profiles, capabilities, and permissions relied on internal lifecycle hooks in ``ActingWebApp``, which was architecturally incorrect (hooks are for application developers, not internal framework use). Now all cleanup runs directly in ``Actor.delete_reciprocal_trust()`` as unconditional, idempotent operations regardless of configuration flags. Also fixed ``Subscription.delete()`` to automatically clean up CallbackProcessor state for callback subscriptions. Removed ~250 lines of internal hook code from ``actingweb/interface/app.py``. Affects: ``actingweb/actor.py``, ``actingweb/subscription.py``, ``actingweb/callback_processor.py``, ``actingweb/interface/app.py``.
+
 - Fix wrong path and sub-path creation for hook execution in the property handler.
 
 - Add storing of sync metadata on initial sync of a trust sync and storage for a remote peer.

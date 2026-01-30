@@ -126,7 +126,9 @@ class MethodsHandler(base_handler.BaseHandler):
                     all_methods = self.hooks.get_method_metadata_list()
 
                     # Filter methods based on peer permissions
-                    peer_id = check.acl.get("peerid", "") if hasattr(check, "acl") else ""
+                    peer_id = (
+                        check.acl.get("peerid", "") if hasattr(check, "acl") else ""
+                    )
                     if peer_id:
                         # For peer-based auth, filter by allowed methods
                         try:

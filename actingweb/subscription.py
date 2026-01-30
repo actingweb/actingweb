@@ -86,7 +86,36 @@ class Subscription:
         if not self.handle:
             logger.debug("Attempted delete of subscription without storage handle")
             return False
+
+        # Clear diffs
         self.clear_diffs()
+
+        # Clear callback processor state if this is a callback subscription
+        if self.callback and self.actor_id and self.peerid and self.subid:
+            try:
+                from .callback_processor import CallbackProcessor
+
+                # Create a minimal actor-like object for CallbackProcessor
+                # We need to avoid circular imports and full Actor initialization
+                class _ActorStub:
+                    def __init__(self, actor_id, config):
+                        self.id = actor_id
+                        self.config = config
+
+                actor_stub = _ActorStub(self.actor_id, self.config)
+                processor = CallbackProcessor(actor_stub)  # type: ignore[arg-type]
+                processor.clear_state(self.peerid, self.subid)
+                logger.debug(
+                    f"Cleared callback state for subscription {self.subid} from peer {self.peerid}"
+                )
+            except ImportError:
+                pass  # CallbackProcessor not available
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clear callback state for {self.subid}: {e}"
+                )
+
+        # Delete subscription record
         self.handle.delete()
         return True
 

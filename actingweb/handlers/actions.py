@@ -126,7 +126,9 @@ class ActionsHandler(base_handler.BaseHandler):
                     all_actions = self.hooks.get_action_metadata_list()
 
                     # Filter actions based on peer permissions
-                    peer_id = check.acl.get("peerid", "") if hasattr(check, "acl") else ""
+                    peer_id = (
+                        check.acl.get("peerid", "") if hasattr(check, "acl") else ""
+                    )
                     if peer_id:
                         # For peer-based auth, filter by allowed actions
                         try:

@@ -94,6 +94,9 @@ class TestNormalCallbackFlow:
 
     def test_003_establish_trust(self):
         """Establish trust between publisher and subscriber."""
+        assert self.publisher_passphrase is not None
+        assert self.subscriber_passphrase is not None
+
         # Publisher initiates trust to subscriber
         response = requests.post(
             f"{self.publisher_url}/trust",
@@ -122,6 +125,8 @@ class TestNormalCallbackFlow:
 
     def test_004_create_subscription(self):
         """Create subscription from subscriber to publisher."""
+        assert self.subscriber_passphrase is not None
+
         response = requests.post(
             f"{self.subscriber_url}/subscriptions",
             json={
@@ -155,9 +160,10 @@ class TestNormalCallbackFlow:
         )
         assert response.status_code == 204
 
-    @pytest.mark.skip(reason="RemotePeerStore verification needs investigation - data storage works but retrieval unclear")
     def test_006_verify_data_stored(self, remote_store_verifier):
         """Verify data was stored in RemotePeerStore."""
+        assert self.subscriber_passphrase is not None
+
         # Wait a bit for async processing
         time.sleep(0.5)
 
@@ -166,8 +172,10 @@ class TestNormalCallbackFlow:
             actor_auth=(self.subscriber_creator, self.subscriber_passphrase),
             peer_id=self.publisher_id,
         )
+        # Data is stored in attribute format with "data" wrapper
+        # Simple values are wrapped: {"value": "value1"}
         assert "test_prop" in stored_data, f"Data not found. Stored data: {stored_data}"
-        assert stored_data["test_prop"] == "value1"
+        assert stored_data["test_prop"]["data"]["value"] == "value1"
 
     def test_007_verify_sequence_updated(self, test_config):
         """Verify subscription sequence was updated."""
@@ -224,10 +232,15 @@ class TestGapDetectionAndHandling:
         assert response.status_code == 201
         TestGapDetectionAndHandling.subscriber_url = response.headers["Location"]
         TestGapDetectionAndHandling.subscriber_id = response.json()["id"]
-        TestGapDetectionAndHandling.subscriber_passphrase = response.json()["passphrase"]
+        TestGapDetectionAndHandling.subscriber_passphrase = response.json()[
+            "passphrase"
+        ]
 
     def test_002_establish_trust_and_subscription(self):
         """Establish trust and create subscription."""
+        assert self.publisher_passphrase is not None
+        assert self.subscriber_passphrase is not None
+
         # Publisher initiates trust
         response = requests.post(
             f"{self.publisher_url}/trust",
@@ -253,7 +266,11 @@ class TestGapDetectionAndHandling:
         # Create subscription
         response = requests.post(
             f"{self.subscriber_url}/subscriptions",
-            json={"peerid": self.publisher_id, "target": "properties", "granularity": "high"},
+            json={
+                "peerid": self.publisher_id,
+                "target": "properties",
+                "granularity": "high",
+            },
             auth=(self.subscriber_creator, self.subscriber_passphrase),
         )
         assert response.status_code in [200, 201, 204]
@@ -265,11 +282,14 @@ class TestGapDetectionAndHandling:
         )
         data = response.json()
         if "data" in data and len(data["data"]) > 0:
-            TestGapDetectionAndHandling.subscription_id = data["data"][0]["subscriptionid"]
+            TestGapDetectionAndHandling.subscription_id = data["data"][0][
+                "subscriptionid"
+            ]
 
-    @pytest.mark.skip(reason="Pending state verification needs CallbackProcessor state inspection - callback accepted correctly")
-    def test_003_send_callback_with_gap(self, callback_sender, remote_store_verifier):
+    def test_003_send_callback_with_gap(self, callback_sender):
         """Send callback with gap (seq=3 when expecting seq=1)."""
+        assert self.subscriber_passphrase is not None
+
         response = callback_sender.send(
             to_actor={"url": self.subscriber_url},
             from_actor_id=self.publisher_id,
@@ -281,15 +301,25 @@ class TestGapDetectionAndHandling:
         # Callback accepted but queued
         assert response.status_code == 204
 
-        # Verify it's in pending
-        state = remote_store_verifier.get_callback_state(
-            actor_url=self.subscriber_url,
-            actor_auth=(self.subscriber_creator, self.subscriber_passphrase),
-            peer_id=self.publisher_id,
-            subscription_id=self.subscription_id,
+        # Verify callback was queued - check pending state
+        # The pending state is stored in attributes with key "pending:{peer_id}:{subscription_id}"
+        bucket = "_callback_state"
+        pending_key = f"pending:{self.publisher_id}:{self.subscription_id}"
+        response = requests.get(
+            f"{self.subscriber_url}/devtest/attributes/{bucket}/{pending_key}",
+            auth=(self.subscriber_creator, self.subscriber_passphrase),
         )
-        assert "pending" in state
-        assert len(state["pending"]) == 1
+        assert response.status_code == 200, (
+            f"Failed to get pending state: {response.status_code}"
+        )
+        pending_attr = response.json()
+        # Pending is stored as {"callbacks": [list]} in the data field
+        pending_data = pending_attr.get("data", {})
+        pending = pending_data.get("callbacks", [])
+        assert len(pending) == 1, (
+            f"Expected 1 pending callback, got {len(pending)}. Full response: {pending_attr}"
+        )
+        assert pending[0]["sequence"] == 3
 
     def test_004_resolve_gap(self, callback_sender):
         """Send missing callbacks to resolve gap."""
@@ -344,7 +374,9 @@ class TestDuplicateCallbackHandling:
         )
         TestDuplicateCallbackHandling.publisher_url = response.headers["Location"]
         TestDuplicateCallbackHandling.publisher_id = response.json()["id"]
-        TestDuplicateCallbackHandling.publisher_passphrase = response.json()["passphrase"]
+        TestDuplicateCallbackHandling.publisher_passphrase = response.json()[
+            "passphrase"
+        ]
 
         # Create subscriber
         response = requests.post(
@@ -353,7 +385,12 @@ class TestDuplicateCallbackHandling:
         )
         TestDuplicateCallbackHandling.subscriber_url = response.headers["Location"]
         TestDuplicateCallbackHandling.subscriber_id = response.json()["id"]
-        TestDuplicateCallbackHandling.subscriber_passphrase = response.json()["passphrase"]
+        TestDuplicateCallbackHandling.subscriber_passphrase = response.json()[
+            "passphrase"
+        ]
+
+        assert self.publisher_passphrase is not None
+        assert self.subscriber_passphrase is not None
 
         # Establish trust
         response = requests.post(
@@ -378,7 +415,11 @@ class TestDuplicateCallbackHandling:
         # Create subscription
         requests.post(
             f"{self.subscriber_url}/subscriptions",
-            json={"peerid": self.publisher_id, "target": "properties", "granularity": "high"},
+            json={
+                "peerid": self.publisher_id,
+                "target": "properties",
+                "granularity": "high",
+            },
             auth=(self.subscriber_creator, self.subscriber_passphrase),
         )
 
@@ -389,7 +430,9 @@ class TestDuplicateCallbackHandling:
         )
         data = response.json()
         if "data" in data and len(data["data"]) > 0:
-            TestDuplicateCallbackHandling.subscription_id = data["data"][0]["subscriptionid"]
+            TestDuplicateCallbackHandling.subscription_id = data["data"][0][
+                "subscriptionid"
+            ]
 
     def test_002_send_first_callback(self, callback_sender):
         """Send first callback."""
@@ -517,13 +560,16 @@ class TestDiffRetention:
         TestDiffRetention.subscriber_id = response.json()["id"]
         TestDiffRetention.subscriber_passphrase = response.json()["passphrase"]
 
+        assert self.publisher_passphrase is not None
+        assert self.subscriber_passphrase is not None
+
         # Establish trust
         response = requests.post(
             f"{self.publisher_url}/trust",
             json={"url": self.subscriber_url, "relationship": "friend"},
             auth=(self.publisher_creator, self.publisher_passphrase),
         )
-        trust_secret = response.json()["secret"]
+        TestDiffRetention.trust_secret = response.json()["secret"]
         peer_id = response.json()["peerid"]
 
         requests.put(
@@ -540,26 +586,31 @@ class TestDiffRetention:
         # Create subscription
         requests.post(
             f"{self.subscriber_url}/subscriptions",
-            json={"peerid": self.publisher_id, "target": "properties", "granularity": "high"},
+            json={
+                "peerid": self.publisher_id,
+                "target": "properties",
+                "granularity": "high",
+            },
             auth=(self.subscriber_creator, self.subscriber_passphrase),
         )
 
         # Get subscription ID
         response = requests.get(
             f"{self.publisher_url}/subscriptions/{self.subscriber_id}",
-            headers={"Authorization": f"Bearer {trust_secret}"},
+            headers={"Authorization": f"Bearer {self.trust_secret}"},
         )
         data = response.json()
         if "data" in data and len(data["data"]) > 0:
             TestDiffRetention.subscription_id = data["data"][0]["subscriptionid"]
 
-    @pytest.mark.skip(reason="Diff retention verified in production - test needs adjustment for subscription diffs format")
-    def test_002_verify_diffs_retained(self, test_config):
+    def test_002_verify_diffs_retained(self):
         """
         Test that diffs are retained after 204 response.
 
         This verifies the fix for: "Diff deleted before subscriber processing"
         """
+        assert self.publisher_passphrase is not None
+
         # Publisher adds a property (creates diff)
         response = requests.post(
             f"{self.publisher_url}/properties",
@@ -568,25 +619,15 @@ class TestDiffRetention:
         )
         assert response.status_code == 201
 
-        # Get subscription on publisher side to check diffs
-        from actingweb.subscription import Subscription
-
-        pub_sub = Subscription(
-            actor_id=self.publisher_id,
-            peerid=self.subscriber_id,
-            subid=self.subscription_id,
-            callback=False,
-            config=test_config,
+        # Get subscription from publisher side via HTTP to check diffs
+        response = requests.get(
+            f"{self.publisher_url}/subscriptions/{self.subscriber_id}/{self.subscription_id}",
+            headers={"Authorization": f"Bearer {self.trust_secret}"},
         )
+        assert response.status_code == 200
+        sub_data = response.json()
 
-        sub_data = pub_sub.get()
-        assert sub_data is not None
-        assert "diffs" in sub_data
-        initial_diffs = sub_data["diffs"]
-        assert len(initial_diffs) >= 1
-
-        # Verify diffs still present after some time
-        # (They should NOT be deleted immediately after 204)
-        time.sleep(0.5)
-        sub_data = pub_sub.get()
-        assert len(sub_data.get("diffs", [])) == len(initial_diffs)
+        # Verify diffs are present (not deleted after 204)
+        assert "data" in sub_data, f"No data in subscription: {sub_data}"
+        diffs = sub_data.get("data", [])
+        assert len(diffs) >= 1, f"Expected at least 1 diff, got {len(diffs)}"

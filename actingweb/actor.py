@@ -2083,7 +2083,10 @@ class Actor:
                 continue
 
             # Send resync callback
-            if self._callback_subscription_resync(sub):
+            # If we resumed a specific subtarget, use that for the resync
+            # (even if the subscription itself has no subtarget or a different one)
+            resync_subtarget = subtarget if subtarget else sub_subtarget
+            if self._callback_subscription_resync(sub, resync_subtarget):
                 count += 1
 
         logger.info(f"Sent {count} resync callbacks for {target}/{subtarget}")
@@ -2185,7 +2188,9 @@ class Actor:
             logger.debug("No async loop, falling back to sync resync callback")
             self._send_resync_callback_sync(callback_url, payload, secret, peer_id)
 
-    def _callback_subscription_resync(self, subscription: dict) -> bool:
+    def _callback_subscription_resync(
+        self, subscription: dict, override_subtarget: str | None = None
+    ) -> bool:
         """Send a resync callback to a single subscription.
 
         Checks peer capability before sending resync. If peer doesn't support
@@ -2197,6 +2202,8 @@ class Actor:
 
         Args:
             subscription: Subscription dict with peerid, subscriptionid, callback, etc.
+            override_subtarget: Optional subtarget to use instead of subscription's subtarget
+                              (used when resuming a specific subtarget on a broader subscription)
 
         Returns:
             True if callback was sent/scheduled successfully
@@ -2206,7 +2213,12 @@ class Actor:
         peer_id = subscription.get("peerid", "")
         sub_id = subscription.get("subscriptionid", "")
         target = subscription.get("target", "")
-        sub_subtarget = subscription.get("subtarget")
+        # Use override_subtarget if provided, otherwise use subscription's subtarget
+        sub_subtarget = (
+            override_subtarget
+            if override_subtarget is not None
+            else subscription.get("subtarget")
+        )
 
         # Get trust relationship to construct callback URL
         from .trust import Trust
@@ -2233,15 +2245,54 @@ class Actor:
             )
             return False
 
-        # Check if peer supports resync callbacks
+        # Check if peer supports resync callbacks (use cached data only)
         from .interface.actor_interface import ActorInterface
         from .peer_capabilities import PeerCapabilities
 
         actor_interface = ActorInterface(self)
         caps = PeerCapabilities(actor_interface, peer_id)
-        # Ensure capabilities are loaded (fetches if not cached or expired)
-        caps.ensure_loaded()
-        supports_resync = caps.supports_resync_callbacks()
+
+        # Use cached capabilities without blocking on network fetch
+        # If cache is expired or not available, assume support (optimistic)
+        supports_resync_cached = caps.supports_resync_callbacks_cached()
+        if supports_resync_cached is None:
+            # Cache expired or not available - assume support to avoid blocking
+            # This is optimistic but safe: if peer doesn't support resync,
+            # the receiver will process it as a regular low-granularity callback
+            supports_resync = True
+            logger.debug(
+                f"Capabilities not cached for peer {peer_id}, "
+                f"assuming resync support (optimistic)"
+            )
+
+            # Schedule background refresh to update cache for next time
+            # This doesn't block the current operation
+            try:
+                import asyncio
+
+                async def _refresh_capabilities():
+                    try:
+                        await caps.refresh_async()
+                        logger.debug(
+                            f"Background refresh of capabilities for {peer_id}"
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"Background capability refresh failed for {peer_id}: {e}"
+                        )
+
+                loop = asyncio.get_running_loop()
+                loop.create_task(_refresh_capabilities())
+            except RuntimeError:
+                # No event loop - skip background refresh
+                # Next operation will still use optimistic approach
+                pass
+        else:
+            supports_resync = supports_resync_cached
+            logger.debug(
+                f"Using cached capability for peer {peer_id}: "
+                f"resync_supported={supports_resync}"
+            )
 
         # Increment sequence number
         new_seq = self._increment_subscription_sequence(peer_id, sub_id)
@@ -2270,8 +2321,16 @@ class Actor:
             }
             logger.debug(f"Sending resync callback to peer {peer_id} (supports resync)")
         else:
-            # Fallback: low-granularity callback with URL only
-            # Peer should fetch full state from the URL
+            # Fallback: create a full-state diff and send low-granularity callback
+            # Get the full current state
+            full_state = self._get_full_state_for_subscription(target, sub_subtarget)
+
+            # Store as a subscription diff
+            diff_url = self._store_subscription_diff(
+                peer_id, sub_id, new_seq, full_state
+            )
+
+            # Send low-granularity callback with URL to subscription diff
             payload = {
                 "id": self.id,
                 "subscriptionid": sub_id,
@@ -2280,11 +2339,11 @@ class Actor:
                 "sequence": new_seq,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "granularity": "low",
-                "url": resource_url,
+                "url": diff_url,
             }
             logger.info(
                 f"Peer {peer_id} does not support resync callbacks, "
-                f"sending low-granularity callback instead"
+                f"creating full-state diff for low-granularity callback"
             )
 
         # Get trust secret for authentication (already fetched above)
@@ -2303,6 +2362,127 @@ class Actor:
             # Local mode: async fire-and-forget
             self._send_resync_callback_async(callback_url, payload, secret, peer_id)
             return True  # Scheduled (not confirmed)
+
+    def _get_full_state_for_subscription(
+        self, target: str, subtarget: str | None
+    ) -> dict[str, Any]:
+        """Get the full current state for a subscription target.
+
+        Args:
+            target: Subscription target (e.g., "properties")
+            subtarget: Optional subtarget (e.g., list name for property lists)
+
+        Returns:
+            Dict containing the full state
+        """
+        if target == "properties":
+            if subtarget:
+                # Specific property list or property
+                if hasattr(self, "property_lists") and self.property_lists:
+                    if self.property_lists.exists(subtarget):
+                        # It's a list - return all items
+                        list_attr = getattr(self.property_lists, subtarget)
+                        items = list(list_attr)
+                        logger.debug(
+                            f"Getting full state for list '{subtarget}': {len(items)} items"
+                        )
+                        # Return as list operation format for diff
+                        return {
+                            subtarget: {
+                                "list": subtarget,
+                                "operation": "extend",
+                                "items": items,
+                            }
+                        }
+
+                # Try as scalar property
+                prop_data = self.get_property(subtarget)
+                if prop_data is not None:
+                    logger.debug(f"Getting full state for property '{subtarget}'")
+                    return {subtarget: prop_data}
+                logger.warning(f"Subtarget '{subtarget}' not found as list or property")
+                return {}
+            else:
+                # All properties - get both scalars and lists
+                result = {}
+                # Get scalar properties
+                all_props = self.get_properties()
+                if all_props:
+                    result.update(all_props)
+                # Get property lists
+                if hasattr(self, "property_lists") and self.property_lists:
+                    for list_name in self.property_lists.list_all():
+                        list_attr = getattr(self.property_lists, list_name)
+                        items = list(list_attr)
+                        result[list_name] = {
+                            "list": list_name,
+                            "operation": "extend",
+                            "items": items,
+                        }
+                logger.debug(
+                    f"Getting full state for all properties: {len(result)} keys"
+                )
+                return result
+        return {}
+
+    def _store_subscription_diff(
+        self, peer_id: str, subscription_id: str, sequence: int, data: dict[str, Any]
+    ) -> str:
+        """Store a subscription diff and return its URL.
+
+        Args:
+            peer_id: Peer actor ID
+            subscription_id: Subscription ID
+            sequence: Sequence number (already incremented)
+            data: Diff data to store
+
+        Returns:
+            URL to fetch this diff
+        """
+        import json
+
+        from .db import get_subscription_diff
+
+        if not self.config:
+            logger.error("No config available for storing subscription diff")
+            return ""
+
+        # Store diff using low-level diff protocol (sequence already incremented)
+        logger.debug(
+            f"Storing subscription diff for {subscription_id} seq={sequence}, "
+            f"data keys: {list(data.keys())}"
+        )
+
+        diff_handle = get_subscription_diff(self.config)
+        blob = json.dumps(data)
+
+        logger.debug(f"Diff blob size: {len(blob)} bytes")
+
+        success = diff_handle.create(
+            actor_id=self.id,
+            subid=subscription_id,
+            diff=blob,
+            seqnr=sequence,
+        )
+
+        if success:
+            logger.info(
+                f"Successfully stored subscription diff for {subscription_id} seq={sequence}"
+            )
+        else:
+            logger.error(
+                f"Failed to store subscription diff for {subscription_id} seq={sequence}, "
+                f"actor_id={self.id}"
+            )
+
+        # Build URL to this diff
+        # Format: /{actor_id}/subscriptions/{peer_id}/{subscription_id}/{sequence}
+        diff_url = (
+            f"{self.config.proto}{self.config.fqdn}/{self.id}"
+            f"/subscriptions/{peer_id}/{subscription_id}/{sequence}"
+        )
+        logger.debug(f"Diff URL: {diff_url}")
+        return diff_url
 
     def _increment_subscription_sequence(
         self, peer_id: str, subscription_id: str

@@ -397,6 +397,16 @@ Publishers can temporarily suspend diff callbacks during bulk operations:
    count = actor.subscriptions.resume(target="properties")
    print(f"Sent resync to {count} subscribers")
 
+**Performance Note:**
+
+The ``resume()`` operation uses **cached peer capabilities** to determine whether to send full resync callbacks or low-granularity callbacks. This avoids blocking on network requests to check peer capabilities:
+
+- If capabilities are cached and fresh (< 24 hours): Uses cached value
+- If cache is expired or missing: Assumes peer supports resync (optimistic approach)
+- Background refresh updates the cache for next time (async mode only)
+
+This ensures ``resume()`` returns immediately without blocking, even when suspending/resuming many subscriptions.
+
 Fan-Out Manager
 ---------------
 

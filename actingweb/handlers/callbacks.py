@@ -431,13 +431,28 @@ class CallbacksHandler(base_handler.BaseHandler):
             return False
 
         # Extract callback data
-        # Check for low-granularity callback with URL (per ActingWeb spec v1.4)
+        # Check for callbacks with URL but no data (per ActingWeb spec v1.4)
+        # This handles both:
+        # 1. Low-granularity callbacks (granularity="low", url, no type)
+        # 2. Resync callbacks (type="resync", url, no data)
         callback_url = params.get("url")
         callback_data = params.get("data")
+        callback_type = params.get("type", "diff")
+        granularity = params.get("granularity", "high")  # Extracted for debugging/logging
+
+        # Track if we need to send PUT acknowledgment after processing
+        # Per ActingWeb spec: high-granularity with data in body → 204 clears diff
+        # But low-granularity/resync with URL only → must send PUT to acknowledge
+        fetched_from_url = bool(callback_url and not callback_data)
 
         if callback_url and not callback_data:
-            # Low-granularity callback - fetch data from URL
-            logger.debug(f"Low-granularity callback, fetching data from {callback_url}")
+            # Need to fetch data from URL
+            fetch_type = (
+                callback_type if callback_type == "resync" else "low-granularity"
+            )
+            logger.debug(
+                f"{fetch_type.capitalize()} callback, fetching data from {callback_url}"
+            )
             try:
                 import httpx
 
@@ -460,28 +475,71 @@ class CallbacksHandler(base_handler.BaseHandler):
                         },
                     )
                 if response.status_code == 200:
-                    # Parse the subscription diff response
                     url_data = response.json()
-                    # Extract the diffs array
-                    diffs = url_data.get("diffs", [])
-                    if diffs and len(diffs) > 0:
-                        # Use the first diff's data (should match the sequence)
-                        callback_data = diffs[0].get("data", {})
+
+                    # Parse response based on callback type
+                    if callback_type == "resync":
+                        # Resync callback - URL points to resource
+                        # Response can be:
+                        # 1. Specific list: /properties/list_name -> returns array
+                        # 2. All properties: /properties -> returns dict with metadata
+                        # 3. Single scalar: /properties/name -> returns dict
+
+                        if isinstance(url_data, list):
+                            # Array response - this is a specific property list
+                            # Extract list name from subtarget parameter (preferred)
+                            subtarget = params.get("subtarget")
+
+                            if subtarget:
+                                # Use subtarget as list name
+                                list_name = subtarget
+                            else:
+                                # Fall back to extracting from URL path
+                                # URL format: /{actor_id}/properties/{list_name}
+                                import re
+
+                                match = re.search(
+                                    r"/properties/([^/]+)/?$", callback_url
+                                )
+                                list_name = match.group(1) if match else "unknown"
+
+                            # Wrap array in expected format for apply_resync_data()
+                            # Use flag-based format (preferred)
+                            callback_data = {
+                                list_name: {"_list": True, "items": url_data}
+                            }
+                            logger.debug(
+                                f"Fetched resync list '{list_name}': {len(url_data)} items"
+                            )
+                        else:
+                            # Dict response - could be:
+                            # - All properties (e.g., {"memory_travel": {"_list": true, "count": 3}})
+                            # - Single scalar property (e.g., {"value": "...", "_list": false})
+                            # Pass through as-is for apply_resync_data()
+                            callback_data = url_data
+                            logger.debug(
+                                f"Fetched resync data: {len(callback_data)} keys"
+                            )
                     else:
-                        callback_data = {}
+                        # Low-granularity diff callback
+                        # URL points to subscription diff endpoint
+                        # Response is a single diff object: {"data": {...}, "sequence": N, ...}
+                        callback_data = url_data.get("data", {})
+                        logger.debug(
+                            f"Fetched low-granularity data: {len(callback_data)} keys"
+                        )
                 else:
                     logger.warning(
-                        f"Failed to fetch low-granularity data: {response.status_code}"
+                        f"Failed to fetch {fetch_type} data: {response.status_code}"
                     )
                     callback_data = {}
             except Exception as e:
-                logger.error(f"Error fetching low-granularity callback data: {e}")
+                logger.error(f"Error fetching {fetch_type} callback data: {e}")
                 callback_data = {}
         else:
             callback_data = callback_data or {}
 
         sequence = params.get("sequence", 0)
-        callback_type = params.get("type", "diff")
 
         logger.debug(
             f"Processing subscription callback: peer={peer_id}, "
@@ -621,6 +679,55 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"Subscription callback rejected: peer={peer_id}, "
                     f"sub={subscription_id}, seq={sequence}, result={result.value}"
                 )
+
+            # Send PUT acknowledgment for low-granularity callbacks only
+            # Per ActingWeb spec:
+            # - High-granularity (data in body) → 204 auto-clears diff
+            # - Low-granularity (URL only) → must send PUT to clear diff
+            # - Resync (type="resync") → 204 means accepted baseline resync, NO diff to clear
+            if (
+                result == ProcessResult.PROCESSED
+                and fetched_from_url
+                and callback_type != "resync"
+            ):
+                logger.debug(
+                    f"Sending PUT acknowledgment for low-granularity callback "
+                    f"seq={sequence} to {peer_id}"
+                )
+                try:
+                    from ..aw_proxy import AwProxy
+
+                    # Create proxy to send PUT acknowledgment to peer
+                    peer_target = {
+                        "id": actor_interface._core_actor.id,
+                        "peerid": peer_id,
+                        "passphrase": None,
+                    }
+                    proxy = AwProxy(
+                        peer_target=peer_target,
+                        config=actor_interface._core_actor.config,
+                    )
+                    if proxy.trust:
+                        # PUT /subscriptions/{our_actor_id}/{subscription_id} {"sequence": N}
+                        path = f"subscriptions/{actor_interface._core_actor.id}/{subscription_id}"
+                        ack_response = proxy.change_resource(
+                            path=path, params={"sequence": sequence}
+                        )
+                        if ack_response is None or "error" in (ack_response or {}):
+                            logger.warning(
+                                f"Failed to send PUT acknowledgment to {peer_id} "
+                                f"for subscription {subscription_id} seq={sequence}"
+                            )
+                        else:
+                            logger.debug(
+                                f"Successfully acknowledged low-granularity callback "
+                                f"seq={sequence} to {peer_id}, diff cleared on publisher"
+                            )
+                except Exception as e:
+                    logger.error(
+                        f"Error sending PUT acknowledgment to {peer_id}: {e}",
+                        exc_info=True,
+                    )
 
             # If resync was triggered, actively sync from publisher to resolve gap
             if result == ProcessResult.RESYNC_TRIGGERED:

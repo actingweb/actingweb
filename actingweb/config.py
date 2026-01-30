@@ -294,6 +294,8 @@ class Config:
             "trust",
             "onewaytrust",
             "subscriptions",
+            "subscriptionresync",  # Support for resync callbacks (ActingWeb v1.4)
+            "subscriptionbatch",  # Support for batching subscription callbacks
             "actions",
             "resources",
             "methods",

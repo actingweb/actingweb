@@ -656,6 +656,171 @@ class TestResyncCallbacks:
         if response.status_code == 204:
             assert len(get_called) > 0, "Expected URL fetch to be called"
 
+    def test_070_low_granularity_put_acknowledgment(self, http_client, monkeypatch):
+        """
+        Verify PUT acknowledgment is sent for low-granularity callbacks.
+
+        When a low-granularity callback (URL only, no data) is processed,
+        the receiver must send a PUT to acknowledge and clear the diff on the publisher.
+        This does NOT apply to resync callbacks (type="resync").
+        """
+        if not self.subscription_id or not self.trust_secret:
+            pytest.skip("No subscription or trust secret available")
+
+        # Track PUT acknowledgments
+        put_calls = []
+
+        # Mock Proxy.change_resource to capture PUT acknowledgments
+        from actingweb.aw_proxy import AwProxy
+
+        original_change_resource = AwProxy.change_resource
+
+        def mock_change_resource(self, path=None, params=None):
+            put_calls.append({"path": path, "params": params})
+            return {"status": "ok"}  # Simulate success
+
+        monkeypatch.setattr(AwProxy, "change_resource", mock_change_resource)
+
+        # Mock HTTP GET to fetch diff data
+        class MockResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "diffs": [
+                        {"sequence": 10, "data": {"test_key": "test_value"}}
+                    ]
+                }
+
+        class MockClient:
+            def __init__(self, timeout=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def get(self, url, headers=None):
+                return MockResponse()
+
+        import httpx
+
+        monkeypatch.setattr(httpx, "Client", MockClient)
+
+        # Send low-granularity callback (no type field)
+        callback_url = f"{self.subscriber_url}/callbacks/subscriptions/{self.publisher_id}/{self.subscription_id}"
+
+        from datetime import UTC, datetime
+
+        response = requests.post(
+            callback_url,
+            json={
+                "id": self.publisher_id,
+                "subscriptionid": self.subscription_id,
+                "target": "properties",
+                "sequence": 1,
+                "granularity": "low",  # Low-granularity
+                "url": f"{self.publisher_url}/subscriptions/{self.subscription_id}/1",
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            headers={
+                "Authorization": f"Bearer {self.trust_secret}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        # Callback may be rejected if sequence is invalid (400)
+        assert response.status_code in [204, 400], (
+            f"Expected 204 or 400, got {response.status_code}. "
+            f"Response: {response.text if hasattr(response, 'text') else response.content}"
+        )
+
+        # Only verify PUT acknowledgment if callback was accepted
+        if response.status_code == 204:
+            assert len(put_calls) == 1, f"Expected 1 PUT call, got {len(put_calls)}"
+            assert put_calls[0]["path"] == f"subscriptions/{self.subscriber_id}/{self.subscription_id}"
+            assert put_calls[0]["params"]["sequence"] == 1
+
+    def test_080_resync_no_put_acknowledgment(self, http_client, monkeypatch):
+        """
+        Verify resync callbacks do NOT send PUT acknowledgments.
+
+        Resync callbacks (type="resync") represent baseline resyncs with no diff to clear.
+        A 204 response means the subscriber accepted to do the baseline resync.
+        No PUT acknowledgment should be sent.
+        """
+        if not self.subscription_id or not self.trust_secret:
+            pytest.skip("No subscription or trust secret available")
+
+        # Track PUT acknowledgments
+        put_calls = []
+
+        # Mock AwProxy.change_resource to capture PUT acknowledgments
+        from actingweb.aw_proxy import AwProxy
+
+        def mock_change_resource(self, path=None, params=None):
+            put_calls.append({"path": path, "params": params})
+            return {"status": "ok"}
+
+        monkeypatch.setattr(AwProxy, "change_resource", mock_change_resource)
+
+        # Mock HTTP GET to fetch resource data
+        class MockResponse:
+            status_code = 200
+
+            def json(self):
+                # Return resource data (properties in this case)
+                return {"test_key": "test_value"}
+
+        class MockClient:
+            def __init__(self, timeout=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def get(self, url, headers=None):
+                return MockResponse()
+
+        import httpx
+
+        monkeypatch.setattr(httpx, "Client", MockClient)
+
+        # Send resync callback (type="resync")
+        callback_url = f"{self.subscriber_url}/callbacks/subscriptions/{self.publisher_id}/{self.subscription_id}"
+
+        from datetime import UTC, datetime
+
+        response = requests.post(
+            callback_url,
+            json={
+                "id": self.publisher_id,
+                "subscriptionid": self.subscription_id,
+                "target": "properties",
+                "sequence": 1,
+                "type": "resync",  # Resync callback
+                "granularity": "high",
+                "url": f"{self.publisher_url}/properties",  # URL to resource, not diff
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            headers={
+                "Authorization": f"Bearer {self.trust_secret}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        # Callback may be rejected if sequence is invalid (400)
+        assert response.status_code in [204, 400], f"Expected 204 or 400, got {response.status_code}"
+
+        # Verify NO PUT acknowledgment was sent for resync (even if accepted)
+        # Note: 400 means callback was rejected, so we wouldn't expect PUT anyway
+        assert len(put_calls) == 0, f"Expected 0 PUT calls for resync, got {len(put_calls)}"
+
     def test_099_cleanup(self, http_client):
         """
         Clean up test actors.

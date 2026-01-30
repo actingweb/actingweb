@@ -2,7 +2,9 @@
 Configuration for automatic subscription processing.
 """
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -24,6 +26,7 @@ class SubscriptionProcessingConfig:
         max_payload_for_high_granularity: Payload size before granularity downgrade
         circuit_breaker_threshold: Failures before opening circuit
         circuit_breaker_cooldown: Seconds before testing recovery
+        subscription_data_hooks: Dict mapping target names to list of hook callables
     """
 
     enabled: bool = False
@@ -39,3 +42,8 @@ class SubscriptionProcessingConfig:
     max_payload_for_high_granularity: int = 65536
     circuit_breaker_threshold: int = 5
     circuit_breaker_cooldown: float = 60.0
+
+    # Hooks for subscription data processing
+    subscription_data_hooks: dict[str, list[Callable[..., Any]]] = field(
+        default_factory=dict
+    )

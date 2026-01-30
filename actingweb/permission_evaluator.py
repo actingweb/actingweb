@@ -142,6 +142,87 @@ class PermissionEvaluator:
             operation=operation,
         )
 
+    def evaluate_bulk_property_access(
+        self, actor_id: str, peer_id: str, property_paths: list[str], operation: str
+    ) -> dict[str, PermissionResult]:
+        """
+        Evaluate property access permissions for multiple properties at once.
+
+        This method is more efficient than calling evaluate_property_access() multiple
+        times because it:
+        1. Fetches effective permissions only once
+        2. Logs only a single summary line instead of one per property
+        3. Reuses compiled regex patterns
+
+        Args:
+            actor_id: The actor owning the properties
+            peer_id: The peer requesting access
+            property_paths: List of property paths to check
+            operation: Operation type ("read", "write", "delete")
+
+        Returns:
+            Dict mapping property_path to PermissionResult
+        """
+        results: dict[str, PermissionResult] = {}
+
+        try:
+            # Get the effective permissions once for all properties
+            effective_perms = self._get_effective_permissions(actor_id, peer_id)
+            if not effective_perms:
+                logger.warning(
+                    f"No effective permissions found for {actor_id}:{peer_id}"
+                )
+                return dict.fromkeys(property_paths, PermissionResult.NOT_FOUND)
+
+            # Get the permission rules
+            permission_rules = effective_perms.get(PermissionType.PROPERTIES.value)
+            if not permission_rules:
+                logger.debug(
+                    f"No properties permissions defined for {actor_id}:{peer_id}"
+                )
+                return dict.fromkeys(property_paths, PermissionResult.NOT_FOUND)
+
+            # Evaluate each property (suppress individual logging for bulk operations)
+            for property_path in property_paths:
+                results[property_path] = self._evaluate_rules(
+                    permission_rules, property_path, operation, suppress_logging=True
+                )
+
+            # Log summary instead of individual evaluations
+            allowed_count = sum(
+                1 for r in results.values() if r == PermissionResult.ALLOWED
+            )
+            denied_count = sum(
+                1 for r in results.values() if r == PermissionResult.DENIED
+            )
+            not_found_count = sum(
+                1 for r in results.values() if r == PermissionResult.NOT_FOUND
+            )
+
+            logger.debug(
+                f"Bulk property evaluation for {actor_id}:{peer_id} - "
+                f"{len(property_paths)} properties: "
+                f"{allowed_count} allowed, {denied_count} denied, {not_found_count} not found"
+            )
+
+            # Log only denied properties for security monitoring
+            if denied_count > 0:
+                denied_props = [
+                    p for p, r in results.items() if r == PermissionResult.DENIED
+                ]
+                logger.warning(
+                    f"Bulk property access denied for {actor_id}:{peer_id} -> "
+                    f"{operation} on {denied_props}"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error in bulk property evaluation for {actor_id}:{peer_id}: {e}"
+            )
+            return dict.fromkeys(property_paths, PermissionResult.DENIED)
+
+        return results
+
     def evaluate_method_access(
         self, actor_id: str, peer_id: str, method_name: str
     ) -> PermissionResult:
@@ -406,7 +487,11 @@ class PermissionEvaluator:
             return None
 
     def _evaluate_rules(
-        self, permission_rules: dict[str, Any], target: str, operation: str
+        self,
+        permission_rules: dict[str, Any],
+        target: str,
+        operation: str,
+        suppress_logging: bool = False,
     ) -> PermissionResult:
         """
         Evaluate permission rules against a specific target and operation.
@@ -420,23 +505,32 @@ class PermissionEvaluator:
            {"patterns": ["pattern1"], "operations": ["read", "write"], "excluded_patterns": ["pattern2"]}
 
         3. Mixed format (combines both approaches)
+
+        Args:
+            permission_rules: The permission rules to evaluate
+            target: The target being accessed
+            operation: The operation being performed
+            suppress_logging: If True, suppress verbose DEBUG logging (for bulk operations)
         """
-        logger.debug(
-            f"Evaluating rules: target='{target}', operation='{operation}', rules={permission_rules}"
-        )
+        if not suppress_logging:
+            logger.debug(
+                f"Evaluating rules: target='{target}', operation='{operation}', rules={permission_rules}"
+            )
 
         # Check explicit denied patterns first (highest priority)
         if "denied" in permission_rules:
             denied_patterns = permission_rules["denied"]
             if self._matches_any_pattern(target, denied_patterns):
-                logger.debug(f"Target '{target}' matched denied pattern")
+                if not suppress_logging:
+                    logger.debug(f"Target '{target}' matched denied pattern")
                 return PermissionResult.DENIED
 
         # Check allowed patterns
         if "allowed" in permission_rules:
             allowed_patterns = permission_rules["allowed"]
             if self._matches_any_pattern(target, allowed_patterns):
-                logger.debug(f"Target '{target}' matched allowed pattern")
+                if not suppress_logging:
+                    logger.debug(f"Target '{target}' matched allowed pattern")
                 return PermissionResult.ALLOWED
 
         # Check pattern-based permissions with operations
@@ -444,15 +538,17 @@ class PermissionEvaluator:
             patterns = permission_rules["patterns"]
             operations = permission_rules["operations"]
 
-            logger.debug(
-                f"Pattern-based check: patterns={patterns}, operations={operations}"
-            )
+            if not suppress_logging:
+                logger.debug(
+                    f"Pattern-based check: patterns={patterns}, operations={operations}"
+                )
 
             # Check if operation is allowed
             if operation not in operations:
-                logger.debug(
-                    f"Operation '{operation}' not in allowed operations {operations}"
-                )
+                if not suppress_logging:
+                    logger.debug(
+                        f"Operation '{operation}' not in allowed operations {operations}"
+                    )
                 return PermissionResult.DENIED
 
             # Check if target matches allowed patterns
@@ -460,30 +556,35 @@ class PermissionEvaluator:
                 # Check excluded patterns
                 excluded = permission_rules.get("excluded_patterns", [])
                 if excluded and self._matches_any_pattern(target, excluded):
-                    logger.debug(f"Target '{target}' matched excluded pattern")
+                    if not suppress_logging:
+                        logger.debug(f"Target '{target}' matched excluded pattern")
                     return PermissionResult.DENIED
-                logger.debug(
-                    f"Target '{target}' matched pattern, operation '{operation}' allowed"
-                )
+                if not suppress_logging:
+                    logger.debug(
+                        f"Target '{target}' matched pattern, operation '{operation}' allowed"
+                    )
                 return PermissionResult.ALLOWED
             else:
                 # When patterns are explicitly defined, non-match means DENIED
                 # EXCEPT: empty target (listing requests) should return NOT_FOUND to allow
                 # the listing endpoint to proceed - individual properties are filtered there
                 if target == "":
-                    logger.debug(
-                        f"Empty target with patterns {patterns} - allowing listing (filter at response level)"
-                    )
+                    if not suppress_logging:
+                        logger.debug(
+                            f"Empty target with patterns {patterns} - allowing listing (filter at response level)"
+                        )
                     return PermissionResult.NOT_FOUND
-                logger.debug(
-                    f"Target '{target}' did not match any patterns {patterns} - denying access"
-                )
+                if not suppress_logging:
+                    logger.debug(
+                        f"Target '{target}' did not match any patterns {patterns} - denying access"
+                    )
                 return PermissionResult.DENIED
 
         # No matching rule found (no patterns/operations configured at all)
-        logger.debug(
-            f"No matching rule found for target='{target}', operation='{operation}'"
-        )
+        if not suppress_logging:
+            logger.debug(
+                f"No matching rule found for target='{target}', operation='{operation}'"
+            )
         return PermissionResult.NOT_FOUND
 
     def _matches_any_pattern(self, target: str, patterns: list[str]) -> bool:
@@ -605,6 +706,9 @@ def batch_check_property_access(
     """
     Batch property access check - more efficient than calling check_property_access in a loop.
 
+    This function optimizes database access by fetching effective permissions once
+    and then evaluating all property paths against those permissions.
+
     Args:
         config: ActingWeb config
         actor_id: The actor granting access
@@ -616,14 +720,16 @@ def batch_check_property_access(
         List of property paths that passed the permission check
     """
     evaluator = get_permission_evaluator(config)
-    accessible = []
 
-    for property_path in property_paths:
-        result = evaluator.evaluate_property_access(
-            actor_id, peer_id, property_path, operation
-        )
-        if result == PermissionResult.ALLOWED:
-            accessible.append(property_path)
+    # Use the optimized bulk evaluation method
+    results = evaluator.evaluate_bulk_property_access(
+        actor_id, peer_id, property_paths, operation
+    )
+
+    # Return only the allowed property paths
+    accessible = [
+        path for path, result in results.items() if result == PermissionResult.ALLOWED
+    ]
 
     return accessible
 

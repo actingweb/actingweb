@@ -209,10 +209,11 @@ class AuthenticatedPropertyListStore:
         try:
             evaluator = get_permission_evaluator(self._config)
             # List properties use the same permission system as regular properties
+            # No "list:" prefix - that's an internal storage detail only
             result = evaluator.evaluate_property_access(
                 self._actor_id,
                 self._auth_context.accessor_id,
-                f"list:{list_name}",
+                list_name,
                 operation,
             )
 

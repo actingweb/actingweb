@@ -66,7 +66,9 @@ class ActingWebApp:
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
         self._sync_subscription_callbacks = False  # Async by default
-        self._thread_pool_workers = 10  # Default thread pool size for FastAPI integration
+        self._thread_pool_workers = (
+            10  # Default thread pool size for FastAPI integration
+        )
 
         # Property lookup configuration
         self._indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
@@ -402,67 +404,10 @@ class ActingWebApp:
 
         self._apply_runtime_changes_to_config()
 
-        # Register lifecycle hooks when profile caching is enabled
-        if self._peer_profile_attributes:
-            self._register_peer_profile_hooks()
+        # Profile cleanup is now handled automatically in core delete_reciprocal_trust()
+        # No hook registration needed
 
         return self
-
-    def _register_peer_profile_hooks(self) -> None:
-        """Register lifecycle hooks for peer profile caching."""
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        @self.lifecycle_hook("trust_approved")
-        def _fetch_profile_on_approval(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Fetch and cache peer profile when trust is approved.
-
-            This hook fires for both HTTP-based and programmatic approvals,
-            ensuring consistent caching behavior regardless of approval path.
-            """
-            if not peer_id or not self._peer_profile_attributes:
-                return
-
-            try:
-                from ..peer_profile import fetch_peer_profile, get_peer_profile_store
-
-                config = self.get_config()
-                profile = fetch_peer_profile(
-                    actor_id=actor.id,
-                    peer_id=peer_id,
-                    config=config,
-                    attributes=self._peer_profile_attributes,
-                )
-                store = get_peer_profile_store(config)
-                store.store_profile(profile)
-                logger.debug(f"Cached peer profile for {peer_id} on trust approval")
-            except Exception as e:
-                logger.warning(f"Failed to cache peer profile for {peer_id}: {e}")
-
-        @self.lifecycle_hook("trust_deleted")
-        def _cleanup_profile_on_trust_deleted(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Clean up cached peer profile when trust is deleted."""
-            if not peer_id or not self._peer_profile_attributes:
-                return
-
-            try:
-                from ..peer_profile import get_peer_profile_store
-
-                config = self.get_config()
-                store = get_peer_profile_store(config)
-                store.delete_profile(actor.id, peer_id)
-                logger.debug(f"Cleaned up peer profile for {peer_id} on trust deletion")
-            except Exception as e:
-                logger.warning(f"Failed to clean up peer profile for {peer_id}: {e}")
 
     def with_peer_capabilities(self, enable: bool = True) -> "ActingWebApp":
         """Enable peer capabilities (methods/actions) caching for trust relationships.
@@ -493,75 +438,10 @@ class ActingWebApp:
         self._peer_capabilities_caching = enable
         self._apply_runtime_changes_to_config()
 
-        # Register lifecycle hooks when capabilities caching is enabled
-        if enable:
-            self._register_peer_capabilities_hooks()
+        # Capabilities cleanup is now handled automatically in core delete_reciprocal_trust()
+        # No hook registration needed
 
         return self
-
-    def _register_peer_capabilities_hooks(self) -> None:
-        """Register lifecycle hooks for peer capabilities caching."""
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        @self.lifecycle_hook("trust_approved")
-        def _fetch_capabilities_on_approval(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Fetch and cache peer capabilities when trust is approved.
-
-            This hook fires for both HTTP-based and programmatic approvals,
-            ensuring consistent caching behavior regardless of approval path.
-            """
-            if not peer_id or not self._peer_capabilities_caching:
-                return
-
-            try:
-                from ..peer_capabilities import (
-                    fetch_peer_methods_and_actions,
-                    get_cached_capabilities_store,
-                )
-
-                config = self.get_config()
-                capabilities = fetch_peer_methods_and_actions(
-                    actor_id=actor.id,
-                    peer_id=peer_id,
-                    config=config,
-                )
-                store = get_cached_capabilities_store(config)
-                store.store_capabilities(capabilities)
-                logger.debug(
-                    f"Cached peer capabilities for {peer_id} on trust approval"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to cache peer capabilities for {peer_id}: {e}")
-
-        @self.lifecycle_hook("trust_deleted")
-        def _cleanup_capabilities_on_trust_deleted(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Clean up cached peer capabilities when trust is deleted."""
-            if not peer_id or not self._peer_capabilities_caching:
-                return
-
-            try:
-                from ..peer_capabilities import get_cached_capabilities_store
-
-                config = self.get_config()
-                store = get_cached_capabilities_store(config)
-                store.delete_capabilities(actor.id, peer_id)
-                logger.debug(
-                    f"Cleaned up peer capabilities for {peer_id} on trust deletion"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to clean up peer capabilities for {peer_id}: {e}"
-                )
 
     def with_peer_permissions(
         self,
@@ -621,73 +501,10 @@ class ActingWebApp:
         self._notify_peer_on_change = notify_peer_on_change
         self._apply_runtime_changes_to_config()
 
-        # Register lifecycle hooks when permissions caching is enabled
-        if enable:
-            self._register_peer_permissions_hooks()
+        # Permissions cleanup is now handled automatically in core delete_reciprocal_trust()
+        # No hook registration needed
 
         return self
-
-    def _register_peer_permissions_hooks(self) -> None:
-        """Register lifecycle hooks for peer permissions caching."""
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        @self.lifecycle_hook("trust_approved")
-        def _fetch_permissions_on_approval(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Fetch and cache peer permissions when trust is approved.
-
-            This hook fires for both HTTP-based and programmatic approvals,
-            ensuring consistent caching behavior regardless of approval path.
-            """
-            if not peer_id or not self._peer_permissions_caching:
-                return
-
-            try:
-                from ..peer_permissions import (
-                    fetch_peer_permissions,
-                    get_peer_permission_store,
-                )
-
-                config = self.get_config()
-                permissions = fetch_peer_permissions(
-                    actor_id=actor.id,
-                    peer_id=peer_id,
-                    config=config,
-                )
-                store = get_peer_permission_store(config)
-                store.store_permissions(permissions)
-                logger.debug(f"Cached peer permissions for {peer_id} on trust approval")
-            except Exception as e:
-                logger.warning(f"Failed to cache peer permissions for {peer_id}: {e}")
-
-        @self.lifecycle_hook("trust_deleted")
-        def _cleanup_permissions_on_trust_deleted(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Clean up cached peer permissions when trust is deleted."""
-            if not peer_id or not self._peer_permissions_caching:
-                return
-
-            try:
-                from ..peer_permissions import get_peer_permission_store
-
-                config = self.get_config()
-                store = get_peer_permission_store(config)
-                store.delete_permissions(actor.id, peer_id)
-                logger.debug(
-                    f"Cleaned up peer permissions for {peer_id} on trust deletion"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to clean up peer permissions for {peer_id}: {e}"
-                )
 
     def add_service(
         self,
@@ -922,14 +739,11 @@ class ActingWebApp:
             max_payload_for_high_granularity=max_payload_for_high_granularity,
             circuit_breaker_threshold=circuit_breaker_threshold,
             circuit_breaker_cooldown=circuit_breaker_cooldown,
+            subscription_data_hooks=self._subscription_data_hooks,
         )
 
-        # Register internal callback hook to route through processor
-        self._register_internal_subscription_handler()
-
-        # Register cleanup hook if enabled
-        if auto_cleanup:
-            self._register_cleanup_hook()
+        # Cleanup is now handled automatically in core delete_reciprocal_trust()
+        # No hook registration needed
 
         return self
 
@@ -964,181 +778,6 @@ class ActingWebApp:
             return func
 
         return decorator
-
-    def _register_internal_subscription_handler(self) -> None:
-        """Register internal handler for subscription callbacks."""
-        from .actor_interface import ActorInterface
-
-        @self.callback_hook("subscription")
-        def _internal_subscription_handler(
-            actor: ActorInterface,
-            name: str,
-            data: dict[str, Any],
-        ) -> bool:
-            """Internal handler that routes through CallbackProcessor."""
-            return self._process_subscription_callback(actor, data)
-
-    def _process_subscription_callback(
-        self,
-        actor: Any,
-        data: dict[str, Any],
-    ) -> bool:
-        """Process subscription callback through the automatic pipeline."""
-        import asyncio
-        import logging
-
-        from ..callback_processor import CallbackProcessor, ProcessResult
-        from ..remote_storage import RemotePeerStore
-
-        config = self._subscription_config
-        if not config.enabled:
-            return False
-
-        peer_id = data.get("peerid", "")
-        subscription = data.get("subscription", {})
-        subscription_id = subscription.get("subscriptionid", "")
-        callback_data = data.get("data", {})
-        sequence = data.get("sequence", 0)
-        callback_type = data.get("type", "diff")
-        target = subscription.get("target", "properties")
-
-        logger = logging.getLogger(__name__)
-
-        async def process() -> bool:
-            # Create processor
-            processor = CallbackProcessor(
-                actor,
-                gap_timeout_seconds=config.gap_timeout_seconds,
-                max_pending=config.max_pending,
-            )
-
-            # Define handler for processed callbacks
-            async def handler(cb: Any) -> None:
-                # Auto-storage
-                if config.auto_storage:
-                    store = RemotePeerStore(actor, peer_id, validate_peer_id=False)
-                    if cb.callback_type.value == "resync":
-                        store.apply_resync_data(cb.data)
-                    else:
-                        store.apply_callback_data(cb.data)
-
-                # Invoke user hooks
-                await self._invoke_subscription_data_hooks(
-                    actor=actor,
-                    peer_id=peer_id,
-                    target=target,
-                    data=cb.data,
-                    sequence=cb.sequence,
-                    callback_type=cb.callback_type.value,
-                )
-
-            # Process through CallbackProcessor
-            result = await processor.process_callback(
-                peer_id=peer_id,
-                subscription_id=subscription_id,
-                sequence=sequence,
-                data=callback_data,
-                callback_type=callback_type,
-                handler=handler,
-            )
-
-            # Accept PENDING as success - callback was queued due to sequence gap
-            # Per ActingWeb protocol, receiver handles gaps via polling, sender should not retry
-            return result in (
-                ProcessResult.PROCESSED,
-                ProcessResult.DUPLICATE,
-                ProcessResult.PENDING,
-            )
-
-        # Run async processing
-        try:
-            _loop = asyncio.get_running_loop()  # Check if event loop is running
-            # If we're in an event loop, use run_in_executor
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(asyncio.run, process())
-                return future.result()
-        except RuntimeError:
-            # No event loop running, safe to use asyncio.run
-            return asyncio.run(process())
-        except Exception as e:
-            logger.error(f"Error processing subscription callback: {e}")
-            return False
-
-    async def _invoke_subscription_data_hooks(
-        self,
-        actor: Any,
-        peer_id: str,
-        target: str,
-        data: dict[str, Any],
-        sequence: int,
-        callback_type: str,
-    ) -> None:
-        """Invoke registered subscription data hooks."""
-        import inspect
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        # Invoke target-specific hooks
-        if target in self._subscription_data_hooks:
-            for hook in self._subscription_data_hooks[target]:
-                try:
-                    if inspect.iscoroutinefunction(hook):
-                        await hook(
-                            actor, peer_id, target, data, sequence, callback_type
-                        )
-                    else:
-                        hook(actor, peer_id, target, data, sequence, callback_type)
-                except Exception as e:
-                    logger.error(f"Error in subscription_data_hook for {target}: {e}")
-
-        # Invoke wildcard hooks
-        if "*" in self._subscription_data_hooks:
-            for hook in self._subscription_data_hooks["*"]:
-                try:
-                    if inspect.iscoroutinefunction(hook):
-                        await hook(
-                            actor, peer_id, target, data, sequence, callback_type
-                        )
-                    else:
-                        hook(actor, peer_id, target, data, sequence, callback_type)
-                except Exception as e:
-                    logger.error(f"Error in subscription_data_hook wildcard: {e}")
-
-    def _register_cleanup_hook(self) -> None:
-        """Register hook to clean up when trust is deleted."""
-        import logging
-
-        from ..callback_processor import CallbackProcessor
-        from ..remote_storage import RemotePeerStore
-
-        logger = logging.getLogger(__name__)
-
-        @self.lifecycle_hook("trust_deleted")
-        def _cleanup_peer_data(
-            actor: Any,
-            peer_id: str = "",
-            **kwargs: Any,
-        ) -> None:
-            """Clean up remote peer data when trust is deleted."""
-            if not peer_id:
-                return
-
-            # Clean up stored data
-            try:
-                store = RemotePeerStore(actor, peer_id, validate_peer_id=False)
-                store.delete_all()
-            except Exception as e:
-                logger.error(f"Error cleaning up RemotePeerStore for {peer_id}: {e}")
-
-            # Clean up callback state
-            try:
-                processor = CallbackProcessor(actor)
-                processor.clear_all_state_for_peer(peer_id)
-            except Exception as e:
-                logger.error(f"Error cleaning up callback state for {peer_id}: {e}")
 
     def get_subscription_config(self) -> SubscriptionProcessingConfig:
         """Get the subscription processing configuration."""
@@ -1178,11 +817,15 @@ class ActingWebApp:
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them
             self._config._hooks = self.hooks
+            # Attach subscription config so handlers can access it
+            self._config._subscription_config = self._subscription_config
         else:
             # If config already exists, keep it in sync with latest builder settings
             self._apply_runtime_changes_to_config()
             # Ensure hooks are attached even if config was created early
             self._config._hooks = self.hooks
+            # Ensure subscription config is attached even if config was created early
+            self._config._subscription_config = self._subscription_config
         return self._config
 
     def is_mcp_enabled(self) -> bool:
@@ -1228,7 +871,10 @@ class ActingWebApp:
             ) from e
 
         integration = FastAPIIntegration(
-            self, fastapi_app, templates_dir=templates_dir, thread_pool_workers=self._thread_pool_workers
+            self,
+            fastapi_app,
+            templates_dir=templates_dir,
+            thread_pool_workers=self._thread_pool_workers,
         )
         integration.setup_routes()
         return integration

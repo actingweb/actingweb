@@ -236,6 +236,7 @@ app = (
 **Lambda/Serverless Deployments**:
 - Use `.with_sync_callbacks()` to ensure subscription callbacks complete before the function freezes
 - Async fire-and-forget callbacks may be lost when Lambda functions freeze after returning a response
+- See `docs/quickstart/deployment.rst` for details
 
 See `docs/quickstart/configuration.rst` for all options.
 

@@ -220,11 +220,25 @@ class SubscriptionManager:
         return [sub for sub in self.all_subscriptions if not sub.is_callback]
 
     def get_subscriptions_to_peer(self, peer_id: str) -> list[SubscriptionInfo]:
-        """Get all subscriptions to a specific peer."""
+        """Get all subscriptions to a specific peer (outbound subscriptions).
+
+        These are subscriptions we created to subscribe to their data.
+        """
         subscriptions = self._core_actor.get_subscriptions(peerid=peer_id)
         if subscriptions is None:
             return []
         return [SubscriptionInfo(sub) for sub in subscriptions if isinstance(sub, dict)]
+
+    def get_subscriptions_from_peer(self, peer_id: str) -> list[SubscriptionInfo]:
+        """Get all subscriptions from a specific peer (inbound subscriptions).
+
+        These are subscriptions they created to subscribe to our data.
+        Returns inbound subscriptions where the peer_id matches.
+        """
+        # Get all inbound subscriptions (callback=False means they subscribed to us)
+        all_inbound = self.inbound_subscriptions
+        # Filter to only those from the specific peer
+        return [sub for sub in all_inbound if sub.peer_id == peer_id]
 
     def get_subscriptions_for_target(
         self, target: str, subtarget: str = "", resource: str = ""
@@ -750,6 +764,25 @@ class SubscriptionManager:
                     f"Stored baseline data for subscription {subscription_id} from {log_path}"
                 )
 
+                # Update local subscription sequence after baseline sync
+                final_seq = response.get("sequence", 0)
+                if final_seq > 0:
+                    from ..subscription import Subscription
+
+                    sub_obj = Subscription(
+                        actor_id=self._core_actor.id,
+                        peerid=peer_id,
+                        subid=subscription_id,
+                        callback=True,
+                        config=self._core_actor.config,
+                    )
+                    if sub_obj.handle:
+                        sub_obj.handle.modify(seqnr=final_seq)
+                        logger.info(
+                            f"Updated subscription {subscription_id} sequence to {final_seq} "
+                            f"after baseline sync"
+                        )
+
                 return SubscriptionSyncResult(
                     subscription_id=subscription_id,
                     success=True,
@@ -761,6 +794,25 @@ class SubscriptionManager:
                 logger.warning(
                     f"Failed to fetch baseline from {log_path} for subscription {subscription_id}"
                 )
+                # Update local subscription sequence even if baseline fetch failed
+                final_seq = response.get("sequence", 0)
+                if final_seq > 0:
+                    from ..subscription import Subscription
+
+                    sub_obj = Subscription(
+                        actor_id=self._core_actor.id,
+                        peerid=peer_id,
+                        subid=subscription_id,
+                        callback=True,
+                        config=self._core_actor.config,
+                    )
+                    if sub_obj.handle:
+                        sub_obj.handle.modify(seqnr=final_seq)
+                        logger.info(
+                            f"Updated subscription {subscription_id} sequence to {final_seq} "
+                            f"after baseline sync (fetch failed)"
+                        )
+
                 return SubscriptionSyncResult(
                     subscription_id=subscription_id,
                     success=True,
@@ -769,6 +821,25 @@ class SubscriptionManager:
                     final_sequence=response.get("sequence", 0),
                 )
         elif diffs_fetched == 0:
+            # Update local subscription sequence for no-diffs case
+            final_seq = response.get("sequence", 0)
+            if final_seq > 0:
+                from ..subscription import Subscription
+
+                sub_obj = Subscription(
+                    actor_id=self._core_actor.id,
+                    peerid=peer_id,
+                    subid=subscription_id,
+                    callback=True,
+                    config=self._core_actor.config,
+                )
+                if sub_obj.handle:
+                    sub_obj.handle.modify(seqnr=final_seq)
+                    logger.info(
+                        f"Updated subscription {subscription_id} sequence to {final_seq} "
+                        f"(no diffs, auto_storage disabled)"
+                    )
+
             return SubscriptionSyncResult(
                 subscription_id=subscription_id,
                 success=True,
@@ -853,6 +924,97 @@ class SubscriptionManager:
                 if seq > max_sequence:
                     max_sequence = seq
 
+        # If we fetched diffs but processed none (all duplicates/rejected),
+        # fetch baseline to ensure we're in sync
+        if diffs_fetched > 0 and diffs_processed == 0 and config.auto_storage:
+            logger.warning(
+                f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
+                f"fetching baseline for subscription {subscription_id}"
+            )
+
+            # Construct target path for baseline fetch
+            target_path = sub.target
+            if sub.subtarget:
+                target_path = f"{target_path}/{sub.subtarget}"
+            if sub.resource:
+                target_path = f"{target_path}/{sub.resource}"
+
+            # Add metadata flag for list properties to get short format
+            if sub.target == "properties" and not sub.subtarget and not sub.resource:
+                target_path = f"{target_path}?metadata=true"
+
+            baseline_response = proxy.get_resource(path=target_path)
+
+            if baseline_response and "error" not in baseline_response:
+                # Transform list metadata if needed
+                if (
+                    sub.target == "properties"
+                    and not sub.subtarget
+                    and not sub.resource
+                ):
+                    transformed_data = self._transform_baseline_list_properties(
+                        baseline_data=baseline_response,
+                        peer_id=peer_id,
+                        target=sub.target,
+                    )
+                else:
+                    transformed_data = baseline_response
+
+                # Apply baseline data
+                store = RemotePeerStore(
+                    actor=actor_interface,
+                    peer_id=peer_id,
+                    validate_peer_id=False,
+                )
+                store.apply_resync_data(transformed_data)
+                logger.info(
+                    f"Stored baseline data for subscription {subscription_id} "
+                    f"after rejecting {diffs_fetched} duplicate diffs"
+                )
+
+                # Update sequence from response
+                final_seq = response.get("sequence", 0)
+                if final_seq > 0:
+                    from ..subscription import Subscription
+
+                    sub_obj = Subscription(
+                        actor_id=self._core_actor.id,
+                        peerid=peer_id,
+                        subid=subscription_id,
+                        callback=True,
+                        config=self._core_actor.config,
+                    )
+                    if sub_obj.handle:
+                        sub_obj.handle.modify(seqnr=final_seq)
+                        logger.info(
+                            f"Updated subscription {subscription_id} sequence to {final_seq} "
+                            f"after baseline sync (duplicate diffs rejected)"
+                        )
+
+                    # Clear the duplicate diffs on the publisher to prevent repeated fetches
+                    clear_response = proxy.change_resource(
+                        path=path, params={"sequence": final_seq}
+                    )
+                    if clear_response is None or "error" in (clear_response or {}):
+                        # Log warning but don't fail the sync
+                        logger.warning(
+                            f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id}, sequence {final_seq}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Cleared duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id} up to sequence {final_seq}"
+                        )
+
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=True,
+                    diffs_fetched=diffs_fetched,
+                    diffs_processed=1,  # Count baseline as 1 processed
+                    final_sequence=response.get("sequence", 0),
+                )
+
         # Clear processed diffs on peer
         if max_sequence > 0:
             clear_response = proxy.change_resource(
@@ -863,6 +1025,24 @@ class SubscriptionManager:
                 logger.warning(
                     f"Failed to clear diffs on peer {peer_id} for subscription "
                     f"{subscription_id}, sequence {max_sequence}"
+                )
+
+        # Update local subscription sequence after processing diffs
+        if max_sequence > 0:
+            from ..subscription import Subscription
+
+            sub_obj = Subscription(
+                actor_id=self._core_actor.id,
+                peerid=peer_id,
+                subid=subscription_id,
+                callback=True,
+                config=self._core_actor.config,
+            )
+            if sub_obj.handle:
+                sub_obj.handle.modify(seqnr=max_sequence)
+                logger.info(
+                    f"Updated subscription {subscription_id} sequence to {max_sequence} "
+                    f"after processing {diffs_processed} diffs"
                 )
 
         return SubscriptionSyncResult(
@@ -928,6 +1108,107 @@ class SubscriptionManager:
 
                 # Fetch via ActingWeb protocol (remote peer enforces permissions)
                 response = proxy.get_resource(path=list_path)
+
+                # Validate response is a list
+                if response is None:
+                    logger.warning(
+                        f"No response when fetching list {property_name} from peer {peer_id}"
+                    )
+                    continue
+
+                if "error" in response:
+                    logger.warning(
+                        f"Error fetching list {property_name} from peer {peer_id}: {response.get('error')}"
+                    )
+                    continue
+
+                if not isinstance(response, list):
+                    logger.error(
+                        f"Invalid response for list {property_name} from peer {peer_id}: "
+                        f"expected list, got {type(response).__name__}"
+                    )
+                    continue
+
+                # Transform to flag-based format with items
+                result[property_name] = {"_list": True, "items": response}
+
+                # Log warning for large lists
+                if len(response) > 100:
+                    logger.warning(
+                        f"List property {property_name} from peer {peer_id} has {len(response)} items. "
+                        f"Consider using subtarget subscriptions for better performance."
+                    )
+
+                logger.debug(
+                    f"Successfully fetched {len(response)} items for list {property_name} from peer {peer_id}"
+                )
+
+            except Exception as e:
+                # Log error but continue processing other properties
+                logger.error(
+                    f"Error fetching list {property_name} from peer {peer_id}: {e}",
+                    exc_info=True,
+                )
+                # Keep metadata as-is (fail gracefully)
+                continue
+
+        return result
+
+    async def _transform_baseline_list_properties_async(
+        self,
+        baseline_data: dict[str, Any],
+        peer_id: str,
+        target: str,
+    ) -> dict[str, Any]:
+        """
+        Async version: Transform list property metadata into actual list items for baseline sync.
+
+        When baseline fetch returns list metadata ({"_list": true, "count": N}),
+        this fetches the actual items from the remote peer via ActingWeb protocol
+        and transforms to the format expected by apply_resync_data().
+
+        Args:
+            baseline_data: Baseline response from remote peer (may contain list metadata)
+            peer_id: ID of remote peer we're syncing from
+            target: Subscription target (e.g., "properties")
+
+        Returns:
+            Transformed data with lists in format {"property_name": {"_list": true, "items": [...]}}
+        """
+        # Create result dict (shallow copy)
+        result = dict(baseline_data)
+
+        # Get proxy for fetching list items from remote peer
+        proxy = self._get_peer_proxy(peer_id)
+        if proxy is None or proxy.trust is None:
+            logger.warning(
+                f"No trust with peer {peer_id}, skipping list transformation"
+            )
+            return baseline_data
+
+        # Process each property in baseline data
+        for property_name, value in baseline_data.items():
+            # Skip if not a dict
+            if not isinstance(value, dict):
+                continue
+
+            # Check for list metadata format: {"_list": true, "count": N}
+            if not value.get("_list"):
+                continue
+
+            # Skip if already has items
+            if "items" in value:
+                continue
+
+            # Fetch actual list items from remote peer
+            try:
+                list_path = f"{target}/{property_name}"
+                logger.debug(
+                    f"Fetching list items for {property_name} from peer {peer_id} at {list_path}"
+                )
+
+                # Fetch via ActingWeb protocol (remote peer enforces permissions)
+                response = await proxy.get_resource_async(path=list_path)
 
                 # Validate response is a list
                 if response is None:
@@ -1212,6 +1493,24 @@ class SubscriptionManager:
                 log_path = f"{log_path}/{sub.resource}"
 
             if baseline_response and "error" not in baseline_response:
+                # For properties subscriptions, transform list metadata into actual items
+                # Only needed when subscribing to full /properties endpoint (no subtarget)
+                # Subtarget subscriptions (e.g., properties/list:name) already return full items
+                if (
+                    sub.target == "properties"
+                    and not sub.subtarget
+                    and not sub.resource
+                ):
+                    transformed_data = (
+                        await self._transform_baseline_list_properties_async(
+                            baseline_data=baseline_response,
+                            peer_id=peer_id,
+                            target=sub.target,
+                        )
+                    )
+                else:
+                    transformed_data = baseline_response
+
                 # Store baseline data
                 from .actor_interface import ActorInterface
 
@@ -1222,11 +1521,30 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                # Apply baseline as resync data
-                store.apply_resync_data(baseline_response)
+                # Apply transformed baseline as resync data
+                store.apply_resync_data(transformed_data)
                 logger.info(
                     f"Stored baseline data for subscription {subscription_id} from {log_path}"
                 )
+
+                # Update local subscription sequence after baseline sync
+                final_seq = response.get("sequence", 0)
+                if final_seq > 0:
+                    from ..subscription import Subscription
+
+                    sub_obj = Subscription(
+                        actor_id=self._core_actor.id,
+                        peerid=peer_id,
+                        subid=subscription_id,
+                        callback=True,
+                        config=self._core_actor.config,
+                    )
+                    if sub_obj.handle:
+                        sub_obj.handle.modify(seqnr=final_seq)
+                        logger.info(
+                            f"Updated subscription {subscription_id} sequence to {final_seq} "
+                            f"after baseline sync"
+                        )
 
                 return SubscriptionSyncResult(
                     subscription_id=subscription_id,
@@ -1239,6 +1557,25 @@ class SubscriptionManager:
                 logger.warning(
                     f"Failed to fetch baseline from {log_path} for subscription {subscription_id}"
                 )
+                # Update local subscription sequence even if baseline fetch failed
+                final_seq = response.get("sequence", 0)
+                if final_seq > 0:
+                    from ..subscription import Subscription
+
+                    sub_obj = Subscription(
+                        actor_id=self._core_actor.id,
+                        peerid=peer_id,
+                        subid=subscription_id,
+                        callback=True,
+                        config=self._core_actor.config,
+                    )
+                    if sub_obj.handle:
+                        sub_obj.handle.modify(seqnr=final_seq)
+                        logger.info(
+                            f"Updated subscription {subscription_id} sequence to {final_seq} "
+                            f"after baseline sync (fetch failed)"
+                        )
+
                 return SubscriptionSyncResult(
                     subscription_id=subscription_id,
                     success=True,
@@ -1247,6 +1584,25 @@ class SubscriptionManager:
                     final_sequence=response.get("sequence", 0),
                 )
         elif diffs_fetched == 0:
+            # Update local subscription sequence for no-diffs case
+            final_seq = response.get("sequence", 0)
+            if final_seq > 0:
+                from ..subscription import Subscription
+
+                sub_obj = Subscription(
+                    actor_id=self._core_actor.id,
+                    peerid=peer_id,
+                    subid=subscription_id,
+                    callback=True,
+                    config=self._core_actor.config,
+                )
+                if sub_obj.handle:
+                    sub_obj.handle.modify(seqnr=final_seq)
+                    logger.info(
+                        f"Updated subscription {subscription_id} sequence to {final_seq} "
+                        f"(no diffs, auto_storage disabled)"
+                    )
+
             return SubscriptionSyncResult(
                 subscription_id=subscription_id,
                 success=True,
@@ -1325,6 +1681,99 @@ class SubscriptionManager:
                 if seq > max_sequence:
                     max_sequence = seq
 
+        # If we fetched diffs but processed none (all duplicates/rejected),
+        # fetch baseline to ensure we're in sync
+        if diffs_fetched > 0 and diffs_processed == 0 and config.auto_storage:
+            logger.warning(
+                f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
+                f"fetching baseline for subscription {subscription_id}"
+            )
+
+            # Construct target path for baseline fetch
+            target_path = sub.target
+            if sub.subtarget:
+                target_path = f"{target_path}/{sub.subtarget}"
+            if sub.resource:
+                target_path = f"{target_path}/{sub.resource}"
+
+            # Add metadata flag for list properties to get short format
+            if sub.target == "properties" and not sub.subtarget and not sub.resource:
+                target_path = f"{target_path}?metadata=true"
+
+            baseline_response = await proxy.get_resource_async(path=target_path)
+
+            if baseline_response and "error" not in baseline_response:
+                # Transform list metadata if needed
+                if (
+                    sub.target == "properties"
+                    and not sub.subtarget
+                    and not sub.resource
+                ):
+                    transformed_data = (
+                        await self._transform_baseline_list_properties_async(
+                            baseline_data=baseline_response,
+                            peer_id=peer_id,
+                            target=sub.target,
+                        )
+                    )
+                else:
+                    transformed_data = baseline_response
+
+                # Apply baseline data
+                store = RemotePeerStore(
+                    actor=actor_interface,
+                    peer_id=peer_id,
+                    validate_peer_id=False,
+                )
+                store.apply_resync_data(transformed_data)
+                logger.info(
+                    f"Stored baseline data for subscription {subscription_id} "
+                    f"after rejecting {diffs_fetched} duplicate diffs"
+                )
+
+                # Update sequence from response
+                final_seq = response.get("sequence", 0)
+                if final_seq > 0:
+                    from ..subscription import Subscription
+
+                    sub_obj = Subscription(
+                        actor_id=self._core_actor.id,
+                        peerid=peer_id,
+                        subid=subscription_id,
+                        callback=True,
+                        config=self._core_actor.config,
+                    )
+                    if sub_obj.handle:
+                        sub_obj.handle.modify(seqnr=final_seq)
+                        logger.info(
+                            f"Updated subscription {subscription_id} sequence to {final_seq} "
+                            f"after baseline sync (duplicate diffs rejected)"
+                        )
+
+                    # Clear the duplicate diffs on the publisher to prevent repeated fetches
+                    clear_response = await proxy.change_resource_async(
+                        path=path, params={"sequence": final_seq}
+                    )
+                    if clear_response is None or "error" in (clear_response or {}):
+                        # Log warning but don't fail the sync
+                        logger.warning(
+                            f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id}, sequence {final_seq}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Cleared duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id} up to sequence {final_seq}"
+                        )
+
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=True,
+                    diffs_fetched=diffs_fetched,
+                    diffs_processed=1,  # Count baseline as 1 processed
+                    final_sequence=response.get("sequence", 0),
+                )
+
         # Clear processed diffs on peer (async)
         if max_sequence > 0:
             clear_response = await proxy.change_resource_async(
@@ -1334,6 +1783,24 @@ class SubscriptionManager:
                 logger.warning(
                     f"Failed to clear diffs on peer {peer_id} for subscription "
                     f"{subscription_id}, sequence {max_sequence}"
+                )
+
+        # Update local subscription sequence after processing diffs
+        if max_sequence > 0:
+            from ..subscription import Subscription
+
+            sub_obj = Subscription(
+                actor_id=self._core_actor.id,
+                peerid=peer_id,
+                subid=subscription_id,
+                callback=True,
+                config=self._core_actor.config,
+            )
+            if sub_obj.handle:
+                sub_obj.handle.modify(seqnr=max_sequence)
+                logger.info(
+                    f"Updated subscription {subscription_id} sequence to {max_sequence} "
+                    f"after processing {diffs_processed} diffs"
                 )
 
         return SubscriptionSyncResult(

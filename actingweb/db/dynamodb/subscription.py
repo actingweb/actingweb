@@ -30,7 +30,7 @@ class Subscription(Model):
     target = UnicodeAttribute(null=True)
     subtarget = UnicodeAttribute(null=True)
     resource = UnicodeAttribute(null=True)
-    seqnr = NumberAttribute(default=1)
+    seqnr = NumberAttribute(default=0)
     callback = BooleanAttribute()
 
 
@@ -102,7 +102,7 @@ class DbSubscription:
             self.handle.subtarget = subtarget
         if resource and len(resource) > 0:
             self.handle.resource = resource
-        if seqnr:
+        if seqnr is not None:
             self.handle.seqnr = seqnr
         self.handle.save()
         return True
@@ -116,7 +116,7 @@ class DbSubscription:
         target=None,
         subtarget=None,
         resource=None,
-        seqnr=1,
+        seqnr=0,
         callback=False,
     ):
         """Create a new subscription"""

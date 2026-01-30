@@ -93,8 +93,35 @@ class CallbackProcessor:
         """Get attribute key for pending callbacks."""
         return f"pending:{peer_id}:{subscription_id}"
 
+    def _get_last_seq(self, peer_id: str, subscription_id: str) -> int:
+        """Get last processed sequence from subscription record (single source of truth).
+
+        Returns:
+            Last processed sequence number, or 0 if subscription doesn't exist
+        """
+        from .subscription import Subscription
+
+        sub = Subscription(
+            actor_id=self._actor.id,
+            peerid=peer_id,
+            subid=subscription_id,
+            callback=True,
+            config=self._actor.config,
+        )
+
+        if not sub.handle:
+            return 0
+
+        # Get subscription data from the Subscription object
+        sub_data = sub.get()
+        return sub_data.get("sequence", 0)
+
     def _get_state(self, peer_id: str, subscription_id: str) -> dict[str, Any]:
-        """Get callback state from storage."""
+        """Get callback state from storage.
+
+        Note: last_seq is now read from subscription record, not stored here.
+        This method returns only CallbackProcessor-specific state.
+        """
         from .attribute import Attributes
 
         db = Attributes(
@@ -105,7 +132,44 @@ class CallbackProcessor:
         attr = db.get_attr(name=self._get_state_key(peer_id, subscription_id))
         # get_attr returns {"data": ..., "timestamp": ...} or None
         state = attr.get("data") if attr else None
-        return state or {"last_seq": 0, "version": 0, "resync_pending": False}
+        return state or {"version": 0, "resync_pending": False}
+
+    def _update_last_seq(
+        self, peer_id: str, subscription_id: str, new_seq: int
+    ) -> bool:
+        """Update subscription sequence (single source of truth for last processed seq).
+
+        Returns:
+            True if update succeeded, False otherwise
+        """
+        from .subscription import Subscription
+
+        try:
+            sub = Subscription(
+                actor_id=self._actor.id,
+                peerid=peer_id,
+                subid=subscription_id,
+                callback=True,
+                config=self._actor.config,
+            )
+
+            if not sub.handle:
+                logger.warning(
+                    f"Cannot update sequence for non-existent subscription {subscription_id}"
+                )
+                return False
+
+            sub.handle.modify(seqnr=new_seq)
+            logger.debug(
+                f"Updated subscription {subscription_id} sequence to {new_seq} "
+                f"(via CallbackProcessor)"
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to update subscription {subscription_id} sequence: {e}"
+            )
+            return False
 
     def _set_state(
         self,
@@ -114,7 +178,10 @@ class CallbackProcessor:
         state: dict[str, Any],
         expected_version: int | None = None,
     ) -> bool:
-        """Set callback state with optimistic locking."""
+        """Set callback state with optimistic locking.
+
+        Note: last_seq is no longer stored here - it's read/written from subscription record.
+        """
         from .attribute import Attributes
 
         db = Attributes(
@@ -239,7 +306,7 @@ class CallbackProcessor:
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
             state = self._get_state(peer_id, subscription_id)
-            last_seq = state.get("last_seq", 0)
+            last_seq = self._get_last_seq(peer_id, subscription_id)
             version = state.get("version", 0)
 
             # Check for duplicate
@@ -262,8 +329,9 @@ class CallbackProcessor:
                     )
                     # Mark resync pending and clear queue
                     state["resync_pending"] = True
-                    state["last_seq"] = -1  # Reset to accept any sequence
                     self._set_state(peer_id, subscription_id, state, version)
+                    # Reset sequence to 0 to accept any sequence after resync
+                    self._update_last_seq(peer_id, subscription_id, 0)
                     self._clear_pending(peer_id, subscription_id)
                     return ProcessResult.RESYNC_TRIGGERED
 
@@ -321,11 +389,8 @@ class CallbackProcessor:
                 pending = self._get_pending(peer_id, subscription_id)
                 next_seq += 1
 
-            # Update state with new last_seq
-            new_last_seq = callbacks_to_process[-1].sequence
-            state["last_seq"] = new_last_seq
+            # Update CallbackProcessor-specific state FIRST (optimistic lock)
             state["resync_pending"] = False
-
             if not self._set_state(peer_id, subscription_id, state, version):
                 # Version conflict - retry
                 logger.debug(f"Version conflict, retrying (attempt {attempt + 1})")
@@ -343,6 +408,18 @@ class CallbackProcessor:
                         logger.error(
                             f"Handler error for seq={cb.sequence}: {e}", exc_info=True
                         )
+
+            # Update sequence in subscription record AFTER successful processing
+            # This prevents duplicate detection on retry and ensures sequence only
+            # advances after the callback has been fully processed
+            new_last_seq = callbacks_to_process[-1].sequence
+            if not self._update_last_seq(peer_id, subscription_id, new_last_seq):
+                # Failed to update subscription - this is critical but we've already
+                # processed the callback, so log error but don't retry
+                logger.error(
+                    f"Failed to update sequence to {new_last_seq} after processing - "
+                    f"callback may be reprocessed on next invocation"
+                )
 
             return ProcessResult.PROCESSED
 
@@ -364,9 +441,8 @@ class CallbackProcessor:
         # Clear pending queue
         self._clear_pending(peer_id, subscription_id)
 
-        # Reset state with new sequence
+        # Reset CallbackProcessor-specific state
         state = {
-            "last_seq": sequence,
             "version": 0,
             "resync_pending": False,
         }
@@ -387,6 +463,9 @@ class CallbackProcessor:
             except Exception as e:
                 # Log with full traceback for debugging
                 logger.error(f"Resync handler error: {e}", exc_info=True)
+
+        # Update subscription sequence AFTER successful processing
+        self._update_last_seq(peer_id, subscription_id, sequence)
 
         return ProcessResult.PROCESSED
 
@@ -425,7 +504,7 @@ class CallbackProcessor:
         state = self._get_state(peer_id, subscription_id)
         pending = self._get_pending(peer_id, subscription_id)
         return {
-            "last_seq": state.get("last_seq", 0),
+            "last_seq": self._get_last_seq(peer_id, subscription_id),
             "version": state.get("version", 0),
             "resync_pending": state.get("resync_pending", False),
             "pending_count": len(pending),
@@ -433,9 +512,15 @@ class CallbackProcessor:
         }
 
     def clear_state(self, peer_id: str, subscription_id: str) -> None:
-        """Clear all state for a subscription (e.g., when trust deleted)."""
+        """Clear all state for a subscription (e.g., when subscription/trust deleted).
+
+        Note: We don't reset the subscription sequence here because:
+        - If called from Subscription.delete(), the subscription is about to be deleted
+        - If called from trust deletion, subscriptions are already deleted
+        """
         from .attribute import Attributes
 
+        # Clear callback state attributes
         db = Attributes(
             actor_id=self._actor.id,
             bucket=self._state_bucket,
@@ -445,7 +530,11 @@ class CallbackProcessor:
         db.delete_attr(name=self._get_pending_key(peer_id, subscription_id))
 
     def clear_all_state_for_peer(self, peer_id: str) -> None:
-        """Clear all callback state for a peer (when trust deleted)."""
+        """Clear all callback state for a peer (when trust deleted).
+
+        Note: We don't reset subscription sequences here because subscriptions
+        are deleted before this method is called in delete_reciprocal_trust().
+        """
         from .attribute import Attributes
 
         db = Attributes(
@@ -496,7 +585,7 @@ class CallbackProcessor:
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
             state = self._get_state(peer_id, subscription_id)
-            last_seq = state.get("last_seq", 0)
+            last_seq = self._get_last_seq(peer_id, subscription_id)
             version = state.get("version", 0)
 
             # Check for duplicate
@@ -519,8 +608,9 @@ class CallbackProcessor:
                     )
                     # Mark resync pending and clear queue
                     state["resync_pending"] = True
-                    state["last_seq"] = -1  # Reset to accept any sequence
                     self._set_state(peer_id, subscription_id, state, version)
+                    # Reset sequence to 0 to accept any sequence after resync
+                    self._update_last_seq(peer_id, subscription_id, 0)
                     self._clear_pending(peer_id, subscription_id)
                     return ProcessResult.RESYNC_TRIGGERED
 
@@ -578,11 +668,8 @@ class CallbackProcessor:
                 pending = self._get_pending(peer_id, subscription_id)
                 next_seq += 1
 
-            # Update state with new last_seq
-            new_last_seq = callbacks_to_process[-1].sequence
-            state["last_seq"] = new_last_seq
+            # Update CallbackProcessor-specific state FIRST (optimistic lock)
             state["resync_pending"] = False
-
             if not self._set_state(peer_id, subscription_id, state, version):
                 # Version conflict - retry
                 logger.debug(f"Version conflict, retrying (attempt {attempt + 1})")
@@ -600,6 +687,18 @@ class CallbackProcessor:
                         logger.error(
                             f"Handler error for seq={cb.sequence}: {e}", exc_info=True
                         )
+
+            # Update sequence in subscription record AFTER successful processing
+            # This prevents duplicate detection on retry and ensures sequence only
+            # advances after the callback has been fully processed
+            new_last_seq = callbacks_to_process[-1].sequence
+            if not self._update_last_seq(peer_id, subscription_id, new_last_seq):
+                # Failed to update subscription - this is critical but we've already
+                # processed the callback, so log error but don't retry
+                logger.error(
+                    f"Failed to update sequence to {new_last_seq} after processing - "
+                    f"callback may be reprocessed on next invocation"
+                )
 
             return ProcessResult.PROCESSED
 
@@ -621,9 +720,8 @@ class CallbackProcessor:
         # Clear pending queue
         self._clear_pending(peer_id, subscription_id)
 
-        # Reset state with new sequence
+        # Reset CallbackProcessor-specific state
         state = {
-            "last_seq": sequence,
             "version": 0,
             "resync_pending": False,
         }
@@ -644,6 +742,9 @@ class CallbackProcessor:
             except Exception as e:
                 # Log with full traceback for debugging
                 logger.error(f"Resync handler error: {e}", exc_info=True)
+
+        # Update subscription sequence AFTER successful processing
+        self._update_last_seq(peer_id, subscription_id, sequence)
 
         return ProcessResult.PROCESSED
 

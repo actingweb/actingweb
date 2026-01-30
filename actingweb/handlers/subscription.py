@@ -336,10 +336,10 @@ class SubscriptionHandler(base_handler.BaseHandler):
                     "data": d,
                 }
             )
-        if len(pairs) == 0:
-            self.response.set_status(404, "No diffs available")
-            return
 
+        # Always return subscription metadata with current sequence,
+        # even when there are no new diffs. This allows subscribers
+        # to synchronize their sequence number with the publisher.
         sub_dict = sub_info.to_dict()
         data = {
             "id": myself.id,

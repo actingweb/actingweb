@@ -126,6 +126,22 @@ class PeerCapabilities:
         """Check if peer supports resync callback type."""
         return self.supports("subscriptionresync")
 
+    def supports_resync_callbacks_cached(self) -> bool | None:
+        """Check if peer supports resync callbacks using only cached data.
+
+        Returns:
+            True if peer supports resync (cached)
+            False if peer doesn't support resync (cached)
+            None if capabilities not cached or expired
+
+        This method never makes network requests - it only checks the cache.
+        Useful for avoiding blocking during time-sensitive operations like
+        subscription resume.
+        """
+        if not self._is_cache_valid():
+            return None
+        return self.supports("subscriptionresync")
+
     def supports_stats_endpoint(self) -> bool:
         """Check if peer supports subscription stats endpoint."""
         return self.supports("subscriptionstats")

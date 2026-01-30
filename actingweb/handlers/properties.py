@@ -157,18 +157,42 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
 
         # Check if this is a list property first
+        logger.debug(
+            f"Checking if '{name}' is a list property: has_lists={hasattr(myself, 'property_lists') if myself else False}"
+        )
+        if (
+            myself
+            and hasattr(myself, "property_lists")
+            and myself.property_lists is not None
+        ):
+            exists = myself.property_lists.exists(name)
+            logger.debug(f"property_lists.exists('{name}') = {exists}")
+
         if (
             myself
             and hasattr(myself, "property_lists")
             and myself.property_lists is not None
             and myself.property_lists.exists(name)
         ):
-            # This is a list property - handle index parameter
-            index_param = self.request.get("index")
+            # This is a list property - handle format and index parameters
+            logger.info(f"Processing list property '{name}'")
+            index_param = (
+                self.request.get("index") or None
+            )  # Convert empty string to None
+            format_param = (
+                self.request.get("format") or None
+            )  # Convert empty string to None
+
             try:
+                logger.info(f"Getting list property object for '{name}'")
                 list_prop = getattr(myself.property_lists, name)
+                logger.info(
+                    f"Got list_prop: {type(list_prop).__name__}, length={len(list_prop) if list_prop else 'N/A'}"
+                )
+                logger.info(f"index_param={index_param}, format_param={format_param}")
 
                 if index_param is not None:
+                    logger.info(f"Handling index access for index={index_param}")
                     # Get specific item by index
                     try:
                         index = int(index_param)
@@ -178,7 +202,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                         if self.hooks:
                             actor_interface = self._get_actor_interface(myself)
                             if actor_interface:
-                                hook_path = [name, str(index)]
+                                hook_path = [str(index)]
                                 auth_context = self._create_auth_context(check, "read")
                                 transformed = self.hooks.execute_property_hooks(
                                     name,
@@ -201,31 +225,63 @@ class PropertiesHandler(base_handler.BaseHandler):
                             self.response.set_status(404, "List item not found")
                         return
                 else:
-                    # Get all items
-                    all_items = list_prop.to_list()
+                    logger.info(
+                        f"Handling list access (not index), format_param={format_param}"
+                    )
+                    # Determine response format
+                    if format_param == "short":
+                        logger.info("Using short format")
+                        # Short format: return metadata only
+                        # This matches the format used in GET /properties?metadata=true
+                        metadata = {
+                            "_list": True,
+                            "count": len(list_prop),
+                            "description": list_prop.get_description(),
+                            "explanation": list_prop.get_explanation(),
+                        }
+                        out = json.dumps(metadata)
+                    else:
+                        # Default (no format or format=full): return all items
+                        # This is the expected behavior for subscriptions
+                        all_items = list_prop.to_list()
 
-                    # Execute property hook if available
-                    if self.hooks:
-                        actor_interface = self._get_actor_interface(myself)
-                        if actor_interface:
-                            hook_path = [name]
-                            auth_context = self._create_auth_context(check, "read")
-                            transformed = self.hooks.execute_property_hooks(
-                                name,
-                                "get",
-                                actor_interface,
-                                all_items,
-                                hook_path,
-                                auth_context,
+                        # Execute property hook if available
+                        logger.info(
+                            f"Checking hooks: has_hooks={self.hooks is not None}"
+                        )
+                        if self.hooks:
+                            actor_interface = self._get_actor_interface(myself)
+                            logger.info(
+                                f"Got actor_interface: {actor_interface is not None}"
                             )
-                            if transformed is not None:
-                                all_items = transformed
-                            else:
-                                if self.response:
-                                    self.response.set_status(404)
-                                return
+                            if actor_interface:
+                                hook_path = []
+                                auth_context = self._create_auth_context(check, "read")
+                                logger.info(
+                                    f"Executing property hooks for '{name}', items count={len(all_items)}"
+                                )
+                                transformed = self.hooks.execute_property_hooks(
+                                    name,
+                                    "get",
+                                    actor_interface,
+                                    all_items,
+                                    hook_path,
+                                    auth_context,
+                                )
+                                logger.info(
+                                    f"Hook result: transformed is None? {transformed is None}"
+                                )
+                                if transformed is not None:
+                                    all_items = transformed
+                                else:
+                                    logger.warning(
+                                        f"Property hook returned None for '{name}', returning 404"
+                                    )
+                                    if self.response:
+                                        self.response.set_status(404)
+                                    return
 
-                    out = json.dumps(all_items)
+                        out = json.dumps(all_items)
 
                 if self.response:
                     self.response.set_status(200, "Ok")
@@ -258,7 +314,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     actor_interface = self._get_actor_interface(myself)
                     if actor_interface:
                         # Use the original name for the hook, not the modified path
-                        hook_path = name.split("/") if name else []
+                        hook_path = path[1:] if len(path) > 1 else []
                         auth_context = self._create_auth_context(check, "read")
                         transformed = self.hooks.execute_property_hooks(
                             name or "*",
@@ -310,16 +366,20 @@ class PropertiesHandler(base_handler.BaseHandler):
                 except ValueError:
                     pair[name] = value
 
-        # Filter properties based on peer permissions
+        # Filter properties based on peer permissions (bulk evaluation)
         peer_id = check.acl.get("peerid", "") if hasattr(check, "acl") else ""
         if peer_id and actor_interface and actor_interface.id and pair:
             try:
                 evaluator = get_permission_evaluator(self.config)
+                # Use bulk evaluation to reduce logging verbosity
+                property_names = list(pair.keys())
+                results = evaluator.evaluate_bulk_property_access(
+                    actor_interface.id, peer_id, property_names, "read"
+                )
+                # Filter based on results
                 filtered_pair = {}
                 for prop_name, prop_value in pair.items():
-                    result = evaluator.evaluate_property_access(
-                        actor_interface.id, peer_id, prop_name, "read"
-                    )
+                    result = results.get(prop_name, PermissionResult.DENIED)
                     if result == PermissionResult.ALLOWED:
                         filtered_pair[prop_name] = prop_value
                     elif result == PermissionResult.NOT_FOUND:
@@ -360,14 +420,15 @@ class PropertiesHandler(base_handler.BaseHandler):
                 f"Found {len(all_list_names)} list properties: {all_list_names}"
             )
 
-            # Filter list properties based on peer permissions
+            # Filter list properties based on peer permissions (bulk evaluation)
             if peer_id and actor_interface and actor_interface.id:
                 try:
                     evaluator = get_permission_evaluator(self.config)
-                    for list_name in all_list_names:
-                        result = evaluator.evaluate_property_access(
-                            actor_interface.id, peer_id, list_name, "read"
-                        )
+                    # Use bulk evaluation to reduce logging verbosity
+                    results = evaluator.evaluate_bulk_property_access(
+                        actor_interface.id, peer_id, list(all_list_names), "read"
+                    )
+                    for list_name, result in results.items():
                         if (
                             result == PermissionResult.ALLOWED
                             or result == PermissionResult.NOT_FOUND

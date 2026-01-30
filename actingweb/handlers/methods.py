@@ -122,8 +122,33 @@ class MethodsHandler(base_handler.BaseHandler):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 if not name:
-                    # Return list of available methods with metadata
-                    result = {"methods": self.hooks.get_method_metadata_list()}
+                    # Return list of available methods with metadata, filtered by permissions
+                    all_methods = self.hooks.get_method_metadata_list()
+
+                    # Filter methods based on peer permissions
+                    peer_id = (
+                        check.acl.get("peerid", "") if hasattr(check, "acl") else ""
+                    )
+                    if peer_id:
+                        # For peer-based auth, filter by allowed methods
+                        try:
+                            evaluator = get_permission_evaluator(self.config)
+                            filtered_methods = []
+                            for method in all_methods:
+                                method_name = method.get("name", "")
+                                perm_result = evaluator.evaluate_method_access(
+                                    actor_id, peer_id, method_name
+                                )
+                                if perm_result == PermissionResult.ALLOWED:
+                                    filtered_methods.append(method)
+                            result = {"methods": filtered_methods}
+                        except Exception as e:
+                            logger.error(f"Error filtering methods by permission: {e}")
+                            # Fall back to returning all methods on error
+                            result = {"methods": all_methods}
+                    else:
+                        # For non-peer auth (basic/oauth), return all methods
+                        result = {"methods": all_methods}
                 else:
                     auth_context = self._create_auth_context(check)
                     result = self.hooks.execute_method_hooks(

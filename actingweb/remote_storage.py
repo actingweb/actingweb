@@ -7,6 +7,7 @@ using internal attributes (not exposed via HTTP).
 
 import logging
 import re
+from datetime import UTC
 from re import Pattern
 from typing import TYPE_CHECKING, Any
 
@@ -116,9 +117,14 @@ class RemotePeerStore:
         return attr.get("data") if attr else None
 
     def set_value(self, name: str, value: dict[str, Any]) -> None:
-        """Set a scalar value."""
+        """Set a scalar value from remote peer (sanitizes for security)."""
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted data from remote peer
+        sanitized_value = sanitize_json_data(value, log_source=f"peer:{self._peer_id}")
+
         db = self._get_attributes()
-        db.set_attr(name=name, data=value)
+        db.set_attr(name=name, data=sanitized_value)
 
     def delete_value(self, name: str) -> None:
         """Delete a scalar value."""
@@ -139,13 +145,27 @@ class RemotePeerStore:
         items: list[dict[str, Any]],
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Set a list (replaces all items)."""
+        """Set a list from remote peer (sanitizes for security)."""
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted data from remote peer
+        sanitized_items = sanitize_json_data(items, log_source=f"peer:{self._peer_id}")
+        sanitized_metadata = (
+            sanitize_json_data(metadata, log_source=f"peer:{self._peer_id}")
+            if metadata
+            else None
+        )
+
         store = self._get_list_store()
         list_attr = getattr(store, name)
         list_attr.clear()
-        list_attr.extend(items)
-        if metadata:
-            list_attr.set_metadata(metadata)
+        list_attr.extend(sanitized_items)
+        if sanitized_metadata:
+            # ListAttribute only supports setting description and explanation
+            if "description" in sanitized_metadata:
+                list_attr.set_description(sanitized_metadata["description"])
+            if "explanation" in sanitized_metadata:
+                list_attr.set_explanation(sanitized_metadata["explanation"])
 
     def delete_list(self, name: str) -> None:
         """Delete a list entirely."""
@@ -202,18 +222,34 @@ class RemotePeerStore:
         - Applies them to the appropriate list
         - Stores scalar values directly
 
+        SECURITY: Sanitizes untrusted data from remote peer before storage.
+
         Args:
             data: Callback data dict from subscription callback
 
         Returns:
             Dict of {property_name: operation_result} for each processed property
         """
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted callback data from remote peer
+        data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:callback")
+
         results: dict[str, Any] = {}
 
         for key, value in data.items():
             try:
-                if key.startswith("list:") and isinstance(value, dict):
-                    # List operation
+                # Detect list operations per ActingWeb spec:
+                # List diff payloads have "list" and "operation" fields in the value
+                if isinstance(value, dict) and "list" in value and "operation" in value:
+                    # List operation (spec-compliant format)
+                    list_name = value.get("list", key)
+                    operation = value.get("operation", "unknown")
+                    results[list_name] = self._apply_list_operation(
+                        list_name, operation, value
+                    )
+                elif key.startswith("list:") and isinstance(value, dict):
+                    # Legacy format: key has "list:" prefix
                     list_name = value.get("list", key[5:])
                     operation = value.get("operation", "unknown")
                     results[list_name] = self._apply_list_operation(
@@ -311,12 +347,21 @@ class RemotePeerStore:
     def apply_resync_data(self, data: dict[str, Any]) -> dict[str, Any]:
         """Apply full resync data, replacing all existing data.
 
+        SECURITY: Sanitizes untrusted data from remote peer before storage.
+
         Args:
             data: Full state data from resync callback
 
         Returns:
             Dict of {property_name: operation_result}
         """
+        from datetime import datetime
+
+        from .db.utils import sanitize_json_data
+
+        # Sanitize untrusted resync data from remote peer
+        data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:resync")
+
         results: dict[str, Any] = {}
 
         # Delete existing data first
@@ -331,7 +376,16 @@ class RemotePeerStore:
                     # metadata-only dicts as empty lists (which causes data loss)
                     if "items" in value:
                         items = value.get("items", [])
-                        self.set_list(key, items)
+
+                        # Create sync metadata
+                        metadata = {
+                            "source_actor": self._peer_id,
+                            "source_property": key,
+                            "synced_at": datetime.now(UTC).isoformat(),
+                            "item_count": len(items),
+                        }
+
+                        self.set_list(key, items, metadata=metadata)
                         results[key] = {
                             "operation": "resync",
                             "items": len(items),
@@ -352,7 +406,16 @@ class RemotePeerStore:
                 elif key.startswith("list:") and isinstance(value, list):
                     # Full list replacement
                     list_name = key[5:]
-                    self.set_list(list_name, value)
+
+                    # Create sync metadata
+                    metadata = {
+                        "source_actor": self._peer_id,
+                        "source_property": list_name,
+                        "synced_at": datetime.now(UTC).isoformat(),
+                        "item_count": len(value),
+                    }
+
+                    self.set_list(list_name, value, metadata=metadata)
                     results[list_name] = {
                         "operation": "resync",
                         "items": len(value),

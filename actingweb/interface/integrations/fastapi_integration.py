@@ -466,7 +466,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             request_context.clear_request_context()
 
 
-def _run_with_context(ctx: contextvars.Context, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+def _run_with_context(
+    ctx: contextvars.Context, func: Callable[..., Any], *args: Any, **kwargs: Any
+) -> Any:
     """
     Run a function with a specific context.
 
@@ -518,10 +520,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         self.fastapi_app.add_middleware(RequestContextMiddleware)
 
     async def _run_in_executor_with_context(
-        self,
-        func: Callable[..., Any],
-        *args: Any,
-        **kwargs: Any
+        self, func: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> Any:
         """
         Run a synchronous function in the thread pool with context propagation.
@@ -549,17 +548,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
         if kwargs:
             # If we have kwargs, wrap in a lambda
             return await loop.run_in_executor(
-                self.executor,
-                lambda: _run_with_context(ctx, func, *args, **kwargs)
+                self.executor, lambda: _run_with_context(ctx, func, *args, **kwargs)
             )
         else:
             # No kwargs, simpler call
             return await loop.run_in_executor(
-                self.executor,
-                _run_with_context,
-                ctx,
-                func,
-                *args
+                self.executor, _run_with_context, ctx, func, *args
             )
 
     def _prefer_async_handlers(self) -> bool:

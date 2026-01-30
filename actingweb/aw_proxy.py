@@ -230,7 +230,9 @@ class AwProxy:
                 url=url, data=data, headers=headers, timeout=self.timeout
             )
             if response.status_code in (302, 401, 403):
-                retry = self._maybe_retry_with_basic("POST", url, data=data, headers=headers)
+                retry = self._maybe_retry_with_basic(
+                    "POST", url, data=data, headers=headers
+                )
                 if retry is not None:
                     response = retry
             self.last_response_code = response.status_code
@@ -280,7 +282,9 @@ class AwProxy:
                 url=url, data=data, headers=headers, timeout=self.timeout
             )
             if response.status_code in (302, 401, 403):
-                retry = self._maybe_retry_with_basic("PUT", url, data=data, headers=headers)
+                retry = self._maybe_retry_with_basic(
+                    "PUT", url, data=data, headers=headers
+                )
                 if retry is not None:
                     response = retry
             self.last_response_code = response.status_code
@@ -337,7 +341,11 @@ class AwProxy:
     # These are useful in async frameworks like FastAPI to avoid blocking the event loop
 
     async def _maybe_retry_with_basic_async(
-        self, method: str, url: str, data: str | None = None, headers: dict[str, str] | None = None
+        self,
+        method: str,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response | None:
         """Async retry with Basic auth if Bearer fails."""
         if not self.peer_passphrase:
@@ -359,9 +367,13 @@ class AwProxy:
                 else:
                     final_headers = {**bh, "Content-Type": "application/json"}
                     if method == "POST":
-                        return await client.post(url, content=data, headers=final_headers)
+                        return await client.post(
+                            url, content=data, headers=final_headers
+                        )
                     if method == "PUT":
-                        return await client.put(url, content=data, headers=final_headers)
+                        return await client.put(
+                            url, content=data, headers=final_headers
+                        )
         except Exception:
             return None
         return None
@@ -397,7 +409,9 @@ class AwProxy:
                 response = await client.get(url, headers=headers)
                 # Retry with Basic if Bearer gets redirected/unauthorized/forbidden
                 if response.status_code in (302, 401, 403):
-                    retry = await self._maybe_retry_with_basic_async("GET", url, headers=headers)
+                    retry = await self._maybe_retry_with_basic_async(
+                        "GET", url, headers=headers
+                    )
                     if retry is not None:
                         response = retry
                 self.last_response_code = response.status_code
@@ -661,7 +675,9 @@ class AwProxy:
             async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.delete(url, headers=headers)
                 if response.status_code in (302, 401, 403):
-                    retry = await self._maybe_retry_with_basic_async("DELETE", url, headers=headers)
+                    retry = await self._maybe_retry_with_basic_async(
+                        "DELETE", url, headers=headers
+                    )
                     if retry is not None:
                         response = retry
                 self.last_response_code = response.status_code

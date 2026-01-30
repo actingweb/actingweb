@@ -55,7 +55,23 @@ In Lambda/serverless environments, async tasks may be lost when the function fre
 
    app = ActingWebApp(...).with_sync_callbacks(enable=True)
 
-This makes callbacks use blocking HTTP requests, guaranteeing delivery at the cost of slightly longer response times.
+This makes **all subscription callbacks** (both diff and resync) use blocking HTTP requests, guaranteeing delivery at the cost of slightly longer response times.
+
+**Why Lambda Requires Sync Callbacks:**
+
+- Lambda freezes execution after returning a response
+- Async fire-and-forget callbacks are terminated before completion
+- Sync callbacks block until delivery is confirmed
+- Both diff callbacks and resync callbacks respect this configuration
+
+**Local Development Warning:**
+
+Do **NOT** use ``with_sync_callbacks()`` in local/container deployments:
+
+- Default async behavior prevents blocking and self-deadlock
+- Async mode allows both actors on the same server to communicate without blocking
+- Sync mode can cause 30+ second blocking when both actors are on the same server
+- Callbacks complete in the background after the response is returned
 
 **When to Use Each Mode:**
 
@@ -81,6 +97,9 @@ This makes callbacks use blocking HTTP requests, guaranteeing delivery at the co
    * - Kubernetes/Docker
      - Async (default)
      - Background tasks persist after response
+   * - Local Development
+     - Async (default)
+     - Prevents blocking and self-deadlock
 
 ========================
 Subscription Processing
@@ -234,6 +253,8 @@ Full state replacement, triggered when:
 - The publisher calls ``resume_subscriptions()``
 - Initial sync after subscription creation
 
+Resync callbacks include a ``type`` field and a ``url`` to fetch the full state:
+
 .. code-block:: json
 
    {
@@ -245,6 +266,24 @@ Full state replacement, triggered when:
      "url": "https://example.com/actor123/properties",
      "timestamp": "2026-01-20T12:00:00Z"
    }
+
+**Low-Granularity Fallback:**
+
+When a peer doesn't support the ``subscriptionresync`` option (per ActingWeb protocol v1.4), the publisher automatically falls back to a low-granularity callback:
+
+.. code-block:: json
+
+   {
+     "id": "actor123",
+     "subscriptionid": "sub456",
+     "sequence": 43,
+     "target": "properties",
+     "granularity": "low",
+     "url": "https://example.com/actor123/subscriptions/sub456/43",
+     "timestamp": "2026-01-20T12:00:00Z"
+   }
+
+Note: No ``type`` field, and ``url`` points to the subscription diff endpoint. The receiver fetches the data from the URL automatically.
 
 Peer Capability Discovery
 -------------------------
@@ -357,6 +396,16 @@ Publishers can temporarily suspend diff callbacks during bulk operations:
    # Resume and send resync to all subscribers
    count = actor.subscriptions.resume(target="properties")
    print(f"Sent resync to {count} subscribers")
+
+**Performance Note:**
+
+The ``resume()`` operation uses **cached peer capabilities** to determine whether to send full resync callbacks or low-granularity callbacks. This avoids blocking on network requests to check peer capabilities:
+
+- If capabilities are cached and fresh (< 24 hours): Uses cached value
+- If cache is expired or missing: Assumes peer supports resync (optimistic approach)
+- Background refresh updates the cache for next time (async mode only)
+
+This ensures ``resume()`` returns immediately without blocking, even when suspending/resuming many subscriptions.
 
 Fan-Out Manager
 ---------------

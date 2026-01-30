@@ -38,6 +38,8 @@ Changelog
 
 - Added ``sequence`` field requirement to GET subscription response (``/subscriptions/<peerid>/<subid>``)
 - The subscription's current sequence number MUST now be included at the top level of the response
+- Added Permission Callback (OPTIONAL) section for push-based permission change notifications
+- Added Permission Query Endpoint (OPTIONAL) section for pull-based permission discovery
 - Added ``subscriptionresync`` option tag for resync callback support
 - Added Resync Callback section for bulk operation synchronization
 - Callbacks now support optional ``type`` field (``"resync"`` or ``"diff"``)
@@ -47,12 +49,15 @@ Changelog
 - Added Callback Back-Pressure mechanism using HTTP 429/503 responses and circuit breaker pattern
 - Added Callback Compression support (OPTIONAL) using standard HTTP content encoding
 - Added Subscription Scope and Overlap clarification for handling multiple overlapping subscriptions
-- Added new option tags: ``subscriptionresync``, ``callbackcompression``
+- Added List Property and Regular Property Namespace section clarifying namespace exclusivity
+- Renamed list property metadata field ``item_count`` to ``count`` for consistency
+- Added ``format`` query parameter for list property GET requests (``format=short`` returns metadata only, ``format=full`` returns all items)
+- Added new option tags: ``subscriptionresync``, ``callbackcompression``, ``permissioncallback``, ``permissionquery``
 
 **Version 1.3** (December 2025)
 
 - Added List Property Subscriptions with structured diff payloads
-- Subscription subtarget format ``list:{name}`` for list properties
+- List property subscriptions use clean property name (no prefix) in subtarget
 - Diff payloads include ``operation``, ``item``, ``index``, and ``items`` fields
 - Updated ``listproperties`` option tag to include subscription capabilities
 
@@ -950,6 +955,23 @@ JSON array. The response MUST be a 200 OK with content type application/json::
     {"id": "1", "content": "Remember to call", "created": "2025-01-15T10:30:00Z"},
     {"id": "2", "content": "Buy groceries", "created": "2025-01-15T14:00:00Z"}
   ]
+
+A GET request MAY include a ``format`` query parameter to control the response
+format:
+
+- ``format=full`` (or no format parameter): Returns the complete list of items as
+  a JSON array (default behavior).
+- ``format=short``: Returns only list metadata without items. This is useful for
+  efficiently checking list size and properties without transferring all items::
+
+    GET /app/78hjh76yug/properties/notes?format=short
+
+    {
+      "_list": true,
+      "count": 2,
+      "description": "Personal notes",
+      "explanation": "Store notes and reminders"
+    }
 
 A GET request to a specific item index MUST return that item only. If the index
 is out of range, a 404 Not Found MUST be returned::
@@ -2540,10 +2562,9 @@ method MUST be used for the /properties endpoint.
 This section applies only to actors that support the *listproperties* option tag.
 Subscriptions to list properties follow a modified diff format that provides
 additional context about list mutations. When subscribing to changes on a
-list property, the subtarget MUST use the format ``list:{name}`` where
-``{name}`` is the list property name. For example, to subscribe to changes
-on a list property named ``notes``, the subscription request MUST specify
-``subtarget: "list:notes"``.
+list property, the subtarget specifies the list property name directly.
+For example, to subscribe to changes on a list property named ``notes``,
+the subscription request MUST specify ``subtarget: "notes"``.
 
 The diff payload for list property changes differs from regular property diffs
 in that it provides structured metadata about the mutation operation. The diff
@@ -2552,7 +2573,7 @@ data MUST include the following fields:
 +----------------+-------------+----------------------------------------------------------------+
 | **Field**      | **Required**| **Description**                                                |
 +----------------+-------------+----------------------------------------------------------------+
-| ``list``       | REQUIRED    | The name of the list property (without the ``list:`` prefix)   |
+| ``list``       | REQUIRED    | The name of the list property                                  |
 +----------------+-------------+----------------------------------------------------------------+
 | ``operation``  | REQUIRED    | The mutation type: ``append``, ``insert``, ``update``,         |
 |                |             | ``delete``, ``pop``, ``extend``, ``clear``, ``remove``,        |
@@ -2572,7 +2593,7 @@ data MUST include the following fields:
 Example diff for appending an item to the ``notes`` list property::
 
   {
-    "list:notes": {
+    "notes": {
       "list": "notes",
       "operation": "append",
       "length": 3,
@@ -2584,7 +2605,7 @@ Example diff for appending an item to the ``notes`` list property::
 Example diff for extending a list with multiple items::
 
   {
-    "list:notes": {
+    "notes": {
       "list": "notes",
       "operation": "extend",
       "length": 5,
@@ -2595,7 +2616,7 @@ Example diff for extending a list with multiple items::
 Example diff for updating an item at a specific index::
 
   {
-    "list:notes": {
+    "notes": {
       "list": "notes",
       "operation": "update",
       "length": 5,
@@ -2607,7 +2628,7 @@ Example diff for updating an item at a specific index::
 Example diff for deleting an item at a specific index::
 
   {
-    "list:notes": {
+    "notes": {
       "list": "notes",
       "operation": "delete",
       "length": 4,
@@ -2619,11 +2640,6 @@ The ``item``, ``index``, and ``items`` fields allow subscribers to receive the
 modified data directly in the callback without needing to make additional GET
 requests to the list property endpoint. This is particularly useful for
 high-frequency updates where minimizing API calls is important.
-
-Note: When evaluating permissions for list property subscriptions, the
-``list:`` prefix MUST be stripped from the subtarget before checking
-permissions. For example, a subscription to ``list:notes`` should be
-authorized against permission rules for ``notes``, not ``list:notes``.
 
 **Getting the Updates**
 

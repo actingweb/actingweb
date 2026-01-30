@@ -1345,10 +1345,14 @@ class Actor:
             # Clean up remote peer data (RemotePeerStore)
             # No config check needed - delete_all() is a no-op if no data exists
             try:
+                from .interface.actor_interface import ActorInterface
                 from .remote_storage import RemotePeerStore
 
+                actor_interface = ActorInterface(self)
                 store = RemotePeerStore(
-                    self, rel["peerid"], validate_peer_id=False  # type: ignore[arg-type]
+                    actor_interface,
+                    rel["peerid"],
+                    validate_peer_id=False,
                 )
                 store.delete_all()
                 logger.info(f"Cleaned up RemotePeerStore for peer {rel['peerid']}")
@@ -2085,21 +2089,119 @@ class Actor:
         logger.info(f"Sent {count} resync callbacks for {target}/{subtarget}")
         return count
 
+    def _send_resync_callback_sync(
+        self, callback_url: str, payload: dict, secret: str, peer_id: str
+    ) -> bool:
+        """Send resync callback synchronously (blocking).
+
+        Args:
+            callback_url: URL to send the callback to
+            payload: Callback payload
+            secret: Trust secret for authentication
+            peer_id: Peer ID (for logging)
+
+        Returns:
+            True if callback was sent successfully
+        """
+        import httpx
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    callback_url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {secret}",
+                    },
+                )
+
+            if response.status_code in (200, 204):
+                logger.info(
+                    f"Sent resync callback to {peer_id} for subscription "
+                    f"{payload.get('subscriptionid')}"
+                )
+                return True
+            else:
+                logger.warning(
+                    f"Resync callback to {peer_id} failed: {response.status_code}"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"Error sending resync callback to {peer_id}: {e}")
+            return False
+
+    def _send_resync_callback_async(
+        self, callback_url: str, payload: dict, secret: str, peer_id: str
+    ) -> None:
+        """Send resync callback asynchronously (fire-and-forget).
+
+        Args:
+            callback_url: URL to send the callback to
+            payload: Callback payload
+            secret: Trust secret for authentication
+            peer_id: Peer ID (for logging)
+        """
+
+        async def _send():
+            import httpx
+
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        callback_url,
+                        json=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {secret}",
+                        },
+                    )
+
+                if response.status_code in (200, 204):
+                    logger.info(
+                        f"Sent resync callback to {peer_id} for subscription "
+                        f"{payload.get('subscriptionid')}"
+                    )
+                else:
+                    logger.warning(
+                        f"Resync callback to {peer_id} failed: {response.status_code}"
+                    )
+
+            except Exception as e:
+                logger.error(f"Error sending resync callback to {peer_id}: {e}")
+
+        try:
+            import asyncio
+
+            loop = asyncio.get_running_loop()
+            loop.create_task(_send())
+            logger.debug(
+                f"Async resync callback to {peer_id} for subscription "
+                f"{payload.get('subscriptionid')} (fire-and-forget)"
+            )
+        except RuntimeError:
+            # No event loop - fallback to sync
+            logger.debug("No async loop, falling back to sync resync callback")
+            self._send_resync_callback_sync(callback_url, payload, secret, peer_id)
+
     def _callback_subscription_resync(self, subscription: dict) -> bool:
         """Send a resync callback to a single subscription.
 
         Checks peer capability before sending resync. If peer doesn't support
         the subscriptionresync option, falls back to low-granularity callback.
 
+        Respects the sync_subscription_callbacks configuration to determine
+        whether to send callbacks synchronously (blocking) or asynchronously
+        (fire-and-forget).
+
         Args:
             subscription: Subscription dict with peerid, subscriptionid, callback, etc.
 
         Returns:
-            True if callback was sent successfully
+            True if callback was sent/scheduled successfully
         """
         from datetime import UTC, datetime
-
-        import httpx
 
         peer_id = subscription.get("peerid", "")
         sub_id = subscription.get("subscriptionid", "")
@@ -2188,32 +2290,19 @@ class Actor:
         # Get trust secret for authentication (already fetched above)
         secret = trust_data.get("secret", "")
 
-        # Send callback
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    callback_url,
-                    json=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {secret}",
-                    },
-                )
+        # Check sync configuration (like diff callbacks do)
+        use_sync = getattr(self.config, "sync_subscription_callbacks", False)
 
-            if response.status_code in (200, 204):
-                logger.info(
-                    f"Sent resync callback to {peer_id} for subscription {sub_id}"
-                )
-                return True
-            else:
-                logger.warning(
-                    f"Resync callback to {peer_id} failed: {response.status_code}"
-                )
-                return False
-
-        except Exception as e:
-            logger.error(f"Error sending resync callback to {peer_id}: {e}")
-            return False
+        if use_sync:
+            # Lambda mode: blocking call
+            logger.info(f"Sync resync callback to {peer_id}")
+            return self._send_resync_callback_sync(
+                callback_url, payload, secret, peer_id
+            )
+        else:
+            # Local mode: async fire-and-forget
+            self._send_resync_callback_async(callback_url, payload, secret, peer_id)
+            return True  # Scheduled (not confirmed)
 
     def _increment_subscription_sequence(
         self, peer_id: str, subscription_id: str
@@ -2444,27 +2533,14 @@ class Actor:
                     + "). Will not send callback."
                 )
             else:
-                if (
-                    self.config
-                    and self.config.module
-                    and self.config.module["deferred"]
-                ):
-                    self.config.module["deferred"].defer(
-                        self.callback_subscription,
-                        peerid=sub["peerid"],
-                        sub_obj=sub_obj,
-                        sub=sub_obj_data,
-                        diff=diff,
-                        blob=finblob,
-                    )
-                else:
-                    self.callback_subscription(
-                        peerid=sub["peerid"],
-                        sub_obj=sub_obj,
-                        sub=sub_obj_data,
-                        diff=diff,
-                        blob=finblob,
-                    )
+                # Direct call - callback_subscription handles sync/async internally
+                self.callback_subscription(
+                    peerid=sub["peerid"],
+                    sub_obj=sub_obj,
+                    sub=sub_obj_data,
+                    diff=diff,
+                    blob=finblob,
+                )
 
 
 class Actors:

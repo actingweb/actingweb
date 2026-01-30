@@ -111,9 +111,7 @@ class Subscription:
             except ImportError:
                 pass  # CallbackProcessor not available
             except Exception as e:
-                logger.warning(
-                    f"Failed to clear callback state for {self.subid}: {e}"
-                )
+                logger.warning(f"Failed to clear callback state for {self.subid}: {e}")
 
         # Delete subscription record
         self.handle.delete()

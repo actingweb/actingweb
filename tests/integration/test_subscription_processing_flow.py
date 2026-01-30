@@ -733,8 +733,16 @@ class TestCallbackSequencing:
 
         Send seq=4,5,6,7,8,9 to fill the gap, then verify seq=10 is processed.
         """
-        if not all([self.subscription_id, self.peer_url, self.actor_id,
-                    self.trust_secret, self.actor_url, self.peer_id]):
+        if not all(
+            [
+                self.subscription_id,
+                self.peer_url,
+                self.actor_id,
+                self.trust_secret,
+                self.actor_url,
+                self.peer_id,
+            ]
+        ):
             pytest.skip("Test requires state from earlier tests in sequence")
 
         peer = {"url": self.peer_url}

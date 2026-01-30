@@ -431,7 +431,55 @@ class CallbacksHandler(base_handler.BaseHandler):
             return False
 
         # Extract callback data
-        callback_data = params.get("data", {})
+        # Check for low-granularity callback with URL (per ActingWeb spec v1.4)
+        callback_url = params.get("url")
+        callback_data = params.get("data")
+
+        if callback_url and not callback_data:
+            # Low-granularity callback - fetch data from URL
+            logger.debug(f"Low-granularity callback, fetching data from {callback_url}")
+            try:
+                import httpx
+
+                from actingweb.trust import Trust
+
+                # Get trust relationship for authentication
+                trust = Trust(
+                    actor_id=actor_interface._core_actor.id,
+                    peerid=peer_id,
+                    config=actor_interface._core_actor.config,
+                )
+                trust_data = trust.get()
+                secret = trust_data.get("secret", "") if trust_data else ""
+
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(
+                        callback_url,
+                        headers={
+                            "Authorization": f"Bearer {secret}",
+                        },
+                    )
+                if response.status_code == 200:
+                    # Parse the subscription diff response
+                    url_data = response.json()
+                    # Extract the diffs array
+                    diffs = url_data.get("diffs", [])
+                    if diffs and len(diffs) > 0:
+                        # Use the first diff's data (should match the sequence)
+                        callback_data = diffs[0].get("data", {})
+                    else:
+                        callback_data = {}
+                else:
+                    logger.warning(
+                        f"Failed to fetch low-granularity data: {response.status_code}"
+                    )
+                    callback_data = {}
+            except Exception as e:
+                logger.error(f"Error fetching low-granularity callback data: {e}")
+                callback_data = {}
+        else:
+            callback_data = callback_data or {}
+
         sequence = params.get("sequence", 0)
         callback_type = params.get("type", "diff")
 

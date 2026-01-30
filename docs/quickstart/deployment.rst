@@ -44,13 +44,28 @@ AWS Lambda (Serverless)
 
 **Important: Enable Synchronous Callbacks**
 
-In Lambda/serverless environments, async fire-and-forget callbacks may be lost when the function freezes after returning a response. Use ``with_sync_callbacks()`` to ensure subscription callbacks complete before the handler returns:
+In Lambda/serverless environments, async fire-and-forget callbacks may be lost when the function freezes after returning a response. Use ``with_sync_callbacks()`` to ensure **all subscription callbacks** (both diff and resync) complete before the handler returns:
 
 .. code-block:: python
 
     aw_app = ActingWebApp(...).with_sync_callbacks(enable=True)
 
 This makes callbacks use blocking HTTP requests instead of async tasks, guaranteeing delivery at the cost of slightly longer response times.
+
+**Why this is needed:**
+
+- Lambda freezes execution after returning a response
+- Async fire-and-forget callbacks are terminated before completion
+- Sync callbacks block until delivery is confirmed
+- Both diff callbacks and resync callbacks respect this configuration
+
+**Local Development:**
+
+Do NOT use ``with_sync_callbacks()`` in local/container deployments:
+
+- Default async behavior prevents blocking and self-deadlock
+- Async mode allows both actors on the same server to communicate without blocking
+- Callbacks complete in the background after the response is returned
 
 .. note::
    ActingWeb automatically detects Lambda environments (via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables) and logs a warning if sync callbacks are not enabled. This helps catch misconfigurations during development and deployment.

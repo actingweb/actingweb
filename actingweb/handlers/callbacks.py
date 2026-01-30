@@ -438,7 +438,6 @@ class CallbacksHandler(base_handler.BaseHandler):
         callback_url = params.get("url")
         callback_data = params.get("data")
         callback_type = params.get("type", "diff")
-        granularity = params.get("granularity", "high")  # Extracted for debugging/logging
 
         # Track if we need to send PUT acknowledgment after processing
         # Per ActingWeb spec: high-granularity with data in body → 204 clears diff

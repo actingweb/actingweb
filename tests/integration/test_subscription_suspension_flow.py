@@ -673,8 +673,6 @@ class TestResyncCallbacks:
         # Mock Proxy.change_resource to capture PUT acknowledgments
         from actingweb.aw_proxy import AwProxy
 
-        original_change_resource = AwProxy.change_resource
-
         def mock_change_resource(self, path=None, params=None):
             put_calls.append({"path": path, "params": params})
             return {"status": "ok"}  # Simulate success
@@ -686,11 +684,7 @@ class TestResyncCallbacks:
             status_code = 200
 
             def json(self):
-                return {
-                    "diffs": [
-                        {"sequence": 10, "data": {"test_key": "test_value"}}
-                    ]
-                }
+                return {"diffs": [{"sequence": 10, "data": {"test_key": "test_value"}}]}
 
         class MockClient:
             def __init__(self, timeout=None):
@@ -740,7 +734,10 @@ class TestResyncCallbacks:
         # Only verify PUT acknowledgment if callback was accepted
         if response.status_code == 204:
             assert len(put_calls) == 1, f"Expected 1 PUT call, got {len(put_calls)}"
-            assert put_calls[0]["path"] == f"subscriptions/{self.subscriber_id}/{self.subscription_id}"
+            assert (
+                put_calls[0]["path"]
+                == f"subscriptions/{self.subscriber_id}/{self.subscription_id}"
+            )
             assert put_calls[0]["params"]["sequence"] == 1
 
     def test_080_resync_no_put_acknowledgment(self, http_client, monkeypatch):
@@ -815,11 +812,15 @@ class TestResyncCallbacks:
         )
 
         # Callback may be rejected if sequence is invalid (400)
-        assert response.status_code in [204, 400], f"Expected 204 or 400, got {response.status_code}"
+        assert response.status_code in [204, 400], (
+            f"Expected 204 or 400, got {response.status_code}"
+        )
 
         # Verify NO PUT acknowledgment was sent for resync (even if accepted)
         # Note: 400 means callback was rejected, so we wouldn't expect PUT anyway
-        assert len(put_calls) == 0, f"Expected 0 PUT calls for resync, got {len(put_calls)}"
+        assert len(put_calls) == 0, (
+            f"Expected 0 PUT calls for resync, got {len(put_calls)}"
+        )
 
     def test_099_cleanup(self, http_client):
         """

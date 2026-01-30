@@ -991,6 +991,22 @@ class SubscriptionManager:
                             f"after baseline sync (duplicate diffs rejected)"
                         )
 
+                    # Clear the duplicate diffs on the publisher to prevent repeated fetches
+                    clear_response = proxy.change_resource(
+                        path=path, params={"sequence": final_seq}
+                    )
+                    if clear_response is None or "error" in (clear_response or {}):
+                        # Log warning but don't fail the sync
+                        logger.warning(
+                            f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id}, sequence {final_seq}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Cleared duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id} up to sequence {final_seq}"
+                        )
+
                 return SubscriptionSyncResult(
                     subscription_id=subscription_id,
                     success=True,
@@ -1732,6 +1748,22 @@ class SubscriptionManager:
                         logger.info(
                             f"Updated subscription {subscription_id} sequence to {final_seq} "
                             f"after baseline sync (duplicate diffs rejected)"
+                        )
+
+                    # Clear the duplicate diffs on the publisher to prevent repeated fetches
+                    clear_response = await proxy.change_resource_async(
+                        path=path, params={"sequence": final_seq}
+                    )
+                    if clear_response is None or "error" in (clear_response or {}):
+                        # Log warning but don't fail the sync
+                        logger.warning(
+                            f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id}, sequence {final_seq}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Cleared duplicate diffs on peer {peer_id} for subscription "
+                            f"{subscription_id} up to sequence {final_seq}"
                         )
 
                 return SubscriptionSyncResult(

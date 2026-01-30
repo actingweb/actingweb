@@ -132,6 +132,25 @@ class Subscription:
             return False
         return self.subscription["sequence"]
 
+    def decrease_seq(self):
+        """Rollback sequence number by 1 (used when diff creation fails after seq increment)"""
+        if not self.handle:
+            logger.debug(
+                "Attempted decrease_seq without subscription retrieved from storage"
+            )
+            return False
+        assert self.subscription is not None  # Always initialized in __init__
+        if self.subscription["sequence"] <= 0:
+            logger.warning(
+                f"Attempted decrease_seq when sequence is already {self.subscription['sequence']}"
+            )
+            return False
+        self.subscription["sequence"] -= 1
+        if not self.handle.modify(seqnr=self.subscription["sequence"]):
+            # Failed to update database
+            return False
+        return self.subscription["sequence"]
+
     def add_diff(self, blob=None):
         """Add a new diff for this subscription"""
         if not self.actor_id or not self.subid or not blob:
@@ -142,7 +161,8 @@ class Subscription:
         assert self.subscription is not None  # Always initialized in __init__
 
         # Increment sequence BEFORE creating diff so first diff gets sequence=1 per spec
-        if not self.increase_seq():
+        new_sequence = self.increase_seq()
+        if not new_sequence:
             logger.error(
                 f"Failed increasing sequence number for subscription {self.subid} for peer {self.peerid}"
             )
@@ -150,12 +170,21 @@ class Subscription:
 
         # Now create diff with the incremented sequence number
         diff = get_subscription_diff(self.config)
-        diff.create(
+        success = diff.create(
             actor_id=self.actor_id,
             subid=self.subid,
             diff=blob,
             seqnr=self.subscription["sequence"],
         )
+
+        # If diff creation failed, rollback the sequence increment
+        if not success:
+            logger.error(
+                f"Failed creating diff for subscription {self.subid}, rolling back sequence from {new_sequence}"
+            )
+            self.decrease_seq()
+            return False
+
         return diff.get()
 
     def get_diff(self, seqnr=0):

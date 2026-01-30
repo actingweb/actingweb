@@ -1351,7 +1351,7 @@ class Actor:
                     self, rel["peerid"], validate_peer_id=False  # type: ignore[arg-type]
                 )
                 store.delete_all()
-                logger.debug(f"Cleaned up RemotePeerStore for peer {rel['peerid']}")
+                logger.info(f"Cleaned up RemotePeerStore for peer {rel['peerid']}")
             except ImportError:
                 pass  # RemotePeerStore not available
             except Exception as e:
@@ -1366,7 +1366,7 @@ class Actor:
 
                 processor = CallbackProcessor(self)  # type: ignore[arg-type]
                 processor.clear_all_state_for_peer(rel["peerid"])
-                logger.debug(
+                logger.info(
                     f"Cleaned up CallbackProcessor state for peer {rel['peerid']}"
                 )
             except ImportError:
@@ -1384,7 +1384,7 @@ class Actor:
 
                     profile_store = get_peer_profile_store(self.config)
                     profile_store.delete_profile(self.id, rel["peerid"])
-                    logger.debug(f"Cleaned up peer profile for peer {rel['peerid']}")
+                    logger.info(f"Cleaned up peer profile for peer {rel['peerid']}")
                 except ImportError:
                     pass  # Peer profile system not available
                 except Exception as e:
@@ -1400,7 +1400,7 @@ class Actor:
 
                     capabilities_store = get_cached_capabilities_store(self.config)
                     capabilities_store.delete_capabilities(self.id, rel["peerid"])
-                    logger.debug(
+                    logger.info(
                         f"Cleaned up peer capabilities for peer {rel['peerid']}"
                     )
                 except ImportError:
@@ -1418,7 +1418,7 @@ class Actor:
 
                     peer_permissions_store = get_peer_permission_store(self.config)
                     peer_permissions_store.delete_permissions(self.id, rel["peerid"])
-                    logger.debug(
+                    logger.info(
                         f"Cleaned up peer permissions cache for peer {rel['peerid']}"
                     )
                 except ImportError:

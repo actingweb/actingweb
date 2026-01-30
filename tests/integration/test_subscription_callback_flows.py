@@ -1,20 +1,66 @@
-"""Integration tests for subscription callback flows and failure scenarios.
+"""
+Integration tests for subscription callback flows and failure scenarios.
 
-Tests the complete subscription callback system including:
-- Normal callback processing
-- Gap detection and handling
-- Gap timeout and automatic resync
-- Duplicate callback handling
-- Sync operations with baseline fetch
-- Diff clearing and confirmation
+This test suite verifies the complete subscription callback system, covering both
+normal operation and edge cases that caused data loss and sync failures in production.
 
-These tests verify the fixes for:
-- False duplicate detection on retry
-- Diff deleted before processing
-- Gap timeout automatic resync
-- increase_seq() type error
-- Peer capabilities not loaded
-- Sync with all-duplicate diffs
+Test Coverage
+-------------
+The tests cover the following subscription callback scenarios:
+
+- **Normal callback processing**: Sequential callback delivery and processing
+- **Gap detection and handling**: Out-of-order callbacks triggering gap detection
+- **Gap timeout and automatic resync**: Automatic recovery when gaps persist
+- **Duplicate callback handling**: Rejection of already-processed sequences
+- **Sync operations with baseline fetch**: Fallback to full data fetch when diffs unavailable
+- **Diff clearing and confirmation**: Publisher-side cleanup after subscriber confirms processing
+
+Critical Bugs Fixed
+-------------------
+This suite includes regression tests for the following critical issues:
+
+1. **False duplicate detection on optimistic lock retry**
+   - **Bug**: CallbackProcessor updated sequence BEFORE state update succeeded, causing
+     retries to mark valid callbacks as duplicates (seq=N <= last_seq=N)
+   - **Impact**: Lost subscription data when database contention occurred
+   - **Fix**: Sequence only updates AFTER successful handler execution and state persistence
+
+2. **Diff deleted before subscriber processing**
+   - **Bug**: Publisher deleted diffs immediately after 204 response, even when callback
+     was queued (gap pending). When subscriber synced to resolve gap, diffs were gone.
+   - **Impact**: Permanent data loss for subscribers with sequence gaps
+   - **Fix**: Diffs only cleared when subscriber explicitly confirms via PUT with sequence
+
+3. **Gap timeout not triggering resync**
+   - **Bug**: CallbackProcessor returned RESYNC_TRIGGERED but handler rejected with 400,
+     and no actual resync occurred
+   - **Impact**: Subscriptions stuck permanently out-of-sync after network issues
+   - **Fix**: RESYNC_TRIGGERED accepted as success (200), handler automatically calls sync
+
+4. **increase_seq() returning boolean instead of integer**
+   - **Bug**: Subscription.increase_seq() returned True/False instead of new sequence number
+   - **Impact**: PostgreSQL type errors when boolean propagated to subscription sequence field
+   - **Fix**: increase_seq() now returns integer sequence or False on failure
+
+5. **Peer capabilities not loaded before checking resync support**
+   - **Bug**: PeerCapabilities.supports_resync_callbacks() called without ensure_loaded(),
+     always returned False even when peer supported resync
+   - **Impact**: Unnecessary fallback to low-granularity callbacks, poor performance
+   - **Fix**: Explicit ensure_loaded() call before capability checks
+
+6. **Sync skipping baseline when all diffs are duplicates**
+   - **Bug**: sync_subscription() returned early when diffs_fetched > 0 but diffs_processed == 0,
+     skipping baseline fetch that would ensure data completeness
+   - **Impact**: "First sync does nothing, second sync works" pattern, confusing behavior
+   - **Fix**: Automatic baseline fetch when all fetched diffs are rejected as duplicates
+
+Test Strategy
+-------------
+- Uses real HTTP servers (Flask/FastAPI) for end-to-end validation
+- Tests both sync and async code paths
+- Verifies database state consistency
+- Checks proper cleanup on failure scenarios
+- Validates both DynamoDB and PostgreSQL backends
 """
 
 import os

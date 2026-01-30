@@ -1,4 +1,57 @@
-"""Database utility functions shared across backends."""
+"""
+Database utility functions shared across backends.
+
+This module provides defensive data handling utilities that protect against
+malformed input, particularly when dealing with untrusted data from remote peers
+in distributed actor-to-actor communication.
+
+Key Functions
+-------------
+
+sanitize_json_data()
+    Recursively sanitizes data to ensure valid UTF-8 and JSON encoding.
+    Critical for handling untrusted data from remote actors that may contain
+    malformed Unicode sequences.
+
+    **Why Sanitization is Needed:**
+
+    Remote actors may send malformed Unicode data (intentionally or due to bugs)
+    that breaks Python's JSON encoder. Specifically:
+
+    - **Unicode surrogates**: Invalid UTF-16 pairs (U+D800 through U+DFFF) that
+      cannot be encoded in UTF-8. These occur when data is improperly decoded
+      from UTF-16 or when corrupted data is transmitted.
+
+    - **Invalid UTF-8 sequences**: Byte sequences that don't form valid UTF-8
+      characters, often from binary data incorrectly treated as text.
+
+    Without sanitization, these sequences cause ``json.dumps()`` to raise
+    ``UnicodeEncodeError`` when preparing subscription callbacks or storing
+    data, resulting in HTTP 500 errors and data loss.
+
+    **When to Use:**
+
+    Apply sanitization to all data received from remote peers before storage:
+
+    - Subscription callback data (diff and resync payloads)
+    - Property values from remote peer synchronization
+    - RemotePeerStore operations
+    - Any data from untrusted sources before database writes
+
+    The sanitization process replaces invalid sequences with Unicode replacement
+    character (U+FFFD �) and logs warnings when modifications occur, enabling
+    security monitoring and debugging.
+
+ensure_timezone_aware_iso()
+    Converts datetime objects to timezone-aware ISO 8601 strings. Ensures
+    consistent timestamp formatting across database backends.
+
+See Also
+--------
+- RemotePeerStore.apply_callback_data() in actingweb/remote_storage.py
+- DbAttribute.set_attr() in actingweb/db/dynamodb/attribute.py
+- DbProperty.set() in actingweb/db/postgresql/property.py
+"""
 
 import logging
 from datetime import UTC, datetime

@@ -5,216 +5,90 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.0b1: Jan 30, 2026
+-----------------------
+
+ActingWeb 3.10 introduces **automatic subscription processing**, comprehensive **request correlation and logging**, and major improvements to subscription reliability. This beta includes all features from alpha releases plus critical bug fixes for subscription handling.
+
+**Highlights:**
+
+- **Automatic Subscription Processing**: CallbackProcessor, RemotePeerStore, and FanOutManager reduce callback handling from ~500 lines to ~30 lines
+- **Request Correlation**: Full distributed tracing with request IDs, actor IDs, and peer IDs in every log line
+- **Subscription Reliability**: Fixed critical bugs in callback sequencing, diff handling, and resync operations
+- **Security**: Comprehensive logging hardening and remote peer data sanitization
+- **Performance**: Bulk permission evaluation, configurable thread pools, and optimized property filtering
+
 ADDED
 ~~~~~
 
-- **Inbound subscription query method**: Added ``get_subscriptions_from_peer()`` method to ``SubscriptionManager`` for querying inbound subscriptions (where a peer has subscribed to our data). Complements existing ``get_subscriptions_to_peer()`` for outbound subscriptions.
+- **Inbound Subscription Query Method**: New ``SubscriptionManager.get_subscriptions_from_peer(peer_id)`` method for querying inbound subscriptions where a peer has subscribed to our data. Complements existing ``get_subscriptions_to_peer()`` for symmetric subscription discovery.
 
-  - New method: ``SubscriptionManager.get_subscriptions_from_peer(peer_id: str)`` returns list of ``SubscriptionInfo``
-  - Returns subscriptions where the specified peer is subscribing to this actor's data
-  - Filters from ``inbound_subscriptions`` property
-  - Useful for understanding which peers are consuming your data
-  - Symmetric API: ``get_subscriptions_to_peer()`` for outbound, ``get_subscriptions_from_peer()`` for inbound
+- **Lambda Environment Detection**: Automatic detection of AWS Lambda deployments with warnings when asynchronous subscription callbacks are enabled. Helps prevent callback loss when Lambda functions freeze by recommending ``with_sync_callbacks()``.
 
-- **Lambda Environment Detection**: ActingWeb now automatically detects AWS Lambda deployments and issues a warning if asynchronous subscription callbacks are enabled. This helps catch misconfigurations where fire-and-forget callbacks could be lost when Lambda functions freeze.
+- **Configurable FastAPI Thread Pool**: New ``ActingWebApp.with_thread_pool_workers(workers)`` method for tuning thread pool size (1-100 workers, default 10). Includes documentation with tuning guidelines for Lambda, container, and CPU-bound scenarios.
 
-  - Detects Lambda via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables
-  - Warning includes recommendation to enable ``with_sync_callbacks()``
-  - Warning appears during config initialization, visible in application logs
-  - No action taken in non-Lambda environments or when sync callbacks are already enabled
-  - See ``actingweb.interface.app._warn_lambda_async_callbacks()``
+- **Request Correlation in Logging**: Comprehensive logging framework with automatic context injection. Every log line includes ``[request_id:actor_id:peer_id]`` for distributed request tracing across actor-to-actor communication.
 
-- **Configurable FastAPI Thread Pool**: Added ``with_thread_pool_workers()`` method to configure thread pool size for FastAPI integration. The thread pool executes synchronous handlers (database operations, HTTP requests) without blocking the async event loop.
-
-  - New method: ``ActingWebApp.with_thread_pool_workers(workers: int)``
-  - Default: 10 workers (backward compatible)
-  - Valid range: 1-100 workers (enforced by validation)
-  - Tuning guidelines in documentation for different deployment scenarios:
-    - Low traffic/Lambda: 5-10 workers
-    - High traffic/Container: 20-50 workers
-    - CPU-bound: 2-5 workers per CPU core
-  - Memory overhead: ~8MB per worker thread
-  - Thread pool size logged at INFO level during FastAPI initialization
-
-- **Request Correlation in Logging**: Added automatic request correlation with context injection in all log statements. Every log line now includes request ID, actor ID, and peer ID (when available), making it easy to trace requests through distributed actor-to-actor communication.
-
-  - New module: ``actingweb.request_context`` - Thread-safe context storage using ``contextvars``
-  - New module: ``actingweb.log_filter`` - ``RequestContextFilter`` for automatic context injection
-  - New logging configuration: ``enable_request_context_filter()`` to enable context in all log statements
-  - New convenience functions: ``configure_production_logging()``, ``configure_development_logging()``, ``configure_testing_logging()``
-  - Log format: ``[short_request_id:actor_id:short_peer_id]`` automatically added to every log line
-  - Context automatically managed by Flask and FastAPI integrations
-  - Request ID extracted from ``X-Request-ID`` header or auto-generated if not present
+  - New modules: ``actingweb.request_context`` (thread-safe context storage), ``actingweb.log_filter`` (context injection)
+  - New functions: ``enable_request_context_filter()``, ``configure_production_logging()``, ``configure_development_logging()``
+  - Request IDs extracted from ``X-Request-ID`` header or auto-generated
   - Response headers include ``X-Request-ID`` for client correlation
-  - Minimal overhead: <1% performance impact for typical INFO-level logging
+  - Context automatically managed by Flask and FastAPI integrations
+  - Minimal overhead: <1% performance impact
 
-- **Inter-Actor Request Correlation**: Added request correlation headers to peer-to-peer communication. When actors communicate, request IDs are propagated with parent tracking, enabling complete request chain tracing.
+- **Inter-Actor Request Correlation**: Request correlation headers (``X-Request-ID``, ``X-Parent-Request-ID``) automatically added to all peer-to-peer communication, enabling complete request chain tracing across actor networks.
 
-  - New headers in peer requests: ``X-Request-ID`` (new UUID per request), ``X-Parent-Request-ID`` (current request ID)
-  - Correlation headers automatically added to all outgoing peer requests (GET, POST, PUT, DELETE)
-  - Correlation headers preserved through authentication retries
-  - Both sync (``requests``) and async (``httpx``) implementations
-  - Debug logging of correlation information for traceability
-  - Enables grepping logs to trace request chains: ``grep "parent_id=abc123" logs``
-
-- **Request Context API**: Added comprehensive API for managing request context in custom integrations:
-
-  - ``set_request_context(request_id, actor_id, peer_id)`` - Set full context
-  - ``get_request_id()``, ``get_actor_id()``, ``get_peer_id()`` - Retrieve context
-  - ``set_request_id()``, ``set_actor_id()``, ``set_peer_id()`` - Set individual fields
-  - ``generate_request_id()`` - Generate new UUID for requests
-  - ``clear_request_context()`` - Clear all context (call at request end)
-  - Context automatically propagates across ``await`` boundaries
-  - Thread-safe and async-safe using Python's ``contextvars``
+- **Request Context API**: Public API for custom integrations: ``set_request_context()``, ``get_request_id()``, ``get_actor_id()``, ``get_peer_id()``, ``clear_request_context()``. Thread-safe and async-safe using Python's ``contextvars``.
 
 CHANGED
 ~~~~~~~
 
-- **Authentication Sets Peer Context**: ``actingweb.auth`` now automatically sets peer ID in request context after successful authentication. This enables peer ID to appear in all subsequent log statements during the request.
+- **Authentication Sets Peer Context**: Authentication layer now automatically sets peer ID in request context after successful authentication for logging correlation.
 
-- **Flask Integration Context Hooks**: Flask integration now automatically manages request context lifecycle:
-
-  - ``before_request`` hook: Extract/generate request ID, extract actor ID from URL
-  - ``after_request`` hook: Add ``X-Request-ID`` to response headers, clear context
-  - Context automatically available in all request handlers
-
-- **FastAPI Integration Context Middleware**: FastAPI integration now uses middleware for automatic context management:
-
-  - Middleware extracts/generates request ID from headers
-  - Extracts actor ID from path parameters
-  - Adds ``X-Request-ID`` to response headers
-  - Context automatically cleared in finally block
-  - Context propagates across async boundaries
+- **Flask/FastAPI Integration Context Management**: Both integrations now automatically manage request context lifecycle with hooks/middleware for extracting request IDs, actor IDs, and adding correlation headers to responses.
 
 IMPROVED
 ~~~~~~~~
 
-- **Bulk property permission evaluation**: Optimized property permission checks to use bulk evaluation when filtering multiple properties. Significantly reduces logging verbosity and improves performance by fetching permissions once and evaluating all properties against cached rules.
+- **Bulk Property Permission Evaluation**: Optimized property permission checks to use bulk evaluation, reducing DEBUG log volume by 10-50x for multi-property operations. Single log line for batch operations with summary: "N properties: X allowed, Y denied, Z not found".
 
-  - New method: ``PermissionEvaluator.evaluate_bulk_property_access()`` - evaluates multiple properties at once
-  - Updated: ``batch_check_property_access()`` now uses bulk evaluation internally
-  - Single log line for batch operations instead of one per property
-  - Logs summary: "N properties: X allowed, Y denied, Z not found"
-  - Only denied properties logged for security monitoring
-  - Reduces DEBUG log volume by 10-50x for bulk property access
-  - Applies to: ``PropertiesHandler`` GET operations with multiple properties (actingweb/handlers/properties.py:345-367)
-  - Backward compatible: individual evaluation still available
+- **Action and Method List Filtering**: Actions and methods list endpoints now filter results based on peer permissions, preventing information disclosure of restricted capabilities.
 
-- **Action and method list filtering**: Added peer permission filtering to action and method list endpoints. When a peer requests the list of available actions or methods, the response is now filtered to only show those they have permission to execute.
+- **FastAPI Context Propagation**: Fixed context propagation to thread pool workers, ensuring log statements from synchronous handlers preserve request ID, actor ID, and peer ID context.
 
-  - Actions list (``GET /<actor_id>/actions``) filtered by peer permissions
-  - Methods list (``GET /<actor_id>/methods``) filtered by peer permissions
-  - Non-peer authentication (OAuth, basic) returns all actions/methods
-  - Uses ``PermissionEvaluator.evaluate_action_access()`` and ``evaluate_method_access()``
-  - Gracefully falls back to showing all on evaluation errors
-  - Prevents information disclosure of restricted capabilities
-  - Affects: ``ActionsHandler`` and ``MethodsHandler`` in actingweb/handlers/
-
-- **FastAPI Context Propagation**: Fixed context propagation to thread pool workers in FastAPI integration. Previously, log statements from handlers executed in the thread pool would lose their request ID, actor ID, and peer ID context. Now context is properly copied and propagated to worker threads.
-
-  - New method: ``FastAPIIntegration._run_in_executor_with_context()`` replaces all ``run_in_executor()`` calls
-  - Helper function: ``_run_with_context()`` executes functions with specific context
-  - Uses ``contextvars.copy_context()`` to capture current context before thread execution
-  - All synchronous handler executions now preserve logging context
-  - Affects: factory handlers, OAuth callbacks, trust operations, subscription handlers, and generic actor requests
-  - No performance impact: context copying is negligible overhead
-  - Enables consistent log correlation across async/sync boundaries
-
-- **Logging Configuration**: Enhanced ``actingweb.logging_config`` module with new configuration options:
-
-  - Per-component log level configuration (``db_level``, ``auth_level``, ``handlers_level``, ``proxy_level``)
-  - ``get_context_format()`` returns log format string with context placeholder
-  - Convenience functions for common logging scenarios
-  - Better separation between library and application logging
+- **Logging Configuration**: Enhanced ``actingweb.logging_config`` with per-component log levels (``db_level``, ``auth_level``, ``handlers_level``, ``proxy_level``) and convenience functions for common scenarios.
 
 SECURITY
 ~~~~~~~~
 
-- **Remote Peer Data Sanitization**: Added comprehensive sanitization of all data received from remote peers to prevent JSON encoding failures from malformed Unicode. All data from subscription callbacks, resync operations, and remote storage operations is now automatically sanitized before storage.
+- **Remote Peer Data Sanitization**: Comprehensive sanitization of all data from remote peers to prevent JSON encoding failures from malformed Unicode. Removes invalid UTF-16 surrogate pairs and replaces invalid UTF-8 sequences. Applied to all RemotePeerStore operations and database writes.
 
-  - New function: ``actingweb.db.utils.sanitize_json_data()`` - recursively sanitizes strings, dicts, lists, and tuples
-  - Removes Unicode surrogate characters (invalid UTF-16 pairs like ``\uD800``) that break JSON encoding
-  - Replaces invalid UTF-8 sequences with Unicode replacement character (``\uFFFD``)
-  - Applied defensively to all remote peer data paths:
-    - ``RemotePeerStore.set_value()``, ``set_list()``, ``apply_callback_data()``, ``apply_resync_data()``
-    - ``DbAttribute.set_attr()``, ``compare_and_swap()`` (both DynamoDB and PostgreSQL)
-    - ``DbProperty.set()`` (both DynamoDB and PostgreSQL)
-  - Logs warnings when sanitization modifies data, including source peer ID
-  - Critical for handling untrusted data from remote actors
+- **Logging Security Hardening**: Comprehensive audit of all log statements to prevent sensitive information leakage:
+  - Token masking (shows only first 8 characters)
+  - Removed full access/refresh tokens from logs (18 statements)
+  - Removed OAuth2 request bodies containing client secrets
+  - Removed HTTP headers containing Authorization headers
+  - Removed property values from property handler logs
+  - Removed HTTP response content from debug logs
+  - Changed verbose INFO logs to DEBUG for high-frequency operations
 
 FIXED
 ~~~~~
 
-- **CRITICAL: Subscription callback processing architecture**: Fixed subscription POST callbacks (``/callbacks/subscriptions/...``) bypassing ``CallbackProcessor`` entirely. The handler was invoking user hooks directly instead of processing through ``CallbackProcessor`` first for sequence validation, gap detection, deduplication, storage, and sequence updates. Now subscription callbacks are processed as internal library logic BEFORE user hooks are invoked, matching the architecture of permission callbacks. This fixes sequence numbers not being updated on the subscriber side when receiving PUSH callbacks from publishers.
-
-- **Subscription sequence persistence in DynamoDB**: Fixed DynamoDB subscription backend silently ignoring sequence updates when ``seqnr=0`` or ``seqnr=1``. The backend used ``if seqnr:`` instead of ``if seqnr is not None:``, causing falsy values (0, 1) to be skipped. Now correctly persists all sequence values including 0 and 1.
-
-- **Subscription sync sequence persistence**: Fixed subscription sync methods (``sync_subscription()`` and ``sync_subscription_async()``) not persisting ``final_sequence`` to the database after fetching diffs or baseline data. This caused subscriptions to repeatedly fetch the same baseline data on subsequent syncs because the local sequence number never advanced. Both sync and async methods now update the local subscription sequence number in all code paths (baseline fetch success/failure, diff processing, no-diffs cases).
-
-- **CallbackProcessor sequence storage refactoring**: Refactored ``CallbackProcessor`` to use subscription record as the single source of truth for sequence numbers, eliminating redundant storage in ``_callback_state`` attributes. Previously, the same sequence number was stored in both the subscription record and CallbackProcessor state, which could diverge and cause false gap detection. Now ``CallbackProcessor`` reads and writes sequence numbers directly from/to the subscription record via ``_get_last_seq()`` and ``_update_last_seq()`` methods. This prevents inconsistencies and simplifies the architecture. Affects: ``CallbackProcessor`` in actingweb/callback_processor.py and ``SubscriptionManager`` in actingweb/interface/subscription_manager.py.
-
-- **Subscription callback hook regression**: Fixed regression where user-registered ``subscription_data_hook`` was being invoked twice when subscription callbacks were processed with ``auto_sequence`` enabled, causing duplicate processing and false "Duplicate callback" warnings. The hooks were being called both inside the internal CallbackProcessor handler AND in the outer callback flow. Now hooks are invoked exactly once, inside the CallbackProcessor handler after sequence validation, ensuring correct behavior while maintaining backward compatibility. For legacy mode (``auto_sequence=False``), hooks are called directly without CallbackProcessor. Affects: ``CallbacksHandler.post()`` in actingweb/handlers/callbacks.py.
-
-- **CRITICAL: Subscription sequence update ordering**: Fixed ``CallbackProcessor`` updating subscription sequence number BEFORE invoking handler and BEFORE state update succeeded. This caused false duplicate detection on optimistic lock retries: the first attempt would update sequence to N, then if the state update failed due to version conflict, the retry would fetch sequence N (already updated) and mark the callback as duplicate since ``seq=N <= last_seq=N``. Now sequence is updated AFTER handlers succeed AND state updates succeed, ensuring callbacks are fully processed before sequence advances and preventing false duplicates on retry. Applies to both ``process_callback()`` and ``process_callback_sync()`` methods, and both diff and resync callback types. Affects: ``CallbackProcessor`` in actingweb/callback_processor.py.
-
-- **Subscription callback processing refactoring**: Removed redundant CallbackProcessor invocation from ``ActingWebApp._process_subscription_callback()``. Previously, subscription callbacks were processed TWICE through CallbackProcessor: once in ``callbacks.py`` handler and again when that handler invoked the old ``_internal_subscription_handler`` hook. Now ``subscription_data_hooks`` are invoked directly from the ``callbacks.py`` handler after CallbackProcessor validation, eliminating duplicate processing, reducing database load, and removing confusing duplicate log messages. The ``subscription_data_hooks`` dict is now passed through ``SubscriptionProcessingConfig`` for direct access. Affects: ``actingweb/interface/app.py``, ``actingweb/handlers/callbacks.py``, ``actingweb/subscription_config.py``.
-
-- **CRITICAL: Subscription ``increase_seq()`` type error**: Fixed ``Subscription.increase_seq()`` returning boolean (``True``/``False``) instead of the new sequence number. This caused ``_increment_subscription_sequence()`` in resync callbacks to assign boolean ``True`` as the sequence, which propagated through callback payloads and caused PostgreSQL type errors when updating subscription sequence: "column seqnr is of type integer but expression is of type boolean". Now ``increase_seq()`` correctly returns the new integer sequence number after successful database update, or ``False`` on failure. Affects: ``Subscription.increase_seq()`` in actingweb/subscription.py:93-103 and ``Actor._increment_subscription_sequence()`` in actingweb/actor.py:2130-2148.
-
-- **Peer capability detection for resync**: Fixed resync callback support detection to ensure peer capabilities are loaded before checking if peer supports resync callbacks. Previously, ``PeerCapabilities.supports_resync_callbacks()`` was called without first calling ``ensure_loaded()``, causing it to return ``False`` (default) even when the peer actually supported resync, resulting in unnecessary fallback to low-granularity callbacks. Now explicitly calls ``caps.ensure_loaded()`` before checking resync support, which fetches capabilities from the peer's ``/meta/actingweb/supported`` endpoint if not cached or expired. Affects: ``Actor._callback_subscription_resync()`` in actingweb/actor.py:2048-2055.
-
-- **Gap timeout resync handling**: Fixed gap timeout resync to be properly handled and automatically trigger synchronization. Previously, when CallbackProcessor detected a gap timeout and returned ``RESYNC_TRIGGERED``, the handler would reject the callback with 400 Bad Request, and no resync would occur, leaving the subscription permanently out of sync. Now ``RESYNC_TRIGGERED`` is accepted as a successful result (returns 200), and the handler automatically calls ``sync_subscription()`` to fetch current state from the publisher, resolving the gap. This ensures subscriptions automatically recover from sequence gaps caused by network issues or missed callbacks. Affects: ``CallbacksHandler._process_subscription_callback_internal()`` in actingweb/handlers/callbacks.py:555-594.
-
-- **CRITICAL: Diff clearing timing**: Fixed publisher immediately deleting diffs after receiving 204 response from callback, causing data loss when subscribers experienced sequence gaps. Previously, when a callback created a gap on the subscriber side (callback went to pending queue), the publisher would delete the diff immediately after getting 204, so when the subscriber later synced to resolve the gap, the diff was already gone. Now diffs are only cleared when the subscriber explicitly confirms processing via PUT ``/subscriptions/{id}`` with ``{"sequence": N}``, ensuring diffs remain available until the subscriber has actually processed them. This fixes the issue where automatic resync after gap timeout would fetch 0 diffs and lose data. Affects: ``Actor.callback_subscription()`` in actingweb/actor.py:1673-1677 and async version at 1720-1725.
-
-- **Sync with all-duplicate diffs**: Fixed sync operations skipping baseline fetch when all fetched diffs were rejected as duplicates by CallbackProcessor. Previously, if subscriber synced and publisher returned diffs (e.g., sequences 22-25) but subscriber was already at sequence 25, CallbackProcessor would reject all diffs as duplicates (``diffs_processed=0``), but sync would not fall back to baseline fetch because ``diffs_fetched > 0``. Now when ``diffs_fetched > 0`` but ``diffs_processed == 0`` (all diffs rejected), sync automatically falls back to baseline fetch to ensure subscriber has complete data. This prevents the "first sync does nothing, second sync works" pattern where first sync gets duplicate diffs and skips baseline, then second sync gets no diffs and correctly fetches baseline. Affects: ``SubscriptionManager.sync_subscription()`` and ``sync_subscription_async()`` in actingweb/interface/subscription_manager.py.
-
-- **Subscription sequence initialization**: Fixed subscriptions being created with initial sequence number of 1 instead of 0, and fixed diff creation to increment sequence before assigning to diff. Subscriptions now correctly start at sequence=0 (no diffs created yet). When the first diff is created, the sequence increments to 1 and the diff is assigned sequence=1, matching ActingWeb spec requirement that "the number is 1 for each new subscription". Affects: ``Subscription.create()`` and ``Subscription.add_diff()`` in actingweb/subscription.py, both DynamoDB and PostgreSQL database backends.
-
-- **Sync All sequence synchronization**: Fixed subscription GET endpoint (``GET /<actor_id>/subscriptions/<peer_id>/<sub_id>``) returning 404 when there are no new diffs, preventing subscribers from learning the publisher's current sequence number during Sync All operations. Now always returns subscription metadata including current sequence, with an empty diffs array when no new changes are available. This allows subscribers to synchronize their sequence numbers with publishers even when no data has changed. Affects: ``SubscriptionHandler.get()`` in actingweb/handlers/subscription.py.
-
-- **List property subscription callback format**: Fixed ``RemotePeerStore.apply_callback_data()`` to properly handle spec-compliant list operation format. Per ActingWeb spec v1.3, list property diff callbacks use the property name as the key (e.g., ``"notes"``) with operation metadata in the value (``{"list": "notes", "operation": "append", ...}``), not a ``"list:"`` prefix. The code was checking for ``key.startswith("list:")`` which doesn't match the wire format, causing list operations to be stored as regular properties instead. Now detects list operations by checking for ``"list"`` and ``"operation"`` fields in the value. Maintains backward compatibility with legacy ``"list:"`` prefix format. Affects: ``RemotePeerStore.apply_callback_data()`` in actingweb/remote_storage.py.
-
-- **Subscription resync callback URL construction**: Fixed subscription resync to construct callback URLs from trust relationship baseuri instead of relying on stored callback URL. This aligns with regular subscription callbacks and ensures correct URL even if trust baseuri changes.
-
-  - Fetches trust data once and reuses for both callback URL construction and authentication
-  - Constructs URL as: ``baseuri + "/callbacks/subscriptions/" + actor_id + "/" + subscription_id``
-  - Logs warning if trust relationship or baseuri is missing
-  - Affects: ``Actor._send_resync_callback()`` in actingweb/actor.py:2020-2035
-
-- **Subscription subtarget wildcard matching**: Fixed subscription subtarget matching to correctly handle empty subtargets as wildcards. A subscription with no subtarget now matches any subtarget filter, enabling broad property subscriptions.
-
-  - Empty ``sub_subtarget`` in subscription means "all subtargets" and matches any filter
-  - Only filters on subtarget when subscription explicitly specifies one
-  - Affects: ``Actor.resync_peer_subscriptions()`` in actingweb/actor.py:1991
-
-- **Subscription baseline sync for list properties**: Fixed issue where baseline synchronization would store metadata (``{"_list": true, "count": N}``) instead of actual list items. Now automatically fetches full list data from remote peers during sync, ensuring subscribers receive complete list contents. Only applies to full ``/properties`` subscriptions; subtarget subscriptions (``properties/list_name``) already worked correctly.
-
-- **Auto-sync after permission grants**: Added automatic synchronization when new permissions are granted to a peer. When a peer grants additional read permissions, the system now immediately fetches the newly accessible data instead of waiting for the next manual sync or diff notification. Configurable via ``SubscriptionProcessingConfig`` and only triggers when ``auto_storage`` is enabled.
-
-- **List property permission checks**: Fixed permission evaluation for list properties to remove incorrect ``list:`` prefix. Permission patterns now correctly match list property names directly (e.g., ``"todos"`` instead of ``"list:todos"``), aligning with user-facing property names and documentation.
-
-- **List property format parameter**: Added ``format`` query parameter to list property GET requests. Use ``GET /properties/list_name?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items, matching the format returned by ``GET /properties?metadata=true``.
-
-- **Trust deletion cleanup architecture**: Refactored peer cleanup from lifecycle hooks to core implementation. Previously, cleanup of subscriptions, RemotePeerStore, CallbackProcessor state, peer profiles, capabilities, and permissions relied on internal lifecycle hooks in ``ActingWebApp``, which was architecturally incorrect (hooks are for application developers, not internal framework use). Now all cleanup runs directly in ``Actor.delete_reciprocal_trust()`` as unconditional, idempotent operations regardless of configuration flags. Also fixed ``Subscription.delete()`` to automatically clean up CallbackProcessor state for callback subscriptions. Removed ~250 lines of internal hook code from ``actingweb/interface/app.py``. Affects: ``actingweb/actor.py``, ``actingweb/subscription.py``, ``actingweb/callback_processor.py``, ``actingweb/interface/app.py``.
-
-- Fix wrong path and sub-path creation for hook execution in the property handler.
-
-- Add storing of sync metadata on initial sync of a trust sync and storage for a remote peer.
+- **List Property Format Parameter**: Added ``format`` query parameter to list property GET requests. Use ``?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items.
 
 DOCUMENTATION
 ~~~~~~~~~~~~~
 
-- Added FastAPI performance tuning section to ``docs/quickstart/configuration.rst``:
-  - Thread pool configuration and tuning guidelines
-  - Lambda deployment best practices
-  - Automatic Lambda environment detection documentation
-  - Memory overhead and sizing recommendations for different scenarios
-- Updated ``docs/quickstart/deployment.rst`` with note about automatic Lambda detection
-- Added comprehensive logging and correlation guide: ``docs/guides/logging-and-correlation.rst``
+- Added FastAPI performance tuning section with thread pool configuration, Lambda deployment best practices, and automatic Lambda detection documentation
+- Added comprehensive logging and correlation guide (``docs/guides/logging-and-correlation.rst``) with grepping examples and request chain tracing patterns
+- Documented request context API for custom integrations
 - Updated configuration quickstart with logging configuration section
-- Added grepping examples and request chain tracing patterns
-- Documented context API for custom integrations
+
+For complete details on features introduced in alpha releases (automatic subscription processing, peer profile/capabilities/permissions caching, subscription suspension, attribute list storage, etc.), see the v3.10.0a5 and earlier entries below.
+
+Unreleased
+----------
 
 v3.10.0a5: Jan 26, 2026
 -----------------------

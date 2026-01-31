@@ -447,8 +447,15 @@ def fetch_peer_permissions(
             return permissions
 
         if "error" in response:
-            error_code = response["error"].get("code", 500)
-            error_msg = response["error"].get("message", "Unknown error")
+            # Handle both dict errors and string errors
+            error_data = response["error"]
+            if isinstance(error_data, dict):
+                error_code = error_data.get("code", 500)
+                error_msg = error_data.get("message", "Unknown error")
+            else:
+                # Error is a string or other type
+                error_code = 500
+                error_msg = str(error_data)
             permissions.fetch_error = f"Error {error_code}: {error_msg}"
             logger.warning(
                 f"Failed to fetch peer permissions from {peer_id}: {permissions.fetch_error}"
@@ -540,8 +547,15 @@ async def fetch_peer_permissions_async(
             return permissions
 
         if "error" in response:
-            error_code = response["error"].get("code", 500)
-            error_msg = response["error"].get("message", "Unknown error")
+            # Handle both dict errors and string errors
+            error_data = response["error"]
+            if isinstance(error_data, dict):
+                error_code = error_data.get("code", 500)
+                error_msg = error_data.get("message", "Unknown error")
+            else:
+                # Error is a string or other type
+                error_code = 500
+                error_msg = str(error_data)
             permissions.fetch_error = f"Error {error_code}: {error_msg}"
             logger.warning(
                 f"Failed to fetch peer permissions from {peer_id}: {permissions.fetch_error}"

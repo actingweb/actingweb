@@ -209,7 +209,16 @@ class AwProxy:
             logger.debug(
                 "Not able to parse response when getting resource at(" + url + ")"
             )
-            result = {}
+            # If response was an error status and JSON parsing failed, return structured error
+            if response.status_code < 200 or response.status_code > 299:
+                result = {
+                    "error": {
+                        "code": response.status_code,
+                        "message": f"HTTP {response.status_code} with non-JSON response",
+                    }
+                }
+            else:
+                result = {}
         return result
 
     def create_resource(self, path=None, params=None):
@@ -461,7 +470,16 @@ class AwProxy:
             logger.debug(
                 "Not able to parse response when getting resource async at(" + url + ")"
             )
-            result = {}
+            # If response was an error status and JSON parsing failed, return structured error
+            if response.status_code < 200 or response.status_code > 299:
+                result = {
+                    "error": {
+                        "code": response.status_code,
+                        "message": f"HTTP {response.status_code} with non-JSON response",
+                    }
+                }
+            else:
+                result = {}
         return result
 
     async def create_resource_async(

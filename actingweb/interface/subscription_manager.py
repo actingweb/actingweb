@@ -1312,6 +1312,128 @@ class SubscriptionManager:
             if not result.success:
                 all_success = False
 
+        # Detect revoked trust: if ALL subscription syncs failed with 404, the peer may have
+        # revoked the trust relationship. Verify by checking if peer actor still exists.
+        all_subscriptions_404 = results and all(not r.success and r.error_code == 404 for r in results)
+        if all_subscriptions_404:
+            logger.warning(
+                f"All {len(results)} subscription(s) failed with 404 for peer {peer_id}. "
+                f"Verifying if peer actor exists or trust has been revoked."
+            )
+
+            # Verify trust relationship still exists from peer's perspective
+            proxy = self._get_peer_proxy(peer_id)
+            trust_exists = False
+            if proxy:
+                try:
+                    # Check if peer still has trust record for us
+                    our_actor_id = self._core_actor.id
+                    trust_response = proxy.get_resource(path=f"/trust/{our_actor_id}")
+                    # If we get a valid response (not an error), trust still exists
+                    if trust_response and "error" not in trust_response:
+                        trust_exists = True
+                        logger.info(
+                            f"Trust relationship with {peer_id} still exists. "
+                            f"Subscriptions were deleted but trust is valid."
+                        )
+                    elif trust_response and "error" in trust_response:
+                        error_code = trust_response["error"].get("code", 500)
+                        logger.warning(
+                            f"Peer {peer_id} returned error {error_code} when accessing trust. "
+                            f"Trust appears revoked."
+                        )
+                except Exception as e:
+                    logger.warning(f"Exception verifying trust with {peer_id}: {e}")
+
+            # Only delete trust if peer's trust record doesn't exist or we can't access it
+            if trust_exists:
+                logger.info(
+                    f"Trust with {peer_id} still exists, but subscriptions are gone. "
+                    f"Cleaning up local subscriptions that were deleted by peer."
+                )
+                # Clean up the dead subscriptions locally
+                try:
+                    for result in results:
+                        if not result.success and result.error_code == 404:
+                            sub = self.get_callback_subscription(peer_id, result.subscription_id)
+                            if sub:
+                                logger.info(
+                                    f"Deleting local subscription {result.subscription_id} - "
+                                    f"peer deleted it but trust remains valid."
+                                )
+                                sub_obj = self._core_actor.get_subscription_obj(
+                                    peerid=peer_id,
+                                    subid=result.subscription_id,
+                                    callback=sub.is_callback,
+                                )
+                                if sub_obj:
+                                    sub_obj.delete()
+                except Exception as e:
+                    logger.error(f"Error cleaning up dead subscriptions for {peer_id}: {e}", exc_info=True)
+            else:
+                logger.warning(
+                    f"Peer {peer_id} does not exist or is inaccessible. "
+                    f"Trust has been revoked. Cleaning up locally."
+                )
+                try:
+                    # Get trust data before deletion for hook
+                    relationships = self._core_actor.get_trust_relationships(peerid=peer_id)
+                    trust_data = relationships[0] if relationships else {}
+
+                    # Trigger trust_deleted lifecycle hook if configured
+                    hooks = getattr(self._core_actor.config, "hooks", None) if self._core_actor.config else None
+                    if hooks:
+                        try:
+                            from .actor_interface import ActorInterface
+
+                            actor_interface = ActorInterface(self._core_actor)
+                            relationship = trust_data.get("relationship", "friend")
+                            logger.debug(
+                                f"Executing trust_deleted hook for revoked trust with {peer_id}"
+                            )
+                            hooks.execute_lifecycle_hooks(
+                                "trust_deleted",
+                                actor=actor_interface,
+                                peer_id=peer_id,
+                                relationship=relationship,
+                                trust_data=trust_data,
+                                initiated_by_peer=True,
+                            )
+                            logger.info(
+                                f"trust_deleted hook executed for revoked trust with {peer_id}"
+                            )
+                        except Exception as e:
+                            logger.error(f"Error executing trust_deleted hook: {e}", exc_info=True)
+                    else:
+                        logger.debug(
+                            f"No hooks configured, skipping trust_deleted hook for {peer_id}"
+                        )
+
+                    # Delete local trust relationship without notifying peer (already revoked)
+                    deleted = self._core_actor.delete_reciprocal_trust(
+                        peerid=peer_id, delete_peer=False
+                    )
+                    if deleted:
+                        logger.info(
+                            f"Successfully cleaned up revoked trust relationship with {peer_id}"
+                        )
+                        return PeerSyncResult(
+                            peer_id=peer_id,
+                            success=False,
+                            subscriptions_synced=0,
+                            total_diffs_processed=total_diffs,
+                            subscription_results=results,
+                            error="Trust relationship has been revoked by peer",
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to delete trust relationship with {peer_id}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Exception while cleaning up revoked trust with {peer_id}: {e}"
+                    )
+
         # Refresh peer profile if configured
         actor_config = self._core_actor.config
         actor_id = self._core_actor.id
@@ -1860,6 +1982,128 @@ class SubscriptionManager:
 
         total_diffs = sum(r.diffs_processed for r in results)
         all_success = all(r.success for r in results)
+
+        # Detect revoked trust: if ALL subscription syncs failed with 404, the peer may have
+        # revoked the trust relationship. Verify by checking if peer actor still exists.
+        all_subscriptions_404 = results and all(not r.success and r.error_code == 404 for r in results)
+        if all_subscriptions_404:
+            logger.warning(
+                f"All {len(results)} subscription(s) failed with 404 for peer {peer_id}. "
+                f"Verifying if peer actor exists or trust has been revoked."
+            )
+
+            # Verify trust relationship still exists from peer's perspective
+            proxy = self._get_peer_proxy(peer_id)
+            trust_exists = False
+            if proxy:
+                try:
+                    # Check if peer still has trust record for us
+                    our_actor_id = self._core_actor.id
+                    trust_response = await proxy.get_resource_async(path=f"/trust/{our_actor_id}")
+                    # If we get a valid response (not an error), trust still exists
+                    if trust_response and "error" not in trust_response:
+                        trust_exists = True
+                        logger.info(
+                            f"Trust relationship with {peer_id} still exists. "
+                            f"Subscriptions were deleted but trust is valid."
+                        )
+                    elif trust_response and "error" in trust_response:
+                        error_code = trust_response["error"].get("code", 500)
+                        logger.warning(
+                            f"Peer {peer_id} returned error {error_code} when accessing trust. "
+                            f"Trust appears revoked."
+                        )
+                except Exception as e:
+                    logger.warning(f"Exception verifying trust with {peer_id}: {e}")
+
+            # Only delete trust if peer's trust record doesn't exist or we can't access it
+            if trust_exists:
+                logger.info(
+                    f"Trust with {peer_id} still exists, but subscriptions are gone. "
+                    f"Cleaning up local subscriptions that were deleted by peer."
+                )
+                # Clean up the dead subscriptions locally
+                try:
+                    for result in results:
+                        if not result.success and result.error_code == 404:
+                            sub = self.get_callback_subscription(peer_id, result.subscription_id)
+                            if sub:
+                                logger.info(
+                                    f"Deleting local subscription {result.subscription_id} - "
+                                    f"peer deleted it but trust remains valid."
+                                )
+                                sub_obj = self._core_actor.get_subscription_obj(
+                                    peerid=peer_id,
+                                    subid=result.subscription_id,
+                                    callback=sub.is_callback,
+                                )
+                                if sub_obj:
+                                    await asyncio.to_thread(sub_obj.delete)
+                except Exception as e:
+                    logger.error(f"Error cleaning up dead subscriptions for {peer_id}: {e}", exc_info=True)
+            else:
+                logger.warning(
+                    f"Peer {peer_id} does not exist or is inaccessible. "
+                    f"Trust has been revoked. Cleaning up locally."
+                )
+                try:
+                    # Get trust data before deletion for hook
+                    relationships = self._core_actor.get_trust_relationships(peerid=peer_id)
+                    trust_data = relationships[0] if relationships else {}
+
+                    # Trigger trust_deleted lifecycle hook if configured (async)
+                    hooks = getattr(self._core_actor.config, "hooks", None) if self._core_actor.config else None
+                    if hooks:
+                        try:
+                            from .actor_interface import ActorInterface
+
+                            actor_interface = ActorInterface(self._core_actor)
+                            relationship = trust_data.get("relationship", "friend")
+                            logger.debug(
+                                f"Executing trust_deleted hook (async) for revoked trust with {peer_id}"
+                            )
+                            await hooks.execute_lifecycle_hooks_async(
+                                "trust_deleted",
+                                actor=actor_interface,
+                                peer_id=peer_id,
+                                relationship=relationship,
+                                trust_data=trust_data,
+                                initiated_by_peer=True,
+                            )
+                            logger.info(
+                                f"trust_deleted hook executed (async) for revoked trust with {peer_id}"
+                            )
+                        except Exception as e:
+                            logger.error(f"Error executing trust_deleted hook: {e}", exc_info=True)
+                    else:
+                        logger.debug(
+                            f"No hooks configured, skipping trust_deleted hook for {peer_id}"
+                        )
+
+                    # Delete local trust relationship without notifying peer (already revoked)
+                    deleted = await self._core_actor.delete_reciprocal_trust_async(
+                        peerid=peer_id, delete_peer=False
+                    )
+                    if deleted:
+                        logger.info(
+                            f"Successfully cleaned up revoked trust relationship with {peer_id}"
+                        )
+                        return PeerSyncResult(
+                            peer_id=peer_id,
+                            success=False,
+                            subscriptions_synced=0,
+                            total_diffs_processed=total_diffs,
+                            subscription_results=list(results),
+                            error="Trust relationship has been revoked by peer",
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to delete trust relationship with {peer_id}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Exception while cleaning up revoked trust with {peer_id}: {e}"
+                    )
 
         # Refresh peer profile if configured (async)
         # Try to use already-synced properties data first to avoid redundant fetch

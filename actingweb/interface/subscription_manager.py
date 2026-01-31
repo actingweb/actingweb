@@ -1381,7 +1381,7 @@ class SubscriptionManager:
                     trust_data = relationships[0] if relationships else {}
 
                     # Trigger trust_deleted lifecycle hook if configured
-                    hooks = getattr(self._core_actor.config, "hooks", None) if self._core_actor.config else None
+                    hooks = getattr(self._core_actor.config, "_hooks", None) if self._core_actor.config else None
                     if hooks:
                         try:
                             from .actor_interface import ActorInterface
@@ -2052,7 +2052,7 @@ class SubscriptionManager:
                     trust_data = relationships[0] if relationships else {}
 
                     # Trigger trust_deleted lifecycle hook if configured (async)
-                    hooks = getattr(self._core_actor.config, "hooks", None) if self._core_actor.config else None
+                    hooks = getattr(self._core_actor.config, "_hooks", None) if self._core_actor.config else None
                     if hooks:
                         try:
                             from .actor_interface import ActorInterface

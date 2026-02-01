@@ -92,6 +92,11 @@ jobs:
           echo "DynamoDB failed to start within 60 seconds"
           exit 1
 
+      - name: Verify xdist groups
+        run: |
+          echo "Verifying xdist group documentation..."
+          poetry run python tests/integration/verify_groups.py
+
       - name: Run all tests in parallel
         run: |
           echo "Collecting tests..."
@@ -103,6 +108,8 @@ jobs:
             -n 4 \
             --dist loadgroup \
             --max-worker-restart=2 \
+            --reruns 2 \
+            --reruns-delay 5 \
             -v \
             --tb=short \
             --junitxml=test-results/tests-${{ matrix.backend }}.xml \
@@ -122,6 +129,19 @@ jobs:
           PG_DB_NAME: actingweb_test
           PG_DB_USER: actingweb
           PG_DB_PASSWORD: testpassword
+
+      - name: Report test flakiness
+        if: always()
+        run: |
+          echo "Analyzing test results for flakiness..."
+          if [ -f test-results/tests-${{ matrix.backend }}.xml ]; then
+            # Count retried tests (flaky tests that passed on retry)
+            RETRIED=$(grep -o 'rerun=' test-results/tests-${{ matrix.backend }}.xml | wc -l || echo 0)
+            echo "Flaky tests (passed on retry): $RETRIED"
+            if [ "$RETRIED" -gt 0 ]; then
+              echo "⚠️ Warning: Found $RETRIED flaky tests that required retry"
+            fi
+          fi
 
       - name: Upload test results
         if: always()

@@ -25,6 +25,7 @@ class FakeConfig:
         self.peer_profile_attributes: list[str] | None = None
         self.peer_capabilities_caching: bool = False
         self.peer_permissions_caching: bool = False
+        self._subscription_config: SubscriptionProcessingConfig | None = None
 
 
 class FakeCoreActor:

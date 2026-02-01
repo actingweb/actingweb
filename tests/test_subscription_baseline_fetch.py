@@ -406,12 +406,8 @@ class TestRefreshPeerMetadata:
         manager = SubscriptionManager(actor)  # type: ignore[arg-type]
 
         with (
-            patch(
-                "actingweb.peer_profile.fetch_peer_profile"
-            ) as mock_fetch,
-            patch(
-                "actingweb.peer_profile.get_peer_profile_store"
-            ) as mock_get_store,
+            patch("actingweb.peer_profile.fetch_peer_profile") as mock_fetch,
+            patch("actingweb.peer_profile.get_peer_profile_store") as mock_get_store,
         ):
             mock_profile = MagicMock()
             mock_fetch.return_value = mock_profile

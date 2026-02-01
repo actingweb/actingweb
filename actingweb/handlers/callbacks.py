@@ -463,16 +463,26 @@ class CallbacksHandler(base_handler.BaseHandler):
                 try:
                     # Use SubscriptionManager's baseline fetch helper
                     # This handles metadata expansion, property list transformations, etc.
-                    callback_data = actor_interface.subscriptions._fetch_and_transform_baseline(
-                        peer_id=peer_id,
-                        target=target,
-                        subtarget=subtarget,
-                        resource=resource,
+                    callback_data = (
+                        actor_interface.subscriptions._fetch_and_transform_baseline(
+                            peer_id=peer_id,
+                            target=target,
+                            subtarget=subtarget,
+                            resource=resource,
+                        )
                     )
                     if callback_data:
+                        # Handle list responses when fetching a subtarget (e.g., properties/list_name)
+                        # _fetch_and_transform_baseline returns a raw list for list properties,
+                        # but apply_resync_data expects a dict. Wrap the list in the expected format.
+                        if isinstance(callback_data, list) and subtarget:
+                            callback_data = {
+                                subtarget: {"_list": True, "items": callback_data}
+                            }
                         logger.debug(
                             f"Fetched resync baseline for {target}"
-                            f"{f'/{subtarget}' if subtarget else ''}: {len(callback_data)} keys"
+                            f"{f'/{subtarget}' if subtarget else ''}: "
+                            f"{len(callback_data)} {'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
                     else:
                         logger.warning(f"Failed to fetch resync baseline for {target}")

@@ -1,4 +1,5 @@
 """Test revoked trust detection and cleanup during sync."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

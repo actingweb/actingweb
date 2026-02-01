@@ -294,8 +294,15 @@ class SubscriptionManager:
         # This bypasses the subscription diff endpoint and ensures we get the current state
         from ..subscription_config import SubscriptionProcessingConfig
 
-        # Get default config (respects auto_storage setting)
-        config = SubscriptionProcessingConfig(enabled=True)
+        # Get configured subscription processing settings from the app
+        # If not configured, use defaults (auto_storage=True for backward compatibility)
+        config = (
+            self._core_actor.config._subscription_config
+            if self._core_actor.config
+            else None
+        )
+        if config is None:
+            config = SubscriptionProcessingConfig(enabled=True)
 
         transformed_data = self._fetch_and_transform_baseline(
             peer_id=peer_id,
@@ -386,8 +393,15 @@ class SubscriptionManager:
         # 3. Fetching directly from /properties is more efficient for initial baseline
         from ..subscription_config import SubscriptionProcessingConfig
 
-        # Get default config (respects auto_storage setting)
-        config = SubscriptionProcessingConfig(enabled=True)
+        # Get configured subscription processing settings from the app
+        # If not configured, use defaults (auto_storage=True for backward compatibility)
+        config = (
+            self._core_actor.config._subscription_config
+            if self._core_actor.config
+            else None
+        )
+        if config is None:
+            config = SubscriptionProcessingConfig(enabled=True)
 
         transformed_data = await self._fetch_and_transform_baseline_async(
             peer_id=peer_id,
@@ -1393,7 +1407,9 @@ class SubscriptionManager:
 
         # Detect revoked trust: if ALL subscription syncs failed with 404, the peer may have
         # revoked the trust relationship. Verify by checking if peer actor still exists.
-        all_subscriptions_404 = results and all(not r.success and r.error_code == 404 for r in results)
+        all_subscriptions_404 = results and all(
+            not r.success and r.error_code == 404 for r in results
+        )
         if all_subscriptions_404:
             logger.warning(
                 f"All {len(results)} subscription(s) failed with 404 for peer {peer_id}. "
@@ -1434,7 +1450,9 @@ class SubscriptionManager:
                 try:
                     for result in results:
                         if not result.success and result.error_code == 404:
-                            sub = self.get_callback_subscription(peer_id, result.subscription_id)
+                            sub = self.get_callback_subscription(
+                                peer_id, result.subscription_id
+                            )
                             if sub:
                                 logger.info(
                                     f"Deleting local subscription {result.subscription_id} - "
@@ -1448,7 +1466,10 @@ class SubscriptionManager:
                                 if sub_obj:
                                     sub_obj.delete()
                 except Exception as e:
-                    logger.error(f"Error cleaning up dead subscriptions for {peer_id}: {e}", exc_info=True)
+                    logger.error(
+                        f"Error cleaning up dead subscriptions for {peer_id}: {e}",
+                        exc_info=True,
+                    )
             else:
                 logger.warning(
                     f"Peer {peer_id} does not exist or is inaccessible. "
@@ -1456,11 +1477,17 @@ class SubscriptionManager:
                 )
                 try:
                     # Get trust data before deletion for hook
-                    relationships = self._core_actor.get_trust_relationships(peerid=peer_id)
+                    relationships = self._core_actor.get_trust_relationships(
+                        peerid=peer_id
+                    )
                     trust_data = relationships[0] if relationships else {}
 
                     # Trigger trust_deleted lifecycle hook if configured
-                    hooks = getattr(self._core_actor.config, "_hooks", None) if self._core_actor.config else None
+                    hooks = (
+                        getattr(self._core_actor.config, "_hooks", None)
+                        if self._core_actor.config
+                        else None
+                    )
                     if hooks:
                         try:
                             from .actor_interface import ActorInterface
@@ -1482,7 +1509,10 @@ class SubscriptionManager:
                                 f"trust_deleted hook executed for revoked trust with {peer_id}"
                             )
                         except Exception as e:
-                            logger.error(f"Error executing trust_deleted hook: {e}", exc_info=True)
+                            logger.error(
+                                f"Error executing trust_deleted hook: {e}",
+                                exc_info=True,
+                            )
                     else:
                         logger.debug(
                             f"No hooks configured, skipping trust_deleted hook for {peer_id}"
@@ -2295,9 +2325,9 @@ class SubscriptionManager:
         # Skip this check during initial sync right after subscription creation to avoid
         # false positives from timing/eventual consistency issues.
         all_subscriptions_404 = (
-            results and
-            all(not r.success and r.error_code == 404 for r in results) and
-            not _skip_revocation_detection
+            results
+            and all(not r.success and r.error_code == 404 for r in results)
+            and not _skip_revocation_detection
         )
         if all_subscriptions_404:
             logger.warning(
@@ -2312,7 +2342,9 @@ class SubscriptionManager:
                 try:
                     # Check if peer still has trust record for us
                     our_actor_id = self._core_actor.id
-                    trust_response = await proxy.get_resource_async(path=f"/trust/{our_actor_id}")
+                    trust_response = await proxy.get_resource_async(
+                        path=f"/trust/{our_actor_id}"
+                    )
                     # If we get a valid response (not an error), trust still exists
                     if trust_response and "error" not in trust_response:
                         trust_exists = True
@@ -2339,7 +2371,9 @@ class SubscriptionManager:
                 try:
                     for result in results:
                         if not result.success and result.error_code == 404:
-                            sub = self.get_callback_subscription(peer_id, result.subscription_id)
+                            sub = self.get_callback_subscription(
+                                peer_id, result.subscription_id
+                            )
                             if sub:
                                 logger.info(
                                     f"Deleting local subscription {result.subscription_id} - "
@@ -2353,7 +2387,10 @@ class SubscriptionManager:
                                 if sub_obj:
                                     await asyncio.to_thread(sub_obj.delete)
                 except Exception as e:
-                    logger.error(f"Error cleaning up dead subscriptions for {peer_id}: {e}", exc_info=True)
+                    logger.error(
+                        f"Error cleaning up dead subscriptions for {peer_id}: {e}",
+                        exc_info=True,
+                    )
             else:
                 logger.warning(
                     f"Peer {peer_id} does not exist or is inaccessible. "
@@ -2361,11 +2398,17 @@ class SubscriptionManager:
                 )
                 try:
                     # Get trust data before deletion for hook
-                    relationships = self._core_actor.get_trust_relationships(peerid=peer_id)
+                    relationships = self._core_actor.get_trust_relationships(
+                        peerid=peer_id
+                    )
                     trust_data = relationships[0] if relationships else {}
 
                     # Trigger trust_deleted lifecycle hook if configured (async)
-                    hooks = getattr(self._core_actor.config, "_hooks", None) if self._core_actor.config else None
+                    hooks = (
+                        getattr(self._core_actor.config, "_hooks", None)
+                        if self._core_actor.config
+                        else None
+                    )
                     if hooks:
                         try:
                             from .actor_interface import ActorInterface
@@ -2387,7 +2430,10 @@ class SubscriptionManager:
                                 f"trust_deleted hook executed (async) for revoked trust with {peer_id}"
                             )
                         except Exception as e:
-                            logger.error(f"Error executing trust_deleted hook: {e}", exc_info=True)
+                            logger.error(
+                                f"Error executing trust_deleted hook: {e}",
+                                exc_info=True,
+                            )
                     else:
                         logger.debug(
                             f"No hooks configured, skipping trust_deleted hook for {peer_id}"

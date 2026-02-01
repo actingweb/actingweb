@@ -218,6 +218,11 @@ class AwProxy:
                     }
                 }
             else:
+                # Success status but non-JSON response - log warning for debugging
+                logger.warning(
+                    f"Peer returned HTTP {response.status_code} with non-JSON content at {url}. "
+                    "This may indicate an unexpected content type or parsing issue."
+                )
                 result = {}
         return result
 

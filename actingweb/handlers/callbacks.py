@@ -452,89 +452,73 @@ class CallbacksHandler(base_handler.BaseHandler):
             logger.debug(
                 f"{fetch_type.capitalize()} callback, fetching data from {callback_url}"
             )
-            try:
-                import httpx
 
-                from actingweb.trust import Trust
+            if callback_type == "resync":
+                # Resync callback - use shared baseline fetch method for consistency
+                # This ensures proper handling of ?metadata=true and property list transformations
+                target = params.get("target", "properties")
+                subtarget = params.get("subtarget")
+                resource = params.get("resource")
 
-                # Get trust relationship for authentication
-                trust = Trust(
-                    actor_id=actor_interface._core_actor.id,
-                    peerid=peer_id,
-                    config=actor_interface._core_actor.config,
-                )
-                trust_data = trust.get()
-                secret = trust_data.get("secret", "") if trust_data else ""
-
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.get(
-                        callback_url,
-                        headers={
-                            "Authorization": f"Bearer {secret}",
-                        },
+                try:
+                    # Use SubscriptionManager's baseline fetch helper
+                    # This handles metadata expansion, property list transformations, etc.
+                    callback_data = actor_interface.subscriptions._fetch_and_transform_baseline(
+                        peer_id=peer_id,
+                        target=target,
+                        subtarget=subtarget,
+                        resource=resource,
                     )
-                if response.status_code == 200:
-                    url_data = response.json()
-
-                    # Parse response based on callback type
-                    if callback_type == "resync":
-                        # Resync callback - URL points to resource
-                        # Response can be:
-                        # 1. Specific list: /properties/list_name -> returns array
-                        # 2. All properties: /properties -> returns dict with metadata
-                        # 3. Single scalar: /properties/name -> returns dict
-
-                        if isinstance(url_data, list):
-                            # Array response - this is a specific property list
-                            # Extract list name from subtarget parameter (preferred)
-                            subtarget = params.get("subtarget")
-
-                            if subtarget:
-                                # Use subtarget as list name
-                                list_name = subtarget
-                            else:
-                                # Fall back to extracting from URL path
-                                # URL format: /{actor_id}/properties/{list_name}
-                                import re
-
-                                match = re.search(
-                                    r"/properties/([^/]+)/?$", callback_url
-                                )
-                                list_name = match.group(1) if match else "unknown"
-
-                            # Wrap array in expected format for apply_resync_data()
-                            # Use flag-based format (preferred)
-                            callback_data = {
-                                list_name: {"_list": True, "items": url_data}
-                            }
-                            logger.debug(
-                                f"Fetched resync list '{list_name}': {len(url_data)} items"
-                            )
-                        else:
-                            # Dict response - could be:
-                            # - All properties (e.g., {"memory_travel": {"_list": true, "count": 3}})
-                            # - Single scalar property (e.g., {"value": "...", "_list": false})
-                            # Pass through as-is for apply_resync_data()
-                            callback_data = url_data
-                            logger.debug(
-                                f"Fetched resync data: {len(callback_data)} keys"
-                            )
+                    if callback_data:
+                        logger.debug(
+                            f"Fetched resync baseline for {target}"
+                            f"{f'/{subtarget}' if subtarget else ''}: {len(callback_data)} keys"
+                        )
                     else:
-                        # Low-granularity diff callback
-                        # URL points to subscription diff endpoint
+                        logger.warning(f"Failed to fetch resync baseline for {target}")
+                        callback_data = {}
+                except Exception as e:
+                    logger.error(f"Error fetching resync baseline: {e}")
+                    callback_data = {}
+            else:
+                # Low-granularity diff callback - fetch from subscription diff endpoint
+                try:
+                    import httpx
+
+                    from actingweb.trust import Trust
+
+                    # Get trust relationship for authentication
+                    trust = Trust(
+                        actor_id=actor_interface._core_actor.id,
+                        peerid=peer_id,
+                        config=actor_interface._core_actor.config,
+                    )
+                    trust_data = trust.get()
+                    secret = trust_data.get("secret", "") if trust_data else ""
+
+                    with httpx.Client(timeout=10.0) as client:
+                        response = client.get(
+                            callback_url,
+                            headers={
+                                "Authorization": f"Bearer {secret}",
+                            },
+                        )
+                    if response.status_code == 200:
+                        url_data = response.json()
+                        # Low-granularity: URL points to subscription diff endpoint
                         # Response is a single diff object: {"data": {...}, "sequence": N, ...}
                         callback_data = url_data.get("data", {})
                         logger.debug(
                             f"Fetched low-granularity data: {len(callback_data)} keys"
                         )
-                else:
-                    logger.warning(
-                        f"Failed to fetch {fetch_type} data: {response.status_code}"
-                    )
+                    else:
+                        logger.warning(
+                            f"Failed to fetch low-granularity data: {response.status_code}"
+                        )
+                        callback_data = {}
+                except Exception as e:
+                    logger.error(f"Error fetching low-granularity callback data: {e}")
                     callback_data = {}
-            except Exception as e:
-                logger.error(f"Error fetching {fetch_type} callback data: {e}")
-                callback_data = {}
         else:
             callback_data = callback_data or {}
 

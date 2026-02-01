@@ -260,10 +260,25 @@ class SubscriptionManager:
         granularity: str = "high",
     ) -> str | None:
         """
-        Subscribe to another actor's data.
+        Subscribe to another actor's data and perform initial baseline sync.
 
-        Returns the subscription URL if successful, None otherwise.
+        This method creates the subscription and immediately fetches baseline data,
+        ensuring consistency regardless of whether the peer has existing data.
+
+        Note: For async contexts, prefer subscribe_to_peer_async() for better
+        performance and non-blocking execution.
+
+        Args:
+            peer_id: ID of the peer actor to subscribe to
+            target: The target to subscribe to (e.g., "properties")
+            subtarget: Optional subtarget within the target
+            resource: Optional specific resource within the target
+            granularity: Update granularity ("high" for real-time, "low" for batched)
+
+        Returns:
+            The subscription URL if successful, None otherwise.
         """
+        # Create the remote subscription
         result = self._core_actor.create_remote_subscription(
             peerid=peer_id,
             target=target,
@@ -271,8 +286,135 @@ class SubscriptionManager:
             resource=resource or None,
             granularity=granularity,
         )
-        # Handle the case where the method returns False instead of None
-        return result if result and isinstance(result, str) else None
+
+        if not result or not isinstance(result, str):
+            return None
+
+        # Perform initial baseline fetch directly from the target endpoint
+        # This bypasses the subscription diff endpoint and ensures we get the current state
+        from ..subscription_config import SubscriptionProcessingConfig
+
+        # Get default config (respects auto_storage setting)
+        config = SubscriptionProcessingConfig(enabled=True)
+
+        transformed_data = self._fetch_and_transform_baseline(
+            peer_id=peer_id,
+            target=target,
+            subtarget=subtarget or None,
+            resource=resource or None,
+        )
+
+        if transformed_data and config.auto_storage:
+            # Store baseline data if auto_storage is enabled
+            from ..remote_storage import RemotePeerStore
+            from .actor_interface import ActorInterface
+
+            actor_interface = ActorInterface(self._core_actor)
+            store = RemotePeerStore(
+                actor=actor_interface,
+                peer_id=peer_id,
+                validate_peer_id=False,
+            )
+            store.apply_resync_data(transformed_data)
+            logger.info(f"Stored initial baseline for {peer_id} from {target}")
+
+        # Fetch peer metadata during initial subscription (independent of storage)
+        if transformed_data:
+            self._refresh_peer_metadata(peer_id)
+
+        return result
+
+    async def subscribe_to_peer_async(
+        self,
+        peer_id: str,
+        target: str,
+        subtarget: str = "",
+        resource: str = "",
+        granularity: str = "high",
+    ) -> str | None:
+        """
+        Subscribe to another actor's data and perform initial baseline sync.
+
+        This is the preferred method for creating subscriptions as it ensures
+        the baseline data is fetched immediately after subscription creation,
+        regardless of whether the peer has existing data or not.
+
+        The method respects the sync_subscription_callbacks configuration:
+        - In Lambda/serverless (sync mode): Uses blocking operations to prevent
+          execution freeze before baseline fetch completes
+        - In local/container (async mode): Uses true async operations for
+          non-blocking execution
+
+        Args:
+            peer_id: ID of the peer actor to subscribe to
+            target: The target to subscribe to (e.g., "properties")
+            subtarget: Optional subtarget within the target
+            resource: Optional specific resource within the target
+            granularity: Update granularity ("high" for real-time, "low" for batched)
+
+        Returns:
+            The subscription URL if successful, None otherwise.
+
+        Example:
+            # Subscribe and get baseline in one call
+            url = await actor.subscriptions.subscribe_to_peer_async(
+                peer_id="peer123",
+                target="properties",
+                granularity="high"
+            )
+            if url:
+                print(f"Subscribed and synced: {url}")
+        """
+        # Create the remote subscription
+        # Note: This respects sync_subscription_callbacks config internally
+        # for Lambda/serverless compatibility
+        result = await self._core_actor.create_remote_subscription_async(
+            peerid=peer_id,
+            target=target,
+            subtarget=subtarget or None,
+            resource=resource or None,
+            granularity=granularity,
+        )
+
+        if not result or not isinstance(result, str):
+            return None
+
+        # Fetch initial baseline directly from the target endpoint
+        # We skip the subscription diff endpoint because:
+        # 1. We just created the subscription - there are no diffs yet
+        # 2. The subscription endpoint might not be ready yet (timing/eventual consistency)
+        # 3. Fetching directly from /properties is more efficient for initial baseline
+        from ..subscription_config import SubscriptionProcessingConfig
+
+        # Get default config (respects auto_storage setting)
+        config = SubscriptionProcessingConfig(enabled=True)
+
+        transformed_data = await self._fetch_and_transform_baseline_async(
+            peer_id=peer_id,
+            target=target,
+            subtarget=subtarget or None,
+            resource=resource or None,
+        )
+
+        if transformed_data and config.auto_storage:
+            # Store baseline data if auto_storage is enabled
+            from ..remote_storage import RemotePeerStore
+            from .actor_interface import ActorInterface
+
+            actor_interface = ActorInterface(self._core_actor)
+            store = RemotePeerStore(
+                actor=actor_interface,
+                peer_id=peer_id,
+                validate_peer_id=False,
+            )
+            store.apply_resync_data(transformed_data)
+            logger.info(f"Stored initial baseline for {peer_id} from {target}")
+
+        # Fetch peer metadata during initial subscription (independent of storage)
+        if transformed_data:
+            await self._refresh_peer_metadata_async(peer_id)
+
+        return result
 
     def unsubscribe(self, peer_id: str, subscription_id: str) -> bool:
         """Unsubscribe from a peer's data."""
@@ -703,52 +845,23 @@ class SubscriptionManager:
 
         diffs_fetched = len(diffs)
 
-        # If no diffs, fetch baseline data from target resource
+        # If no diffs, fetch baseline data from target resource using shared method
         if diffs_fetched == 0 and config.auto_storage:
-            # Construct full target path including subtarget and resource if present
-            target_path = sub.target
-            if sub.subtarget:
-                target_path = f"{target_path}/{sub.subtarget}"
-            if sub.resource:
-                target_path = f"{target_path}/{sub.resource}"
-
             logger.info(
-                f"No diffs for subscription {subscription_id}, fetching baseline from {target_path}"
+                f"No diffs for subscription {subscription_id}, fetching baseline from target"
             )
 
-            # Add metadata parameter for properties endpoint (only for collection-level)
-            if sub.target == "properties" and not sub.subtarget:
-                # Request metadata to include property list information
-                target_path = f"{target_path}?metadata=true"
+            # Fetch and transform baseline data
+            transformed_data = self._fetch_and_transform_baseline(
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget,
+                resource=sub.resource,
+            )
 
-            # Fetch baseline data from target resource
-            baseline_response = proxy.get_resource(path=target_path)
-
-            # Reconstruct path for logging (without query params)
-            log_path = sub.target
-            if sub.subtarget:
-                log_path = f"{log_path}/{sub.subtarget}"
-            if sub.resource:
-                log_path = f"{log_path}/{sub.resource}"
-
-            if baseline_response and "error" not in baseline_response:
-                # For properties subscriptions, transform list metadata into actual items
-                # Only needed when subscribing to full /properties endpoint (no subtarget)
-                # Subtarget subscriptions (e.g., properties/list:name) already return full items
-                if (
-                    sub.target == "properties"
-                    and not sub.subtarget
-                    and not sub.resource
-                ):
-                    transformed_data = self._transform_baseline_list_properties(
-                        baseline_data=baseline_response,
-                        peer_id=peer_id,
-                        target=sub.target,
-                    )
-                else:
-                    transformed_data = baseline_response
-
+            if transformed_data:
                 # Store baseline data
+                from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
                 actor_interface = ActorInterface(self._core_actor)
@@ -757,69 +870,35 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
-
-                # Apply transformed baseline as resync data
                 store.apply_resync_data(transformed_data)
-                logger.info(
-                    f"Stored baseline data for subscription {subscription_id} from {log_path}"
+                logger.info(f"Stored baseline for subscription {subscription_id}")
+
+            # Update local subscription sequence after baseline sync
+            final_seq = response.get("sequence", 0)
+            if final_seq > 0:
+                from ..subscription import Subscription
+
+                sub_obj = Subscription(
+                    actor_id=self._core_actor.id,
+                    peerid=peer_id,
+                    subid=subscription_id,
+                    callback=True,
+                    config=self._core_actor.config,
                 )
-
-                # Update local subscription sequence after baseline sync
-                final_seq = response.get("sequence", 0)
-                if final_seq > 0:
-                    from ..subscription import Subscription
-
-                    sub_obj = Subscription(
-                        actor_id=self._core_actor.id,
-                        peerid=peer_id,
-                        subid=subscription_id,
-                        callback=True,
-                        config=self._core_actor.config,
+                if sub_obj.handle:
+                    sub_obj.handle.modify(seqnr=final_seq)
+                    logger.info(
+                        f"Updated subscription {subscription_id} sequence to {final_seq} "
+                        f"after baseline sync"
                     )
-                    if sub_obj.handle:
-                        sub_obj.handle.modify(seqnr=final_seq)
-                        logger.info(
-                            f"Updated subscription {subscription_id} sequence to {final_seq} "
-                            f"after baseline sync"
-                        )
 
-                return SubscriptionSyncResult(
-                    subscription_id=subscription_id,
-                    success=True,
-                    diffs_fetched=0,
-                    diffs_processed=1,  # Count baseline fetch as 1 processed item
-                    final_sequence=response.get("sequence", 0),
-                )
-            else:
-                logger.warning(
-                    f"Failed to fetch baseline from {log_path} for subscription {subscription_id}"
-                )
-                # Update local subscription sequence even if baseline fetch failed
-                final_seq = response.get("sequence", 0)
-                if final_seq > 0:
-                    from ..subscription import Subscription
-
-                    sub_obj = Subscription(
-                        actor_id=self._core_actor.id,
-                        peerid=peer_id,
-                        subid=subscription_id,
-                        callback=True,
-                        config=self._core_actor.config,
-                    )
-                    if sub_obj.handle:
-                        sub_obj.handle.modify(seqnr=final_seq)
-                        logger.info(
-                            f"Updated subscription {subscription_id} sequence to {final_seq} "
-                            f"after baseline sync (fetch failed)"
-                        )
-
-                return SubscriptionSyncResult(
-                    subscription_id=subscription_id,
-                    success=True,
-                    diffs_fetched=0,
-                    diffs_processed=0,
-                    final_sequence=response.get("sequence", 0),
-                )
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=True,
+                diffs_fetched=0,
+                diffs_processed=1,  # Count baseline fetch as 1 processed item
+                final_sequence=response.get("sequence", 0),
+            )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case
             final_seq = response.get("sequence", 0)
@@ -1586,54 +1665,23 @@ class SubscriptionManager:
 
         diffs_fetched = len(diffs)
 
-        # If no diffs, fetch baseline data from target resource
+        # If no diffs, fetch baseline data from target resource using shared method
         if diffs_fetched == 0 and config.auto_storage:
-            # Construct full target path including subtarget and resource if present
-            target_path = sub.target
-            if sub.subtarget:
-                target_path = f"{target_path}/{sub.subtarget}"
-            if sub.resource:
-                target_path = f"{target_path}/{sub.resource}"
-
             logger.info(
-                f"No diffs for subscription {subscription_id}, fetching baseline from {target_path}"
+                f"No diffs for subscription {subscription_id}, fetching baseline from target"
             )
 
-            # Add metadata parameter for properties endpoint (only for collection-level)
-            if sub.target == "properties" and not sub.subtarget:
-                # Request metadata to include property list information
-                target_path = f"{target_path}?metadata=true"
+            # Fetch and transform baseline data
+            transformed_data = await self._fetch_and_transform_baseline_async(
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget,
+                resource=sub.resource,
+            )
 
-            # Fetch baseline data from target resource
-            baseline_response = await proxy.get_resource_async(path=target_path)
-
-            # Reconstruct path for logging (without query params)
-            log_path = sub.target
-            if sub.subtarget:
-                log_path = f"{log_path}/{sub.subtarget}"
-            if sub.resource:
-                log_path = f"{log_path}/{sub.resource}"
-
-            if baseline_response and "error" not in baseline_response:
-                # For properties subscriptions, transform list metadata into actual items
-                # Only needed when subscribing to full /properties endpoint (no subtarget)
-                # Subtarget subscriptions (e.g., properties/list:name) already return full items
-                if (
-                    sub.target == "properties"
-                    and not sub.subtarget
-                    and not sub.resource
-                ):
-                    transformed_data = (
-                        await self._transform_baseline_list_properties_async(
-                            baseline_data=baseline_response,
-                            peer_id=peer_id,
-                            target=sub.target,
-                        )
-                    )
-                else:
-                    transformed_data = baseline_response
-
+            if transformed_data:
                 # Store baseline data
+                from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
                 actor_interface = ActorInterface(self._core_actor)
@@ -1642,69 +1690,35 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
-
-                # Apply transformed baseline as resync data
                 store.apply_resync_data(transformed_data)
-                logger.info(
-                    f"Stored baseline data for subscription {subscription_id} from {log_path}"
+                logger.info(f"Stored baseline for subscription {subscription_id}")
+
+            # Update local subscription sequence after baseline sync
+            final_seq = response.get("sequence", 0)
+            if final_seq > 0:
+                from ..subscription import Subscription
+
+                sub_obj = Subscription(
+                    actor_id=self._core_actor.id,
+                    peerid=peer_id,
+                    subid=subscription_id,
+                    callback=True,
+                    config=self._core_actor.config,
                 )
-
-                # Update local subscription sequence after baseline sync
-                final_seq = response.get("sequence", 0)
-                if final_seq > 0:
-                    from ..subscription import Subscription
-
-                    sub_obj = Subscription(
-                        actor_id=self._core_actor.id,
-                        peerid=peer_id,
-                        subid=subscription_id,
-                        callback=True,
-                        config=self._core_actor.config,
+                if sub_obj.handle:
+                    sub_obj.handle.modify(seqnr=final_seq)
+                    logger.info(
+                        f"Updated subscription {subscription_id} sequence to {final_seq} "
+                        f"after baseline sync"
                     )
-                    if sub_obj.handle:
-                        sub_obj.handle.modify(seqnr=final_seq)
-                        logger.info(
-                            f"Updated subscription {subscription_id} sequence to {final_seq} "
-                            f"after baseline sync"
-                        )
 
-                return SubscriptionSyncResult(
-                    subscription_id=subscription_id,
-                    success=True,
-                    diffs_fetched=0,
-                    diffs_processed=1,  # Count baseline fetch as 1 processed item
-                    final_sequence=response.get("sequence", 0),
-                )
-            else:
-                logger.warning(
-                    f"Failed to fetch baseline from {log_path} for subscription {subscription_id}"
-                )
-                # Update local subscription sequence even if baseline fetch failed
-                final_seq = response.get("sequence", 0)
-                if final_seq > 0:
-                    from ..subscription import Subscription
-
-                    sub_obj = Subscription(
-                        actor_id=self._core_actor.id,
-                        peerid=peer_id,
-                        subid=subscription_id,
-                        callback=True,
-                        config=self._core_actor.config,
-                    )
-                    if sub_obj.handle:
-                        sub_obj.handle.modify(seqnr=final_seq)
-                        logger.info(
-                            f"Updated subscription {subscription_id} sequence to {final_seq} "
-                            f"after baseline sync (fetch failed)"
-                        )
-
-                return SubscriptionSyncResult(
-                    subscription_id=subscription_id,
-                    success=True,
-                    diffs_fetched=0,
-                    diffs_processed=0,
-                    final_sequence=response.get("sequence", 0),
-                )
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=True,
+                diffs_fetched=0,
+                diffs_processed=1,  # Count baseline fetch as 1 processed item
+                final_sequence=response.get("sequence", 0),
+            )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case
             final_seq = response.get("sequence", 0)
@@ -1933,10 +1947,300 @@ class SubscriptionManager:
             final_sequence=max_sequence,
         )
 
+    def _fetch_and_transform_baseline(
+        self,
+        peer_id: str,
+        target: str,
+        subtarget: str | None = None,
+        resource: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Fetch and transform baseline data from peer (synchronous).
+
+        This is a helper method that fetches baseline data from the target endpoint
+        and transforms it appropriately (e.g., property list metadata expansion).
+        It does NOT store the data - that's the caller's responsibility.
+
+        Args:
+            peer_id: ID of the peer to fetch baseline from
+            target: The target endpoint (e.g., "properties")
+            subtarget: Optional subtarget
+            resource: Optional resource
+
+        Returns:
+            Transformed baseline data dict, or None if fetch failed
+        """
+        # Construct full target path
+        target_path = target
+        if subtarget:
+            target_path = f"{target_path}/{subtarget}"
+        if resource:
+            target_path = f"{target_path}/{resource}"
+
+        # Add metadata parameter for properties endpoint (only for collection-level)
+        if target == "properties" and not subtarget:
+            target_path = f"{target_path}?metadata=true"
+
+        # Get proxy for peer communication
+        proxy = self._get_peer_proxy(peer_id)
+        if not proxy:
+            logger.warning(f"Cannot fetch baseline for {peer_id}: no proxy available")
+            return None
+
+        # Fetch baseline data from target resource
+        try:
+            baseline_response = proxy.get_resource(path=target_path)
+        except Exception as e:
+            logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
+            return None
+
+        if not baseline_response or "error" in baseline_response:
+            logger.warning(
+                f"No baseline data available for {peer_id} from {target}: "
+                f"{baseline_response.get('error') if baseline_response else 'empty response'}"
+            )
+            return None
+
+        # For properties subscriptions, transform list metadata into actual items
+        if target == "properties" and not subtarget and not resource:
+            return self._transform_baseline_list_properties(
+                baseline_data=baseline_response,
+                peer_id=peer_id,
+                target=target,
+            )
+        else:
+            return baseline_response
+
+    async def _fetch_and_transform_baseline_async(
+        self,
+        peer_id: str,
+        target: str,
+        subtarget: str | None = None,
+        resource: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Fetch and transform baseline data from peer (asynchronous).
+
+        This is a helper method that fetches baseline data from the target endpoint
+        and transforms it appropriately (e.g., property list metadata expansion).
+        It does NOT store the data - that's the caller's responsibility.
+
+        Args:
+            peer_id: ID of the peer to fetch baseline from
+            target: The target endpoint (e.g., "properties")
+            subtarget: Optional subtarget
+            resource: Optional resource
+
+        Returns:
+            Transformed baseline data dict, or None if fetch failed
+        """
+        # Construct full target path
+        target_path = target
+        if subtarget:
+            target_path = f"{target_path}/{subtarget}"
+        if resource:
+            target_path = f"{target_path}/{resource}"
+
+        # Add metadata parameter for properties endpoint (only for collection-level)
+        if target == "properties" and not subtarget:
+            target_path = f"{target_path}?metadata=true"
+
+        # Get proxy for peer communication
+        proxy = self._get_peer_proxy(peer_id)
+        if not proxy:
+            logger.warning(f"Cannot fetch baseline for {peer_id}: no proxy available")
+            return None
+
+        # Fetch baseline data from target resource
+        try:
+            baseline_response = await proxy.get_resource_async(path=target_path)
+        except Exception as e:
+            logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
+            return None
+
+        if not baseline_response or "error" in baseline_response:
+            logger.warning(
+                f"No baseline data available for {peer_id} from {target}: "
+                f"{baseline_response.get('error') if baseline_response else 'empty response'}"
+            )
+            return None
+
+        # For properties subscriptions, transform list metadata into actual items
+        if target == "properties" and not subtarget and not resource:
+            return await self._transform_baseline_list_properties_async(
+                baseline_data=baseline_response,
+                peer_id=peer_id,
+                target=target,
+            )
+        else:
+            return baseline_response
+
+    def _refresh_peer_metadata(self, peer_id: str) -> None:
+        """
+        Refresh cached peer metadata (profile, capabilities, permissions).
+
+        This is called during initial subscription creation to cache peer information.
+
+        Args:
+            peer_id: ID of the peer to refresh metadata for
+        """
+        actor_id = self._core_actor.id
+        actor_config = self._core_actor.config
+
+        # Refresh peer profile if configured
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_profile_attributes", None)
+        ):
+            try:
+                from ..peer_profile import fetch_peer_profile, get_peer_profile_store
+
+                profile = fetch_peer_profile(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                    attributes=actor_config.peer_profile_attributes,
+                )
+                store = get_peer_profile_store(actor_config)
+                store.store_profile(profile)
+                logger.debug(f"Refreshed peer profile for {peer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer profile: {e}")
+
+        # Refresh peer capabilities if configured
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_capabilities_caching", False)
+        ):
+            try:
+                from ..peer_capabilities import (
+                    fetch_peer_methods_and_actions,
+                    get_cached_capabilities_store,
+                )
+
+                capabilities = fetch_peer_methods_and_actions(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                )
+                store = get_cached_capabilities_store(actor_config)
+                store.store_capabilities(capabilities)
+                logger.debug(f"Refreshed peer capabilities for {peer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer capabilities: {e}")
+
+        # Refresh peer permissions if configured
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_permissions_caching", False)
+        ):
+            try:
+                from ..peer_permissions import (
+                    fetch_peer_permissions,
+                    get_peer_permission_store,
+                )
+
+                permissions = fetch_peer_permissions(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                )
+                store = get_peer_permission_store(actor_config)
+                store.store_permissions(permissions)
+                logger.debug(f"Refreshed peer permissions for {peer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer permissions: {e}")
+
+    async def _refresh_peer_metadata_async(self, peer_id: str) -> None:
+        """
+        Refresh cached peer metadata (profile, capabilities, permissions) asynchronously.
+
+        This is called during initial subscription creation to cache peer information.
+
+        Args:
+            peer_id: ID of the peer to refresh metadata for
+        """
+        actor_id = self._core_actor.id
+        actor_config = self._core_actor.config
+
+        # Refresh peer profile if configured
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_profile_attributes", None)
+        ):
+            try:
+                from ..peer_profile import (
+                    fetch_peer_profile_async,
+                    get_peer_profile_store,
+                )
+
+                profile = await fetch_peer_profile_async(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                    attributes=actor_config.peer_profile_attributes,
+                )
+                store = get_peer_profile_store(actor_config)
+                store.store_profile(profile)
+                logger.debug(f"Refreshed peer profile for {peer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer profile: {e}")
+
+        # Refresh peer capabilities if configured
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_capabilities_caching", False)
+        ):
+            try:
+                from ..peer_capabilities import (
+                    fetch_peer_methods_and_actions_async,
+                    get_cached_capabilities_store,
+                )
+
+                capabilities = await fetch_peer_methods_and_actions_async(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                )
+                store = get_cached_capabilities_store(actor_config)
+                store.store_capabilities(capabilities)
+                logger.debug(f"Refreshed peer capabilities for {peer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer capabilities: {e}")
+
+        # Refresh peer permissions if configured
+        if (
+            actor_config
+            and actor_id
+            and getattr(actor_config, "peer_permissions_caching", False)
+        ):
+            try:
+                from ..peer_permissions import (
+                    fetch_peer_permissions_async,
+                    get_peer_permission_store,
+                )
+
+                permissions = await fetch_peer_permissions_async(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    config=actor_config,
+                )
+                store = get_peer_permission_store(actor_config)
+                store.store_permissions(permissions)
+                logger.debug(f"Refreshed peer permissions for {peer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh peer permissions: {e}")
+
     async def sync_peer_async(
         self,
         peer_id: str,
         config: "SubscriptionProcessingConfig | None" = None,
+        _skip_revocation_detection: bool = False,
     ) -> PeerSyncResult:
         """
         Async version of sync_peer.
@@ -1946,6 +2250,9 @@ class SubscriptionManager:
         Args:
             peer_id: ID of the peer actor
             config: Optional processing configuration
+            _skip_revocation_detection: Internal parameter to skip trust revocation
+                detection during initial subscription sync (to avoid false positives
+                from timing/eventual consistency issues)
 
         Returns:
             PeerSyncResult with aggregate sync outcome
@@ -1985,7 +2292,13 @@ class SubscriptionManager:
 
         # Detect revoked trust: if ALL subscription syncs failed with 404, the peer may have
         # revoked the trust relationship. Verify by checking if peer actor still exists.
-        all_subscriptions_404 = results and all(not r.success and r.error_code == 404 for r in results)
+        # Skip this check during initial sync right after subscription creation to avoid
+        # false positives from timing/eventual consistency issues.
+        all_subscriptions_404 = (
+            results and
+            all(not r.success and r.error_code == 404 for r in results) and
+            not _skip_revocation_detection
+        )
         if all_subscriptions_404:
             logger.warning(
                 f"All {len(results)} subscription(s) failed with 404 for peer {peer_id}. "

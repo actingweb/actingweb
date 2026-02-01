@@ -258,19 +258,22 @@ Creating Subscriptions
 
 .. code-block:: python
 
-    # Create local subscription (we subscribe to them)
-    sub = actor.subscriptions.create_local_subscription(
+    # Subscribe to peer (synchronous - includes automatic baseline sync)
+    subscription_url = actor.subscriptions.subscribe_to_peer(
         peer_id="peer123",
-        resource_uri="https://peer.example.com/peer123",
-        granularity="",  # All properties
-        target_uri=f"https://myapp.com/{actor.id}/callbacks/updates"
+        target="properties",
+        subtarget="",
+        resource="",
+        granularity="high"
     )
 
-    # Create with peer notification
-    sub = await actor.subscriptions.subscribe_to_peer_async(
+    # Subscribe to peer (async - includes automatic baseline sync)
+    subscription_url = await actor.subscriptions.subscribe_to_peer_async(
         peer_id="peer123",
-        baseuri="https://peer.example.com/peer123",
-        callback_path="callbacks/updates"
+        target="properties",
+        subtarget="",
+        resource="",
+        granularity="high"
     )
 
 Deleting Subscriptions

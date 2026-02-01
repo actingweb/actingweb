@@ -86,11 +86,16 @@ SubscriptionManager Async Methods
 
     class SubscriptionManager:
         async def subscribe_to_peer_async(
-            self, peer_id: str, baseuri: str, callback_path: str
-        ) -> Optional[Subscription]
+            self,
+            peer_id: str,
+            target: str,
+            subtarget: str = "",
+            resource: str = "",
+            granularity: str = "high"
+        ) -> Optional[str]  # Returns subscription URL
 
-        async def unsubscribe_async(
-            self, peer_id: str
+        async def unsubscribe(
+            self, peer_id: str, subscription_id: str
         ) -> bool
 
 AwProxy Async Methods
@@ -196,14 +201,14 @@ Async Subscription with Callback
         if not trust:
             raise RuntimeError("Failed to establish trust")
 
-        # Then subscribe
-        subscription = await actor.subscriptions.subscribe_to_peer_async(
+        # Then subscribe (includes automatic baseline sync)
+        subscription_url = await actor.subscriptions.subscribe_to_peer_async(
             peer_id="service",
-            baseuri=service_uri,
-            callback_path="callbacks/service_updates"
+            target="properties",
+            granularity="high"
         )
 
-        return subscription
+        return subscription_url
 
 Implementation Details
 ======================

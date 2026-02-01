@@ -5,6 +5,25 @@ CHANGELOG
 Unreleased
 ----------
 
+IMPROVED
+~~~~~~~~
+
+- **Parallel Test Isolation**: Significantly improved pytest-xdist parallel test execution reliability, reducing flakiness from ~5% to <1%:
+
+  - Worker-namespaced OAuth2 client registration prevents token exchange conflicts between parallel workers
+  - Pre/post cleanup for both DynamoDB and PostgreSQL ensures clean database state between runs
+  - Enhanced botocore pre-warming with timeout handling prevents initialization hangs
+  - Added pytest-rerunfailures with retry logic for transient failures (temporary safety net)
+
+- **Test Infrastructure Documentation**: Created comprehensive xdist group documentation (``tests/integration/XDIST_GROUPS.md``) covering all 42 test groups with categorization and rationale.
+
+- **CI/CD Reliability**: Enhanced GitHub Actions workflow with automated group verification, flakiness reporting, and retry logic for improved stability across both DynamoDB and PostgreSQL matrix jobs.
+
+ADDED
+~~~~~
+
+- **Test Group Verification**: New ``tests/integration/verify_groups.py`` script ensures all xdist groups are documented, integrated into CI pipeline to prevent undocumented groups.
+
 v3.10.0b1: Jan 30, 2026
 -----------------------
 

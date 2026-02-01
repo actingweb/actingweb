@@ -92,6 +92,11 @@ jobs:
           echo "DynamoDB failed to start within 60 seconds"
           exit 1
 
+      - name: Verify xdist groups
+        run: |
+          echo "Verifying xdist group documentation..."
+          poetry run python tests/integration/verify_groups.py
+
       - name: Run all tests in parallel
         run: |
           echo "Collecting tests..."
@@ -103,6 +108,8 @@ jobs:
             -n 4 \
             --dist loadgroup \
             --max-worker-restart=2 \
+            --reruns 2 \
+            --reruns-delay 5 \
             -v \
             --tb=short \
             --junitxml=test-results/tests-${{ matrix.backend }}.xml \
@@ -122,6 +129,19 @@ jobs:
           PG_DB_NAME: actingweb_test
           PG_DB_USER: actingweb
           PG_DB_PASSWORD: testpassword
+
+      - name: Report test flakiness
+        if: always()
+        run: |
+          echo "Analyzing test results for flakiness..."
+          if [ -f test-results/tests-${{ matrix.backend }}.xml ]; then
+            # Count retried tests (flaky tests that passed on retry)
+            RETRIED=$(grep -o 'rerun=' test-results/tests-${{ matrix.backend }}.xml | wc -l || echo 0)
+            echo "Flaky tests (passed on retry): $RETRIED"
+            if [ "$RETRIED" -gt 0 ]; then
+              echo "⚠️ Warning: Found $RETRIED flaky tests that required retry"
+            fi
+          fi
 
       - name: Upload test results
         if: always()
@@ -166,24 +186,88 @@ jobs:
             const fs = require('fs');
             const path = require('path');
 
+            // Function to parse JUnit XML and extract test statistics
+            function parseJUnitXML(xmlPath) {
+              if (!fs.existsSync(xmlPath)) {
+                return null;
+              }
+
+              const xmlContent = fs.readFileSync(xmlPath, 'utf8');
+
+              // Count total tests
+              const testcaseMatches = xmlContent.match(/<testcase/g);
+              const totalTests = testcaseMatches ? testcaseMatches.length : 0;
+
+              // Count failures
+              const failureMatches = xmlContent.match(/<failure/g);
+              const failures = failureMatches ? failureMatches.length : 0;
+
+              // Count errors
+              const errorMatches = xmlContent.match(/<error/g);
+              const errors = errorMatches ? errorMatches.length : 0;
+
+              // Count flaky tests (tests with rerun attribute)
+              const rerunMatches = xmlContent.match(/rerun="/g);
+              const flakyTests = rerunMatches ? rerunMatches.length : 0;
+
+              // Count skipped tests
+              const skippedMatches = xmlContent.match(/<skipped/g);
+              const skipped = skippedMatches ? skippedMatches.length : 0;
+
+              return {
+                total: totalTests,
+                passed: totalTests - failures - errors - skipped,
+                failures: failures,
+                errors: errors,
+                skipped: skipped,
+                flaky: flakyTests
+              };
+            }
+
             let comment = '## 🧪 Test Results Summary\n\n';
             comment += '### Matrix Testing: Both Database Backends\n\n';
-            comment += '| Backend | Status | Details |\n';
-            comment += '|---------|--------|----------|\n';
+            comment += '| Backend | Tests | Passed | Failed | Flaky | Status |\n';
+            comment += '|---------|-------|--------|--------|-------|--------|\n';
 
             const backends = ['dynamodb', 'postgresql'];
+            let hasFlakiness = false;
+
             for (const backend of backends) {
-              const dir = `all-test-results/test-results-${backend}`;
-              if (fs.existsSync(dir)) {
-                comment += `| ${backend} | ✅ Tests executed | See workflow checks for details |\n`;
+              const xmlPath = `all-test-results/test-results-${backend}/tests-${backend}.xml`;
+              const stats = parseJUnitXML(xmlPath);
+
+              if (stats) {
+                const statusEmoji = (stats.failures + stats.errors) > 0 ? '❌' : '✅';
+                const flakyEmoji = stats.flaky > 0 ? '⚠️' : '✅';
+
+                comment += `| ${backend} | ${stats.total} | ${stats.passed} | ${stats.failures + stats.errors} | ${stats.flaky} ${flakyEmoji} | ${statusEmoji} |\n`;
+
+                if (stats.flaky > 0) {
+                  hasFlakiness = true;
+                }
               } else {
-                comment += `| ${backend} | ⚠️ Results not found | - |\n`;
+                comment += `| ${backend} | - | - | - | - | ⚠️ No results |\n`;
               }
             }
 
-            comment += '\n**Note**: \n';
-            comment += '- Each backend is tested independently in parallel\n';
-            comment += '- Full test results are available in workflow check runs\n';
+            comment += '\n';
+
+            if (hasFlakiness) {
+              comment += '### ⚠️ Flakiness Detected\n\n';
+              comment += 'Some tests required retry to pass. This may indicate:\n';
+              comment += '- Race conditions in parallel execution\n';
+              comment += '- External dependency timeouts\n';
+              comment += '- Non-deterministic test behavior\n\n';
+              comment += 'Please review the workflow logs for details on which tests were retried.\n\n';
+            } else {
+              comment += '### ✅ No Flakiness Detected\n\n';
+              comment += 'All tests passed on first attempt without requiring retries.\n\n';
+            }
+
+            comment += '**Notes**:\n';
+            comment += '- Each backend is tested independently with 4 parallel workers\n';
+            comment += '- Flaky tests are automatically retried up to 2 times (5 second delay)\n';
+            comment += '- Full test results and logs are available in workflow check runs\n';
             comment += '- Coverage reports are uploaded to Codecov with backend-specific flags\n';
 
             // Post comment

@@ -22,14 +22,16 @@ class OAuth2TestHelper:
     authenticated HTTP methods for testing.
     """
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, worker_id: str = "master"):
         """
         Initialize OAuth2 test helper.
 
         Args:
             base_url: Base URL of the ActingWeb application (e.g., "http://localhost:5555")
+            worker_id: Worker ID for parallel test isolation (e.g., "gw0", "master")
         """
         self.base_url = base_url
+        self.worker_id = worker_id
         self.client_id: str | None = None
         self.client_secret: str | None = None
         self.access_token: str | None = None
@@ -51,10 +53,13 @@ class OAuth2TestHelper:
         Raises:
             AssertionError: If registration fails
         """
+        # Add worker ID to ensure unique client_name across workers
+        unique_client_name = f"{client_name} [w{self.worker_id}]"
+
         response = requests.post(
             f"{self.base_url}/oauth/register",
             json={
-                "client_name": client_name,
+                "client_name": unique_client_name,
                 "redirect_uris": ["http://localhost:3000/callback"],
                 "grant_types": ["client_credentials"],
                 "trust_type": trust_type,
@@ -174,7 +179,10 @@ class OAuth2TestHelper:
 
 
 def create_authenticated_client(
-    base_url: str, client_name: str = "Test Client"
+    base_url: str,
+    worker_id: str = "master",
+    client_name: str = "Test Client",
+    scope: str = "mcp",
 ) -> OAuth2TestHelper:
     """
     Convenience function to create a fully authenticated OAuth2 client.
@@ -186,7 +194,9 @@ def create_authenticated_client(
 
     Args:
         base_url: Base URL of the ActingWeb application
+        worker_id: Worker ID for parallel test isolation (e.g., "gw0", "master")
         client_name: Human-readable name for the client
+        scope: OAuth2 scope to request (default: mcp)
 
     Returns:
         Configured OAuth2TestHelper instance
@@ -196,7 +206,7 @@ def create_authenticated_client(
         >>> response = client.get("/mcp")
         >>> assert response.status_code == 200
     """
-    helper = OAuth2TestHelper(base_url)
+    helper = OAuth2TestHelper(base_url, worker_id=worker_id)
     helper.register_client(client_name)
-    helper.get_access_token()
+    helper.get_access_token(scope=scope)
     return helper

@@ -62,11 +62,24 @@ def prewarm_aws_client(tmp_path_factory):
     lock_file = root_tmp_dir / "botocore_prewarm.lock"
     warmup_done = root_tmp_dir / "botocore_warmup_done"
 
-    with filelock.FileLock(str(lock_file)):
-        if not warmup_done.exists():
-            # First worker to acquire lock does the warming
-            _prewarm_botocore()
-            warmup_done.touch()
+    lock = filelock.FileLock(str(lock_file), timeout=30)
+
+    try:
+        with lock:
+            if not warmup_done.exists():
+                # First worker to acquire lock does the warming
+                _prewarm_botocore()
+                warmup_done.touch()
+    except filelock.Timeout:
+        # Lock timeout - another worker may be stuck
+        # Wait for warmup_done marker with polling
+        for _ in range(30):
+            if warmup_done.exists():
+                break
+            time.sleep(1)
+        else:
+            # Continue anyway - tests may be slower but will work
+            print("Warning: Botocore pre-warming timeout, continuing anyway")
 
     yield
 
@@ -109,6 +122,45 @@ def get_worker_number(worker_id: str) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def cleanup_dynamodb_tables(worker_info: dict) -> None:
+    """
+    Clean up DynamoDB tables for this worker.
+
+    Args:
+        worker_info: Worker configuration dict with 'db_prefix'
+    """
+    import boto3
+
+    client = boto3.client(
+        "dynamodb",
+        region_name="us-west-1",
+        endpoint_url=TEST_DYNAMODB_HOST,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+
+    # List and delete worker-specific tables
+    try:
+        response = client.list_tables()
+        my_prefix = worker_info["db_prefix"]
+        my_tables = [
+            t for t in response.get("TableNames", []) if t.startswith(my_prefix)
+        ]
+
+        for table_name in my_tables:
+            try:
+                client.delete_table(TableName=table_name)
+                # Wait for deletion to complete
+                waiter = client.get_waiter("table_not_exists")
+                waiter.wait(
+                    TableName=table_name, WaiterConfig={"Delay": 1, "MaxAttempts": 10}
+                )
+            except Exception as e:
+                print(f"Warning: Could not delete table {table_name}: {e}")
+    except Exception as e:
+        print(f"Warning: Could not list/delete DynamoDB tables: {e}")
 
 
 # Test configuration
@@ -259,11 +311,30 @@ def setup_database(docker_services, worker_info):
     Set up database for testing based on DATABASE_BACKEND.
 
     For PostgreSQL: Runs migrations to create tables with worker-specific schema.
-    For DynamoDB: No setup needed (tables auto-created).
+    For DynamoDB: Pre-cleanup stale tables from previous failed runs.
     """
     if DATABASE_BACKEND == "postgresql":
-        # Run Alembic migrations for PostgreSQL with worker-specific schema
+        # Pre-cleanup: Drop schema from previous failed run
         schema_name = f"{worker_info['db_prefix']}public"
+
+        if schema_name != "public":
+            try:
+                import psycopg
+                from psycopg import sql
+
+                conninfo = f"host={TEST_POSTGRES_HOST} port={TEST_POSTGRES_PORT} dbname={TEST_POSTGRES_DB} user={TEST_POSTGRES_USER} password={TEST_POSTGRES_PASSWORD}"
+
+                with psycopg.connect(conninfo) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                                sql.Identifier(schema_name)
+                            )
+                        )
+                    conn.commit()
+                    print(f"Pre-cleanup: Dropped stale schema {schema_name}")
+            except Exception as e:
+                print(f"Pre-cleanup warning for schema {schema_name}: {e}")
 
         # Set environment for migration
         migration_env = os.environ.copy()
@@ -293,10 +364,13 @@ def setup_database(docker_services, worker_info):
             check=True,
             capture_output=True,
         )
+    elif DATABASE_BACKEND == "dynamodb":
+        # Pre-cleanup: Remove stale tables from previous failed runs
+        cleanup_dynamodb_tables(worker_info)
 
     yield
 
-    # Cleanup PostgreSQL schemas after tests
+    # Post-cleanup
     if DATABASE_BACKEND == "postgresql":
         schema_name = f"{worker_info['db_prefix']}public"
         try:
@@ -315,9 +389,12 @@ def setup_database(docker_services, worker_info):
                             )
                         )
                 conn.commit()
-                print(f"Dropped schema {schema_name}")
+                print(f"Post-cleanup: Dropped schema {schema_name}")
         except Exception as e:
             print(f"Error cleaning up schema {schema_name}: {e}")
+    elif DATABASE_BACKEND == "dynamodb":
+        # Post-cleanup: Remove tables created during tests
+        cleanup_dynamodb_tables(worker_info)
 
 
 @pytest.fixture(scope="session")
@@ -650,7 +727,7 @@ def actor_factory(test_app: str, worker_info: dict):
 
 
 @pytest.fixture
-def oauth2_client(test_app):
+def oauth2_client(test_app, worker_info):
     """
     Create an authenticated OAuth2 client for testing OAuth2-protected endpoints.
 
@@ -662,7 +739,11 @@ def oauth2_client(test_app):
     """
     from .utils.oauth2_helper import create_authenticated_client
 
-    return create_authenticated_client(test_app, client_name="Test Fixture Client")
+    return create_authenticated_client(
+        test_app,
+        worker_id=worker_info["worker_id"],
+        client_name="Test Fixture Client",
+    )
 
 
 @pytest.fixture

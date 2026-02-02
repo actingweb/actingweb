@@ -19,7 +19,7 @@ ADDED
 IMPROVED
 ~~~~~~~~
 
-- **Structured Proxy Error Responses**: ``aw_proxy.get_resource()`` and ``get_resource_async()`` now return structured error dicts (with ``code`` and ``message``) when the peer returns non-JSON error responses, instead of silently returning an empty dict.
+- **Structured Proxy Error Responses**: All ``aw_proxy`` resource methods (GET, POST, PUT, DELETE, sync and async) now return structured error dicts (with ``code`` and ``message``) for all error responses, including when the peer returns JSON with a string-typed ``error`` field (e.g., ``{"error": "Not found"}``). Previously, the actual HTTP status code (e.g., 404) was lost and replaced with a hardcoded 500 in downstream error handling.
 
 - **Robust Error Format Handling**: ``peer_permissions`` now handles both dict and string error formats in peer responses, preventing ``AttributeError`` on unexpected error shapes.
 

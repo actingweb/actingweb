@@ -344,6 +344,11 @@ Store and retrieve data synchronized from peers:
        "items": [{"id": 3}]
    })
 
+   # Enumerate stored data
+   scalar_names = store.list_all_scalars()   # ["status", "config"]
+   list_names = store.list_all_lists()       # ["items", "history"]
+   all_props = store.get_all_properties()    # Combined view with type metadata
+
    # Storage stats
    stats = store.get_storage_stats()
    print(f"Stored {stats['scalar_count']} scalars, {stats['list_count']} lists")

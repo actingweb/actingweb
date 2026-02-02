@@ -190,6 +190,96 @@ class RemotePeerStore:
         store = self._get_list_store()
         return store.list_all()
 
+    def list_all_scalars(self) -> list[str]:
+        """List all scalar property names for this peer.
+
+        Returns:
+            List of scalar property names (excludes list properties and their metadata)
+        """
+        db = self._get_attributes()
+        all_attrs = db.get_bucket() or {}
+
+        scalar_names = []
+        for name in all_attrs.keys():
+            # Skip internal list storage keys (list:*:meta, list:*:0, etc.)
+            if not name.startswith("list:"):
+                scalar_names.append(name)
+
+        return scalar_names
+
+    def get_all_properties(self) -> dict[str, Any]:
+        """Get all properties (both lists and scalars) for this peer.
+
+        Returns:
+            Dictionary mapping property names to their metadata:
+            {
+                "property_name": {
+                    "type": "list" | "scalar",
+                    "value": <list of items> | <scalar value>,
+                    "item_count": <int> (for lists only)
+                }
+            }
+
+        Example:
+            >>> store = RemotePeerStore(actor, peer_id)
+            >>> props = store.get_all_properties()
+            >>> print(props)
+            {
+                "memory_personal": {
+                    "type": "list",
+                    "value": [{"id": 1, "text": "..."}],
+                    "item_count": 1
+                },
+                "status": {
+                    "type": "scalar",
+                    "value": {"active": True}
+                }
+            }
+        """
+        properties = {}
+
+        # Get all list properties
+        try:
+            for list_name in self.list_all_lists():
+                try:
+                    items = self.get_list(list_name)
+                    properties[list_name] = {
+                        "type": "list",
+                        "value": items,
+                        "item_count": len(items),
+                    }
+                except Exception as e:
+                    logger.warning(
+                        f"Error reading list '{list_name}' for peer {self._peer_id}: {e}"
+                    )
+                    continue
+        except Exception as e:
+            logger.error(
+                f"Error listing list properties for peer {self._peer_id}: {e}"
+            )
+
+        # Get all scalar properties
+        try:
+            for scalar_name in self.list_all_scalars():
+                try:
+                    value = self.get_value(scalar_name)
+                    if value is not None:
+                        properties[scalar_name] = {
+                            "type": "scalar",
+                            "value": value,
+                        }
+                except Exception as e:
+                    logger.warning(
+                        f"Error reading scalar '{scalar_name}' for peer {self._peer_id}: {e}"
+                    )
+                    continue
+        except Exception as e:
+            logger.error(
+                f"Error listing scalar properties for peer {self._peer_id}: {e}"
+            )
+
+        return properties
+
     # Cleanup
 
     def delete_all(self) -> None:

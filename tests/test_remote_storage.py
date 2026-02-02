@@ -621,6 +621,181 @@ class TestRemotePeerStoreStats:
             assert stats["total_attributes"] == 4
 
 
+class TestRemotePeerStoreListAllScalars:
+    """Test list_all_scalars method."""
+
+    @pytest.fixture
+    def mock_actor(self):
+        """Create a mock ActorInterface."""
+        actor = MagicMock()
+        actor.id = "actor123"
+        actor.config = MagicMock()
+        return actor
+
+    def test_list_all_scalars_filters_list_keys(self, mock_actor):
+        """Test that list: prefixed keys are excluded."""
+        with patch("actingweb.attribute.Attributes") as mock:
+            mock_instance = MagicMock()
+            mock_instance.get_bucket.return_value = {
+                "status": {"data": {"active": True}},
+                "config": {"data": {"key": "val"}},
+                "list:items:meta": {"data": {}},
+                "list:items:0": {"data": {}},
+                "list:items:1": {"data": {}},
+            }
+            mock.return_value = mock_instance
+
+            store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+            scalars = store.list_all_scalars()
+
+            assert sorted(scalars) == ["config", "status"]
+
+    def test_list_all_scalars_empty_bucket(self, mock_actor):
+        """Test with empty bucket returns empty list."""
+        with patch("actingweb.attribute.Attributes") as mock:
+            mock_instance = MagicMock()
+            mock_instance.get_bucket.return_value = {}
+            mock.return_value = mock_instance
+
+            store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+            scalars = store.list_all_scalars()
+
+            assert scalars == []
+
+    def test_list_all_scalars_none_bucket(self, mock_actor):
+        """Test with None bucket returns empty list."""
+        with patch("actingweb.attribute.Attributes") as mock:
+            mock_instance = MagicMock()
+            mock_instance.get_bucket.return_value = None
+            mock.return_value = mock_instance
+
+            store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+            scalars = store.list_all_scalars()
+
+            assert scalars == []
+
+    def test_list_all_scalars_only_list_keys(self, mock_actor):
+        """Test when all keys are list keys."""
+        with patch("actingweb.attribute.Attributes") as mock:
+            mock_instance = MagicMock()
+            mock_instance.get_bucket.return_value = {
+                "list:items:meta": {"data": {}},
+                "list:items:0": {"data": {}},
+            }
+            mock.return_value = mock_instance
+
+            store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+            scalars = store.list_all_scalars()
+
+            assert scalars == []
+
+
+class TestRemotePeerStoreGetAllProperties:
+    """Test get_all_properties method."""
+
+    @pytest.fixture
+    def mock_actor(self):
+        """Create a mock ActorInterface."""
+        actor = MagicMock()
+        actor.id = "actor123"
+        actor.config = MagicMock()
+        return actor
+
+    @pytest.fixture
+    def mock_storage(self):
+        """Create mocks for both Attributes and AttributeListStore."""
+        scalar_storage: dict[str, dict] = {}
+        list_data: dict[str, list] = {}
+        list_metadata: dict[str, dict] = {}
+
+        with patch("actingweb.attribute.Attributes") as attr_mock:
+            attr_instance = MagicMock()
+
+            def get_attr_side_effect(name: str | None = None) -> dict | None:
+                if name is None:
+                    return None
+                return scalar_storage.get(name)
+
+            def get_bucket_side_effect():
+                return scalar_storage
+
+            attr_instance.get_attr.side_effect = get_attr_side_effect
+            attr_instance.get_bucket.side_effect = get_bucket_side_effect
+            attr_mock.return_value = attr_instance
+
+            with patch(
+                "actingweb.attribute_list_store.AttributeListStore"
+            ) as list_mock:
+                list_mock.return_value = MockListStore(list_data, list_metadata)
+
+                yield scalar_storage, list_data
+
+    def test_get_all_properties_mixed(self, mock_actor, mock_storage):
+        """Test getting all properties with both lists and scalars."""
+        scalar_storage, list_data = mock_storage
+        scalar_storage["status"] = {"data": {"active": True}, "timestamp": None}
+        list_data["items"] = [{"id": 1}, {"id": 2}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        props = store.get_all_properties()
+
+        assert "items" in props
+        assert props["items"]["type"] == "list"
+        assert props["items"]["value"] == [{"id": 1}, {"id": 2}]
+        assert props["items"]["item_count"] == 2
+
+        assert "status" in props
+        assert props["status"]["type"] == "scalar"
+        assert props["status"]["value"] == {"active": True}
+
+    def test_get_all_properties_empty(self, mock_actor, mock_storage):
+        """Test getting all properties when store is empty."""
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        props = store.get_all_properties()
+
+        assert props == {}
+
+    def test_get_all_properties_only_scalars(self, mock_actor, mock_storage):
+        """Test getting all properties when only scalars exist."""
+        scalar_storage, _ = mock_storage
+        scalar_storage["key1"] = {"data": {"val": 1}, "timestamp": None}
+        scalar_storage["key2"] = {"data": {"val": 2}, "timestamp": None}
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        props = store.get_all_properties()
+
+        assert len(props) == 2
+        assert props["key1"]["type"] == "scalar"
+        assert props["key2"]["type"] == "scalar"
+
+    def test_get_all_properties_only_lists(self, mock_actor, mock_storage):
+        """Test getting all properties when only lists exist."""
+        _, list_data = mock_storage
+        list_data["list_a"] = [{"id": 1}]
+        list_data["list_b"] = [{"id": 2}, {"id": 3}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        props = store.get_all_properties()
+
+        assert len(props) == 2
+        assert props["list_a"]["type"] == "list"
+        assert props["list_a"]["item_count"] == 1
+        assert props["list_b"]["type"] == "list"
+        assert props["list_b"]["item_count"] == 2
+
+    def test_get_all_properties_skips_none_scalars(self, mock_actor, mock_storage):
+        """Test that scalars with None value are excluded."""
+        scalar_storage, _ = mock_storage
+        # get_attr returns this dict, but get_value extracts .get("data")
+        # If data is None, the property is skipped
+        scalar_storage["empty_key"] = {"data": None, "timestamp": None}
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        props = store.get_all_properties()
+
+        assert "empty_key" not in props
+
+
 class TestRemotePeerStoreCleanup:
     """Test cleanup operations."""
 

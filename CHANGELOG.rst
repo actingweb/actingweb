@@ -14,6 +14,8 @@ ADDED
 
 - **Peer Metadata Refresh on Subscribe**: Initial subscription creation now automatically refreshes cached peer profile, capabilities, and permissions metadata when configured, eliminating the need for a separate sync cycle.
 
+- **RemotePeerStore Enumeration**: Added ``list_all_scalars()`` and ``get_all_properties()`` methods to ``RemotePeerStore`` for enumerating stored peer data. ``get_all_properties()`` returns a combined view of all lists and scalars with type metadata (type, value, item_count).
+
 IMPROVED
 ~~~~~~~~
 

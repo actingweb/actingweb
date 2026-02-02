@@ -358,8 +358,13 @@ class RemotePeerStore:
                         list_name, operation, value
                     )
                 else:
-                    # Scalar value
-                    if isinstance(value, dict):
+                    # Per ActingWeb spec: "an empty attribute is defined as the
+                    # same as a non-existent attribute, thus an attribute can be
+                    # deleted by setting it to ''."
+                    if value == "" or value is None:
+                        self.delete_value(key)
+                        results[key] = {"deleted": True, "type": "scalar"}
+                    elif isinstance(value, dict):
                         self.set_value(key, value)
                         results[key] = {"stored": True, "type": "scalar"}
                     else:

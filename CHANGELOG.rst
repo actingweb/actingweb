@@ -118,6 +118,8 @@ SECURITY
 FIXED
 ~~~~~
 
+- **Property Deletion via Subscription Callbacks**: ``RemotePeerStore.apply_callback_data()`` now correctly handles property deletion. Per the ActingWeb spec, an empty string value in a diff callback means the property was deleted. Previously, deleted properties were stored as ``{"value": ""}`` instead of being removed from the store.
+
 - **List Property Format Parameter**: Added ``format`` query parameter to list property GET requests. Use ``?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items.
 
 DOCUMENTATION

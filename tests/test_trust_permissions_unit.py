@@ -544,14 +544,30 @@ class TestTrustPermissionStoreNotifications:
     def test_build_callback_data_structure(self):
         """
         Test that _build_callback_data returns the expected payload structure.
+
+        _build_callback_data now sends effective permissions (merged with base
+        trust-type defaults). We mock the registry to return no base permissions
+        so only the overrides appear.
         """
+        from unittest.mock import Mock, patch
+
         from actingweb.trust_permissions import TrustPermissionStore
 
         config = self._create_mock_config()
         store = TrustPermissionStore(config)
         permissions = self._create_permissions()
 
-        callback_data = store._build_callback_data(permissions)
+        # Mock the registry to return a trust type with no base permissions
+        mock_registry_instance = Mock()
+        mock_trust_type = Mock()
+        mock_trust_type.base_permissions = {}
+        mock_registry_instance.get_type.return_value = mock_trust_type
+
+        with patch(
+            "actingweb.trust_type_registry.get_registry",
+            return_value=mock_registry_instance,
+        ):
+            callback_data = store._build_callback_data(permissions)
 
         assert callback_data["id"] == "actor123"
         assert callback_data["target"] == "permissions"

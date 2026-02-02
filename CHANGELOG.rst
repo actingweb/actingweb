@@ -16,8 +16,17 @@ ADDED
 
 - **RemotePeerStore Enumeration**: Added ``list_all_scalars()`` and ``get_all_properties()`` methods to ``RemotePeerStore`` for enumerating stored peer data. ``get_all_properties()`` returns a combined view of all lists and scalars with type metadata (type, value, item_count).
 
+FIXED
+~~~~~
+
+- **Permission Diff Asymmetry**: Fixed a bug where permission callbacks sent only override fields instead of the full effective permissions (base trust-type defaults merged with overrides). This caused ``detect_permission_changes()`` to incorrectly report base permissions as revoked when only new permissions were granted, leading to potential data loss via ``_delete_revoked_peer_data()``. The ``GET /permissions/{peer_id}`` endpoint now also returns merged effective permissions for consistency.
+
 IMPROVED
 ~~~~~~~~
+
+- **Incremental Sync on Permission Grant**: Permission grant auto-sync now fetches only the newly granted properties instead of doing a full ``sync_peer()`` which refetched the entire baseline, capabilities, and permissions. Reduces HTTP requests from ~7 to 1-2 per permission grant.
+
+- **Capability Cache Staleness Check**: ``sync_peer()`` now checks if cached peer capabilities (methods/actions) are fresh before refetching. Capabilities are only refetched when the cache is older than ``peer_capabilities_max_age_seconds`` (default: 1 hour, configurable via ``with_peer_capabilities(max_age_seconds=...)``). A new ``force_refresh`` parameter on ``sync_peer()`` and ``sync_peer_async()`` bypasses staleness checks for manual/developer-triggered syncs.
 
 - **Structured Proxy Error Responses**: All ``aw_proxy`` resource methods (GET, POST, PUT, DELETE, sync and async) now return structured error dicts (with ``code`` and ``message``) for all error responses, including when the peer returns JSON with a string-typed ``error`` field (e.g., ``{"error": "Not found"}``). Previously, the actual HTTP status code (e.g., 404) was lost and replaced with a hardcoded 500 in downstream error handling.
 

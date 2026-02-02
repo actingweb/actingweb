@@ -2089,8 +2089,13 @@ push mechanism.
 
 ``source`` (string)
   Indicates the source of permissions:
-  - ``"custom_override"`` for custom permissions
-  - ``"trust_type_default"`` for default permissions from trust type registry
+  - ``"custom_override"`` for per-trust overrides merged with base trust-type defaults
+  - ``"trust_type_default"`` for default permissions from trust type registry (no overrides exist)
+
+When ``source`` is ``"custom_override"``, the permissions represent the full *effective*
+permissions: base trust-type defaults merged with per-relationship overrides. This ensures
+peers can accurately detect changes by comparing with their cached copy, without needing
+to independently know the base trust-type defaults.
 
 ``trust_type`` (string)
   The trust relationship type (e.g., "subscriber", "friend", "mcp_client")
@@ -2154,55 +2159,75 @@ Permission overrides SHOULD follow this structure to ensure interoperability:
 
 **Permission Response Format**
 
-The GET permissions endpoint SHOULD return a JSON response with these additional fields:
+The GET permissions endpoint SHOULD return a JSON response with these fields:
 
-``is_custom`` (boolean)
-  True if the permissions are custom overrides, false if using trust type defaults.
+``actor_id`` (string)
+  The actor granting permissions.
 
-``source`` (string)  
-  Indicates the source of permissions: "custom_override" for custom permissions
-  or "trust_type_default" for default permissions from the trust type registry.
+``peer_id`` (string)
+  The peer receiving permissions.
 
-``created_by`` (string, optional)
-  User or system that created the custom permissions (if is_custom is true).
+``permissions`` (object)
+  The full effective permissions, containing all permission categories
+  (``properties``, ``methods``, ``actions``, ``tools``, ``resources``, ``prompts``).
+  When custom overrides exist, these are merged with base trust-type defaults.
 
-``updated_at`` (string, optional)
-  Timestamp when custom permissions were last updated (if is_custom is true).
+``source`` (string)
+  Indicates the source of permissions: ``"custom_override"`` for effective permissions
+  (base merged with overrides) or ``"trust_type_default"`` for unmodified trust type defaults.
 
-``notes`` (string, optional)
-  Description or notes about the permissions.
+``trust_type`` (string)
+  The trust relationship type (e.g., ``"subscriber"``, ``"friend"``, ``"mcp_client"``).
 
-Example response with custom permissions::
+Example response with custom overrides (effective permissions)::
 
     {
         "actor_id": "actor123",
-        "peer_id": "peer456", 
-        "trust_type": "mcp_power_user",
-        "tools": {
-            "allowed": ["search", "fetch", "create_note"],
-            "denied": ["delete_*"]
+        "peer_id": "peer456",
+        "permissions": {
+            "properties": {
+                "patterns": ["displayname", "email", "memory_travel"],
+                "operations": ["read"],
+                "excluded_patterns": []
+            },
+            "methods": {"allowed": []},
+            "actions": {},
+            "tools": {
+                "allowed": ["search", "fetch", "create_note"],
+                "denied": ["delete_*"]
+            },
+            "resources": {"patterns": [], "operations": ["read"]},
+            "prompts": {"allowed": []}
         },
-        "is_custom": true,
         "source": "custom_override",
-        "created_by": "user@example.com",
-        "updated_at": "2024-01-15T10:30:00Z",
-        "notes": "Enhanced permissions for power user"
+        "trust_type": "subscriber"
     }
 
-Example response with default permissions::
+Note: The ``permissions`` object contains the full effective permissions — base
+trust-type defaults merged with per-relationship overrides. For example, if the
+base ``subscriber`` type grants ``["displayname", "email"]`` and the override adds
+``["memory_travel"]``, the response contains the union ``["displayname", "email",
+"memory_travel"]``.
+
+Example response with default permissions (no overrides)::
 
     {
-        "actor_id": "actor123", 
+        "actor_id": "actor123",
         "peer_id": "peer456",
-        "trust_type": "mcp_power_user",
-        "tools": {
-            "allowed": ["search", "fetch", "create_note", "update_note", "analyze"]
+        "permissions": {
+            "properties": {
+                "patterns": ["displayname", "email"],
+                "operations": ["read"],
+                "excluded_patterns": []
+            },
+            "methods": {"allowed": []},
+            "actions": {},
+            "tools": {"allowed": []},
+            "resources": {"patterns": [], "operations": ["read"]},
+            "prompts": {"allowed": []}
         },
-        "is_custom": false,
         "source": "trust_type_default",
-        "created_by": "system",
-        "updated_at": null,
-        "notes": "Default permissions for AI Assistant (Power User)"
+        "trust_type": "subscriber"
     }
 
 **Permission Evaluation**
@@ -2920,7 +2945,8 @@ rather than requiring a separate permission ID.
 **Permission Callback Format**
 
 Permission callbacks use target ``"permissions"`` and include the full
-permission grant structure::
+effective permission grant structure (base trust-type defaults merged with
+per-relationship overrides)::
 
   POST /{receiving_actor_id}/callbacks/permissions/{granting_actor_id}
   Content-Type: application/json
@@ -2959,7 +2985,8 @@ permission grant structure::
 
 - Permission callbacks do NOT use sequence numbers (sequence field is 0 or absent)
 - Permission callbacks are idempotent - receiving the same permissions multiple times is safe
-- The ``data`` field contains the FULL current permissions, not a diff
+- The ``data`` field contains the FULL effective permissions (base trust-type defaults
+  merged with per-relationship overrides), not a diff or override-only subset
 - Receivers should replace cached permissions entirely, not merge
 
 **Callback Type Field**

@@ -76,6 +76,10 @@ class Config:
         # When True, enables automatic caching of peer methods/actions
         # Fetches from GET /methods and GET /actions endpoints
         self.peer_capabilities_caching: bool = False
+        # Maximum age in seconds before cached capabilities are considered stale
+        # and refetched. Capabilities (methods/actions) rarely change, so the
+        # default of 1 hour is conservative. Set to 0 to always refetch.
+        self.peer_capabilities_max_age_seconds: int = 3600
         #########
         # Peer permissions caching configuration
         #########

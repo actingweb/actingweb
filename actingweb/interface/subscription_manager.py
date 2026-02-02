@@ -1349,6 +1349,7 @@ class SubscriptionManager:
         self,
         peer_id: str,
         config: "SubscriptionProcessingConfig | None" = None,
+        force_refresh: bool = False,
     ) -> PeerSyncResult:
         """
         Sync all outbound subscriptions to a peer.
@@ -1359,6 +1360,8 @@ class SubscriptionManager:
         Args:
             peer_id: ID of the peer actor
             config: Optional processing configuration
+            force_refresh: If True, bypass capability cache staleness checks
+                and always refetch. Use for manual/developer-triggered syncs.
 
         Returns:
             PeerSyncResult with aggregate sync outcome
@@ -1580,7 +1583,7 @@ class SubscriptionManager:
             except Exception as e:
                 logger.warning(f"Failed to refresh peer profile during sync: {e}")
 
-        # Refresh peer capabilities if configured
+        # Refresh peer capabilities if configured (with staleness check)
         if (
             actor_config
             and actor_id
@@ -1592,16 +1595,29 @@ class SubscriptionManager:
                     get_cached_capabilities_store,
                 )
 
-                capabilities = fetch_peer_methods_and_actions(
-                    actor_id=actor_id,
-                    peer_id=peer_id,
-                    config=actor_config,
-                )
                 store = get_cached_capabilities_store(actor_config)
-                store.store_capabilities(capabilities)
-                logger.debug(
-                    f"Refreshed peer capabilities during sync_peer for {peer_id}"
-                )
+
+                # Check cache staleness (skip if force_refresh)
+                should_fetch = force_refresh
+                if not force_refresh:
+                    should_fetch = self._is_capability_cache_stale(
+                        store, actor_id, peer_id, actor_config
+                    )
+
+                if should_fetch:
+                    capabilities = fetch_peer_methods_and_actions(
+                        actor_id=actor_id,
+                        peer_id=peer_id,
+                        config=actor_config,
+                    )
+                    store.store_capabilities(capabilities)
+                    logger.debug(
+                        f"Refreshed peer capabilities during sync_peer for {peer_id}"
+                    )
+                else:
+                    logger.debug(
+                        f"Using cached capabilities for {peer_id} (cache is fresh)"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to refresh peer capabilities during sync: {e}")
 
@@ -2108,6 +2124,57 @@ class SubscriptionManager:
         else:
             return baseline_response
 
+    def _is_capability_cache_stale(
+        self,
+        store: Any,
+        actor_id: str,
+        peer_id: str,
+        actor_config: Any,
+    ) -> bool:
+        """Check if cached peer capabilities are stale and need refetching.
+
+        Args:
+            store: The CachedCapabilitiesStore instance
+            actor_id: The actor ID
+            peer_id: The peer ID
+            actor_config: Config object with peer_capabilities_max_age_seconds
+
+        Returns:
+            True if cache is stale or missing (should fetch), False if fresh (skip fetch)
+        """
+        from datetime import UTC, datetime
+
+        try:
+            cached = store.get_capabilities(actor_id, peer_id)
+            if not cached or not cached.fetched_at:
+                return True  # No cache - need to fetch
+
+            max_age = getattr(actor_config, "peer_capabilities_max_age_seconds", 3600)
+            if max_age <= 0:
+                return True  # Staleness check disabled - always fetch
+
+            fetched_time = datetime.fromisoformat(cached.fetched_at)
+            age_seconds = (datetime.now(UTC) - fetched_time).total_seconds()
+
+            if age_seconds < max_age:
+                logger.debug(
+                    f"Capability cache for {peer_id} is fresh "
+                    f"(age: {age_seconds:.0f}s, max: {max_age}s)"
+                )
+                return False  # Cache is fresh
+
+            logger.debug(
+                f"Capability cache for {peer_id} is stale "
+                f"(age: {age_seconds:.0f}s, max: {max_age}s)"
+            )
+            return True  # Cache is stale
+
+        except Exception as e:
+            logger.debug(
+                f"Error checking capability cache staleness for {peer_id}: {e}"
+            )
+            return True  # On error, fetch to be safe
+
     def _extract_profile_from_remote_store(
         self,
         peer_id: str,
@@ -2361,6 +2428,7 @@ class SubscriptionManager:
         peer_id: str,
         config: "SubscriptionProcessingConfig | None" = None,
         _skip_revocation_detection: bool = False,
+        force_refresh: bool = False,
     ) -> PeerSyncResult:
         """
         Async version of sync_peer.
@@ -2373,6 +2441,8 @@ class SubscriptionManager:
             _skip_revocation_detection: Internal parameter to skip trust revocation
                 detection during initial subscription sync (to avoid false positives
                 from timing/eventual consistency issues)
+            force_refresh: If True, bypass capability cache staleness checks
+                and always refetch. Use for manual/developer-triggered syncs.
 
         Returns:
             PeerSyncResult with aggregate sync outcome
@@ -2599,7 +2669,7 @@ class SubscriptionManager:
                     f"Failed to refresh peer profile during sync (async): {e}"
                 )
 
-        # Refresh peer capabilities if configured (async)
+        # Refresh peer capabilities if configured (async, with staleness check)
         if (
             actor_config
             and actor_id
@@ -2611,16 +2681,29 @@ class SubscriptionManager:
                     get_cached_capabilities_store,
                 )
 
-                capabilities = await fetch_peer_methods_and_actions_async(
-                    actor_id=actor_id,
-                    peer_id=peer_id,
-                    config=actor_config,
-                )
                 store = get_cached_capabilities_store(actor_config)
-                store.store_capabilities(capabilities)
-                logger.debug(
-                    f"Refreshed peer capabilities (async) during sync_peer for {peer_id}"
-                )
+
+                # Check cache staleness (skip if force_refresh)
+                should_fetch = force_refresh
+                if not force_refresh:
+                    should_fetch = self._is_capability_cache_stale(
+                        store, actor_id, peer_id, actor_config
+                    )
+
+                if should_fetch:
+                    capabilities = await fetch_peer_methods_and_actions_async(
+                        actor_id=actor_id,
+                        peer_id=peer_id,
+                        config=actor_config,
+                    )
+                    store.store_capabilities(capabilities)
+                    logger.debug(
+                        f"Refreshed peer capabilities (async) during sync_peer for {peer_id}"
+                    )
+                else:
+                    logger.debug(
+                        f"Using cached capabilities for {peer_id} (cache is fresh, async)"
+                    )
             except Exception as e:
                 logger.warning(
                     f"Failed to refresh peer capabilities during sync (async): {e}"

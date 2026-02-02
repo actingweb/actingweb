@@ -63,6 +63,15 @@ class TestPermissionsHandler:
         mock_store = MagicMock()
         mock_store_instance = MagicMock()
         mock_store_instance.get_permissions.return_value = custom_perms
+        # Mock _get_effective_permissions to return the expected merged result
+        mock_store_instance._get_effective_permissions.return_value = {
+            "properties": {"patterns": ["memory_travel"], "operations": ["read"]},
+            "methods": None,
+            "actions": None,
+            "tools": None,
+            "resources": None,
+            "prompts": None,
+        }
         mock_store.return_value = mock_store_instance
 
         with patch(

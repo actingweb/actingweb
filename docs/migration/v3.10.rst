@@ -711,8 +711,9 @@ mechanism by supporting:
 - Recovery if permission callbacks are missed
 
 The endpoint is automatically registered when using the ActingWeb framework.
-No migration changes needed. The endpoint returns either custom permission overrides
-or trust type defaults, allowing peers to discover what permissions they have been granted.
+No migration changes needed. The endpoint returns the full *effective* permissions
+(base trust-type defaults merged with per-trust overrides), allowing peers to
+discover what permissions they have been granted and accurately detect changes.
 
 Using Cached Permissions
 ------------------------

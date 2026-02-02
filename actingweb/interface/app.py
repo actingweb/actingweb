@@ -172,6 +172,10 @@ class ActingWebApp:
         # Peer capabilities (methods/actions) caching configuration
         if hasattr(self, "_peer_capabilities_caching"):
             self._config.peer_capabilities_caching = self._peer_capabilities_caching
+        if hasattr(self, "_peer_capabilities_max_age_seconds"):
+            self._config.peer_capabilities_max_age_seconds = (
+                self._peer_capabilities_max_age_seconds
+            )
         # Peer permissions caching configuration
         if hasattr(self, "_peer_permissions_caching"):
             self._config.peer_permissions_caching = self._peer_permissions_caching
@@ -409,15 +413,23 @@ class ActingWebApp:
 
         return self
 
-    def with_peer_capabilities(self, enable: bool = True) -> "ActingWebApp":
+    def with_peer_capabilities(
+        self,
+        enable: bool = True,
+        max_age_seconds: int = 3600,
+    ) -> "ActingWebApp":
         """Enable peer capabilities (methods/actions) caching for trust relationships.
 
         When enabled, peer methods and actions are automatically fetched and cached
         when trust relationships are established. Capabilities are refreshed during
-        sync_peer() operations.
+        sync_peer() operations only if the cache is stale (older than max_age_seconds).
 
         Args:
             enable: Whether to enable capabilities caching. Default True.
+            max_age_seconds: Maximum age in seconds before cached capabilities are
+                considered stale and refetched. Default 3600 (1 hour). Capabilities
+                (methods/actions) rarely change, so 1 hour is conservative. Set to 0
+                to always refetch.
 
         Returns:
             Self for method chaining.
@@ -426,7 +438,7 @@ class ActingWebApp:
 
             app = (
                 ActingWebApp(...)
-                .with_peer_capabilities(enable=True)
+                .with_peer_capabilities(enable=True, max_age_seconds=7200)
             )
 
             # Access via TrustManager
@@ -436,6 +448,7 @@ class ActingWebApp:
                     print(f"Method: {method.name} - {method.description}")
         """
         self._peer_capabilities_caching = enable
+        self._peer_capabilities_max_age_seconds = max_age_seconds
         self._apply_runtime_changes_to_config()
 
         # Capabilities cleanup is now handled automatically in core delete_reciprocal_trust()

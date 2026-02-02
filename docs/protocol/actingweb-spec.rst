@@ -855,23 +855,51 @@ If the attribute is not accessible without a trust relationship,
 a 401 Unauthorised MUST be returned. If the request's current trust
 relationship is not sufficient, a 403 Forbidden MUST be returned.
 
-If the actor supports list properties (see *listproperties* option tag), a GET
-request to /properties MAY include a query parameter ``metadata=true`` to return
-an enhanced response that includes metadata for list properties. When
-metadata=true, the response SHOULD include ``description``, ``explanation``, and
-``count`` fields for each list property, in addition to the items::
+If the actor supports list properties (see *listproperties* option tag), the
+GET /properties endpoint supports two optional query parameters: ``format``
+and ``metadata``. These parameters are mutually exclusive; using both in the
+same request MUST return 400 Bad Request.
+
+**Default response** (same as ``?format=short``):
+
+Simple properties are returned as key-value pairs or dictionaries. List properties are
+included as markers with ``_list`` and ``count`` fields::
+
+  GET /app/78hjh76yug/properties
+
+  {"name": "Alice", "age": "30", "notes": {"_list": true, "count": 2}}
+
+**Full format** (``?format=full``):
+
+Simple properties are returned as-is. List properties include items,
+description, and explanation::
+
+  GET /app/78hjh76yug/properties?format=full
+
+  {
+    "name": "Alice",
+    "notes": {
+      "_list": true, "count": 2,
+      "description": "Personal notes",
+      "explanation": "Store notes and reminders",
+      "items": [{"id": "1", "content": "Remember to call"}, ...]
+    }
+  }
+
+**Metadata only** (``?metadata=true``):
+
+Returns structural metadata without property values. Useful for discovering
+property names and sizes::
 
   GET /app/78hjh76yug/properties?metadata=true
 
   {
-    "properties": {"name": "Alice", "age": "30"},
-    "list_properties": {
-      "notes": {
-        "description": "Personal notes",
-        "explanation": "Store notes and reminders",
-        "count": 1,
-        "items": [{"id": "1", "content": "Remember to call"}]
-      }
+    "simple": {
+      "properties": ["name", "age"],
+      "total_bytes": 1234
+    },
+    "lists": {
+      "notes": {"count": 2, "total_bytes": 2048, "description": "...", "explanation": "..."}
     }
   }
 

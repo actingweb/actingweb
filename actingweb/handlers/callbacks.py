@@ -292,7 +292,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if sub_info:
                 # Convert to dict for hook compatibility
                 sub = sub_info.to_dict()
-                logger.debug("Found subscription (" + str(sub) + ")")
+                logger.debug(f"Found subscription {subid} for peer {peerid}")
                 if not check or not check.check_authorisation(
                     path="callbacks",
                     subpath="subscriptions",

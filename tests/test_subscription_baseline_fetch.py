@@ -79,8 +79,8 @@ class TestFetchAndTransformBaseline:
         assert result is not None
         assert result["scalar_prop"] == {"value": "test"}
         assert result["number_prop"] == {"value": 42}
-        # Verify it added ?metadata=true for properties
-        mock_proxy.get_resource.assert_called_once_with(path="properties?metadata=true")
+        # Verify it fetches properties without metadata param (default format)
+        mock_proxy.get_resource.assert_called_once_with(path="properties")
 
     def test_fetch_and_transform_with_subtarget(self):
         """Test baseline fetch with subtarget (no metadata param)."""
@@ -102,7 +102,7 @@ class TestFetchAndTransformBaseline:
         assert result is not None
         assert isinstance(result, list)
         assert len(result) == 2
-        # Verify no ?metadata=true when subtarget specified
+        # Verify subtarget is appended to path
         mock_proxy.get_resource.assert_called_once_with(path="properties/memory_travel")
 
     def test_fetch_and_transform_with_property_lists(self):
@@ -117,7 +117,7 @@ class TestFetchAndTransformBaseline:
         # First call: baseline fetch returns metadata
         # Subsequent calls: fetch individual lists
         def mock_get_resource(path: str):
-            if path == "properties?metadata=true":
+            if path == "properties":
                 return {
                     "scalar_prop": {"value": "test"},
                     "list_prop": {"_list": True, "count": 3},

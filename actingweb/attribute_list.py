@@ -411,14 +411,6 @@ class ListAttribute:
         # Store the item directly as data (attributes support native JSON)
         item_db.set_attr(name=item_attribute_name, data=item)
 
-        # Log metadata only (never log actual user data for privacy)
-        item_type = type(item).__name__
-        item_size = len(str(item)) if item else 0
-        logger.debug(
-            f"append(): Stored item at '{item_attribute_name}' "
-            f"(type={item_type}, size={item_size} chars)"
-        )
-
         # Update metadata
         meta = self._load_metadata()
         meta["length"] = length + 1

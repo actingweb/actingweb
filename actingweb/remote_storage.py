@@ -111,10 +111,17 @@ class RemotePeerStore:
 
     def get_value(self, name: str) -> dict[str, Any] | None:
         """Get a scalar value by name."""
+        from .db.utils import sanitize_json_data
+
         db = self._get_attributes()
         attr = db.get_attr(name=name)
         # get_attr returns {"data": ..., "timestamp": ...} or None
-        return attr.get("data") if attr else None
+        data = attr.get("data") if attr else None
+        # Defense-in-depth: sanitize on read to catch surrogates that
+        # survived storage (e.g., from JSON round-trip of \uD800 escapes)
+        if data is not None:
+            data = sanitize_json_data(data, log_source=f"read:peer:{self._peer_id}")
+        return data
 
     def set_value(self, name: str, value: dict[str, Any]) -> None:
         """Set a scalar value from remote peer (sanitizes for security)."""
@@ -135,9 +142,14 @@ class RemotePeerStore:
 
     def get_list(self, name: str) -> list[dict[str, Any]]:
         """Get a list by name."""
+        from .db.utils import sanitize_json_data
+
         store = self._get_list_store()
         list_attr = getattr(store, name)
-        return list(list_attr)
+        items = list(list_attr)
+        # Defense-in-depth: sanitize on read to catch surrogates that
+        # survived storage (e.g., from JSON round-trip of \uD800 escapes)
+        return sanitize_json_data(items, log_source=f"read:peer:{self._peer_id}")
 
     def set_list(
         self,

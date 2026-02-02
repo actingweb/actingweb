@@ -877,7 +877,7 @@ class TestBaselineTransformation:
         assert result == baseline_data
 
     def test_transform_baseline_with_full_metadata(self):
-        """Test transforming list metadata with full metadata format (from ?metadata=true)."""
+        """Test transforming list metadata with _list markers from default GET /properties."""
         actor = FakeCoreActor()
 
         # Mock proxy that returns list items

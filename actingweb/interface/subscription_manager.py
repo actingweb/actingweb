@@ -884,6 +884,7 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
+
                 store.apply_resync_data(transformed_data)
                 logger.info(f"Stored baseline for subscription {subscription_id}")
 
@@ -1031,10 +1032,6 @@ class SubscriptionManager:
                 target_path = f"{target_path}/{sub.subtarget}"
             if sub.resource:
                 target_path = f"{target_path}/{sub.resource}"
-
-            # Add metadata flag for list properties to get short format
-            if sub.target == "properties" and not sub.subtarget and not sub.resource:
-                target_path = f"{target_path}?metadata=true"
 
             baseline_response = proxy.get_resource(path=target_path)
 
@@ -1544,6 +1541,7 @@ class SubscriptionManager:
                     )
 
         # Refresh peer profile if configured
+        # Try to use already-synced properties data first to avoid redundant fetch
         actor_config = self._core_actor.config
         actor_id = self._core_actor.id
         if (
@@ -1554,15 +1552,31 @@ class SubscriptionManager:
             try:
                 from ..peer_profile import fetch_peer_profile, get_peer_profile_store
 
-                profile = fetch_peer_profile(
-                    actor_id=actor_id,
+                # Try to extract profile from synced properties
+                profile, profile_extracted = self._extract_profile_from_remote_store(
                     peer_id=peer_id,
-                    config=actor_config,
-                    attributes=actor_config.peer_profile_attributes,
+                    actor_id=actor_id,
+                    actor_config=actor_config,
                 )
+
+                # Only fetch if we couldn't extract from synced data
+                if not profile_extracted:
+                    profile = fetch_peer_profile(
+                        actor_id=actor_id,
+                        peer_id=peer_id,
+                        config=actor_config,
+                        attributes=actor_config.peer_profile_attributes,
+                    )
+                    logger.debug(
+                        f"Fetched peer profile for {peer_id} via fallback (extraction failed)"
+                    )
+                else:
+                    logger.debug(
+                        f"Extracted peer profile from synced properties for {peer_id}"
+                    )
+
                 store = get_peer_profile_store(actor_config)
                 store.store_profile(profile)
-                logger.debug(f"Refreshed peer profile during sync_peer for {peer_id}")
             except Exception as e:
                 logger.warning(f"Failed to refresh peer profile during sync: {e}")
 
@@ -1720,6 +1734,7 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
+
                 store.apply_resync_data(transformed_data)
                 logger.info(f"Stored baseline for subscription {subscription_id}")
 
@@ -1862,10 +1877,6 @@ class SubscriptionManager:
             if sub.resource:
                 target_path = f"{target_path}/{sub.resource}"
 
-            # Add metadata flag for list properties to get short format
-            if sub.target == "properties" and not sub.subtarget and not sub.resource:
-                target_path = f"{target_path}?metadata=true"
-
             baseline_response = await proxy.get_resource_async(path=target_path)
 
             if baseline_response and "error" not in baseline_response:
@@ -2007,10 +2018,6 @@ class SubscriptionManager:
         if resource:
             target_path = f"{target_path}/{resource}"
 
-        # Add metadata parameter for properties endpoint (only for collection-level)
-        if target == "properties" and not subtarget:
-            target_path = f"{target_path}?metadata=true"
-
         # Get proxy for peer communication
         proxy = self._get_peer_proxy(peer_id)
         if not proxy:
@@ -2071,10 +2078,6 @@ class SubscriptionManager:
         if resource:
             target_path = f"{target_path}/{resource}"
 
-        # Add metadata parameter for properties endpoint (only for collection-level)
-        if target == "properties" and not subtarget:
-            target_path = f"{target_path}?metadata=true"
-
         # Get proxy for peer communication
         proxy = self._get_peer_proxy(peer_id)
         if not proxy:
@@ -2104,6 +2107,93 @@ class SubscriptionManager:
             )
         else:
             return baseline_response
+
+    def _extract_profile_from_remote_store(
+        self,
+        peer_id: str,
+        actor_id: str,
+        actor_config: Any,
+    ) -> tuple[Any, bool]:
+        """
+        Extract peer profile from already-synced properties in RemotePeerStore.
+
+        This avoids redundant network fetches by using data already synced during
+        subscription baseline sync.
+
+        Args:
+            peer_id: ID of the peer to extract profile for
+            actor_id: ID of the local actor
+            actor_config: Actor configuration with peer_profile_attributes
+
+        Returns:
+            Tuple of (PeerProfile, success_flag) where success_flag indicates
+            if extraction succeeded
+        """
+        from datetime import UTC, datetime
+
+        from ..peer_profile import PeerProfile
+        from ..remote_storage import RemotePeerStore
+        from .actor_interface import ActorInterface
+
+        # Check if we have recently synced properties data
+        actor_interface = ActorInterface(self._core_actor)
+        remote_store = RemotePeerStore(
+            actor=actor_interface,
+            peer_id=peer_id,
+            validate_peer_id=False,
+        )
+
+        # Initialize profile object
+        profile = PeerProfile(
+            actor_id=actor_id,
+            peer_id=peer_id,
+            fetched_at=datetime.now(UTC).isoformat(),
+        )
+
+        try:
+            # Track if we successfully extracted any attributes
+            profile_extracted = False
+
+            # Get properties from remote store (properties are stored as values)
+            for attr in actor_config.peer_profile_attributes:
+                value_data = remote_store.get_value(attr)
+
+                if value_data is not None:
+                    # Extract actual value (properties are wrapped in {"value": ...})
+                    if isinstance(value_data, dict) and "value" in value_data:
+                        actual_value = value_data["value"]
+                    else:
+                        actual_value = value_data
+
+                    # Convert to string for standard profile attributes
+                    if attr == "displayname":
+                        profile.displayname = (
+                            str(actual_value) if actual_value is not None else None
+                        )
+                        profile_extracted = True
+                    elif attr == "email":
+                        profile.email = (
+                            str(actual_value) if actual_value is not None else None
+                        )
+                        profile_extracted = True
+                    elif attr == "description":
+                        profile.description = (
+                            str(actual_value) if actual_value is not None else None
+                        )
+                        profile_extracted = True
+                    else:
+                        # Store in extra_attributes (keep original type)
+                        profile.extra_attributes[attr] = actual_value
+                        profile_extracted = True
+
+            return profile, profile_extracted
+
+        except Exception as e:
+            # If reading from store fails, return failure
+            logger.warning(
+                f"Profile extraction failed for {peer_id}: {e}",
+            )
+            return profile, False
 
     def _refresh_peer_metadata(self, peer_id: str) -> None:
         """
@@ -2474,73 +2564,20 @@ class SubscriptionManager:
             and getattr(actor_config, "peer_profile_attributes", None)
         ):
             try:
-                from datetime import UTC, datetime
-
-                from ..peer_profile import PeerProfile, get_peer_profile_store
-                from ..remote_storage import RemotePeerStore
-                from .actor_interface import ActorInterface
-
-                # Check if we have recently synced properties data
-                actor_interface = ActorInterface(self._core_actor)
-                remote_store = RemotePeerStore(
-                    actor=actor_interface,
-                    peer_id=peer_id,
-                    validate_peer_id=False,
+                from ..peer_profile import (
+                    fetch_peer_profile_async,
+                    get_peer_profile_store,
                 )
 
                 # Try to extract profile from synced properties
-                profile_extracted = False
-                profile = PeerProfile(
-                    actor_id=actor_id,
+                profile, profile_extracted = self._extract_profile_from_remote_store(
                     peer_id=peer_id,
-                    fetched_at=datetime.now(UTC).isoformat(),
+                    actor_id=actor_id,
+                    actor_config=actor_config,
                 )
-
-                try:
-                    # Get properties from remote store (properties are stored as values)
-                    for attr in actor_config.peer_profile_attributes:
-                        value_data = remote_store.get_value(attr)
-                        if value_data is not None:
-                            # Extract actual value (properties are wrapped in {"value": ...})
-                            if isinstance(value_data, dict) and "value" in value_data:
-                                actual_value = value_data["value"]
-                            else:
-                                actual_value = value_data
-
-                            # Convert to string for standard profile attributes
-                            if attr == "displayname":
-                                profile.displayname = (
-                                    str(actual_value)
-                                    if actual_value is not None
-                                    else None
-                                )
-                                profile_extracted = True
-                            elif attr == "email":
-                                profile.email = (
-                                    str(actual_value)
-                                    if actual_value is not None
-                                    else None
-                                )
-                                profile_extracted = True
-                            elif attr == "description":
-                                profile.description = (
-                                    str(actual_value)
-                                    if actual_value is not None
-                                    else None
-                                )
-                                profile_extracted = True
-                            else:
-                                # Store in extra_attributes (keep original type)
-                                profile.extra_attributes[attr] = actual_value
-                                profile_extracted = True
-                except Exception:
-                    # If reading from store fails, we'll fetch below
-                    profile_extracted = False
 
                 # Only fetch if we couldn't extract from synced data
                 if not profile_extracted:
-                    from ..peer_profile import fetch_peer_profile_async
-
                     profile = await fetch_peer_profile_async(
                         actor_id=actor_id,
                         peer_id=peer_id,
@@ -2548,11 +2585,11 @@ class SubscriptionManager:
                         attributes=actor_config.peer_profile_attributes,
                     )
                     logger.debug(
-                        f"Fetched peer profile (async) during sync_peer for {peer_id}"
+                        f"Fetched peer profile for {peer_id} via fallback (extraction failed)"
                     )
                 else:
                     logger.debug(
-                        f"Extracted peer profile from synced properties for {peer_id} (avoided redundant fetch)"
+                        f"Extracted peer profile from synced properties for {peer_id}"
                     )
 
                 store = get_peer_profile_store(actor_config)

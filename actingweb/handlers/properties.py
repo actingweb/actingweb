@@ -161,13 +161,6 @@ class PropertiesHandler(base_handler.BaseHandler):
             myself
             and hasattr(myself, "property_lists")
             and myself.property_lists is not None
-        ):
-            exists = myself.property_lists.exists(name)
-
-        if (
-            myself
-            and hasattr(myself, "property_lists")
-            and myself.property_lists is not None
             and myself.property_lists.exists(name)
         ):
             # This is a list property - handle format and index parameters

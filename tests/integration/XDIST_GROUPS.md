@@ -53,6 +53,8 @@ Feature-specific tests that logically belong together.
 | `resync_on_resume` | Resync on subscription resume | test_resync_on_resume.py |
 | `resync_state_handling` | Resync state management | test_resync_state_handling.py |
 | `suspension_subtarget` | Subscription subtarget suspension | test_suspension_subtarget.py |
+| `baseline_storage` | Baseline sync storage of simple and list properties | test_subscription_baseline_storage.py |
+| `peer_profile_extraction` | Peer profile extraction during subscription sync | test_peer_profile_extraction.py |
 | `devtest_attributes_flow` | DevTest attributes operations | test_devtest_attributes_flow.py |
 | `mcp_integration` | MCP (Model Context Protocol) integration tests | test_mcp_integration.py |
 | `oauth2_integration` | OAuth2 authentication and token flow | test_oauth2_integration.py |

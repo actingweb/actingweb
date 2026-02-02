@@ -24,6 +24,7 @@ def test_baseline_stores_simple_and_list_properties(
     import os
 
     import requests
+
     from actingweb.config import Config
 
     # Create config with peer profile attributes enabled
@@ -209,7 +210,7 @@ def test_baseline_stores_simple_and_list_properties(
     profile_store = get_peer_profile_store(config)
     peer_profile = profile_store.get_profile(actor_a["id"], actor_b["id"])
 
-    print(f"\nDEBUG: Checking PeerProfileStore...")
+    print("\nDEBUG: Checking PeerProfileStore...")
     if peer_profile:
         print(f"  Profile found: displayname={peer_profile.displayname}, email={peer_profile.email}")
         assert (

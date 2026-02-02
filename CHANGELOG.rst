@@ -5,8 +5,25 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Revoked Trust Detection**: Automatic detection and cleanup when a peer has revoked a trust relationship. During subscription sync, if all subscriptions return 404, the system verifies the trust relationship with the peer and either cleans up dead subscriptions (if trust still exists) or removes the local trust entirely, triggering the ``trust_deleted`` lifecycle hook.
+
+- **Baseline Sync on Subscription Creation**: ``subscribe_to_peer()`` and new ``subscribe_to_peer_async()`` now perform an immediate baseline data fetch after creating the subscription. This ensures consistent initial state regardless of whether the peer has existing data or pending diffs.
+
+- **Peer Metadata Refresh on Subscribe**: Initial subscription creation now automatically refreshes cached peer profile, capabilities, and permissions metadata when configured, eliminating the need for a separate sync cycle.
+
 IMPROVED
 ~~~~~~~~
+
+- **Structured Proxy Error Responses**: ``aw_proxy.get_resource()`` and ``get_resource_async()`` now return structured error dicts (with ``code`` and ``message``) when the peer returns non-JSON error responses, instead of silently returning an empty dict.
+
+- **Robust Error Format Handling**: ``peer_permissions`` now handles both dict and string error formats in peer responses, preventing ``AttributeError`` on unexpected error shapes.
+
+- **Privacy in List Attribute Logging**: ``ListAttribute.append()`` no longer logs actual user data values; only metadata (type and size) is logged.
+
+- **Consolidated Baseline Fetch Logic**: Resync callbacks and subscription creation now share the same baseline fetch and transformation helpers (``_fetch_and_transform_baseline``), ensuring consistent handling of ``?metadata=true`` expansion and property list transformations.
 
 - **Parallel Test Isolation**: Significantly improved pytest-xdist parallel test execution reliability, reducing flakiness from ~5% to <1%:
 
@@ -19,8 +36,13 @@ IMPROVED
 
 - **CI/CD Reliability**: Enhanced GitHub Actions workflow with automated group verification, flakiness reporting, and retry logic for improved stability across both DynamoDB and PostgreSQL matrix jobs.
 
-ADDED
-~~~~~
+CHANGED
+~~~~~~~
+
+- **SDK Documentation**: Updated ``developer-api.rst`` and ``async-operations.rst`` to reflect new ``subscribe_to_peer()`` and ``subscribe_to_peer_async()`` signatures and baseline sync behavior.
+
+ADDED (Test Infrastructure)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - **Test Group Verification**: New ``tests/integration/verify_groups.py`` script ensures all xdist groups are documented, integrated into CI pipeline to prevent undocumented groups.
 

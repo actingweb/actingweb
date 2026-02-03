@@ -5,8 +5,40 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Revoked Trust Detection**: Automatic detection and cleanup when a peer has revoked a trust relationship. During subscription sync, if all subscriptions return 404, the system verifies the trust relationship with the peer and either cleans up dead subscriptions (if trust still exists) or removes the local trust entirely, triggering the ``trust_deleted`` lifecycle hook.
+
+- **Baseline Sync on Subscription Creation**: ``subscribe_to_peer()`` and new ``subscribe_to_peer_async()`` now perform an immediate baseline data fetch after creating the subscription. This ensures consistent initial state regardless of whether the peer has existing data or pending diffs.
+
+- **Peer Metadata Refresh on Subscribe**: Initial subscription creation now automatically refreshes cached peer profile, capabilities, and permissions metadata when configured, eliminating the need for a separate sync cycle.
+
+- **RemotePeerStore Enumeration**: Added ``list_all_scalars()`` and ``get_all_properties()`` methods to ``RemotePeerStore`` for enumerating stored peer data. ``get_all_properties()`` returns a combined view of all lists and scalars with type metadata (type, value, item_count).
+
+FIXED
+~~~~~
+
+- **Permission Diff Asymmetry**: Fixed a bug where permission callbacks sent only override fields instead of the full effective permissions (base trust-type defaults merged with overrides). This caused ``detect_permission_changes()`` to incorrectly report base permissions as revoked when only new permissions were granted, leading to potential data loss via ``_delete_revoked_peer_data()``. The ``GET /permissions/{peer_id}`` endpoint now also returns merged effective permissions for consistency.
+
+- **Non-Destructive Resync**: ``RemotePeerStore.apply_resync_data()`` now replaces only the specific properties included in the resync data instead of deleting all peer data first. This prevents data loss when multiple subscriptions exist to the same peer (e.g., subscription A syncs ``memory_*`` properties, subscription B resyncs ``status`` - previously, B's resync would delete all of A's data).
+
+- **Permission Format Normalization**: Both shorthand list format (``["pattern1", "pattern2"]``) and spec-compliant dict format (``{"patterns": [...], "operations": [...]}``) are now accepted and normalized consistently across all permission APIs. Shorthand format defaults to read-only operations. This applies to ``TrustPermissions`` storage, ``PeerPermissions`` callbacks, and ``AccessControlConfig.add_trust_type()``.
+
 IMPROVED
 ~~~~~~~~
+
+- **Incremental Sync on Permission Grant**: Permission grant auto-sync now fetches only the newly granted properties instead of doing a full ``sync_peer()`` which refetched the entire baseline, capabilities, and permissions. Reduces HTTP requests from ~7 to 1-2 per permission grant.
+
+- **Capability Cache Staleness Check**: ``sync_peer()`` now checks if cached peer capabilities (methods/actions) are fresh before refetching. Capabilities are only refetched when the cache is older than ``peer_capabilities_max_age_seconds`` (default: 1 hour, configurable via ``with_peer_capabilities(max_age_seconds=...)``). A new ``force_refresh`` parameter on ``sync_peer()`` and ``sync_peer_async()`` bypasses staleness checks for manual/developer-triggered syncs.
+
+- **Structured Proxy Error Responses**: All ``aw_proxy`` resource methods (GET, POST, PUT, DELETE, sync and async) now return structured error dicts (with ``code`` and ``message``) for all error responses, including when the peer returns JSON with a string-typed ``error`` field (e.g., ``{"error": "Not found"}``). Previously, the actual HTTP status code (e.g., 404) was lost and replaced with a hardcoded 500 in downstream error handling.
+
+- **Robust Error Format Handling**: ``peer_permissions`` now handles both dict and string error formats in peer responses, preventing ``AttributeError`` on unexpected error shapes.
+
+- **Privacy in List Attribute Logging**: ``ListAttribute.append()`` no longer logs actual user data values; only metadata (type and size) is logged.
+
+- **Consolidated Baseline Fetch Logic**: Resync callbacks and subscription creation now share the same baseline fetch and transformation helpers (``_fetch_and_transform_baseline``), ensuring consistent handling of ``?metadata=true`` expansion and property list transformations.
 
 - **Parallel Test Isolation**: Significantly improved pytest-xdist parallel test execution reliability, reducing flakiness from ~5% to <1%:
 
@@ -19,8 +51,13 @@ IMPROVED
 
 - **CI/CD Reliability**: Enhanced GitHub Actions workflow with automated group verification, flakiness reporting, and retry logic for improved stability across both DynamoDB and PostgreSQL matrix jobs.
 
-ADDED
-~~~~~
+CHANGED
+~~~~~~~
+
+- **SDK Documentation**: Updated ``developer-api.rst`` and ``async-operations.rst`` to reflect new ``subscribe_to_peer()`` and ``subscribe_to_peer_async()`` signatures and baseline sync behavior.
+
+ADDED (Test Infrastructure)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - **Test Group Verification**: New ``tests/integration/verify_groups.py`` script ensures all xdist groups are documented, integrated into CI pipeline to prevent undocumented groups.
 
@@ -93,6 +130,8 @@ SECURITY
 
 FIXED
 ~~~~~
+
+- **Property Deletion via Subscription Callbacks**: ``RemotePeerStore.apply_callback_data()`` now correctly handles property deletion. Per the ActingWeb spec, an empty string value in a diff callback means the property was deleted. Previously, deleted properties were stored as ``{"value": ""}`` instead of being removed from the store.
 
 - **List Property Format Parameter**: Added ``format`` query parameter to list property GET requests. Use ``?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items.
 

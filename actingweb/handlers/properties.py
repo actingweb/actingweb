@@ -157,17 +157,6 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
 
         # Check if this is a list property first
-        logger.debug(
-            f"Checking if '{name}' is a list property: has_lists={hasattr(myself, 'property_lists') if myself else False}"
-        )
-        if (
-            myself
-            and hasattr(myself, "property_lists")
-            and myself.property_lists is not None
-        ):
-            exists = myself.property_lists.exists(name)
-            logger.debug(f"property_lists.exists('{name}') = {exists}")
-
         if (
             myself
             and hasattr(myself, "property_lists")
@@ -354,8 +343,17 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
 
         properties = actor_interface.properties.to_dict()
-        # Check if metadata is requested via query parameter
+        # Check query parameters
         include_metadata = self.request.get("metadata") == "true"
+        format_param = self.request.get("format") or None
+
+        # Mutual exclusion: format and metadata cannot be used together
+        if include_metadata and format_param:
+            if self.response:
+                self.response.set_status(
+                    400, "Cannot use format and metadata parameters together"
+                )
+            return
 
         pair = {}
         if properties and len(properties) > 0:
@@ -416,9 +414,6 @@ class PropertiesHandler(base_handler.BaseHandler):
             and actor_interface.property_lists is not None
         ):
             all_list_names = set(actor_interface.property_lists.list_all() or [])
-            logger.debug(
-                f"Found {len(all_list_names)} list properties: {all_list_names}"
-            )
 
             # Filter list properties based on peer permissions (bulk evaluation)
             if peer_id and actor_interface and actor_interface.id:
@@ -443,30 +438,56 @@ class PropertiesHandler(base_handler.BaseHandler):
                 # No peer - include all (owner access)
                 list_names = all_list_names
 
-        # Add list properties based on metadata flag
+        # Build response based on query parameters
         if include_metadata:
-            # Full metadata format for list properties
+            # Metadata-only response: no property values, just structure info
+            simple_names = list(pair.keys())
+            simple_total_bytes = sum(len(json.dumps(v)) for v in pair.values())
+            lists_info: dict[str, Any] = {}
             for list_name in list_names:
                 list_prop = getattr(actor_interface.property_lists, list_name)
-                pair[list_name] = {
-                    "_list": True,
-                    "count": len(list_prop),
+                items = list(list_prop)
+                total_bytes = sum(len(json.dumps(item)) for item in items)
+                lists_info[list_name] = {
+                    "count": len(items),
+                    "total_bytes": total_bytes,
                     "description": list_prop.get_description(),
                     "explanation": list_prop.get_explanation(),
                 }
-
-            # Wrap non-list properties with _list: false
-            for name in list(pair.keys()):
-                if name not in list_names:
-                    current_value = pair[name]
-                    if isinstance(current_value, dict) and "_list" in current_value:
-                        continue  # Already wrapped
-                    pair[name] = {
-                        "value": current_value,
-                        "_list": False,
-                    }
+            pair = {
+                "simple": {
+                    "properties": simple_names,
+                    "total_bytes": simple_total_bytes,
+                },
+                "lists": lists_info,
+            }
+        elif format_param == "full":
+            # Full format: simple props as-is + list props with items, description, explanation
+            for list_name in list_names:
+                list_prop = getattr(actor_interface.property_lists, list_name)
+                items = list(list_prop)
+                # Execute property hooks on list items if available
+                if self.hooks and actor_interface:
+                    auth_context = self._create_auth_context(check, "read")
+                    transformed_items = []
+                    for item in items:
+                        transformed = self.hooks.execute_property_hooks(
+                            list_name, "get", actor_interface, item, [], auth_context
+                        )
+                        if transformed is not None:
+                            transformed_items.append(transformed)
+                        else:
+                            transformed_items.append(item)
+                    items = transformed_items
+                pair[list_name] = {
+                    "_list": True,
+                    "count": len(items),
+                    "description": list_prop.get_description(),
+                    "explanation": list_prop.get_explanation(),
+                    "items": items,
+                }
         else:
-            # Minimal format for list properties (without metadata)
+            # Default / format=short: simple props as-is + minimal list markers
             for list_name in list_names:
                 list_prop = getattr(actor_interface.property_lists, list_name)
                 pair[list_name] = {
@@ -657,7 +678,6 @@ class PropertiesHandler(base_handler.BaseHandler):
             store = {path[i]: c}
             i -= 1
         orig = myself.property[name] if myself and myself.property else None
-        logger.debug(f"Property {name} has existing value: {orig is not None}")
         try:
             orig = json.loads(orig or "{}")
             merge_dict(orig, store)
@@ -681,7 +701,6 @@ class PropertiesHandler(base_handler.BaseHandler):
                     return
         res = final_res
         res = json.dumps(res)
-        logger.debug(f"Storing property /properties/{name}")
         if myself and myself.property:
             myself.property[name] = res
         myself.register_diffs(
@@ -1170,7 +1189,6 @@ class PropertiesHandler(base_handler.BaseHandler):
             return
         orig = myself.property[name] if myself and myself.property else None
         old = orig
-        logger.debug(f"DELETE property {name}, has existing value: {orig is not None}")
         try:
             orig = json.loads(orig or "{}")
         except (TypeError, ValueError, KeyError):
@@ -1199,7 +1217,6 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(403)
                     return
         res = json.dumps(orig)
-        logger.debug(f"Storing property /properties/{name}")
         if myself and myself.property:
             myself.property[name] = res
         myself.register_diffs(

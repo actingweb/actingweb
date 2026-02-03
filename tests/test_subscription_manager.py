@@ -877,7 +877,7 @@ class TestBaselineTransformation:
         assert result == baseline_data
 
     def test_transform_baseline_with_full_metadata(self):
-        """Test transforming list metadata with full metadata format (from ?metadata=true)."""
+        """Test transforming list metadata with _list markers from default GET /properties."""
         actor = FakeCoreActor()
 
         # Mock proxy that returns list items
@@ -922,3 +922,267 @@ class TestBaselineTransformation:
         assert "items" in result["tags"]
         assert len(result["tags"]["items"]) == 3
         assert "python" in result["tags"]["items"]
+
+
+class TestSyncSubscriptionErrors:
+    """Test sync_subscription error handling paths."""
+
+    def test_sync_subscription_not_found(self):
+        """Test 404 when subscription doesn't exist."""
+        from actingweb.interface.subscription_manager import (
+            SubscriptionManager,
+            SubscriptionSyncResult,
+        )
+
+        actor = FakeCoreActor()
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        # Mock get_callback_subscription to return None
+        manager.get_callback_subscription = lambda peer_id, subscription_id: None  # type: ignore[method-assign]
+
+        result = manager.sync_subscription(
+            peer_id="peer_1", subscription_id="nonexistent_sub"
+        )
+
+        assert isinstance(result, SubscriptionSyncResult)
+        assert result.success is False
+        assert result.error_code == 404
+        assert result.error == "Subscription not found"
+        assert result.diffs_fetched == 0
+        assert result.diffs_processed == 0
+
+    def test_sync_subscription_no_trust(self):
+        """Test error when no trust relationship exists."""
+        from unittest.mock import MagicMock
+
+        from actingweb.interface.subscription_manager import (
+            SubscriptionManager,
+            SubscriptionSyncResult,
+        )
+
+        actor = FakeCoreActor()
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        # Mock a subscription that exists
+        mock_sub = MagicMock()
+        mock_sub.target = "properties"
+        mock_sub.subtarget = None
+        mock_sub.resource = None
+        manager.get_callback_subscription = lambda peer_id, subscription_id: mock_sub  # type: ignore[method-assign]
+
+        # Mock proxy with no trust
+        mock_proxy = MagicMock()
+        mock_proxy.trust = None
+        manager._get_peer_proxy = lambda peer_id: mock_proxy  # type: ignore[method-assign]
+
+        result = manager.sync_subscription(peer_id="peer_1", subscription_id="sub_1")
+
+        assert isinstance(result, SubscriptionSyncResult)
+        assert result.success is False
+        assert result.error_code == 404
+        assert result.error == "No trust relationship with peer"
+
+    def test_sync_subscription_proxy_error(self):
+        """Test handling proxy communication failure."""
+        from unittest.mock import MagicMock
+
+        from actingweb.interface.subscription_manager import (
+            SubscriptionManager,
+            SubscriptionSyncResult,
+        )
+
+        actor = FakeCoreActor()
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        # Mock a subscription that exists
+        mock_sub = MagicMock()
+        mock_sub.target = "properties"
+        mock_sub.subtarget = None
+        mock_sub.resource = None
+        manager.get_callback_subscription = lambda peer_id, subscription_id: mock_sub  # type: ignore[method-assign]
+
+        # Mock proxy that returns None on get_resource
+        mock_proxy = MagicMock()
+        mock_proxy.trust = {"verified": True}
+        mock_proxy.get_resource = MagicMock(return_value=None)
+        mock_proxy.last_response_code = 502
+        manager._get_peer_proxy = lambda peer_id: mock_proxy  # type: ignore[method-assign]
+
+        result = manager.sync_subscription(peer_id="peer_1", subscription_id="sub_1")
+
+        assert isinstance(result, SubscriptionSyncResult)
+        assert result.success is False
+        assert result.error_code == 502
+        assert result.error == "Failed to communicate with peer"
+
+    def test_sync_subscription_api_error_response(self):
+        """Test parsing error response from peer."""
+        from unittest.mock import MagicMock
+
+        from actingweb.interface.subscription_manager import (
+            SubscriptionManager,
+            SubscriptionSyncResult,
+        )
+
+        actor = FakeCoreActor()
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        # Mock a subscription that exists
+        mock_sub = MagicMock()
+        mock_sub.target = "properties"
+        mock_sub.subtarget = None
+        mock_sub.resource = None
+        manager.get_callback_subscription = lambda peer_id, subscription_id: mock_sub  # type: ignore[method-assign]
+
+        # Mock proxy that returns error response
+        mock_proxy = MagicMock()
+        mock_proxy.trust = {"verified": True}
+        mock_proxy.get_resource = MagicMock(
+            return_value={"error": {"code": 403, "message": "Access forbidden"}}
+        )
+        manager._get_peer_proxy = lambda peer_id: mock_proxy  # type: ignore[method-assign]
+
+        result = manager.sync_subscription(peer_id="peer_1", subscription_id="sub_1")
+
+        assert isinstance(result, SubscriptionSyncResult)
+        assert result.success is False
+        assert result.error_code == 403
+        assert result.error == "Access forbidden"
+
+    def test_sync_subscription_empty_diffs_no_auto_storage(self):
+        """Test when no diffs and auto_storage is disabled."""
+        from unittest.mock import MagicMock, patch
+
+        from actingweb.interface.subscription_manager import (
+            SubscriptionManager,
+            SubscriptionSyncResult,
+        )
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = FakeCoreActor()
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        # Mock a subscription that exists
+        mock_sub = MagicMock()
+        mock_sub.target = "properties"
+        mock_sub.subtarget = None
+        mock_sub.resource = None
+        manager.get_callback_subscription = lambda peer_id, subscription_id: mock_sub  # type: ignore[method-assign]
+
+        # Mock proxy that returns empty diffs
+        mock_proxy = MagicMock()
+        mock_proxy.trust = {"verified": True}
+        mock_proxy.get_resource = MagicMock(return_value={"sequence": 5, "data": []})
+        manager._get_peer_proxy = lambda peer_id: mock_proxy  # type: ignore[method-assign]
+
+        # Disable auto_storage
+        config = SubscriptionProcessingConfig(enabled=True, auto_storage=False)
+
+        # Patch Subscription class to avoid database access
+        with patch("actingweb.subscription.Subscription") as MockSubscription:
+            mock_sub_obj = MagicMock()
+            mock_sub_obj.handle = MagicMock()
+            MockSubscription.return_value = mock_sub_obj
+
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        assert isinstance(result, SubscriptionSyncResult)
+        assert result.success is True
+        assert result.diffs_fetched == 0
+        assert result.diffs_processed == 0
+        assert result.final_sequence == 5
+
+    def test_sync_subscription_with_diffs_no_auto_sequence(self):
+        """Test processing diffs without sequence tracking."""
+        from unittest.mock import MagicMock, patch
+
+        from actingweb.interface.subscription_manager import (
+            SubscriptionManager,
+            SubscriptionSyncResult,
+        )
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = FakeCoreActor()
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        # Mock a subscription that exists
+        mock_sub = MagicMock()
+        mock_sub.target = "properties"
+        mock_sub.subtarget = None
+        mock_sub.resource = None
+        manager.get_callback_subscription = lambda peer_id, subscription_id: mock_sub  # type: ignore[method-assign]
+
+        # Mock proxy that returns diffs
+        mock_proxy = MagicMock()
+        mock_proxy.trust = {"verified": True}
+        mock_proxy.get_resource = MagicMock(
+            return_value={
+                "sequence": 10,
+                "data": [
+                    {
+                        "sequence": 5,
+                        "data": {"key": "value1"},
+                        "timestamp": "2024-01-01",
+                    },
+                    {
+                        "sequence": 6,
+                        "data": {"key": "value2"},
+                        "timestamp": "2024-01-02",
+                    },
+                ],
+            }
+        )
+        mock_proxy.change_resource = MagicMock(return_value={"success": True})
+        manager._get_peer_proxy = lambda peer_id: mock_proxy  # type: ignore[method-assign]
+
+        # Config with auto_sequence disabled
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_sequence=False, auto_storage=False
+        )
+
+        # Patch Subscription class to avoid database access
+        with patch("actingweb.subscription.Subscription") as MockSubscription:
+            mock_sub_obj = MagicMock()
+            mock_sub_obj.handle = MagicMock()
+            MockSubscription.return_value = mock_sub_obj
+
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        assert isinstance(result, SubscriptionSyncResult)
+        assert result.success is True
+        assert result.diffs_fetched == 2
+        assert result.diffs_processed == 2
+        assert result.final_sequence == 6  # Max of processed sequences
+
+    def test_sync_subscription_null_proxy(self):
+        """Test handling when _get_peer_proxy returns None."""
+        from unittest.mock import MagicMock
+
+        from actingweb.interface.subscription_manager import (
+            SubscriptionManager,
+            SubscriptionSyncResult,
+        )
+
+        actor = FakeCoreActor()
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        # Mock a subscription that exists
+        mock_sub = MagicMock()
+        mock_sub.target = "properties"
+        mock_sub.subtarget = None
+        mock_sub.resource = None
+        manager.get_callback_subscription = lambda peer_id, subscription_id: mock_sub  # type: ignore[method-assign]
+
+        # Mock proxy returning None
+        manager._get_peer_proxy = lambda peer_id: None  # type: ignore[method-assign]
+
+        result = manager.sync_subscription(peer_id="peer_1", subscription_id="sub_1")
+
+        assert isinstance(result, SubscriptionSyncResult)
+        assert result.success is False
+        assert result.error_code == 404
+        assert result.error == "No trust relationship with peer"

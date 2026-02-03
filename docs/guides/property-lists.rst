@@ -109,10 +109,20 @@ List properties integrate with the standard ``/properties`` endpoints:
   GET /{actor_id}/properties/{list_name}
   # Returns: [item1, item2, ...]
 
-**GET with metadata**::
+**GET all properties (default / format=short)**::
+
+  GET /{actor_id}/properties
+  # Returns: {"name": "Alice", "notes": {"_list": true, "count": 2}}
+
+**GET all properties with full list data (format=full)**::
+
+  GET /{actor_id}/properties?format=full
+  # Returns: {"name": "Alice", "notes": {"_list": true, "count": 2, "description": "...", "items": [...]}}
+
+**GET metadata only (metadata=true)**::
 
   GET /{actor_id}/properties?metadata=true
-  # Returns list metadata: {"_list": true, "count": N, "description": "...", ...}
+  # Returns: {"simple": {"properties": [...], "total_bytes": N}, "lists": {...}}
 
 **POST new item** (append to end)::
 

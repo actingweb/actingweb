@@ -410,9 +410,6 @@ class ListAttribute:
         )
         # Store the item directly as data (attributes support native JSON)
         item_db.set_attr(name=item_attribute_name, data=item)
-        logger.debug(
-            f"append(): Stored item at '{item_attribute_name}' with value: {item}"
-        )
 
         # Update metadata
         meta = self._load_metadata()

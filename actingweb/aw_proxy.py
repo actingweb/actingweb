@@ -209,7 +209,28 @@ class AwProxy:
             logger.debug(
                 "Not able to parse response when getting resource at(" + url + ")"
             )
-            result = {}
+            # If response was an error status and JSON parsing failed, return structured error
+            if response.status_code < 200 or response.status_code > 299:
+                result = {
+                    "error": {
+                        "code": response.status_code,
+                        "message": f"HTTP {response.status_code} with non-JSON response",
+                    }
+                }
+            else:
+                # Success status but non-JSON response - log warning for debugging
+                logger.warning(
+                    f"Peer returned HTTP {response.status_code} with non-JSON content at {url}. "
+                    "This may indicate an unexpected content type or parsing issue."
+                )
+                result = {}
+        # Ensure error responses from peers have a structured error with the HTTP status code
+        if response.status_code < 200 or response.status_code > 299:
+            if "error" in result and not isinstance(result["error"], dict):
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": str(result["error"]),
+                }
         return result
 
     def create_resource(self, path=None, params=None):
@@ -260,6 +281,13 @@ class AwProxy:
                 "Not able to parse response when creating resource at(" + url + ")"
             )
             result = {}
+        # Ensure error responses from peers have a structured error with the HTTP status code
+        if response.status_code < 200 or response.status_code > 299:
+            if "error" in result and not isinstance(result["error"], dict):
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": str(result["error"]),
+                }
         return result
 
     def change_resource(self, path=None, params=None):
@@ -308,6 +336,13 @@ class AwProxy:
                 "Not able to parse response when changing resource at(" + url + ")"
             )
             result = {}
+        # Ensure error responses from peers have a structured error with the HTTP status code
+        if response.status_code < 200 or response.status_code > 299:
+            if "error" in result and not isinstance(result["error"], dict):
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": str(result["error"]),
+                }
         return result
 
     def delete_resource(self, path=None):
@@ -461,7 +496,23 @@ class AwProxy:
             logger.debug(
                 "Not able to parse response when getting resource async at(" + url + ")"
             )
-            result = {}
+            # If response was an error status and JSON parsing failed, return structured error
+            if response.status_code < 200 or response.status_code > 299:
+                result = {
+                    "error": {
+                        "code": response.status_code,
+                        "message": f"HTTP {response.status_code} with non-JSON response",
+                    }
+                }
+            else:
+                result = {}
+        # Ensure error responses from peers have a structured error with the HTTP status code
+        if response.status_code < 200 or response.status_code > 299:
+            if "error" in result and not isinstance(result["error"], dict):
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": str(result["error"]),
+                }
         return result
 
     async def create_resource_async(
@@ -557,6 +608,13 @@ class AwProxy:
                 + ")"
             )
             result = {}
+        # Ensure error responses from peers have a structured error with the HTTP status code
+        if response.status_code < 200 or response.status_code > 299:
+            if "error" in result and not isinstance(result["error"], dict):
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": str(result["error"]),
+                }
         return result
 
     async def change_resource_async(
@@ -650,6 +708,13 @@ class AwProxy:
                 + ")"
             )
             result = {}
+        # Ensure error responses from peers have a structured error with the HTTP status code
+        if response.status_code < 200 or response.status_code > 299:
+            if "error" in result and not isinstance(result["error"], dict):
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": str(result["error"]),
+                }
         return result
 
     async def delete_resource_async(
@@ -732,4 +797,11 @@ class AwProxy:
                 + ")"
             )
             result = {}
+        # Ensure error responses from peers have a structured error with the HTTP status code
+        if response.status_code < 200 or response.status_code > 299:
+            if "error" in result and not isinstance(result["error"], dict):
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": str(result["error"]),
+                }
         return result

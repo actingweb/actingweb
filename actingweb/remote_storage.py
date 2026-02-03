@@ -111,10 +111,17 @@ class RemotePeerStore:
 
     def get_value(self, name: str) -> dict[str, Any] | None:
         """Get a scalar value by name."""
+        from .db.utils import sanitize_json_data
+
         db = self._get_attributes()
         attr = db.get_attr(name=name)
         # get_attr returns {"data": ..., "timestamp": ...} or None
-        return attr.get("data") if attr else None
+        data = attr.get("data") if attr else None
+        # Defense-in-depth: sanitize on read to catch surrogates that
+        # survived storage (e.g., from JSON round-trip of \uD800 escapes)
+        if data is not None:
+            data = sanitize_json_data(data, log_source=f"read:peer:{self._peer_id}")
+        return data
 
     def set_value(self, name: str, value: dict[str, Any]) -> None:
         """Set a scalar value from remote peer (sanitizes for security)."""
@@ -135,9 +142,14 @@ class RemotePeerStore:
 
     def get_list(self, name: str) -> list[dict[str, Any]]:
         """Get a list by name."""
+        from .db.utils import sanitize_json_data
+
         store = self._get_list_store()
         list_attr = getattr(store, name)
-        return list(list_attr)
+        items = list(list_attr)
+        # Defense-in-depth: sanitize on read to catch surrogates that
+        # survived storage (e.g., from JSON round-trip of \uD800 escapes)
+        return sanitize_json_data(items, log_source=f"read:peer:{self._peer_id}")
 
     def set_list(
         self,
@@ -177,6 +189,96 @@ class RemotePeerStore:
         """List all stored lists for this peer."""
         store = self._get_list_store()
         return store.list_all()
+
+    def list_all_scalars(self) -> list[str]:
+        """List all scalar property names for this peer.
+
+        Returns:
+            List of scalar property names (excludes list properties and their metadata)
+        """
+        db = self._get_attributes()
+        all_attrs = db.get_bucket() or {}
+
+        scalar_names = []
+        for name in all_attrs.keys():
+            # Skip internal list storage keys (list:*:meta, list:*:0, etc.)
+            if not name.startswith("list:"):
+                scalar_names.append(name)
+
+        return scalar_names
+
+    def get_all_properties(self) -> dict[str, Any]:
+        """Get all properties (both lists and scalars) for this peer.
+
+        Returns:
+            Dictionary mapping property names to their metadata:
+            {
+                "property_name": {
+                    "type": "list" | "scalar",
+                    "value": <list of items> | <scalar value>,
+                    "item_count": <int> (for lists only)
+                }
+            }
+
+        Example:
+            >>> store = RemotePeerStore(actor, peer_id)
+            >>> props = store.get_all_properties()
+            >>> print(props)
+            {
+                "memory_personal": {
+                    "type": "list",
+                    "value": [{"id": 1, "text": "..."}],
+                    "item_count": 1
+                },
+                "status": {
+                    "type": "scalar",
+                    "value": {"active": True}
+                }
+            }
+        """
+        properties = {}
+
+        # Get all list properties
+        try:
+            for list_name in self.list_all_lists():
+                try:
+                    items = self.get_list(list_name)
+                    properties[list_name] = {
+                        "type": "list",
+                        "value": items,
+                        "item_count": len(items),
+                    }
+                except Exception as e:
+                    logger.warning(
+                        f"Error reading list '{list_name}' for peer {self._peer_id}: {e}"
+                    )
+                    continue
+        except Exception as e:
+            logger.error(
+                f"Error listing list properties for peer {self._peer_id}: {e}"
+            )
+
+        # Get all scalar properties
+        try:
+            for scalar_name in self.list_all_scalars():
+                try:
+                    value = self.get_value(scalar_name)
+                    if value is not None:
+                        properties[scalar_name] = {
+                            "type": "scalar",
+                            "value": value,
+                        }
+                except Exception as e:
+                    logger.warning(
+                        f"Error reading scalar '{scalar_name}' for peer {self._peer_id}: {e}"
+                    )
+                    continue
+        except Exception as e:
+            logger.error(
+                f"Error listing scalar properties for peer {self._peer_id}: {e}"
+            )
+
+        return properties
 
     # Cleanup
 
@@ -256,8 +358,13 @@ class RemotePeerStore:
                         list_name, operation, value
                     )
                 else:
-                    # Scalar value
-                    if isinstance(value, dict):
+                    # Per ActingWeb spec: "an empty attribute is defined as the
+                    # same as a non-existent attribute, thus an attribute can be
+                    # deleted by setting it to ''."
+                    if value == "" or value is None:
+                        self.delete_value(key)
+                        results[key] = {"deleted": True, "type": "scalar"}
+                    elif isinstance(value, dict):
                         self.set_value(key, value)
                         results[key] = {"stored": True, "type": "scalar"}
                     else:
@@ -345,12 +452,18 @@ class RemotePeerStore:
         return {"operation": operation, "error": "unknown operation"}
 
     def apply_resync_data(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Apply full resync data, replacing all existing data.
+        """Apply resync data, replacing only the properties included in the data.
+
+        Unlike a full delete-and-replace, this method only replaces the specific
+        properties provided, preserving any other synced data from other
+        subscriptions. This is important when multiple subscriptions exist to
+        the same peer - a resync on one subscription should not destroy data
+        from other subscriptions.
 
         SECURITY: Sanitizes untrusted data from remote peer before storage.
 
         Args:
-            data: Full state data from resync callback
+            data: Resync data from callback (only these properties are replaced)
 
         Returns:
             Dict of {property_name: operation_result}
@@ -364,10 +477,12 @@ class RemotePeerStore:
 
         results: dict[str, Any] = {}
 
-        # Delete existing data first
-        self.delete_all()
+        # NOTE: We do NOT call delete_all() here.
+        # Each property is replaced individually, preserving unrelated properties.
+        # For lists, set_list() already clears before extending.
+        # For scalars, set_value() overwrites the existing value.
 
-        # Apply all new data
+        # Apply new data
         for key, value in data.items():
             try:
                 # Check for flag-based list format (preferred)
@@ -457,7 +572,11 @@ class RemotePeerStore:
         """
         from datetime import UTC, datetime
 
-        from .peer_permissions import PeerPermissions, get_peer_permission_store
+        from .peer_permissions import (
+            PeerPermissions,
+            get_peer_permission_store,
+            normalize_property_permission,
+        )
 
         try:
             actor_id = self._actor.id
@@ -474,7 +593,7 @@ class RemotePeerStore:
             peer_perms = PeerPermissions(
                 actor_id=actor_id,
                 peer_id=self._peer_id,
-                properties=permissions.get("properties"),
+                properties=normalize_property_permission(permissions.get("properties")),
                 methods=permissions.get("methods"),
                 actions=permissions.get("actions"),
                 tools=permissions.get("tools"),

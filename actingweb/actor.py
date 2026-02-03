@@ -792,21 +792,25 @@ class Actor:
         # This prevents race condition where peer tries to subscribe back
         # before our approval is saved
         dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
-        result = dbtrust.modify(
-            baseuri=baseuri,
-            secret=secret,
-            desc=desc,
-            approved=approved,
-            verified=verified,
-            verification_token=verification_token,
-            peer_approved=peer_approved,
-            client_name=client_name,
-            client_version=client_version,
-            client_platform=client_platform,
-            oauth_client_id=oauth_client_id,
-            last_accessed=last_accessed,
-            last_connected_via=last_connected_via,
-        )
+        try:
+            result = dbtrust.modify(
+                baseuri=baseuri,
+                secret=secret,
+                desc=desc,
+                approved=approved,
+                verified=verified,
+                verification_token=verification_token,
+                peer_approved=peer_approved,
+                client_name=client_name,
+                client_version=client_version,
+                client_platform=client_platform,
+                oauth_client_id=oauth_client_id,
+                last_accessed=last_accessed,
+                last_connected_via=last_connected_via,
+            )
+        except Exception as e:
+            logger.error(f"Exception in dbtrust.modify: {e}", exc_info=True)
+            return False
 
         # Now that approval is saved, notify peer so their auto-subscribe will succeed
         headers = {}

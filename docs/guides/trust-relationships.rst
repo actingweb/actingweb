@@ -265,12 +265,18 @@ ActingWeb can automatically cache the methods and actions that trusted peers exp
    app = ActingWebApp(
        aw_type="urn:actingweb:example.com:myapp",
        fqdn="myapp.example.com"
-   ).with_peer_capabilities(enable=True)
+   ).with_peer_capabilities(enable=True, max_age_seconds=3600)
+
+**Parameters:**
+
+- ``enable``: Enable/disable capabilities caching. Default: ``True`` when called.
+- ``max_age_seconds``: Maximum cache age in seconds before capabilities are refetched during ``sync_peer()``. Default: ``3600`` (1 hour). Set to ``0`` to always refetch.
 
 When enabled, capabilities are:
 
 - Automatically fetched when trust is fully approved (both sides)
-- Refreshed during ``sync_peer()`` operations
+- Refreshed during ``sync_peer()`` operations (only if cache is older than ``max_age_seconds``)
+- Always refreshed when ``sync_peer(force_refresh=True)`` is called
 - Cleaned up when trust is deleted
 
 **Accessing Cached Capabilities**
@@ -407,8 +413,12 @@ to notify you immediately. The callback is sent to::
 
    POST /{your_actor_id}/callbacks/permissions/{peer_actor_id}
 
-The library automatically handles these callbacks and updates the local cache. Peers supporting
-this feature advertise ``permissioncallback`` in their ``/meta/actingweb/supported`` endpoint.
+The library automatically handles these callbacks and updates the local cache. Permission
+callbacks contain the full *effective* permissions (base trust-type defaults merged with
+per-trust overrides), enabling accurate change detection. When new property patterns are
+granted, an incremental sync automatically fetches only the newly granted properties.
+Peers supporting this feature advertise ``permissioncallback`` in their
+``/meta/actingweb/supported`` endpoint.
 
 **Use Cases for MCP**
 

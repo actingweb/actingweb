@@ -967,6 +967,72 @@ class TestDetectPermissionChanges:
         assert changes["granted_patterns"] == ["profile_*"]
 
 
+class TestNormalizePropertyPermission:
+    """Test normalize_property_permission() function."""
+
+    def test_none_returns_none(self):
+        """Test that None input returns None."""
+        from actingweb.peer_permissions import normalize_property_permission
+
+        result = normalize_property_permission(None)
+        assert result is None
+
+    def test_list_normalized_to_dict(self):
+        """Test that shorthand list format is normalized to spec-compliant dict."""
+        from actingweb.peer_permissions import normalize_property_permission
+
+        # Shorthand: ["pattern1", "pattern2"]
+        result = normalize_property_permission(["memory_*", "profile/*"])
+
+        # Expected: {"patterns": [...], "operations": ["read"]}
+        assert isinstance(result, dict)
+        assert result["patterns"] == ["memory_*", "profile/*"]
+        assert result["operations"] == ["read"]
+
+    def test_empty_list_normalized(self):
+        """Test that empty list is normalized correctly."""
+        from actingweb.peer_permissions import normalize_property_permission
+
+        result = normalize_property_permission([])
+
+        assert isinstance(result, dict)
+        assert result["patterns"] == []
+        assert result["operations"] == ["read"]
+
+    def test_dict_passed_through(self):
+        """Test that spec-compliant dict is passed through unchanged."""
+        from actingweb.peer_permissions import normalize_property_permission
+
+        input_dict = {
+            "patterns": ["memory_*"],
+            "operations": ["read", "write"],
+            "excluded_patterns": ["memory_private_*"],
+        }
+
+        result = normalize_property_permission(input_dict)
+
+        assert result == input_dict
+
+    def test_dict_without_operations_passed_through(self):
+        """Test that dict without operations is passed through."""
+        from actingweb.peer_permissions import normalize_property_permission
+
+        input_dict = {"patterns": ["memory_*"]}
+
+        result = normalize_property_permission(input_dict)
+
+        # Should pass through as-is (caller may want to add operations)
+        assert result == {"patterns": ["memory_*"]}
+
+    def test_empty_dict_passed_through(self):
+        """Test that empty dict is passed through unchanged."""
+        from actingweb.peer_permissions import normalize_property_permission
+
+        result = normalize_property_permission({})
+
+        assert result == {}
+
+
 class TestAutoDeleteOnRevocationConfiguration:
     """Test auto_delete_on_revocation configuration."""
 

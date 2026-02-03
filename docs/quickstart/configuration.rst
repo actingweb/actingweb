@@ -670,11 +670,12 @@ Enable peer capabilities caching via the fluent API:
     app = ActingWebApp(
         aw_type="urn:actingweb:example.com:myapp",
         fqdn="myapp.example.com"
-    ).with_peer_capabilities(enable=True)
+    ).with_peer_capabilities(enable=True, max_age_seconds=3600)
 
 **Parameters:**
 
 - ``enable``: Boolean to enable/disable capabilities caching. Default: ``True`` when called.
+- ``max_age_seconds``: Maximum age (in seconds) before cached capabilities are considered stale and refetched during ``sync_peer()``. Default: ``3600`` (1 hour). Set to ``0`` to always refetch.
 
 **Default Behavior:**
 
@@ -698,7 +699,9 @@ When enabled, capabilities are automatically updated:
    * - Trust fully approved (remote)
      - Fetch and cache peer methods/actions
    * - ``sync_peer()`` completion
-     - Refresh cached capabilities
+     - Refresh cached capabilities (only if cache is older than ``max_age_seconds``)
+   * - ``sync_peer(force_refresh=True)``
+     - Always refresh cached capabilities, bypassing staleness check
    * - Trust deleted
      - Delete cached capabilities
 
@@ -944,6 +947,19 @@ The callback is sent to::
     POST /{your_actor_id}/callbacks/permissions/{peer_actor_id}
 
 The library automatically handles these callbacks and updates the local cache.
+
+**Effective Permissions in Callbacks:**
+
+Permission callbacks send the full *effective* permissions — base trust-type defaults
+merged with per-trust overrides. This ensures the receiving peer can accurately detect
+what changed. The ``GET /{actor_id}/permissions/{peer_id}`` endpoint also returns
+effective permissions for consistency.
+
+**Incremental Sync on Permission Grant:**
+
+When a permission callback grants access to new property patterns, the library performs
+an incremental sync — fetching only the newly granted properties instead of a full
+``sync_peer()`` call. This reduces HTTP requests from ~7 to 1-2 per permission grant.
 
 Best Practices
 ~~~~~~~~~~~~~~

@@ -112,7 +112,7 @@ class TestPropertiesMetadataAPI:
         assert "explanation" not in data["test_list"]
 
     def test_004_get_properties_with_metadata_true(self, http_client):
-        """Get properties with metadata=true parameter."""
+        """Get properties with metadata=true returns metadata-only structure."""
         response = requests.get(
             f"{self.actor_url}/properties?metadata=true",
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
@@ -120,18 +120,51 @@ class TestPropertiesMetadataAPI:
         assert response.status_code == 200
         data = response.json()
 
-        # Regular property should be wrapped with _list: false
-        assert "test_prop" in data
-        assert data["test_prop"]["_list"] is False
-        assert data["test_prop"]["value"] == {"value": "test_value"}
+        # Should have top-level "simple" and "lists" keys
+        assert "simple" in data
+        assert "lists" in data
 
-        # List property should have full metadata format
-        # Now uses _list and count consistently
+        # Simple properties: names and total_bytes
+        assert "test_prop" in data["simple"]["properties"]
+        assert "total_bytes" in data["simple"]
+        assert isinstance(data["simple"]["total_bytes"], int)
+
+        # List properties: count, total_bytes, description, explanation
+        assert "test_list" in data["lists"]
+        assert data["lists"]["test_list"]["count"] == 2
+        assert "total_bytes" in data["lists"]["test_list"]
+        assert "description" in data["lists"]["test_list"]
+        assert "explanation" in data["lists"]["test_list"]
+
+    def test_004b_get_properties_format_full(self, http_client):
+        """Get properties with format=full includes list items."""
+        response = requests.get(
+            f"{self.actor_url}/properties?format=full",
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        # Regular property should be simple value
+        assert "test_prop" in data
+        assert data["test_prop"] == {"value": "test_value"}
+
+        # List property should have full data including items
         assert "test_list" in data
         assert data["test_list"]["_list"] is True
         assert data["test_list"]["count"] == 2
         assert "description" in data["test_list"]
         assert "explanation" in data["test_list"]
+        assert "items" in data["test_list"]
+        assert len(data["test_list"]["items"]) == 2
+
+    def test_004c_get_properties_format_and_metadata_exclusive(self, http_client):
+        """Using format and metadata together should return 400."""
+        response = requests.get(
+            f"{self.actor_url}/properties?format=short&metadata=true",
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+        assert response.status_code == 400
 
     def test_099_cleanup_actor(self, http_client):
         """Delete test actor."""

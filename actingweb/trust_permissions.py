@@ -386,28 +386,82 @@ class TrustPermissionStore:
                 exc_info=True,
             )
 
+    def _get_effective_permissions(
+        self, permissions: TrustPermissions
+    ) -> dict[str, Any]:
+        """Get the full effective permissions by merging overrides with base trust-type defaults.
+
+        For each permission category, returns the override if set, otherwise
+        falls back to the base trust-type default. This ensures the callback
+        payload and GET /permissions responses contain the complete effective
+        permission set, not just the overrides.
+
+        Args:
+            permissions: The TrustPermissions with overrides.
+
+        Returns:
+            Dict with all permission categories populated with effective values.
+        """
+        from .trust_type_registry import get_registry
+
+        # Build override dict from TrustPermissions fields
+        override_dict: dict[str, Any] = {}
+        categories = [
+            "properties",
+            "methods",
+            "actions",
+            "tools",
+            "resources",
+            "prompts",
+        ]
+        for category in categories:
+            value = getattr(permissions, category, None)
+            if value is not None:
+                override_dict[category] = value
+
+        # Look up base permissions from trust type registry
+        base_permissions: dict[str, Any] = {}
+        try:
+            registry = get_registry(self.config)
+            trust_type = registry.get_type(permissions.trust_type)
+            if trust_type and trust_type.base_permissions:
+                base_permissions = trust_type.base_permissions
+        except Exception as e:
+            logger.warning(
+                f"Could not load base permissions for trust type "
+                f"'{permissions.trust_type}': {e}"
+            )
+
+        if not base_permissions:
+            # No base permissions available, return overrides only
+            return {cat: override_dict.get(cat) for cat in categories}
+
+        # Merge base permissions with overrides
+        merged = merge_permissions(base_permissions, override_dict)
+
+        # Return only the standard categories
+        return {cat: merged.get(cat) for cat in categories}
+
     def _build_callback_data(self, permissions: TrustPermissions) -> dict[str, Any]:
         """Build the callback data payload for permission notification.
+
+        Sends the full effective permissions (base trust-type defaults merged
+        with overrides) so the receiving peer can accurately detect what changed.
 
         Args:
             permissions: The TrustPermissions to send.
 
         Returns:
-            Dict containing the callback payload.
+            Dict containing the callback payload with full effective permissions.
         """
+        effective = self._get_effective_permissions(permissions)
+
         return {
             "id": permissions.actor_id,
             "target": "permissions",
             "type": "permission",
             "timestamp": datetime.now(UTC).isoformat(),
-            "data": {
-                "properties": permissions.properties,
-                "methods": permissions.methods,
-                "actions": permissions.actions,
-                "tools": permissions.tools,
-                "resources": permissions.resources,
-                "prompts": permissions.prompts,
-            },
+            "data": effective,
         }
 
     def get_permissions(self, actor_id: str, peer_id: str) -> TrustPermissions | None:
@@ -505,7 +559,11 @@ class TrustPermissionStore:
     def update_permissions(
         self, actor_id: str, peer_id: str, updates: dict[str, Any]
     ) -> bool:
-        """Update specific permission fields for a trust relationship."""
+        """Update specific permission fields for a trust relationship.
+
+        Normalizes any shorthand permission formats to the spec-compliant
+        structured format before storage.
+        """
         # Load existing permissions
         existing = self.get_permissions(actor_id, peer_id)
         if not existing:
@@ -518,9 +576,14 @@ class TrustPermissionStore:
             # Apply updates to the existing permissions
             updated_data = existing.to_dict()
 
-            # Update only the specified fields
+            # Update only the specified fields, normalizing properties format
             for field, value in updates.items():
                 if hasattr(existing, field):
+                    # Normalize properties to spec-compliant format
+                    if field == "properties":
+                        from .peer_permissions import normalize_property_permission
+
+                        value = normalize_property_permission(value)
                     updated_data[field] = value
                 else:
                     logger.warning(f"Unknown permission field: {field}")
@@ -632,21 +695,31 @@ def create_permission_override(
     """
     Create a permission override object for a trust relationship.
 
+    Normalizes any shorthand permission formats to the spec-compliant structured
+    format before storage. This ensures consistent storage format regardless of
+    input format.
+
     Args:
         actor_id: The actor granting permissions
         peer_id: The peer receiving permissions
         trust_type: The trust type this relationship is based on
-        permission_updates: Dict containing permission category updates
+        permission_updates: Dict containing permission category updates.
+            Accepts both spec-compliant format and shorthand list format for
+            properties (e.g., ["prop1", "prop2"] is converted to
+            {"patterns": [...], "operations": ["read"]}).
 
     Returns:
-        TrustPermissions object ready for storage
+        TrustPermissions object ready for storage with normalized permissions
     """
-    # Extract permission categories from updates
+    # Import here to avoid circular import
+    from .peer_permissions import normalize_property_permission
+
+    # Extract and normalize permission categories from updates
     permissions = TrustPermissions(
         actor_id=actor_id,
         peer_id=peer_id,
         trust_type=trust_type,
-        properties=permission_updates.get("properties"),
+        properties=normalize_property_permission(permission_updates.get("properties")),
         methods=permission_updates.get("methods"),
         actions=permission_updates.get("actions"),
         tools=permission_updates.get("tools"),

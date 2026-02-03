@@ -1,15 +1,23 @@
 import json
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from actingweb import auth
 from actingweb.handlers import base_handler
 
 if TYPE_CHECKING:
+    from actingweb.aw_proxy import AwProxy
     from actingweb.interface.actor_interface import ActorInterface
+    from actingweb.remote_storage import RemotePeerStore
     from actingweb.subscription_config import SubscriptionProcessingConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _has_wildcard(pattern: str) -> bool:
+    """Check if a pattern contains wildcard characters."""
+    return "*" in pattern or "?" in pattern or "[" in pattern
 
 
 class CallbacksHandler(base_handler.BaseHandler):
@@ -170,6 +178,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     PeerPermissions,
                     detect_permission_changes,
                     get_peer_permission_store,
+                    normalize_property_permission,
                 )
 
                 perm_data = params.get("data", {})
@@ -178,7 +187,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 peer_perms = PeerPermissions(
                     actor_id=actor_id,
                     peer_id=granting_actor_id,
-                    properties=perm_data.get("properties"),
+                    properties=normalize_property_permission(perm_data.get("properties")),
                     methods=perm_data.get("methods"),
                     actions=perm_data.get("actions"),
                     tools=perm_data.get("tools"),
@@ -217,8 +226,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                     )
 
                 # Auto-sync when new permissions are granted
-                # This fetches the newly accessible data immediately
-                # Only perform auto-sync if subscription processing is enabled and auto_storage is on
+                # This fetches the newly accessible data immediately using
+                # incremental sync (only the newly granted properties, not full baseline)
                 subscription_config = getattr(
                     myself.config, "_subscription_config", None
                 )
@@ -228,27 +237,24 @@ class CallbacksHandler(base_handler.BaseHandler):
                     and subscription_config.enabled
                     and subscription_config.auto_storage
                 ):
+                    granted_patterns = permission_changes["granted_patterns"]
                     logger.info(
-                        f"Auto-syncing peer {granting_actor_id} after permissions granted: "
-                        f"{permission_changes['granted_patterns']}"
+                        f"Incremental sync for peer {granting_actor_id} after permissions granted: "
+                        f"{granted_patterns}"
                     )
                     try:
-                        sync_result = actor_interface.subscriptions.sync_peer(
-                            granting_actor_id, config=subscription_config
+                        self._incremental_sync_granted_properties(
+                            actor_interface=actor_interface,
+                            peer_id=granting_actor_id,
+                            granted_patterns=granted_patterns,
                         )
-                        if sync_result.success:
-                            logger.info(
-                                f"Auto-sync completed for {granting_actor_id}: "
-                                f"{sync_result.subscriptions_synced} subscription(s), "
-                                f"{sync_result.total_diffs_processed} diffs processed"
-                            )
-                        else:
-                            logger.warning(
-                                f"Auto-sync failed for {granting_actor_id}: {sync_result.error}"
-                            )
+                        logger.info(
+                            f"Incremental sync completed for {granting_actor_id}: "
+                            f"{len(granted_patterns)} pattern(s) synced"
+                        )
                     except Exception as sync_error:
                         logger.error(
-                            f"Error during auto-sync for {granting_actor_id}: {sync_error}",
+                            f"Error during incremental sync for {granting_actor_id}: {sync_error}",
                             exc_info=True,
                         )
                         # Don't fail the callback - sync is not critical
@@ -292,7 +298,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if sub_info:
                 # Convert to dict for hook compatibility
                 sub = sub_info.to_dict()
-                logger.debug("Found subscription (" + str(sub) + ")")
+                logger.debug(f"Found subscription {subid} for peer {peerid}")
                 if not check or not check.check_authorisation(
                     path="callbacks",
                     subpath="subscriptions",
@@ -452,89 +458,83 @@ class CallbacksHandler(base_handler.BaseHandler):
             logger.debug(
                 f"{fetch_type.capitalize()} callback, fetching data from {callback_url}"
             )
-            try:
-                import httpx
 
-                from actingweb.trust import Trust
+            if callback_type == "resync":
+                # Resync callback - use shared baseline fetch method for consistency
+                # This ensures proper handling of ?metadata=true and property list transformations
+                target = params.get("target", "properties")
+                subtarget = params.get("subtarget")
+                resource = params.get("resource")
 
-                # Get trust relationship for authentication
-                trust = Trust(
-                    actor_id=actor_interface._core_actor.id,
-                    peerid=peer_id,
-                    config=actor_interface._core_actor.config,
-                )
-                trust_data = trust.get()
-                secret = trust_data.get("secret", "") if trust_data else ""
-
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.get(
-                        callback_url,
-                        headers={
-                            "Authorization": f"Bearer {secret}",
-                        },
+                try:
+                    # Use SubscriptionManager's baseline fetch helper
+                    # This handles metadata expansion, property list transformations, etc.
+                    callback_data = (
+                        actor_interface.subscriptions._fetch_and_transform_baseline(
+                            peer_id=peer_id,
+                            target=target,
+                            subtarget=subtarget,
+                            resource=resource,
+                        )
                     )
-                if response.status_code == 200:
-                    url_data = response.json()
-
-                    # Parse response based on callback type
-                    if callback_type == "resync":
-                        # Resync callback - URL points to resource
-                        # Response can be:
-                        # 1. Specific list: /properties/list_name -> returns array
-                        # 2. All properties: /properties -> returns dict with metadata
-                        # 3. Single scalar: /properties/name -> returns dict
-
-                        if isinstance(url_data, list):
-                            # Array response - this is a specific property list
-                            # Extract list name from subtarget parameter (preferred)
-                            subtarget = params.get("subtarget")
-
-                            if subtarget:
-                                # Use subtarget as list name
-                                list_name = subtarget
-                            else:
-                                # Fall back to extracting from URL path
-                                # URL format: /{actor_id}/properties/{list_name}
-                                import re
-
-                                match = re.search(
-                                    r"/properties/([^/]+)/?$", callback_url
-                                )
-                                list_name = match.group(1) if match else "unknown"
-
-                            # Wrap array in expected format for apply_resync_data()
-                            # Use flag-based format (preferred)
+                    if callback_data:
+                        # Handle list responses when fetching a subtarget (e.g., properties/list_name)
+                        # _fetch_and_transform_baseline returns a raw list for list properties,
+                        # but apply_resync_data expects a dict. Wrap the list in the expected format.
+                        if isinstance(callback_data, list) and subtarget:
                             callback_data = {
-                                list_name: {"_list": True, "items": url_data}
+                                subtarget: {"_list": True, "items": callback_data}
                             }
-                            logger.debug(
-                                f"Fetched resync list '{list_name}': {len(url_data)} items"
-                            )
-                        else:
-                            # Dict response - could be:
-                            # - All properties (e.g., {"memory_travel": {"_list": true, "count": 3}})
-                            # - Single scalar property (e.g., {"value": "...", "_list": false})
-                            # Pass through as-is for apply_resync_data()
-                            callback_data = url_data
-                            logger.debug(
-                                f"Fetched resync data: {len(callback_data)} keys"
-                            )
+                        logger.debug(
+                            f"Fetched resync baseline for {target}"
+                            f"{f'/{subtarget}' if subtarget else ''}: "
+                            f"{len(callback_data)} {'keys' if isinstance(callback_data, dict) else 'items'}"
+                        )
                     else:
-                        # Low-granularity diff callback
-                        # URL points to subscription diff endpoint
+                        logger.warning(f"Failed to fetch resync baseline for {target}")
+                        callback_data = {}
+                except Exception as e:
+                    logger.error(f"Error fetching resync baseline: {e}")
+                    callback_data = {}
+            else:
+                # Low-granularity diff callback - fetch from subscription diff endpoint
+                try:
+                    import httpx
+
+                    from actingweb.trust import Trust
+
+                    # Get trust relationship for authentication
+                    trust = Trust(
+                        actor_id=actor_interface._core_actor.id,
+                        peerid=peer_id,
+                        config=actor_interface._core_actor.config,
+                    )
+                    trust_data = trust.get()
+                    secret = trust_data.get("secret", "") if trust_data else ""
+
+                    with httpx.Client(timeout=10.0) as client:
+                        response = client.get(
+                            callback_url,
+                            headers={
+                                "Authorization": f"Bearer {secret}",
+                            },
+                        )
+                    if response.status_code == 200:
+                        url_data = response.json()
+                        # Low-granularity: URL points to subscription diff endpoint
                         # Response is a single diff object: {"data": {...}, "sequence": N, ...}
                         callback_data = url_data.get("data", {})
                         logger.debug(
                             f"Fetched low-granularity data: {len(callback_data)} keys"
                         )
-                else:
-                    logger.warning(
-                        f"Failed to fetch {fetch_type} data: {response.status_code}"
-                    )
+                    else:
+                        logger.warning(
+                            f"Failed to fetch low-granularity data: {response.status_code}"
+                        )
+                        callback_data = {}
+                except Exception as e:
+                    logger.error(f"Error fetching low-granularity callback data: {e}")
                     callback_data = {}
-            except Exception as e:
-                logger.error(f"Error fetching {fetch_type} callback data: {e}")
-                callback_data = {}
         else:
             callback_data = callback_data or {}
 
@@ -760,6 +760,183 @@ class CallbacksHandler(base_handler.BaseHandler):
                 exc_info=True,
             )
             return False
+
+    def _incremental_sync_granted_properties(
+        self,
+        actor_interface: "ActorInterface",
+        peer_id: str,
+        granted_patterns: list[str],
+    ) -> None:
+        """Fetch and store only the newly granted properties from a peer.
+
+        Instead of doing a full sync_peer() (which refetches baseline, capabilities,
+        and permissions), this method only fetches the specific properties that were
+        just granted access to.
+
+        Args:
+            actor_interface: The actor interface for storage access
+            peer_id: The peer who granted access
+            granted_patterns: List of property patterns that were newly granted
+        """
+        import fnmatch
+
+        from actingweb.aw_proxy import AwProxy
+        from actingweb.remote_storage import RemotePeerStore
+
+        if not granted_patterns:
+            return
+
+        # Get proxy to peer
+        proxy = AwProxy(
+            peer_target={
+                "id": actor_interface._core_actor.id,
+                "peerid": peer_id,
+                "passphrase": None,
+            },
+            config=actor_interface._core_actor.config,
+        )
+
+        if not proxy.trust:
+            logger.warning(f"Cannot fetch granted properties: no trust with {peer_id}")
+            return
+
+        remote_store = RemotePeerStore(actor_interface, peer_id, validate_peer_id=False)
+
+        for pattern in granted_patterns:
+            if _has_wildcard(pattern):
+                # Wildcard pattern: fetch property list and filter
+                self._fetch_wildcard_properties(
+                    proxy, remote_store, peer_id, pattern, fnmatch.fnmatch
+                )
+            else:
+                # Exact property name: fetch directly
+                self._fetch_single_property(proxy, remote_store, peer_id, pattern)
+
+    def _fetch_single_property(
+        self,
+        proxy: "AwProxy",
+        remote_store: "RemotePeerStore",
+        peer_id: str,
+        property_name: str,
+    ) -> None:
+        """Fetch a single property from a peer and store it.
+
+        Handles both simple properties (stored as key-value) and list properties
+        (stored via set_list with items array).
+        """
+        from datetime import UTC, datetime
+
+        try:
+            response = proxy.get_resource(path=f"properties/{property_name}")
+
+            if response is None or (isinstance(response, dict) and "error" in response):
+                error_msg = (
+                    response.get("error")
+                    if isinstance(response, dict)
+                    else "no response"
+                )
+                logger.warning(
+                    f"Failed to fetch property {property_name} from {peer_id}: {error_msg}"
+                )
+                return
+
+            # Response could be:
+            # 1. A list of items (for list properties): [{"data": ...}, ...]
+            # 2. A dict with list markers: {"_list": True, "items": [...]}
+            # 3. A simple dict value: {"value": "..."}
+            if isinstance(response, list):
+                # List property returned as array of items
+                metadata = {
+                    "source_actor": peer_id,
+                    "source_property": property_name,
+                    "synced_at": datetime.now(UTC).isoformat(),
+                    "item_count": len(response),
+                }
+                remote_store.set_list(property_name, response, metadata=metadata)
+                logger.debug(
+                    f"Stored list property '{property_name}' from {peer_id}: "
+                    f"{len(response)} items"
+                )
+            elif isinstance(response, dict) and response.get("_list") is True:
+                # List property with flag-based format
+                raw_items = response.get("items", [])
+                items: list[dict[str, Any]] = (
+                    raw_items if isinstance(raw_items, list) else []
+                )
+                metadata = {
+                    "source_actor": peer_id,
+                    "source_property": property_name,
+                    "synced_at": datetime.now(UTC).isoformat(),
+                    "item_count": len(items),
+                }
+                remote_store.set_list(property_name, items, metadata=metadata)
+                logger.debug(
+                    f"Stored list property '{property_name}' from {peer_id}: "
+                    f"{len(items)} items"
+                )
+            elif isinstance(response, dict):
+                # Simple property - store value
+                remote_store.set_value(property_name, response)
+                logger.debug(f"Stored property '{property_name}' from {peer_id}")
+            else:
+                logger.warning(
+                    f"Unexpected response type for property {property_name} "
+                    f"from {peer_id}: {type(response).__name__}"
+                )
+        except Exception as e:
+            logger.error(
+                f"Error fetching property {property_name} from {peer_id}: {e}",
+                exc_info=True,
+            )
+
+    def _fetch_wildcard_properties(
+        self,
+        proxy: "AwProxy",
+        remote_store: "RemotePeerStore",
+        peer_id: str,
+        pattern: str,
+        fnmatch_func: Callable[[str, str], bool],
+    ) -> None:
+        """Fetch properties matching a wildcard pattern from a peer."""
+        try:
+            # Fetch property list from peer
+            response = proxy.get_resource(path="properties")
+
+            if response is None or "error" in (response or {}):
+                error_msg = (
+                    response.get("error")
+                    if isinstance(response, dict)
+                    else "no response"
+                )
+                logger.warning(
+                    f"Failed to fetch property list from {peer_id}: {error_msg}"
+                )
+                return
+
+            if not isinstance(response, dict):
+                return
+
+            # Filter properties matching the pattern
+            matching_props = [
+                prop_name
+                for prop_name in response.keys()
+                if fnmatch_func(prop_name, pattern)
+            ]
+
+            logger.debug(
+                f"Found {len(matching_props)} properties matching pattern '{pattern}' "
+                f"on peer {peer_id}"
+            )
+
+            # Fetch each matching property
+            for prop_name in matching_props:
+                self._fetch_single_property(proxy, remote_store, peer_id, prop_name)
+
+        except Exception as e:
+            logger.error(
+                f"Error fetching wildcard properties '{pattern}' from {peer_id}: {e}",
+                exc_info=True,
+            )
 
     def _delete_revoked_peer_data(
         self,

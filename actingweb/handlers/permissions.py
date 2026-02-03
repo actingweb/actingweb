@@ -97,20 +97,18 @@ class PermissionsHandler(base_handler.BaseHandler):
             }
 
             if custom_permissions:
-                # Return custom permission overrides
+                # Return effective permissions: overrides merged with base defaults
+                # This ensures the response contains the complete permission set,
+                # not just the overrides. Consistent with callback payloads.
+                effective = perm_store._get_effective_permissions(custom_permissions)
                 response_data["permissions"] = {
-                    "properties": custom_permissions.properties or {},
-                    "methods": custom_permissions.methods or {},
-                    "actions": custom_permissions.actions or {},
-                    "tools": custom_permissions.tools or {},
-                    "resources": custom_permissions.resources or {},
-                    "prompts": custom_permissions.prompts or {},
+                    k: v or {} for k, v in effective.items()
                 }
                 response_data["source"] = "custom_override"
                 response_data["trust_type"] = custom_permissions.trust_type
 
                 logger.debug(
-                    f"Returning custom permissions for {actor_id} -> {peer_id}"
+                    f"Returning effective permissions (merged) for {actor_id} -> {peer_id}"
                 )
             else:
                 # Return defaults from trust type

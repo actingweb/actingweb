@@ -22,6 +22,30 @@ from .constants import PEER_PERMISSIONS_BUCKET
 logger = logging.getLogger(__name__)
 
 
+def normalize_property_permission(value: Any) -> dict[str, Any] | None:
+    """Normalize property permission to structured dict format.
+
+    Handles shorthand list format (e.g., ["prop1", "prop2"]) by converting to
+    the structured format (e.g., {"patterns": [...], "operations": ["read"]}).
+
+    Args:
+        value: Permission value - can be None, a list (shorthand), or dict (structured)
+
+    Returns:
+        Normalized dict with patterns/operations, or None if input is None
+    """
+    if value is None:
+        return None
+    if isinstance(value, list):
+        # Shorthand: list of pattern names -> full permission structure
+        return {"patterns": value, "operations": ["read"]}
+    if isinstance(value, dict):
+        return value
+    # Unexpected type - log warning and return as-is for error handling downstream
+    logger.warning(f"Unexpected property permission type: {type(value)}, value: {value}")
+    return value
+
+
 @dataclass
 class PeerPermissions:
     """
@@ -447,8 +471,15 @@ def fetch_peer_permissions(
             return permissions
 
         if "error" in response:
-            error_code = response["error"].get("code", 500)
-            error_msg = response["error"].get("message", "Unknown error")
+            # Handle both dict errors and string errors
+            error_data = response["error"]
+            if isinstance(error_data, dict):
+                error_code = error_data.get("code", 500)
+                error_msg = error_data.get("message", "Unknown error")
+            else:
+                # Error is a string or other type
+                error_code = 500
+                error_msg = str(error_data)
             permissions.fetch_error = f"Error {error_code}: {error_msg}"
             logger.warning(
                 f"Failed to fetch peer permissions from {peer_id}: {permissions.fetch_error}"
@@ -459,8 +490,9 @@ def fetch_peer_permissions(
         perm_data = response.get("permissions", response)
 
         # Map response to PeerPermissions fields
+        # Normalize properties in case peer sends shorthand list format
         if "properties" in perm_data:
-            permissions.properties = perm_data["properties"]
+            permissions.properties = normalize_property_permission(perm_data["properties"])
         if "methods" in perm_data:
             permissions.methods = perm_data["methods"]
         if "actions" in perm_data:
@@ -540,8 +572,15 @@ async def fetch_peer_permissions_async(
             return permissions
 
         if "error" in response:
-            error_code = response["error"].get("code", 500)
-            error_msg = response["error"].get("message", "Unknown error")
+            # Handle both dict errors and string errors
+            error_data = response["error"]
+            if isinstance(error_data, dict):
+                error_code = error_data.get("code", 500)
+                error_msg = error_data.get("message", "Unknown error")
+            else:
+                # Error is a string or other type
+                error_code = 500
+                error_msg = str(error_data)
             permissions.fetch_error = f"Error {error_code}: {error_msg}"
             logger.warning(
                 f"Failed to fetch peer permissions from {peer_id}: {permissions.fetch_error}"
@@ -559,8 +598,9 @@ async def fetch_peer_permissions_async(
         )
 
         # Map response to PeerPermissions fields
+        # Normalize properties in case peer sends shorthand list format
         if "properties" in perm_data:
-            permissions.properties = perm_data["properties"]
+            permissions.properties = normalize_property_permission(perm_data["properties"])
         if "methods" in perm_data:
             permissions.methods = perm_data["methods"]
         if "actions" in perm_data:

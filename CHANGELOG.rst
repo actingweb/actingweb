@@ -21,6 +21,10 @@ FIXED
 
 - **Permission Diff Asymmetry**: Fixed a bug where permission callbacks sent only override fields instead of the full effective permissions (base trust-type defaults merged with overrides). This caused ``detect_permission_changes()`` to incorrectly report base permissions as revoked when only new permissions were granted, leading to potential data loss via ``_delete_revoked_peer_data()``. The ``GET /permissions/{peer_id}`` endpoint now also returns merged effective permissions for consistency.
 
+- **Non-Destructive Resync**: ``RemotePeerStore.apply_resync_data()`` now replaces only the specific properties included in the resync data instead of deleting all peer data first. This prevents data loss when multiple subscriptions exist to the same peer (e.g., subscription A syncs ``memory_*`` properties, subscription B resyncs ``status`` - previously, B's resync would delete all of A's data).
+
+- **Permission Format Normalization**: Both shorthand list format (``["pattern1", "pattern2"]``) and spec-compliant dict format (``{"patterns": [...], "operations": [...]}``) are now accepted and normalized consistently across all permission APIs. Shorthand format defaults to read-only operations. This applies to ``TrustPermissions`` storage, ``PeerPermissions`` callbacks, and ``AccessControlConfig.add_trust_type()``.
+
 IMPROVED
 ~~~~~~~~
 

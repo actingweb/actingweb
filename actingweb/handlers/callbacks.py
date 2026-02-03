@@ -178,6 +178,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     PeerPermissions,
                     detect_permission_changes,
                     get_peer_permission_store,
+                    normalize_property_permission,
                 )
 
                 perm_data = params.get("data", {})
@@ -186,7 +187,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 peer_perms = PeerPermissions(
                     actor_id=actor_id,
                     peer_id=granting_actor_id,
-                    properties=perm_data.get("properties"),
+                    properties=normalize_property_permission(perm_data.get("properties")),
                     methods=perm_data.get("methods"),
                     actions=perm_data.get("actions"),
                     tools=perm_data.get("tools"),

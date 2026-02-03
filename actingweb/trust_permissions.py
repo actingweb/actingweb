@@ -559,7 +559,11 @@ class TrustPermissionStore:
     def update_permissions(
         self, actor_id: str, peer_id: str, updates: dict[str, Any]
     ) -> bool:
-        """Update specific permission fields for a trust relationship."""
+        """Update specific permission fields for a trust relationship.
+
+        Normalizes any shorthand permission formats to the spec-compliant
+        structured format before storage.
+        """
         # Load existing permissions
         existing = self.get_permissions(actor_id, peer_id)
         if not existing:
@@ -572,9 +576,14 @@ class TrustPermissionStore:
             # Apply updates to the existing permissions
             updated_data = existing.to_dict()
 
-            # Update only the specified fields
+            # Update only the specified fields, normalizing properties format
             for field, value in updates.items():
                 if hasattr(existing, field):
+                    # Normalize properties to spec-compliant format
+                    if field == "properties":
+                        from .peer_permissions import normalize_property_permission
+
+                        value = normalize_property_permission(value)
                     updated_data[field] = value
                 else:
                     logger.warning(f"Unknown permission field: {field}")
@@ -686,21 +695,31 @@ def create_permission_override(
     """
     Create a permission override object for a trust relationship.
 
+    Normalizes any shorthand permission formats to the spec-compliant structured
+    format before storage. This ensures consistent storage format regardless of
+    input format.
+
     Args:
         actor_id: The actor granting permissions
         peer_id: The peer receiving permissions
         trust_type: The trust type this relationship is based on
-        permission_updates: Dict containing permission category updates
+        permission_updates: Dict containing permission category updates.
+            Accepts both spec-compliant format and shorthand list format for
+            properties (e.g., ["prop1", "prop2"] is converted to
+            {"patterns": [...], "operations": ["read"]}).
 
     Returns:
-        TrustPermissions object ready for storage
+        TrustPermissions object ready for storage with normalized permissions
     """
-    # Extract permission categories from updates
+    # Import here to avoid circular import
+    from .peer_permissions import normalize_property_permission
+
+    # Extract and normalize permission categories from updates
     permissions = TrustPermissions(
         actor_id=actor_id,
         peer_id=peer_id,
         trust_type=trust_type,
-        properties=permission_updates.get("properties"),
+        properties=normalize_property_permission(permission_updates.get("properties")),
         methods=permission_updates.get("methods"),
         actions=permission_updates.get("actions"),
         tools=permission_updates.get("tools"),

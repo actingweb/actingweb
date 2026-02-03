@@ -710,8 +710,30 @@ class TrustPeerHandler(base_handler.BaseHandler):
 
         if trust_updated and permissions_updated:
             self.response.set_status(204, "Ok")
+        elif not trust_updated:
+            # Trust modification failed - check if it's because trust doesn't exist
+            # or because of a validation error
+            relationships = myself.get_trust_relationships(
+                relationship=relationship, peerid=peerid
+            )
+            if not relationships:
+                logger.warning(
+                    f"Trust modification failed: no trust relationship found for "
+                    f"actor={actor_id}, peer={peerid}, relationship={relationship}"
+                )
+                self.response.set_status(404, "Trust relationship not found")
+            else:
+                logger.warning(
+                    f"Trust modification failed for actor={actor_id}, peer={peerid}, "
+                    f"relationship={relationship} (trust exists but modify failed)"
+                )
+                self.response.set_status(400, "Failed to modify trust relationship")
         else:
-            self.response.set_status(500, "Not modified")
+            # permissions_updated is False
+            logger.warning(
+                f"Permissions update failed for actor={actor_id}, peer={peerid}"
+            )
+            self.response.set_status(500, "Failed to update permissions")
 
     def delete(self, actor_id, relationship, peerid):
         # Use AuthResult for granular control since we need add_response=False and custom logic

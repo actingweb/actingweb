@@ -328,8 +328,12 @@ class AccessControlConfig:
         Args:
             name: Unique trust type identifier
             display_name: Human-readable name
-            permissions: Simplified permissions dict for high-level access control
-                        (properties, methods, tools, resources, prompts)
+            permissions: Permissions dict for high-level access control
+                        (properties, methods, tools, resources, prompts).
+                        Properties accept two formats:
+                        - Simple: ["pattern1", "pattern2"] (defaults to read-only)
+                        - Full: {"patterns": [...], "operations": [...], "excluded_patterns": [...]}
+                        Both formats are normalized to the full spec-compliant format on storage.
             description: Optional description
             oauth_scope: Optional OAuth2 scope mapping
             acl_rules: Optional list of HTTP endpoint ACL rules. Each rule is a tuple

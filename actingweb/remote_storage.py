@@ -452,12 +452,18 @@ class RemotePeerStore:
         return {"operation": operation, "error": "unknown operation"}
 
     def apply_resync_data(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Apply full resync data, replacing all existing data.
+        """Apply resync data, replacing only the properties included in the data.
+
+        Unlike a full delete-and-replace, this method only replaces the specific
+        properties provided, preserving any other synced data from other
+        subscriptions. This is important when multiple subscriptions exist to
+        the same peer - a resync on one subscription should not destroy data
+        from other subscriptions.
 
         SECURITY: Sanitizes untrusted data from remote peer before storage.
 
         Args:
-            data: Full state data from resync callback
+            data: Resync data from callback (only these properties are replaced)
 
         Returns:
             Dict of {property_name: operation_result}
@@ -471,10 +477,12 @@ class RemotePeerStore:
 
         results: dict[str, Any] = {}
 
-        # Delete existing data first
-        self.delete_all()
+        # NOTE: We do NOT call delete_all() here.
+        # Each property is replaced individually, preserving unrelated properties.
+        # For lists, set_list() already clears before extending.
+        # For scalars, set_value() overwrites the existing value.
 
-        # Apply all new data
+        # Apply new data
         for key, value in data.items():
             try:
                 # Check for flag-based list format (preferred)
@@ -564,7 +572,11 @@ class RemotePeerStore:
         """
         from datetime import UTC, datetime
 
-        from .peer_permissions import PeerPermissions, get_peer_permission_store
+        from .peer_permissions import (
+            PeerPermissions,
+            get_peer_permission_store,
+            normalize_property_permission,
+        )
 
         try:
             actor_id = self._actor.id
@@ -581,7 +593,7 @@ class RemotePeerStore:
             peer_perms = PeerPermissions(
                 actor_id=actor_id,
                 peer_id=self._peer_id,
-                properties=permissions.get("properties"),
+                properties=normalize_property_permission(permissions.get("properties")),
                 methods=permissions.get("methods"),
                 actions=permissions.get("actions"),
                 tools=permissions.get("tools"),

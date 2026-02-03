@@ -552,15 +552,23 @@ class TestRemotePeerStoreResync:
 
                 yield scalar_storage, list_data
 
-    def test_resync_replaces_all_data(self, mock_actor, mock_storage):
-        """Test resync replaces all data."""
+    def test_resync_preserves_other_properties(self, mock_actor, mock_storage):
+        """Test resync replaces only specified properties, preserving others.
+
+        This is critical for multi-subscription scenarios where different
+        subscriptions sync different properties to the same peer store.
+        A resync on one subscription should NOT delete data from other subscriptions.
+        """
         scalar_storage, _ = mock_storage
         scalar_storage["old_key"] = {"data": {"old": True}, "timestamp": None}
 
         store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
         results = store.apply_resync_data({"new_key": {"new": True}})
 
-        assert "old_key" not in scalar_storage
+        # old_key should be PRESERVED (not deleted)
+        assert "old_key" in scalar_storage
+        assert scalar_storage["old_key"]["data"] == {"old": True}
+        # new_key should be added
         assert scalar_storage["new_key"]["data"] == {"new": True}
         assert results["new_key"]["operation"] == "resync"
         assert results["new_key"]["success"] is True
@@ -586,6 +594,73 @@ class TestRemotePeerStoreResync:
         assert scalar_storage["count"]["data"] == {"value": 42}
         assert results["count"]["operation"] == "resync"
         assert results["count"]["success"] is True
+
+    def test_resync_preserves_other_lists(self, mock_actor, mock_storage):
+        """Test resync of one list does not delete other lists.
+
+        This tests the multi-subscription scenario:
+        - Subscription 1: syncs memory_items (100 items)
+        - Subscription 2: syncs status
+        - Resync on Subscription 2 should NOT delete memory_items
+        """
+        scalar_storage, list_data = mock_storage
+        # Pre-populate with existing list (from a different subscription)
+        list_data["memory_items"] = [{"id": 1}, {"id": 2}, {"id": 3}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        # Resync only "status" property (not memory_items)
+        results = store.apply_resync_data({"status": {"online": True}})
+
+        # memory_items should be preserved
+        assert "memory_items" in list_data
+        assert len(list_data["memory_items"]) == 3
+        assert list_data["memory_items"] == [{"id": 1}, {"id": 2}, {"id": 3}]
+        # status should be added
+        assert scalar_storage["status"]["data"] == {"online": True}
+        assert results["status"]["success"] is True
+
+    def test_resync_replaces_same_list(self, mock_actor, mock_storage):
+        """Test resync replaces the content of the same list."""
+        _, list_data = mock_storage
+        # Pre-populate list
+        list_data["items"] = [{"old": 1}, {"old": 2}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        # Resync the same list with new content
+        results = store.apply_resync_data({"list:items": [{"new": 1}]})
+
+        # List should be replaced with new content
+        assert list_data["items"] == [{"new": 1}]
+        assert results["items"]["operation"] == "resync"
+        assert results["items"]["items"] == 1
+
+    def test_resync_mixed_preserves_unrelated(self, mock_actor, mock_storage):
+        """Test resync with mixed content preserves unrelated data.
+
+        Comprehensive test of the multi-subscription data preservation behavior.
+        """
+        scalar_storage, list_data = mock_storage
+        # Pre-populate with existing data from "other subscriptions"
+        scalar_storage["other_scalar"] = {"data": {"keep": "me"}, "timestamp": None}
+        list_data["other_list"] = [{"preserve": True}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        # Resync with completely different properties
+        results = store.apply_resync_data({
+            "new_scalar": {"value": "new"},
+            "list:new_list": [{"item": 1}, {"item": 2}],
+        })
+
+        # Original data preserved
+        assert "other_scalar" in scalar_storage
+        assert scalar_storage["other_scalar"]["data"] == {"keep": "me"}
+        assert "other_list" in list_data
+        assert list_data["other_list"] == [{"preserve": True}]
+        # New data added
+        assert scalar_storage["new_scalar"]["data"] == {"value": "new"}
+        assert list_data["new_list"] == [{"item": 1}, {"item": 2}]
+        assert results["new_scalar"]["success"] is True
+        assert results["new_list"]["success"] is True
 
 
 class TestRemotePeerStoreStats:

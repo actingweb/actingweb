@@ -237,21 +237,39 @@ SubscriptionManager
 
 The ``SubscriptionManager`` handles event subscriptions to and from other actors.
 
+Subscription Directions
+-----------------------
+
+Understanding subscription directions is important for proper subscription management:
+
+**Outbound subscriptions** (callback=True):
+  You are the **subscriber**. You subscribed TO another actor to receive their updates.
+  Use ``unsubscribe()`` to terminate these.
+
+**Inbound subscriptions** (callback=False):
+  You are the **publisher**. Another actor subscribed TO YOU to receive your updates.
+  Use ``revoke_peer_subscription()`` to terminate these.
+
 Listing Subscriptions
 ---------------------
 
 .. code-block:: python
 
-    # Get all subscriptions
-    all_subs = actor.subscriptions.list_subscriptions()
+    # Get all subscriptions (both directions)
+    all_subs = actor.subscriptions.all_subscriptions
 
-    # Get specific subscription by peer
-    sub = actor.subscriptions.get_subscription("peer123")
+    # Get outbound subscriptions (we subscribed to them)
+    outbound = actor.subscriptions.get_subscriptions_to_peer("peer123")
+
+    # Get inbound subscriptions (they subscribed to us)
+    inbound = actor.subscriptions.get_subscriptions_from_peer("peer123")
 
     # Get subscription with pending diffs
-    sub_with_diffs = actor.subscriptions.get_subscription_with_diffs("peer123")
-    if sub_with_diffs.has_diffs():
-        diffs = sub_with_diffs.get_diffs()
+    sub_with_diffs = actor.subscriptions.get_subscription_with_diffs(
+        peer_id="peer123",
+        subscription_id="sub456"
+    )
+    diffs = sub_with_diffs.get_diffs()
 
 Creating Subscriptions
 -----------------------
@@ -276,29 +294,85 @@ Creating Subscriptions
         granularity="high"
     )
 
-Deleting Subscriptions
------------------------
+Deleting Subscriptions: unsubscribe() vs revoke_peer_subscription()
+--------------------------------------------------------------------
+
+There are two methods for deleting subscriptions, each for a different use case:
+
+**unsubscribe()** - For terminating YOUR outbound subscriptions
+    Use when you (the subscriber) want to stop receiving updates from a peer.
+    This deletes your local outbound subscription and notifies the peer to delete
+    their inbound record.
+
+    .. code-block:: python
+
+        # You subscribed to peer123's data and now want to stop receiving updates
+        success = actor.subscriptions.unsubscribe(
+            peer_id="peer123",
+            subscription_id="sub456"
+        )
+
+        # Unsubscribe from all subscriptions to a peer
+        success = actor.subscriptions.unsubscribe_from_peer("peer123")
+
+**revoke_peer_subscription()** - For terminating a PEER'S inbound subscription
+    Use when you (the publisher) want to stop sending updates to a peer.
+    This deletes your local inbound subscription record and notifies the peer
+    to delete their outbound subscription. The ``subscription_deleted`` lifecycle
+    hook fires with ``initiated_by_peer=False``.
+
+    .. code-block:: python
+
+        # peer123 subscribed to your data and you want to revoke their access
+        success = actor.subscriptions.revoke_peer_subscription(
+            peer_id="peer123",
+            subscription_id="sub456"
+        )
+
+**Quick Reference:**
+
++---------------------------+----------------+-----------------+---------------------------+
+| Method                    | You are        | Subscription    | Use case                  |
++===========================+================+=================+===========================+
+| ``unsubscribe()``         | Subscriber     | Outbound        | Stop receiving updates    |
++---------------------------+----------------+-----------------+---------------------------+
+| ``revoke_peer_subscription()`` | Publisher | Inbound         | Stop sending updates      |
++---------------------------+----------------+-----------------+---------------------------+
+
+**Example: Managing Bidirectional Subscriptions**
 
 .. code-block:: python
 
-    # Delete local subscription
-    success = actor.subscriptions.delete_subscription("peer123")
+    # Actor A and Actor B have mutual subscriptions
+    # A subscribes to B (outbound for A, inbound for B)
+    # B subscribes to A (outbound for B, inbound for A)
 
-    # Delete with peer notification
-    success = await actor.subscriptions.unsubscribe_async("peer123")
+    # If A wants to stop receiving updates from B:
+    actor_a.subscriptions.unsubscribe("actor_b_id", "sub_id_a_to_b")
 
-Callback Subscriptions
------------------------
+    # If A wants to stop B from receiving A's updates:
+    actor_a.subscriptions.revoke_peer_subscription("actor_b_id", "sub_id_b_to_a")
 
-For callback-specific operations:
+Subscription Lifecycle Hook
+---------------------------
+
+The ``subscription_deleted`` lifecycle hook fires when inbound subscriptions are deleted:
 
 .. code-block:: python
 
-    # Get callback subscription (they subscribed to us)
-    callback_sub = actor.subscriptions.get_callback_subscription("peer123")
+    @app.lifecycle_hook("subscription_deleted")
+    def on_subscription_deleted(actor, peer_id, subscription_id, subscription_data, initiated_by_peer):
+        if initiated_by_peer:
+            # Peer unsubscribed from us via unsubscribe()
+            logger.info(f"{peer_id} unsubscribed from our data")
+        else:
+            # We revoked their subscription via revoke_peer_subscription()
+            logger.info(f"Revoked {peer_id}'s subscription")
 
-    # Delete callback subscription
-    success = actor.subscriptions.delete_callback_subscription("peer123")
+        # Common cleanup: revoke permissions, clear cached data, etc.
+        actor.trust.update_permissions(peer_id, [])
+
+See :doc:`../reference/hooks-reference` for full hook documentation.
 
 Authenticated Views
 ===================

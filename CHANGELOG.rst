@@ -72,10 +72,14 @@ CHANGED
 
 - **SDK Documentation**: Updated ``developer-api.rst`` and ``async-operations.rst`` to reflect new ``subscribe_to_peer()`` and ``subscribe_to_peer_async()`` signatures and baseline sync behavior.
 
+- **Subscription Management Documentation**: Enhanced ``developer-api.rst`` with comprehensive guide for subscription directions (inbound vs outbound), ``unsubscribe()`` vs ``revoke_peer_subscription()`` usage, and subscription lifecycle hook integration.
+
 ADDED (Test Infrastructure)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - **Test Group Verification**: New ``tests/integration/verify_groups.py`` script ensures all xdist groups are documented, integrated into CI pipeline to prevent undocumented groups.
+
+- **Subscription Lifecycle Integration Tests**: New ``test_subscription_lifecycle_hooks.py`` with 29 tests covering ``subscription_deleted`` hook execution, ``revoke_peer_subscription()`` method, and bidirectional subscription management (unsubscribe vs revoke).
 
 v3.10.0b1: Jan 30, 2026
 -----------------------

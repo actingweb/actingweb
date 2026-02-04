@@ -433,7 +433,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
             f"DELETE subscription: actor_id={actor_id}, peerid={peerid}, subid={subid}, acl_peerid='{acl_peerid}'"
         )
         if len(acl_peerid) == 0:
-            logger.warning(
+            logger.debug(
                 f"Calling delete_remote_subscription because acl_peerid is empty (actor={actor_id}, peer={peerid}, subid={subid})"
             )
             myself.delete_remote_subscription(peerid=peerid, subid=subid)
@@ -478,16 +478,18 @@ class SubscriptionHandler(base_handler.BaseHandler):
             return
 
         # Execute lifecycle hook after successful deletion
-        # Only for inbound subscriptions (callback=False) when peer initiates deletion
-        # Hook execution happens at the handler level for peer-initiated deletions (initiated_by_peer=True)
-        # Hook execution happens at the interface level for local deletions (initiated_by_peer=False)
+        # For inbound subscriptions (callback=False), fire the hook with appropriate initiated_by_peer flag
+        # - initiated_by_peer=True when peer initiates deletion (acl_peerid is set)
+        # - initiated_by_peer=False when local actor deletes via REST API (acl_peerid is empty)
+        # For outbound subscriptions (callback=True), hook is fired at the interface level
         logger.debug(
             f"Hook check: hooks={self.hooks is not None}, acl_peerid='{acl_peerid}', "
             f"len(acl_peerid)={len(acl_peerid)}, is_callback={is_callback}"
         )
-        if self.hooks and len(acl_peerid) > 0 and not is_callback:
+        if self.hooks and not is_callback:
+            initiated_by_peer = len(acl_peerid) > 0
             logger.info(
-                f"Executing subscription_deleted hook for {peerid}, initiated_by_peer=True"
+                f"Executing subscription_deleted hook for {peerid}, initiated_by_peer={initiated_by_peer}"
             )
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
@@ -498,7 +500,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
                         peer_id=peerid,
                         subscription_id=subid,
                         subscription_data=sub_data,
-                        initiated_by_peer=True,
+                        initiated_by_peer=initiated_by_peer,
                     )
                     logger.info(
                         f"Successfully executed subscription_deleted hook for {peerid}"
@@ -512,7 +514,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
         else:
             logger.debug(
                 f"Skipping hook execution: hooks={self.hooks is not None}, "
-                f"acl_peerid length={len(acl_peerid)}, is_callback={is_callback}"
+                f"is_callback={is_callback}"
             )
 
         if self.response:

@@ -1661,13 +1661,11 @@ class Actor:
         if not subid:
             return False
 
-        # Clean up RemotePeerStore for outbound subscriptions if this is the last one to this peer
-        # IMPORTANT: Do this BEFORE deleting the subscription so we can check for remaining ones
+        # For outbound subscriptions (callback=True), check if we need to clean up RemotePeerStore
+        # We need to check this BEFORE deletion to know how many subscriptions exist
+        should_cleanup_remote_peer_store = False
         if callback and peerid:
             try:
-                from .interface.actor_interface import ActorInterface
-                from .remote_storage import RemotePeerStore
-
                 # CRITICAL: Clear the subscription cache to get fresh data from database
                 # Otherwise we might see stale subscriptions or the one we're about to delete
                 self.subs_list = None
@@ -1687,19 +1685,10 @@ class Actor:
                         f"{len(remaining_subs)} other outbound subscription(s) still active"
                     )
                 else:
-                    # No other outbound subscriptions to this peer, safe to clean up
-                    actor_interface = ActorInterface(self)  # type: ignore[arg-type]
-                    store = RemotePeerStore(
-                        actor_interface,
-                        peerid,
-                        validate_peer_id=False,
-                    )
-                    store.delete_all()
-                    logger.info(f"Cleaned up RemotePeerStore for peer {peerid}")
-            except ImportError:
-                pass  # RemotePeerStore not available
+                    # Mark for cleanup after successful deletion
+                    should_cleanup_remote_peer_store = True
             except Exception as e:
-                logger.warning(f"Failed to clean up RemotePeerStore for {peerid}: {e}")
+                logger.warning(f"Failed to check RemotePeerStore cleanup for {peerid}: {e}")
 
         sub = subscription.Subscription(
             actor_id=self.id,
@@ -1712,6 +1701,27 @@ class Actor:
 
         # Clear subscription cache after deletion to ensure fresh data on next access
         self.subs_list = None
+
+        # Clean up RemotePeerStore AFTER successful deletion to avoid data loss
+        # Note: should_cleanup_remote_peer_store is only True when peerid is not None
+        if result and should_cleanup_remote_peer_store and peerid:
+            try:
+                from .interface.actor_interface import ActorInterface
+                from .remote_storage import RemotePeerStore
+
+                # No other outbound subscriptions to this peer, safe to clean up
+                actor_interface = ActorInterface(self)  # type: ignore[arg-type]
+                store = RemotePeerStore(
+                    actor_interface,
+                    peerid,
+                    validate_peer_id=False,
+                )
+                store.delete_all()
+                logger.info(f"Cleaned up RemotePeerStore for peer {peerid}")
+            except ImportError:
+                pass  # RemotePeerStore not available
+            except Exception as e:
+                logger.warning(f"Failed to clean up RemotePeerStore for {peerid}: {e}")
 
         return result
 

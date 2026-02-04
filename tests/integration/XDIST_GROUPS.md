@@ -56,6 +56,9 @@ Feature-specific tests that logically belong together.
 | `baseline_storage` | Baseline sync storage of simple and list properties | test_subscription_baseline_storage.py |
 | `peer_profile_extraction` | Peer profile extraction during subscription sync | test_peer_profile_extraction.py |
 | `sync_coverage` | Subscription sync coverage tests (trust revocation, baseline fetch, error handling) | test_subscription_sync_coverage.py |
+| `subscription_lifecycle_hooks` | Subscription deleted hook execution (peer-initiated and owner-initiated) | test_subscription_lifecycle_hooks.py |
+| `revoke_peer_subscription` | Revoking inbound subscriptions via revoke_peer_subscription() | test_subscription_lifecycle_hooks.py |
+| `unsubscribe_vs_revoke` | Difference between unsubscribe() and revoke_peer_subscription() | test_subscription_lifecycle_hooks.py |
 | `devtest_attributes_flow` | DevTest attributes operations | test_devtest_attributes_flow.py |
 | `mcp_integration` | MCP (Model Context Protocol) integration tests | test_mcp_integration.py |
 | `oauth2_integration` | OAuth2 authentication and token flow | test_oauth2_integration.py |

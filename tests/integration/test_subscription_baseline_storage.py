@@ -31,9 +31,14 @@ def test_baseline_stores_simple_and_list_properties(
     database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
     config = Config(
         database=database_backend,
-        peer_profile_attributes=["displayname", "email"],  # Enable peer profile extraction
+        peer_profile_attributes=[
+            "displayname",
+            "email",
+        ],  # Enable peer profile extraction
     )
-    print(f"\nDEBUG: Created config with peer profiles enabled: {config.peer_profile_attributes}")
+    print(
+        f"\nDEBUG: Created config with peer profiles enabled: {config.peer_profile_attributes}"
+    )
 
     # Create two actors
     actor_a = actor_factory.create("baseline_test_a@example.com")
@@ -155,7 +160,9 @@ def test_baseline_stores_simple_and_list_properties(
         subscription_id=sub_id,
         config=sync_config,
     )
-    print(f"\nDEBUG: Sync result: success={sync_result.success}, error={sync_result.error}")
+    print(
+        f"\nDEBUG: Sync result: success={sync_result.success}, error={sync_result.error}"
+    )
     assert sync_result.success, f"Subscription sync failed: {sync_result.error}"
 
     # Verify RemotePeerStore has all data
@@ -176,9 +183,9 @@ def test_baseline_stores_simple_and_list_properties(
     else:
         actual_displayname = displayname
 
-    assert (
-        actual_displayname == "Test User"
-    ), f"Expected 'Test User', got {actual_displayname}"
+    assert actual_displayname == "Test User", (
+        f"Expected 'Test User', got {actual_displayname}"
+    )
 
     email = remote_store.get_value("email")
     print(f"DEBUG: email from RemotePeerStore: {email}")
@@ -190,9 +197,9 @@ def test_baseline_stores_simple_and_list_properties(
     else:
         actual_email = email
 
-    assert (
-        actual_email == "test@example.com"
-    ), f"Expected 'test@example.com', got {actual_email}"
+    assert actual_email == "test@example.com", (
+        f"Expected 'test@example.com', got {actual_email}"
+    )
 
     # Check list property
     items = remote_store.get_list("test_items")
@@ -212,13 +219,15 @@ def test_baseline_stores_simple_and_list_properties(
 
     print("\nDEBUG: Checking PeerProfileStore...")
     if peer_profile:
-        print(f"  Profile found: displayname={peer_profile.displayname}, email={peer_profile.email}")
-        assert (
-            peer_profile.displayname == "Test User"
-        ), f"Expected profile displayname 'Test User', got {peer_profile.displayname}"
-        assert (
-            peer_profile.email == "test@example.com"
-        ), f"Expected profile email 'test@example.com', got {peer_profile.email}"
+        print(
+            f"  Profile found: displayname={peer_profile.displayname}, email={peer_profile.email}"
+        )
+        assert peer_profile.displayname == "Test User", (
+            f"Expected profile displayname 'Test User', got {peer_profile.displayname}"
+        )
+        assert peer_profile.email == "test@example.com", (
+            f"Expected profile email 'test@example.com', got {peer_profile.email}"
+        )
         print("\n✓ Peer profile extracted and stored correctly!")
     else:
         print("  ERROR: Profile NOT found in PeerProfileStore!")

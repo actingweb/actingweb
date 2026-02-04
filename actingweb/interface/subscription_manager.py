@@ -192,8 +192,9 @@ class SubscriptionManager:
         actor.subscriptions.unsubscribe(peer_id="peer123", subscription_id="sub123")
     """
 
-    def __init__(self, core_actor: CoreActor):
+    def __init__(self, core_actor: CoreActor, hooks: Any = None):
         self._core_actor = core_actor
+        self._hooks = hooks
 
     @property
     def all_subscriptions(self) -> list[SubscriptionInfo]:
@@ -224,7 +225,9 @@ class SubscriptionManager:
 
         These are subscriptions we created to subscribe to their data.
         """
-        subscriptions = self._core_actor.get_subscriptions(peerid=peer_id)
+        subscriptions = self._core_actor.get_subscriptions(
+            peerid=peer_id, callback=True
+        )
         if subscriptions is None:
             return []
         return [SubscriptionInfo(sub) for sub in subscriptions if isinstance(sub, dict)]
@@ -437,15 +440,19 @@ class SubscriptionManager:
             peerid=peer_id, subid=subscription_id
         )
         if remote_result:
-            # Then delete local subscription
+            # Then delete local outbound subscription (callback=True)
+            # IMPORTANT: Pass callback=True so RemotePeerStore cleanup happens
             local_result = self._core_actor.delete_subscription(
-                peerid=peer_id, subid=subscription_id
+                peerid=peer_id, subid=subscription_id, callback=True
             )
             return bool(local_result)
         return False
 
     def unsubscribe_from_peer(self, peer_id: str) -> bool:
-        """Unsubscribe from all of a peer's data."""
+        """Unsubscribe from all of a peer's data.
+
+        Cleanup of RemotePeerStore happens automatically in Subscription.delete().
+        """
         subscriptions = self.get_subscriptions_to_peer(peer_id)
         success = True
         for sub in subscriptions:
@@ -515,6 +522,88 @@ class SubscriptionManager:
         if sub_data and isinstance(sub_data, dict):
             return SubscriptionInfo(sub_data)
         return None
+
+    def revoke_peer_subscription(self, peer_id: str, subscription_id: str) -> bool:
+        """
+        Revoke a peer's subscription to our data (delete inbound subscription).
+
+        Use this when you want to terminate a peer's subscription to your actor's data.
+        This notifies the peer to delete their outbound subscription and deletes our
+        local inbound subscription record. Lifecycle hooks will be executed with
+        initiated_by_peer=False.
+
+        Args:
+            peer_id: ID of the peer actor
+            subscription_id: ID of the inbound subscription to revoke
+
+        Returns:
+            True if revoked successfully, False otherwise
+
+        Example:
+            # Get inbound subscriptions from a peer
+            inbound_subs = actor.subscriptions.get_subscriptions_from_peer("peer123")
+            for sub in inbound_subs:
+                # Revoke their subscription to us
+                actor.subscriptions.revoke_peer_subscription("peer123", sub.subscription_id)
+        """
+        # Get subscription data before deletion for lifecycle hook
+        sub_data = {}
+        if self._hooks:
+            from ..subscription import Subscription as CoreSubscription
+
+            sub_obj = CoreSubscription(
+                actor_id=self._core_actor.id,
+                peerid=peer_id,
+                subid=subscription_id,
+                callback=False,
+                config=self._core_actor.config,
+            )
+            sub_data = sub_obj.subscription if sub_obj.subscription else {}
+
+        # Send DELETE to peer's callback endpoint
+        remote_result = self._core_actor.delete_remote_subscription(
+            peerid=peer_id, subid=subscription_id
+        )
+
+        if remote_result:
+            # Delete local inbound subscription record (callback=False)
+            local_result = self._core_actor.delete_subscription(
+                peerid=peer_id,
+                subid=subscription_id,
+                callback=False,
+            )
+
+            # Execute lifecycle hook after successful deletion
+            # initiated_by_peer=False because we initiated the deletion
+            if local_result and self._hooks:
+                try:
+                    from .actor_interface import ActorInterface
+
+                    registry = getattr(
+                        self._core_actor.config, "service_registry", None
+                    )
+                    actor_interface = ActorInterface(
+                        self._core_actor, service_registry=registry
+                    )
+                    self._hooks.execute_lifecycle_hooks(
+                        "subscription_deleted",
+                        actor=actor_interface,
+                        peer_id=peer_id,
+                        subscription_id=subscription_id,
+                        subscription_data=sub_data,
+                        initiated_by_peer=False,
+                    )
+                    logger.debug(
+                        f"Executed subscription_deleted hook for {peer_id}, initiated_by_peer=False"
+                    )
+                except Exception as e:
+                    # Log hook execution error but don't fail subscription deletion
+                    logger.warning(
+                        f"Lifecycle hook failed for subscription {subscription_id}: {e}"
+                    )
+
+            return bool(local_result)
+        return False
 
     def delete_callback_subscription(self, peer_id: str, subscription_id: str) -> bool:
         """

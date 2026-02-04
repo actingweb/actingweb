@@ -1660,6 +1660,47 @@ class Actor:
         """Deletes a specified subscription"""
         if not subid:
             return False
+
+        # Clean up RemotePeerStore for outbound subscriptions if this is the last one to this peer
+        # IMPORTANT: Do this BEFORE deleting the subscription so we can check for remaining ones
+        if callback and peerid:
+            try:
+                from .interface.actor_interface import ActorInterface
+                from .remote_storage import RemotePeerStore
+
+                # CRITICAL: Clear the subscription cache to get fresh data from database
+                # Otherwise we might see stale subscriptions or the one we're about to delete
+                self.subs_list = None
+
+                # Check if we have any other outbound subscriptions to this peer
+                other_subs = self.get_subscriptions(peerid=peerid, callback=True)
+
+                # Filter out the current subscription being deleted
+                # IMPORTANT: Field name is "subscriptionid" not "subid"
+                remaining_subs = [
+                    s for s in (other_subs or []) if s.get("subscriptionid") != subid
+                ]
+
+                if remaining_subs:
+                    logger.debug(
+                        f"Not cleaning up RemotePeerStore for {peerid} - "
+                        f"{len(remaining_subs)} other outbound subscription(s) still active"
+                    )
+                else:
+                    # No other outbound subscriptions to this peer, safe to clean up
+                    actor_interface = ActorInterface(self)  # type: ignore[arg-type]
+                    store = RemotePeerStore(
+                        actor_interface,
+                        peerid,
+                        validate_peer_id=False,
+                    )
+                    store.delete_all()
+                    logger.info(f"Cleaned up RemotePeerStore for peer {peerid}")
+            except ImportError:
+                pass  # RemotePeerStore not available
+            except Exception as e:
+                logger.warning(f"Failed to clean up RemotePeerStore for {peerid}: {e}")
+
         sub = subscription.Subscription(
             actor_id=self.id,
             peerid=peerid,
@@ -1667,7 +1708,12 @@ class Actor:
             callback=callback,
             config=self.config,
         )
-        return sub.delete()
+        result = sub.delete()
+
+        # Clear subscription cache after deletion to ensure fresh data on next access
+        self.subs_list = None
+
+        return result
 
     def callback_subscription(
         self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None

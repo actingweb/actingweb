@@ -224,6 +224,7 @@ class LifecycleEvent(Enum):
     OAUTH_SUCCESS = "oauth_success"
     TRUST_APPROVED = "trust_approved"
     TRUST_DELETED = "trust_deleted"
+    SUBSCRIPTION_DELETED = "subscription_deleted"
 
 
 @dataclass

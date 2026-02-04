@@ -90,17 +90,17 @@ class Subscription:
         # Clear diffs
         self.clear_diffs()
 
+        # Create minimal actor stub (used by both cleanup operations below)
+        # We need to avoid circular imports and full Actor initialization
+        class _ActorStub:
+            def __init__(self, actor_id, config):
+                self.id = actor_id
+                self.config = config
+
         # Clear callback processor state if this is a callback subscription
         if self.callback and self.actor_id and self.peerid and self.subid:
             try:
                 from .callback_processor import CallbackProcessor
-
-                # Create a minimal actor-like object for CallbackProcessor
-                # We need to avoid circular imports and full Actor initialization
-                class _ActorStub:
-                    def __init__(self, actor_id, config):
-                        self.id = actor_id
-                        self.config = config
 
                 actor_stub = _ActorStub(self.actor_id, self.config)
                 processor = CallbackProcessor(actor_stub)  # type: ignore[arg-type]
@@ -112,6 +112,9 @@ class Subscription:
                 pass  # CallbackProcessor not available
             except Exception as e:
                 logger.warning(f"Failed to clear callback state for {self.subid}: {e}")
+
+        # NOTE: RemotePeerStore cleanup is handled at a higher level in Actor.delete_subscription()
+        # where we have access to check for other remaining subscriptions to the same peer
 
         # Delete subscription record
         self.handle.delete()

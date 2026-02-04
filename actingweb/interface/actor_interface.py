@@ -279,7 +279,9 @@ class ActorInterface:
     def subscriptions(self) -> SubscriptionManager:
         """Subscription manager."""
         if self._subscription_manager is None:
-            self._subscription_manager = SubscriptionManager(self._core_actor)
+            self._subscription_manager = SubscriptionManager(
+                self._core_actor, hooks=self._hooks
+            )
         return self._subscription_manager
 
     @property

@@ -42,7 +42,9 @@ def normalize_property_permission(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
     # Unexpected type - log warning and return as-is for error handling downstream
-    logger.warning(f"Unexpected property permission type: {type(value)}, value: {value}")
+    logger.warning(
+        f"Unexpected property permission type: {type(value)}, value: {value}"
+    )
     return value
 
 
@@ -492,7 +494,9 @@ def fetch_peer_permissions(
         # Map response to PeerPermissions fields
         # Normalize properties in case peer sends shorthand list format
         if "properties" in perm_data:
-            permissions.properties = normalize_property_permission(perm_data["properties"])
+            permissions.properties = normalize_property_permission(
+                perm_data["properties"]
+            )
         if "methods" in perm_data:
             permissions.methods = perm_data["methods"]
         if "actions" in perm_data:
@@ -600,7 +604,9 @@ async def fetch_peer_permissions_async(
         # Map response to PeerPermissions fields
         # Normalize properties in case peer sends shorthand list format
         if "properties" in perm_data:
-            permissions.properties = normalize_property_permission(perm_data["properties"])
+            permissions.properties = normalize_property_permission(
+                perm_data["properties"]
+            )
         if "methods" in perm_data:
             permissions.methods = perm_data["methods"]
         if "actions" in perm_data:

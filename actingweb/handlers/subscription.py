@@ -31,9 +31,10 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
 
         # Use SubscriptionManager to get subscriptions
         if peerid:
-            subscription_infos = (
-                actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
-            )
+            # Return both directions: outbound (we subscribed to them) and inbound (they subscribed to us)
+            outbound = actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+            inbound = actor_interface.subscriptions.get_subscriptions_from_peer(peerid)
+            subscription_infos = outbound + inbound
         elif target:
             subscription_infos = (
                 actor_interface.subscriptions.get_subscriptions_for_target(
@@ -165,9 +166,10 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
                 sub for sub in subscription_infos if sub.peer_id == peerid
             ]
         else:
-            subscription_infos = (
-                actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
-            )
+            # Return both directions: outbound (we subscribed to them) and inbound (they subscribed to us)
+            outbound = actor_interface.subscriptions.get_subscriptions_to_peer(peerid)
+            inbound = actor_interface.subscriptions.get_subscriptions_from_peer(peerid)
+            subscription_infos = outbound + inbound
 
         # Convert SubscriptionInfo objects to dicts for JSON response
         subscriptions = [sub.to_dict() for sub in subscription_infos]
@@ -426,11 +428,93 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
             return
         # Do not delete remote subscription if this is from our peer
-        if len(auth_result.auth_obj.acl["peerid"]) == 0:
+        acl_peerid = auth_result.auth_obj.acl.get("peerid", "")
+        logger.debug(
+            f"DELETE subscription: actor_id={actor_id}, peerid={peerid}, subid={subid}, acl_peerid='{acl_peerid}'"
+        )
+        if len(acl_peerid) == 0:
+            logger.warning(
+                f"Calling delete_remote_subscription because acl_peerid is empty (actor={actor_id}, peer={peerid}, subid={subid})"
+            )
             myself.delete_remote_subscription(peerid=peerid, subid=subid)
-        if not myself.delete_subscription(peerid=peerid, subid=subid):
+        else:
+            logger.debug(
+                f"NOT calling delete_remote_subscription because request is from peer '{acl_peerid}'"
+            )
+
+        # Get subscription info before deletion for lifecycle hook
+        # NOTE: We don't know if this is inbound or outbound yet, so we try to fetch
+        # with callback=False first (most common case - peer deleting their subscription to us)
+        from ..subscription import Subscription
+
+        sub_obj = Subscription(
+            actor_id=actor_id,
+            peerid=peerid,
+            subid=subid,
+            callback=False,
+            config=myself.config,
+        )
+        sub_data = sub_obj.subscription if sub_obj.subscription else {}
+
+        # If subscription not found with callback=False, try callback=True
+        if not sub_data:
+            sub_obj = Subscription(
+                actor_id=actor_id,
+                peerid=peerid,
+                subid=subid,
+                callback=True,
+                config=myself.config,
+            )
+            sub_data = sub_obj.subscription if sub_obj.subscription else {}
+
+        is_callback = sub_data.get("callback", False)
+
+        # Delete the subscription (cleanup happens automatically in Subscription.delete())
+        # IMPORTANT: Pass the actual callback value from the subscription record
+        if not myself.delete_subscription(
+            peerid=peerid, subid=subid, callback=is_callback
+        ):
             self.response.set_status(404)
             return
+
+        # Execute lifecycle hook after successful deletion
+        # Only for inbound subscriptions (callback=False) when peer initiates deletion
+        # Hook execution happens at the handler level for peer-initiated deletions (initiated_by_peer=True)
+        # Hook execution happens at the interface level for local deletions (initiated_by_peer=False)
+        logger.debug(
+            f"Hook check: hooks={self.hooks is not None}, acl_peerid='{acl_peerid}', "
+            f"len(acl_peerid)={len(acl_peerid)}, is_callback={is_callback}"
+        )
+        if self.hooks and len(acl_peerid) > 0 and not is_callback:
+            logger.info(
+                f"Executing subscription_deleted hook for {peerid}, initiated_by_peer=True"
+            )
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                try:
+                    self.hooks.execute_lifecycle_hooks(
+                        "subscription_deleted",
+                        actor=actor_interface,
+                        peer_id=peerid,
+                        subscription_id=subid,
+                        subscription_data=sub_data,
+                        initiated_by_peer=True,
+                    )
+                    logger.info(
+                        f"Successfully executed subscription_deleted hook for {peerid}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Error executing subscription_deleted hook: {e}", exc_info=True
+                    )
+            else:
+                logger.warning("Failed to get actor_interface for hook execution")
+        else:
+            logger.debug(
+                f"Skipping hook execution: hooks={self.hooks is not None}, "
+                f"acl_peerid length={len(acl_peerid)}, is_callback={is_callback}"
+            )
+
         if self.response:
             self.response.set_status(204)
         return

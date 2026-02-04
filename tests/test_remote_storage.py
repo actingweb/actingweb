@@ -646,10 +646,12 @@ class TestRemotePeerStoreResync:
 
         store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
         # Resync with completely different properties
-        results = store.apply_resync_data({
-            "new_scalar": {"value": "new"},
-            "list:new_list": [{"item": 1}, {"item": 2}],
-        })
+        results = store.apply_resync_data(
+            {
+                "new_scalar": {"value": "new"},
+                "list:new_list": [{"item": 1}, {"item": 2}],
+            }
+        )
 
         # Original data preserved
         assert "other_scalar" in scalar_storage

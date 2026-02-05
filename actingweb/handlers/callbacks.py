@@ -94,9 +94,47 @@ class CallbacksHandler(base_handler.BaseHandler):
                     self.response.set_status(500, "Internal error")
                 return
 
+            # Get subscription data before deletion for lifecycle hook
+            sub_data = {}
+            if self.hooks:
+                from ..subscription import Subscription
+
+                sub_obj = Subscription(
+                    actor_id=actor_id,
+                    peerid=peerid,
+                    subid=subid,
+                    callback=False,  # Callback subscription is inbound (callback=False)
+                    config=myself.config,
+                )
+                sub_data = sub_obj.subscription if sub_obj.subscription else {}
+
             if actor_interface.subscriptions.delete_callback_subscription(
                 peer_id=peerid, subscription_id=subid
             ):
+                # Execute lifecycle hook after successful deletion
+                # This is a peer-initiated deletion (they're deleting their subscription to us)
+                if self.hooks and peerid:
+                    try:
+                        logger.info(
+                            f"Executing subscription_deleted hook for peer {peerid}, initiated_by_peer=True"
+                        )
+                        self.hooks.execute_lifecycle_hooks(
+                            "subscription_deleted",
+                            actor=actor_interface,
+                            peer_id=peerid,
+                            subscription_id=subid,
+                            subscription_data=sub_data,
+                            initiated_by_peer=True,
+                        )
+                        logger.info(
+                            f"Successfully executed subscription_deleted hook for {peerid}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Error executing subscription_deleted hook: {e}",
+                            exc_info=True,
+                        )
+
                 self.response.set_status(204, "Deleted")
                 return
             self.response.set_status(404, "Not found")
@@ -187,7 +225,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                 peer_perms = PeerPermissions(
                     actor_id=actor_id,
                     peer_id=granting_actor_id,
-                    properties=normalize_property_permission(perm_data.get("properties")),
+                    properties=normalize_property_permission(
+                        perm_data.get("properties")
+                    ),
                     methods=perm_data.get("methods"),
                     actions=perm_data.get("actions"),
                     tools=perm_data.get("tools"),

@@ -254,9 +254,7 @@ class RemotePeerStore:
                     )
                     continue
         except Exception as e:
-            logger.error(
-                f"Error listing list properties for peer {self._peer_id}: {e}"
-            )
+            logger.error(f"Error listing list properties for peer {self._peer_id}: {e}")
 
         # Get all scalar properties
         try:

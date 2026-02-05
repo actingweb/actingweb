@@ -8,6 +8,10 @@ Unreleased
 ADDED
 ~~~~~
 
+- **Revoke Peer Subscription Method**: New ``SubscriptionManager.revoke_peer_subscription(peer_id, subscription_id)`` method provides semantically clear way to delete inbound subscriptions (peer's subscription to our data). This method notifies the peer to delete their outbound subscription and deletes our local inbound record. Improves API clarity compared to the generic ``unsubscribe()`` method which works for both directions but has misleading naming for inbound subscriptions.
+
+- **Subscription Deleted Lifecycle Hook**: New ``subscription_deleted`` lifecycle event triggered when a subscription is deleted, particularly useful for cleanup when peers unsubscribe. The hook receives ``actor``, ``peer_id``, ``subscription_id``, ``subscription_data``, and ``initiated_by_peer`` flag. Applications can use this to revoke permissions, clean up cached data, or send notifications when peers unsubscribe. Only triggered for inbound subscriptions (where peer subscribes to us) to prevent duplicate cleanup.
+
 - **Revoked Trust Detection**: Automatic detection and cleanup when a peer has revoked a trust relationship. During subscription sync, if all subscriptions return 404, the system verifies the trust relationship with the peer and either cleans up dead subscriptions (if trust still exists) or removes the local trust entirely, triggering the ``trust_deleted`` lifecycle hook.
 
 - **Baseline Sync on Subscription Creation**: ``subscribe_to_peer()`` and new ``subscribe_to_peer_async()`` now perform an immediate baseline data fetch after creating the subscription. This ensures consistent initial state regardless of whether the peer has existing data or pending diffs.
@@ -18,6 +22,18 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **RemotePeerStore Cleanup with Multiple Subscriptions**: Fixed a bug where deleting one outbound subscription would incorrectly clean up the RemotePeerStore even when other active outbound subscriptions to the same peer still existed. Moved cleanup logic from low-level ``Subscription.delete()`` to ``Actor.delete_subscription()`` where it can properly check for remaining subscriptions using the Actor interface (``get_subscriptions()``), ensuring cached peer data is preserved when still needed by other subscriptions.
+
+- **Missing Callback Parameter in Unsubscribe**: Fixed a critical bug in ``SubscriptionManager.unsubscribe()`` where the ``callback=True`` parameter wasn't passed to ``delete_subscription()`` when deleting the local outbound subscription. This caused RemotePeerStore cleanup to be skipped entirely, leaving cached peer data orphaned after unsubscribing. The method now correctly passes ``callback=True`` to trigger proper cleanup of outbound subscriptions.
+
+- **Stale Subscription Cache Preventing Cleanup**: Fixed a bug in ``Actor.delete_subscription()`` where the subscription list cache (``self.subs_list``) was not cleared before checking for remaining subscriptions, causing the check to use stale data including already-deleted or currently-deleting subscriptions. This prevented RemotePeerStore cleanup from running even when deleting the last subscription to a peer. The method now clears the cache before checking and after deletion to ensure fresh data.
+
+- **Wrong Field Name in Subscription Filtering**: Fixed a critical bug in ``Actor.delete_subscription()`` where the filter checked ``s.get("subid")`` instead of ``s.get("subscriptionid")``, causing the filter to never match any subscriptions. This meant every subscription deletion would find "other subscriptions still active" (the one being deleted) and skip RemotePeerStore cleanup entirely, leaving orphaned peer data. The filter now uses the correct field name ``subscriptionid``.
+
+- **Subscription Deletion Cleanup**: Fixed a bug in the subscription handler where the actual ``callback`` value from the subscription record wasn't passed to ``delete_subscription()``, causing incorrect RemotePeerStore cleanup. The handler now fetches the subscription first to determine whether it's inbound (``callback=False``) or outbound (``callback=True``), then passes the correct value to ensure proper cleanup: outbound subscriptions clean up cached peer data, while inbound subscriptions don't.
+
+- **Subscription Listing by Peer**: Fixed a bug in the subscription handler where ``GET /subscriptions?peerid=X`` only returned outbound subscriptions (where we subscribed to peer) instead of all subscriptions involving that peer. The endpoint now returns both outbound and inbound subscriptions (where peer subscribed to us), matching the expected API behavior.
 
 - **Permission Diff Asymmetry**: Fixed a bug where permission callbacks sent only override fields instead of the full effective permissions (base trust-type defaults merged with overrides). This caused ``detect_permission_changes()`` to incorrectly report base permissions as revoked when only new permissions were granted, leading to potential data loss via ``_delete_revoked_peer_data()``. The ``GET /permissions/{peer_id}`` endpoint now also returns merged effective permissions for consistency.
 
@@ -56,10 +72,14 @@ CHANGED
 
 - **SDK Documentation**: Updated ``developer-api.rst`` and ``async-operations.rst`` to reflect new ``subscribe_to_peer()`` and ``subscribe_to_peer_async()`` signatures and baseline sync behavior.
 
+- **Subscription Management Documentation**: Enhanced ``developer-api.rst`` with comprehensive guide for subscription directions (inbound vs outbound), ``unsubscribe()`` vs ``revoke_peer_subscription()`` usage, and subscription lifecycle hook integration.
+
 ADDED (Test Infrastructure)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - **Test Group Verification**: New ``tests/integration/verify_groups.py`` script ensures all xdist groups are documented, integrated into CI pipeline to prevent undocumented groups.
+
+- **Subscription Lifecycle Integration Tests**: New ``test_subscription_lifecycle_hooks.py`` with 29 tests covering ``subscription_deleted`` hook execution, ``revoke_peer_subscription()`` method, and bidirectional subscription management (unsubscribe vs revoke).
 
 v3.10.0b1: Jan 30, 2026
 -----------------------

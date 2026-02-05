@@ -51,11 +51,14 @@ class FakeCoreActor:
         target: str | None = None,
         subtarget: str | None = None,
         resource: str | None = None,
+        callback: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Mock get_subscriptions - returns list of dicts."""
         result = []
         for key, sub in self._subscriptions.items():
             if peerid is not None and key[0] != peerid:
+                continue
+            if callback is not None and key[2] != callback:
                 continue
             if target is not None and sub.get("target") != target:
                 continue

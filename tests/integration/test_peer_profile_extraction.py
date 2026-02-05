@@ -14,7 +14,12 @@ pytestmark = pytest.mark.xdist_group(name="peer_profile_extraction")
 
 
 def test_peer_profile_extraction_during_sync(
-    actor_factory, trust_helper, http_client, docker_services, setup_database, worker_info
+    actor_factory,
+    trust_helper,
+    http_client,
+    docker_services,
+    setup_database,
+    worker_info,
 ):
     """Test that peer profile is extracted and stored during subscription baseline sync."""
     from actingweb.actor import Actor
@@ -39,9 +44,14 @@ def test_peer_profile_extraction_during_sync(
 
     config = Config(
         database=database_backend,
-        peer_profile_attributes=["displayname", "email"],  # Enable peer profile extraction
+        peer_profile_attributes=[
+            "displayname",
+            "email",
+        ],  # Enable peer profile extraction
     )
-    print(f"\n✓ Created config with peer profiles enabled: {config.peer_profile_attributes}")
+    print(
+        f"\n✓ Created config with peer profiles enabled: {config.peer_profile_attributes}"
+    )
 
     # Create two actors via HTTP API
     actor_a = actor_factory.create("profile_test_a@example.com")
@@ -64,7 +74,9 @@ def test_peer_profile_extraction_during_sync(
         timeout=5,
     )
     assert response.status_code in (200, 204)
-    print("✓ Set properties on actor B: displayname='Test User B', email='user_b@example.com'")
+    print(
+        "✓ Set properties on actor B: displayname='Test User B', email='user_b@example.com'"
+    )
 
     # Establish trust from actor_a to actor_b
     trust_helper.establish(actor_a, actor_b, "friend", approve=True)
@@ -146,7 +158,9 @@ def test_peer_profile_extraction_during_sync(
     if isinstance(displayname_data, dict):
         print(f"  displayname keys: {displayname_data.keys()}")
         print(f"  'value' in displayname_data: {'value' in displayname_data}")
-    assert displayname_data is not None, "displayname should be stored in RemotePeerStore"
+    assert displayname_data is not None, (
+        "displayname should be stored in RemotePeerStore"
+    )
 
     # Properties are stored in wrapped format: {"value": "..."}
     if isinstance(displayname_data, dict) and "value" in displayname_data:
@@ -156,9 +170,9 @@ def test_peer_profile_extraction_during_sync(
         actual_displayname = displayname_data
         print(f"  displayname (used directly): {actual_displayname}")
 
-    assert (
-        actual_displayname == "Test User B"
-    ), f"Expected 'Test User B', got {actual_displayname} (type: {type(actual_displayname)})"
+    assert actual_displayname == "Test User B", (
+        f"Expected 'Test User B', got {actual_displayname} (type: {type(actual_displayname)})"
+    )
 
     email_data = remote_store.get_value("email")
     print(f"  email from RemotePeerStore (raw): {email_data}")
@@ -174,9 +188,9 @@ def test_peer_profile_extraction_during_sync(
         actual_email = email_data
 
     print(f"  email (extracted): {actual_email}")
-    assert (
-        actual_email == "user_b@example.com"
-    ), f"Expected 'user_b@example.com', got {actual_email}"
+    assert actual_email == "user_b@example.com", (
+        f"Expected 'user_b@example.com', got {actual_email}"
+    )
 
     print("✓ All properties stored correctly in RemotePeerStore!")
 
@@ -189,12 +203,12 @@ def test_peer_profile_extraction_during_sync(
         print(
             f"  ✓ Profile found: displayname={peer_profile.displayname}, email={peer_profile.email}"
         )
-        assert (
-            peer_profile.displayname == "Test User B"
-        ), f"Expected profile displayname 'Test User B', got {peer_profile.displayname}"
-        assert (
-            peer_profile.email == "user_b@example.com"
-        ), f"Expected profile email 'user_b@example.com', got {peer_profile.email}"
+        assert peer_profile.displayname == "Test User B", (
+            f"Expected profile displayname 'Test User B', got {peer_profile.displayname}"
+        )
+        assert peer_profile.email == "user_b@example.com", (
+            f"Expected profile email 'user_b@example.com', got {peer_profile.email}"
+        )
         print("\n✅ SUCCESS: Peer profile extracted and stored correctly!")
     else:
         print("  ❌ ERROR: Profile NOT found in PeerProfileStore!")

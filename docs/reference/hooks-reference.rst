@@ -94,7 +94,7 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-- Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``email_verification_required``, ``email_verified``
+- Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_verified``
 
 Event Details
 ~~~~~~~~~~~~~
@@ -193,6 +193,34 @@ Event Details
     - ``trust_data``: Dictionary containing the trust relationship data (may be empty if trust was already deleted)
 
     **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the cached peer profile is automatically deleted when this hook fires.
+
+``subscription_deleted``
+    Triggered when a subscription is deleted (inbound subscriptions only).
+
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, subscription_id: str, subscription_data: dict, initiated_by_peer: bool) -> None``
+
+    **Parameters**:
+
+    - ``actor``: The ActorInterface for the current actor
+    - ``peer_id``: The ID of the peer in the subscription
+    - ``subscription_id``: The ID of the subscription that was deleted
+    - ``subscription_data``: Dictionary containing the subscription data (may be empty if subscription was already deleted)
+    - ``initiated_by_peer``: ``True`` if the peer initiated the deletion (unsubscribed from us), ``False`` if we revoked their subscription
+
+    **Use Cases**: Revoke peer permissions, clean up cached data, send notifications when peers unsubscribe
+
+    **Note**: Only triggered for inbound subscriptions (where peer subscribes to us) to prevent duplicate cleanup. Outbound subscription deletions (us unsubscribing from peer) do not trigger this hook.
+
+    **Example**:
+
+    .. code-block:: python
+
+        @app.lifecycle_hook("subscription_deleted")
+        def on_subscription_deleted(actor, peer_id, subscription_id, subscription_data, initiated_by_peer):
+            if initiated_by_peer:
+                # Peer unsubscribed from us - revoke their permissions
+                actor.trust.update_permissions(peer_id, [])
+                notify_user(actor, f"{peer_id} unsubscribed from your data")
 
 ``email_verification_required``
     Triggered when email verification is needed for OAuth2 actors.

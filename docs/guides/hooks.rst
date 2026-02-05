@@ -167,7 +167,16 @@ Lifecycle Hooks
        # Called when peer approves, completing mutual approval
        notify_user(actor, f"{peer_id} approved your request! Relationship established")
 
-Available events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``.
+   @app.lifecycle_hook("subscription_deleted")
+   def on_subscription_deleted(actor, peer_id, subscription_id, subscription_data, **kwargs):
+       # Called when a subscription is deleted (by us or by peer)
+       initiated_by_peer = kwargs.get("initiated_by_peer", False)
+       if initiated_by_peer:
+           # Peer unsubscribed from us - revoke their permissions
+           revoke_permissions(actor, peer_id)
+           notify_user(actor, f"{peer_id} unsubscribed from your data")
+
+Available events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``.
 
 Subscription Hook
 -----------------

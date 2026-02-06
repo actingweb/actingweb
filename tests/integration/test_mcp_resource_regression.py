@@ -91,27 +91,23 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
     # Register custom resources to test the three bug fixes
 
     # Bug Fix #1: Test legacy "uri" field fallback (no uri_template)
-    @aw_app.method_hook("legacy_uri_resource")
+    @aw_app.method_hook("legacy_resource")
     @mcp_resource(
-        uri_template=None,  # Intentionally not provided
+        uri_template="notes://legacy_resource",
         name="Legacy URI Resource",
-        description="Resource using legacy uri field for backward compatibility",
+        description="Resource testing uri_template fallback chain",
     )
     def legacy_uri_resource_hook(_actor, _method_name, _params):
         """
         Test legacy "uri" field fallback.
 
-        This simulates resources that were registered before uri_template existed.
-        The handler should fall back to metadata.get("uri") field.
+        Tests that the fallback chain (uri_template → uri → default) works correctly.
+        Uses notes:// scheme which is allowed by mcp_client trust type (notes://* pattern).
         """
-        # Manually set the "uri" field in metadata (simulating old-style registration)
-        # Note: We can't actually override the decorator metadata here, but the test
-        # will verify that the fallback chain works by checking if actingweb://legacy_uri_resource
-        # is accessible (default fallback).
         return {
             "contents": [
                 {
-                    "uri": "actingweb://legacy_uri_resource",
+                    "uri": "notes://legacy_resource",
                     "mimeType": "text/plain",
                     "text": "legacy_uri_fallback_success",
                 }
@@ -121,7 +117,7 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
     # Bug Fix #2: Test empty template variables (no placeholders in URI)
     @aw_app.method_hook("static_resource")
     @mcp_resource(
-        uri_template="actingweb://static",
+        uri_template="notes://static",
         name="Static Resource",
         description="Resource with no URI variables (empty dict should match)",
     )
@@ -131,11 +127,12 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
 
         The bug was that empty dict {} was treated as falsy, failing the match.
         This should now work correctly with `is not None` check.
+        Uses notes:// scheme for mcp_client permissions.
         """
         return {
             "contents": [
                 {
-                    "uri": "actingweb://static",
+                    "uri": "notes://static",
                     "mimeType": "text/plain",
                     "text": "empty_dict_match_success",
                 }
@@ -145,7 +142,7 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
     # Bug Fix #3: Test correct parameter order in _match_uri_template
     @aw_app.method_hook("user_data")
     @mcp_resource(
-        uri_template="actingweb://users/{userId}/data",
+        uri_template="notes://users/{userId}/data",
         name="User Data Resource",
         description="Resource with URI parameters to test extraction",
     )
@@ -156,13 +153,14 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
         The bug was reversed parameters: _match_uri_template(uri, template)
         should be _match_uri_template(template, uri).
         This resource verifies that variables are correctly extracted.
+        Uses notes:// scheme for mcp_client permissions.
         """
         # params should contain the extracted userId
         user_id = params.get("userId", "unknown")
         return {
             "contents": [
                 {
-                    "uri": f"actingweb://users/{user_id}/data",
+                    "uri": f"notes://users/{user_id}/data",
                     "mimeType": "application/json",
                     "text": f'{{"userId": "{user_id}", "status": "parameter_extraction_success"}}',
                 }
@@ -255,8 +253,8 @@ class TestMCPResourceRegressions:
         """
         Regression test for Bug #1: Legacy "uri" field fallback.
 
-        Verifies that resources without uri_template still work by falling back
-        to the default actingweb://{method_name} pattern.
+        Verifies that the uri_template field lookup and fallback chain
+        (uri_template → uri → default) works correctly.
         """
         initialize_mcp_session(regression_oauth2_client)
 
@@ -266,7 +264,7 @@ class TestMCPResourceRegressions:
             json={
                 "jsonrpc": "2.0",
                 "method": "resources/read",
-                "params": {"uri": "actingweb://legacy_uri_resource"},
+                "params": {"uri": "notes://legacy_resource"},
                 "id": 100,
             },
             headers={"Content-Type": "application/json"},
@@ -296,7 +294,7 @@ class TestMCPResourceRegressions:
             json={
                 "jsonrpc": "2.0",
                 "method": "resources/read",
-                "params": {"uri": "actingweb://static"},
+                "params": {"uri": "notes://static"},
                 "id": 101,
             },
             headers={"Content-Type": "application/json"},
@@ -326,7 +324,7 @@ class TestMCPResourceRegressions:
             json={
                 "jsonrpc": "2.0",
                 "method": "resources/read",
-                "params": {"uri": "actingweb://users/user123/data"},
+                "params": {"uri": "notes://users/user123/data"},
                 "id": 102,
             },
             headers={"Content-Type": "application/json"},

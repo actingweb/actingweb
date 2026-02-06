@@ -366,10 +366,15 @@ class AsyncMCPHandler(MCPHandler):
                     if is_mcp_exposed(hook):
                         metadata = get_mcp_metadata(hook)
                         if metadata and metadata.get("type") == "resource":
-                            uri_template = metadata.get("uri")
+                            # Prefer 'uri_template' from decorator; fall back to legacy 'uri'
+                            uri_template = (
+                                metadata.get("uri_template")
+                                or metadata.get("uri")
+                                or f"actingweb://{method_name}"
+                            )
                             if uri_template:
-                                match_result = _match_uri_template(uri, uri_template)
-                                if match_result:
+                                match_result = _match_uri_template(uri_template, uri)
+                                if match_result is not None:
                                     try:
                                         # Extract variables from URI
                                         uri_variables = match_result
@@ -434,6 +439,8 @@ class AsyncMCPHandler(MCPHandler):
 
         except ImportError:
             logger.warning("Failed to import URI template matching from SDK server")
+        except Exception as e:
+            logger.error(f"Unexpected error during resource lookup: {e}", exc_info=True)
 
         return self._create_jsonrpc_error(
             request_id, -32601, f"Resource not found: {uri}"

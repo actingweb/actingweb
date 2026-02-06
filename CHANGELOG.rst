@@ -5,6 +5,14 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.0b3: Feb 6, 2026
+-----------------------
+
+FIXED
+~~~~~
+
+- **Async MCP Resource Lookup**: Fixed three critical bugs in ``AsyncMCPHandler._handle_resource_read_async()`` that prevented MCP resources from being discovered and executed. (1) Handler checked ``metadata.get("uri")`` but resources are registered with ``"uri_template"`` field - added fallback chain checking ``uri_template`` first, then ``uri``, then generating default. (2) URI template matching called with reversed parameters ``_match_uri_template(uri, uri_template)`` instead of correct order ``(uri_template, uri)``. (3) Match result checked with ``if match_result:`` which treated empty dict ``{}`` (valid match with no variables) as falsy - changed to ``if match_result is not None:``. Resources now work correctly in async MCP handler.
+
 v3.10.0b2: Feb 5, 2026
 -----------------------
 

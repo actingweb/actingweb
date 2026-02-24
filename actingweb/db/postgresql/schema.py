@@ -47,7 +47,6 @@ class Property(Base):
     __tablename__ = "properties"
     __table_args__ = (
         PrimaryKeyConstraint("id", "name"),
-        Index("idx_properties_value", "value"),
     )
 
     id = Column(String(255), nullable=False)  # actor_id

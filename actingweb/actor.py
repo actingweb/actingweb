@@ -2594,39 +2594,27 @@ class Actor:
             subs = []
         if subtarget and resource:
             logger.debug(
-                "register_diffs() - blob("
-                + blob
-                + "), target("
-                + target
-                + "), subtarget("
-                + subtarget
-                + "), resource("
-                + resource
-                + "), # of subs("
-                + str(len(subs))
-                + ")"
+                "register_diffs() - blob(%s bytes), target(%s), subtarget(%s), resource(%s), # of subs(%s)",
+                len(blob),
+                target,
+                subtarget,
+                resource,
+                len(subs),
             )
         elif subtarget:
             logger.debug(
-                "register_diffs() - blob("
-                + blob
-                + "), target("
-                + target
-                + "), subtarget("
-                + subtarget
-                + "), # of subs("
-                + str(len(subs))
-                + ")"
+                "register_diffs() - blob(%s bytes), target(%s), subtarget(%s), # of subs(%s)",
+                len(blob),
+                target,
+                subtarget,
+                len(subs),
             )
         else:
             logger.debug(
-                "register_diffs() - blob("
-                + blob
-                + "), target("
-                + target
-                + "), # of subs("
-                + str(len(subs))
-                + ")"
+                "register_diffs() - blob(%s bytes), target(%s), # of subs(%s)",
+                len(blob),
+                target,
+                len(subs),
             )
         for sub in subs:
             # Skip the ones without correct subtarget
@@ -2683,11 +2671,9 @@ class Actor:
                     )
                     continue
                 logger.debug(
-                    "         - subscription has resource("
-                    + sub_obj_data["resource"]
-                    + "), adding diff("
-                    + subblob
-                    + ")"
+                    "         - subscription has resource(%s), adding diff(%s bytes)",
+                    sub_obj_data["resource"],
+                    len(subblob),
                 )
                 finblob = subblob
             # The diff is on the resource, but the subscription is on a
@@ -2712,11 +2698,9 @@ class Actor:
                         upblob[resource] = blob
                 finblob = json.dumps(upblob)
                 logger.debug(
-                    "         - diff has resource("
-                    + resource
-                    + "), subscription has not, adding diff("
-                    + finblob
-                    + ")"
+                    "         - diff has resource(%s), subscription has not, adding diff(%s bytes)",
+                    resource,
+                    len(finblob),
                 )
             # Subscriptions with subtarget, but this diff is on a higher level
             elif not subtarget and sub_obj_data["subtarget"]:
@@ -2730,11 +2714,9 @@ class Actor:
                     # The diff blob does not contain the subtarget
                     pass
                 logger.debug(
-                    "         - subscription has subtarget("
-                    + sub_obj_data["subtarget"]
-                    + "), adding diff("
-                    + subblob
-                    + ")"
+                    "         - subscription has subtarget(%s), adding diff(%s bytes)",
+                    sub_obj_data["subtarget"],
+                    len(subblob) if subblob else 0,
                 )
                 finblob = subblob
             # The diff is on the subtarget, but the subscription is on the
@@ -2750,16 +2732,15 @@ class Actor:
                     upblob[subtarget] = blob
                 finblob = json.dumps(upblob)
                 logger.debug(
-                    "         - diff has subtarget("
-                    + subtarget
-                    + "), subscription has not, adding diff("
-                    + finblob
-                    + ")"
+                    "         - diff has subtarget(%s), subscription has not, adding diff(%s bytes)",
+                    subtarget,
+                    len(finblob),
                 )
             else:
                 # The diff is correct for the subscription
                 logger.debug(
-                    "         - exact target/subtarget match, adding diff(" + blob + ")"
+                    "         - exact target/subtarget match, adding diff(%s bytes)",
+                    len(blob),
                 )
                 finblob = blob
             if sub_obj:

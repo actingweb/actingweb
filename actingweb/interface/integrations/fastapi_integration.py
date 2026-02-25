@@ -741,19 +741,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 or request.headers.get("x-requested-with") == "XMLHttpRequest"
             )
 
-            # First, handle MCP OAuth2 token revocation if Authorization header present
             auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                self.logger.info("Logout: Revoking MCP OAuth2 token")
+            oauth_cookie = request.cookies.get("oauth_token")
+
+            # Web UI logout (oauth_token cookie present) — clear cookie
+            # and also revoke the session token via the handler
+            if oauth_cookie:
+                self.logger.info("Logout: Clearing web UI session")
+                # Delegate to handler for session token revocation
                 await self._handle_oauth2_endpoint(request, "logout")
 
-            # Check if this is a web UI logout (oauth_token cookie present)
-            oauth_cookie = request.cookies.get("oauth_token")
-            if oauth_cookie:
-                self.logger.info("Logout: Clearing web UI session (oauth_token cookie)")
-
                 if is_ajax:
-                    # Return JSON response for AJAX requests
                     response = JSONResponse(
                         {
                             "success": True,
@@ -765,25 +763,24 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     response.delete_cookie("oauth_token", path="/")
                     return response
                 else:
-                    # Return redirect for direct navigation
                     response = RedirectResponse(url="/", status_code=302)
                     response.delete_cookie("oauth_token", path="/")
-                    # Add CORS headers even for redirects
                     for key, value in get_spa_cors_headers().items():
                         response.headers[key] = value
                     return response
 
-            # If neither token nor cookie, just return success
-            if not auth_header and not oauth_cookie:
-                self.logger.info("Logout: No active session found")
-                return JSONResponse(
-                    {"message": "No active session to logout"},
-                    status_code=200,
-                    headers=get_spa_cors_headers(),
-                )
+            # SPA/MCP client logout (Bearer token, no cookie)
+            if auth_header.startswith("Bearer "):
+                self.logger.info("Logout: Revoking session token")
+                return await self._handle_oauth2_endpoint(request, "logout")
 
-            # MCP client logout without web UI redirect
-            return await self._handle_oauth2_endpoint(request, "logout")
+            # No active session
+            self.logger.info("Logout: No active session found")
+            return JSONResponse(
+                {"message": "No active session to logout"},
+                status_code=200,
+                headers=get_spa_cors_headers(),
+            )
 
         # Unified OAuth endpoints (JSON API, accessible at /oauth/*)
         @self.fastapi_app.get("/oauth/config")

@@ -906,55 +906,47 @@ class OAuth2EndpointsHandler(BaseHandler):
 
     def _handle_provider_token_logout(self, token: str) -> dict[str, Any]:
         """
-        Handle logout by revoking the OAuth2 token with the provider.
+        Handle logout by invalidating the ActingWeb session and revoking
+        the provider's OAuth token (for providers that support revocation).
 
-        Looks up the provider from the session cookie so the token is
-        sent to the correct revocation endpoint.  Falls back to the
-        default provider when no session is available.
+        The token passed here is an ActingWeb-generated session token.
+        We look up the actor from it, then revoke the actual provider
+        token stored in actor.store with the provider's revocation endpoint.
 
         Args:
-            token: OAuth2 access token
+            token: ActingWeb session token
 
         Returns:
             Response dict indicating logout success/failure
         """
         try:
-            # Revoke the token with the provider
-            revocation_successful = False
+            from ..oauth_session import get_oauth2_session_manager
+
+            session_manager = get_oauth2_session_manager(self.config)
+
+            # Look up actor from the session token so we can revoke
+            # the provider's token stored in actor.store
             try:
-                from ..oauth2 import create_oauth2_authenticator
+                token_data = session_manager.validate_access_token(token)
+                if token_data:
+                    actor_id = token_data.get("actor_id")
+                    if actor_id:
+                        self._revoke_provider_token_for_actor(actor_id)
+            except Exception as lookup_error:
+                logger.debug(f"Provider token lookup during logout: {lookup_error}")
 
-                # Try to determine the provider from the session cookie
-                provider_name = ""
-                try:
-                    session_id = (
-                        self.request.cookies.get("session_id")
-                        if self.request.cookies
-                        else None
-                    )
-                    if session_id:
-                        from ..oauth_session import get_oauth2_session_manager
-
-                        session_manager = get_oauth2_session_manager(self.config)
-                        session = session_manager.get_session(session_id)
-                        if session:
-                            provider_name = session.get("provider", "")
-                except Exception as session_err:
-                    logger.debug(
-                        f"Could not look up provider from session: {session_err}"
-                    )
-
-                authenticator = create_oauth2_authenticator(self.config, provider_name)
-                revocation_successful = authenticator.revoke_token(token)
+            # Revoke the ActingWeb session token
+            try:
+                session_manager.revoke_access_token(token)
+                logger.debug("Revoked ActingWeb session token")
             except Exception as revoke_error:
-                logger.error(f"Error during token revocation: {revoke_error}")
-                # Continue with logout even if revocation fails
+                logger.debug(f"Session token revocation: {revoke_error}")
+                # Non-critical — token will expire naturally
 
             # Always return success and clear cookies
             return {
                 "action": "success",
-                "message": "Successfully logged out"
-                + ("" if revocation_successful else " (token revocation failed)"),
+                "message": "Successfully logged out",
                 "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
@@ -972,6 +964,56 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
+
+    def _revoke_provider_token_for_actor(self, actor_id: str) -> None:
+        """
+        Revoke the OAuth provider's token stored in actor.store.
+
+        Looks up the actor, reads the provider token and provider name
+        from the store, and sends the token to the provider's revocation
+        endpoint. Only effective for providers that support revocation
+        (e.g., Google). GitHub does not support token revocation.
+
+        This is best-effort — failures are logged but do not affect logout.
+        """
+        try:
+            from .. import actor as actor_module
+            from ..oauth2 import create_oauth2_authenticator
+
+            actor = actor_module.Actor(actor_id=actor_id, config=self.config)
+            if not actor.id or not actor.store:
+                return
+
+            provider_token = actor.store.oauth_token
+            provider_name = getattr(actor.store, "oauth_provider", "") or ""
+
+            if not provider_token:
+                logger.debug(f"No provider token stored for actor {actor_id}")
+                return
+
+            authenticator = create_oauth2_authenticator(self.config, provider_name)
+
+            if not authenticator.provider.revocation_uri:
+                logger.debug(
+                    f"Provider {provider_name or 'default'} does not support "
+                    f"token revocation, skipping"
+                )
+                return
+
+            if authenticator.revoke_token(str(provider_token)):
+                logger.info(
+                    f"Revoked {provider_name or 'default'} provider token "
+                    f"for actor {actor_id}"
+                )
+                # Clear the stored provider token
+                actor.store.oauth_token = None
+                actor.store.oauth_token_expiry = None
+            else:
+                logger.debug(
+                    f"Provider token revocation returned false for actor {actor_id}"
+                )
+        except Exception as e:
+            logger.debug(f"Provider token revocation for actor {actor_id}: {e}")
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create OAuth2 error response."""

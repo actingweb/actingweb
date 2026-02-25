@@ -845,34 +845,18 @@ class OAuth2SPAHandler(BaseHandler):
             if token_type_hint == "refresh_token":
                 session_manager.revoke_refresh_token(token)
             else:
-                session_manager.revoke_access_token(token)
-
-            # Also try to revoke with the correct OAuth provider (best-effort;
-            # GitHub does not support token revocation).
-            try:
-                from ..oauth2 import create_oauth2_authenticator
-
-                # Look up the provider from the session cookie
-                provider_name = ""
+                # Look up actor from session token and revoke provider token
                 try:
-                    session_id = (
-                        self.request.cookies.get("session_id")
-                        if self.request.cookies
-                        else None
-                    )
-                    if session_id:
-                        session = session_manager.get_session(session_id)
-                        if session:
-                            provider_name = session.get("provider", "")
-                except Exception as session_err:
+                    token_data = session_manager.validate_access_token(token)
+                    if token_data:
+                        actor_id = token_data.get("actor_id")
+                        if actor_id:
+                            self._revoke_provider_token_for_actor(actor_id)
+                except Exception as lookup_error:
                     logger.debug(
-                        f"Could not look up provider from session: {session_err}"
+                        f"Provider token lookup during revoke: {lookup_error}"
                     )
-
-                authenticator = create_oauth2_authenticator(self.config, provider_name)
-                authenticator.revoke_token(token)
-            except Exception as e:
-                logger.debug(f"Provider token revocation failed (non-critical): {e}")
+                session_manager.revoke_access_token(token)
 
         except Exception as e:
             logger.warning(f"Token revocation error: {e}")
@@ -891,7 +875,9 @@ class OAuth2SPAHandler(BaseHandler):
 
         POST /oauth/spa/logout
 
-        Clears all tokens and cookies.
+        Clears all tokens and cookies. Also revokes the stored provider token
+        (e.g., Google) so the backend can no longer make API calls on behalf
+        of the user.
         """
         # Get token to revoke
         token = None
@@ -908,37 +894,26 @@ class OAuth2SPAHandler(BaseHandler):
                 "access_token"
             ) or self.request.cookies.get("oauth_token")
 
-        # Revoke tokens if we have one
         if token:
             try:
                 from ..oauth_session import get_oauth2_session_manager
 
                 session_manager = get_oauth2_session_manager(self.config)
-                session_manager.revoke_access_token(token)
 
-                # Also revoke with the correct OAuth provider (best-effort;
-                # GitHub does not support token revocation).
-                from ..oauth2 import create_oauth2_authenticator
-
-                # Look up the provider from the session cookie
-                provider_name = ""
+                # Revoke provider token (e.g., Google) stored in actor.store
                 try:
-                    session_id = (
-                        self.request.cookies.get("session_id")
-                        if self.request.cookies
-                        else None
-                    )
-                    if session_id:
-                        session = session_manager.get_session(session_id)
-                        if session:
-                            provider_name = session.get("provider", "")
-                except Exception as session_err:
+                    token_data = session_manager.validate_access_token(token)
+                    if token_data:
+                        actor_id = token_data.get("actor_id")
+                        if actor_id:
+                            self._revoke_provider_token_for_actor(actor_id)
+                except Exception as lookup_error:
                     logger.debug(
-                        f"Could not look up provider from session: {session_err}"
+                        f"Provider token lookup during logout: {lookup_error}"
                     )
 
-                authenticator = create_oauth2_authenticator(self.config, provider_name)
-                authenticator.revoke_token(token)
+                # Revoke the ActingWeb session token
+                session_manager.revoke_access_token(token)
             except Exception as e:
                 logger.debug(f"Token revocation during logout: {e}")
 
@@ -1114,6 +1089,56 @@ class OAuth2SPAHandler(BaseHandler):
                         path="/oauth/spa/token",
                         secure=True,
                     )
+
+    def _revoke_provider_token_for_actor(self, actor_id: str) -> None:
+        """
+        Revoke the OAuth provider's token stored in actor.store.
+
+        Looks up the actor, reads the provider token and provider name
+        from the store, and sends the token to the provider's revocation
+        endpoint. Only effective for providers that support revocation
+        (e.g., Google). GitHub does not support token revocation.
+
+        This is best-effort — failures are logged but do not affect logout.
+        """
+        try:
+            from .. import actor as actor_module
+            from ..oauth2 import create_oauth2_authenticator
+
+            actor = actor_module.Actor(actor_id=actor_id, config=self.config)
+            if not actor.id or not actor.store:
+                return
+
+            provider_token = actor.store.oauth_token
+            provider_name = getattr(actor.store, "oauth_provider", "") or ""
+
+            if not provider_token:
+                logger.debug(f"No provider token stored for actor {actor_id}")
+                return
+
+            authenticator = create_oauth2_authenticator(self.config, provider_name)
+
+            if not authenticator.provider.revocation_uri:
+                logger.debug(
+                    f"Provider {provider_name or 'default'} does not support "
+                    f"token revocation, skipping"
+                )
+                return
+
+            if authenticator.revoke_token(str(provider_token)):
+                logger.info(
+                    f"Revoked {provider_name or 'default'} provider token "
+                    f"for actor {actor_id}"
+                )
+                # Clear the stored provider token
+                actor.store.oauth_token = None
+                actor.store.oauth_token_expiry = None
+            else:
+                logger.debug(
+                    f"Provider token revocation returned false for actor {actor_id}"
+                )
+        except Exception as e:
+            logger.debug(f"Provider token revocation for actor {actor_id}: {e}")
 
     def _json_error(self, status_code: int, message: str) -> dict[str, Any]:
         """Create JSON error response."""

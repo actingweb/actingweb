@@ -346,6 +346,80 @@ Your SPA callback page then calls the server to exchange the code for tokens:
    The ``Accept: application/json`` header is required in Stage 2. Without it,
    the server will perform another redirect (Stage 1 behavior).
 
+Email Verification for SPA
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When an OAuth provider (e.g., GitHub with private email) cannot provide a verified email
+address, the callback redirects back to the SPA with special parameters instead of
+redirecting to a server-rendered HTML form:
+
+.. code-block:: text
+
+   /oauth/callback → detects email_required
+       ↓ (redirects back to SPA)
+   {spa_redirect_url}?email_required=true&session={session_id}
+
+Your SPA should detect the ``email_required`` parameter and show an email input form:
+
+.. code-block:: javascript
+
+   // On /callback page
+   const params = new URLSearchParams(window.location.search);
+
+   if (params.get('email_required') === 'true') {
+       const sessionId = params.get('session');
+       // Show email input form in SPA
+       showEmailForm(sessionId);
+       return;
+   }
+
+When the user submits their email, POST it to ``/oauth/email``:
+
+.. code-block:: javascript
+
+   const response = await fetch('/oauth/email', {
+       method: 'POST',
+       headers: {
+           'Content-Type': 'application/json',
+           'Accept': 'application/json'
+       },
+       body: JSON.stringify({
+           session: sessionId,
+           email: userEmail
+       })
+   }).then(r => r.json());
+
+   if (response.success) {
+       if (response.email_requires_verification) {
+           // Email needs verification — the email_verification_required
+           // lifecycle hook has already fired and your backend sends the
+           // verification email. Show the user a "check your inbox" message.
+           showVerificationPending(response.email);
+       } else {
+           // Email was from the provider's verified list — no verification needed
+           setAccessToken(response.access_token);
+           window.location.href = response.redirect_url;
+       }
+   }
+
+The verification email is sent by your application's ``email_verification_required``
+lifecycle hook — the same hook used for HTML template applications:
+
+.. code-block:: python
+
+   @app.lifecycle_hook("email_verification_required")
+   def send_verification_email(actor, email, verification_url, token):
+       # verification_url is: https://<root>/oauth/email?verify=<token>
+       send_email(
+           to=email,
+           subject="Verify your email",
+           body=f"Click here to verify: {verification_url}"
+       )
+
+When the user clicks the verification link, the browser navigates to
+``GET /oauth/email?verify=<token>``, which validates the token and marks the email
+as verified. See :doc:`authentication` for the full verification flow details.
+
 Token Delivery Modes
 --------------------
 
@@ -1039,6 +1113,75 @@ Logout and clear session.
        "message": "Logged out successfully",
        "redirect_url": "/"
    }
+
+GET /oauth/email
+~~~~~~~~~~~~~~~~~
+
+Email collection form (when OAuth provider doesn't provide email) or email verification.
+
+**Email form (session parameter):**
+
+.. code-block:: text
+
+   GET /oauth/email?session=<session_id>
+   Accept: application/json
+
+**Response:**
+
+.. code-block:: json
+
+   {
+       "action": "email_required",
+       "session_id": "...",
+       "form_action": "/oauth/email",
+       "form_method": "POST",
+       "provider": "github",
+       "provider_display": "GitHub",
+       "message": "Your GitHub account does not have a public email...",
+       "verified_emails": [],
+       "has_verified_emails": false
+   }
+
+**Email verification (verify parameter):**
+
+.. code-block:: text
+
+   GET /oauth/email?verify=<token>
+
+Validates the token and marks the email as verified. Returns HTML success page
+or JSON response based on ``Accept`` header.
+
+POST /oauth/email
+~~~~~~~~~~~~~~~~~~
+
+Submit email address to complete actor creation.
+
+**Request Body:**
+
+.. code-block:: json
+
+   {
+       "session": "<session_id>",
+       "email": "user@example.com"
+   }
+
+**Response:**
+
+.. code-block:: json
+
+   {
+       "success": true,
+       "status": "success",
+       "actor_id": "abc123",
+       "email": "user@example.com",
+       "redirect_url": "/abc123/www",
+       "email_requires_verification": true,
+       "access_token": "...",
+       "token_type": "Bearer"
+   }
+
+When ``email_requires_verification`` is ``true``, the ``email_verification_required``
+lifecycle hook has been fired. Your backend hook handler should send the verification email.
 
 Troubleshooting
 ---------------

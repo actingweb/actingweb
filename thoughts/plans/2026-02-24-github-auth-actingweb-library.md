@@ -290,6 +290,130 @@ After the initial implementation was completed, the following changes were made 
 
 **Rationale**: User requested verification that changes are non-breaking and documentation in migration notes for the feature release.
 
+### 3. PR review fixes — 7 issues from code review
+
+**Category**: Bug fix / UX refinement
+
+**What changed**: Addressed all actionable items from the PR #84 code review:
+
+1. **Token revocation uses correct provider** (Bug fix): All three revocation paths (`_handle_provider_token_logout`, `_handle_revoke`, `_handle_logout`) now look up the provider from the `session_id` cookie via `session_manager.get_session()` before creating the authenticator. Falls back to default provider when no session is available.
+
+2. **Rename `google_token_data` parameter** (Cleanup): Renamed `google_token_data` parameter to `provider_token_data` in `TokenManager.create_authorization_code()` and `_create_access_token()`. Updated the kwarg in `oauth2_server.py` caller. Storage keys (`google_token_key`, bucket names) left unchanged to avoid data migration.
+
+3. **Extract `display_name` helper** (Cleanup): Added `get_provider_display_name()` function and `_PROVIDER_DISPLAY_NAMES` dict in `oauth2.py`. Replaced all 5 duplicated `prov_name.capitalize() if prov_name != "github" else "GitHub"` expressions across `factory.py`, `oauth2_endpoints.py`, and `oauth2_spa.py`.
+
+4. **Document mixed API limitation** (Documentation): Added `.. note::` to `with_oauth()` docstring warning that mixing nameless calls with named provider calls silently drops the nameless provider.
+
+5. **Make `get_github_verified_emails()` public** (Cleanup): Renamed from `_get_github_verified_emails()` on `OAuth2Authenticator`. Updated both call sites in `oauth2_callback.py`.
+
+6. **Non-idiomatic mock pattern** (No action): The `type("Response", ...)` pattern was not found anywhere in the test suite. False positive in the review.
+
+7. **RFC 8414 discovery limitation** (Documentation): Added `.. note::` to `_create_oauth_discovery_response()` in both Flask and FastAPI integrations documenting that discovery only reflects the default provider and that non-default providers should use `/oauth/authorize` directly.
+
+**Files affected**:
+- `actingweb/oauth2.py` — Added `get_provider_display_name()`, renamed `_get_github_verified_emails` → `get_github_verified_emails`
+- `actingweb/handlers/oauth2_endpoints.py` — Provider lookup in revocation, display_name helper
+- `actingweb/handlers/oauth2_spa.py` — Provider lookup in revocation/logout (2 locations), display_name helper
+- `actingweb/handlers/oauth2_callback.py` — Updated 2 call sites for renamed method
+- `actingweb/handlers/factory.py` — display_name helper (2 locations)
+- `actingweb/oauth2_server/token_manager.py` — Renamed `google_token_data` → `provider_token_data` parameter
+- `actingweb/oauth2_server/oauth2_server.py` — Updated kwarg name
+- `actingweb/interface/app.py` — `with_oauth()` docstring note
+- `actingweb/interface/integrations/flask_integration.py` — Discovery docstring note
+- `actingweb/interface/integrations/fastapi_integration.py` — Discovery docstring note
+
+**Rationale**: Code review on PR #84 identified correctness gaps (token revocation), naming inconsistencies from the provider-agnostic refactor, code duplication, and missing documentation.
+
+### 4. Loosen dependency constraints and update dev dependencies
+
+**Category**: Changed
+
+**What changed**: Loosened runtime dependency version ranges to reduce conflicts for downstream consumers. Updated dev dependencies and removed redundant `black` formatter.
+
+**Runtime deps loosened**: `boto3 >=1.26`, `requests >=2.20`, `cryptography >=43.0`, `oauthlib >=3.2`, `typing-extensions >=4.0`, `flask >=3.0`, `werkzeug >=3.0`, `fastapi >=0.100`, `uvicorn >=0.20`, `jinja2 >=3.0`.
+
+**Dev deps updated**: `ruff` 0.14→0.15, `responses` 0.25→0.26, `pytest-rerunfailures` 13→16. Removed `black` (redundant with `ruff format`).
+
+**Files affected**:
+- `pyproject.toml` — Updated version constraints
+- `poetry.lock` — Re-resolved
+
+**Rationale**: Library dependencies should be as permissive as possible to avoid version conflicts for downstream consumers. Dev dependencies don't affect consumers so can be updated freely.
+
+### 5. Native SPA email verification flow
+
+**Category**: UX refinement / New functionality
+
+**What changed**: The SPA email verification flow no longer redirects to a server-rendered HTML form, which was a jarring UX break for SPA users. Instead, the flow now redirects back to the SPA with query parameters, and the SPA handles email collection and verification natively through the JSON API.
+
+**Changes:**
+
+1. **SPA callback redirects back to SPA**: When GitHub returns no verified email, the SPA OAuth callback now redirects to `{spa_redirect_url}?email_required=true&session={session_id}` instead of to `/oauth/email?session={id}`. This matches the existing SPA redirect patterns (success: `?session=...`, error: `?error=...`).
+
+2. **POST `/oauth/email` does NOT return verification token**: The verification token is never exposed in API responses. Instead, both SPA and HTML template flows rely on the `email_verification_required` lifecycle hook — the app backend hook handler sends the verification email in both cases. The JSON response includes `email_requires_verification: true` so the SPA knows to inform the user.
+
+3. **GET `/oauth/email?verify=<token>` verification endpoint**: Added email verification handling directly on the `/oauth/email` endpoint. A reverse token→actor_id index (stored in `_email_verify_tokens` attribute bucket with TTL) enables clean verification URLs without the actor_id in the path.
+
+4. **Verification URL format updated**: Changed from `/{actor_id}/www/verify_email?token=...` to `/oauth/email?verify=...` in both the `oauth_email.py` POST handler and the `email_verification.py` resend handler. The existing `/{actor_id}/www/verify_email` endpoint continues to work for backward compatibility.
+
+5. **New constant**: Added `EMAIL_VERIFY_TOKEN_INDEX_BUCKET` to `constants.py` for the reverse token index bucket.
+
+**Expected SPA flow:**
+1. SPA starts GitHub OAuth → callback finds no verified email
+2. Callback redirects: `{spa_redirect_url}?email_required=true&session={session_id}`
+3. SPA shows email input form → POSTs to `POST /oauth/email` with `Accept: application/json`
+4. Response includes `email_requires_verification: true`; `email_verification_required` lifecycle hook fires
+5. App backend hook handler sends verification email with link: `https://<root>/oauth/email?verify=<token>`
+6. User clicks link → `GET /oauth/email?verify=<token>` validates and marks email verified
+
+**Expected HTML template flow:**
+1. Browser starts GitHub OAuth → callback finds no verified email
+2. Callback redirects: `/oauth/email?session={session_id}` (server-rendered form)
+3. User submits email → POST `/oauth/email` (form POST)
+4. `email_verification_required` lifecycle hook fires — app backend sends verification email
+5. Browser redirect to `/{actor_id}/www`
+6. User clicks email link → `GET /oauth/email?verify=<token>` validates and marks email verified
+
+Both flows rely on the same `email_verification_required` hook for sending the verification email — the token is never exposed in API or HTML responses.
+
+**Files affected**:
+- `actingweb/constants.py` — Added `EMAIL_VERIFY_TOKEN_INDEX_BUCKET`
+- `actingweb/handlers/oauth2_callback.py` — SPA email redirect now goes back to SPA with `email_required=true&session=...` params
+- `actingweb/handlers/oauth_email.py` — GET handles `?verify=<token>`, POST returns verification token in JSON, stores token index
+- `actingweb/handlers/email_verification.py` — Updated resend handler to use new verification URL format and token index
+
+**Rationale**: SPA users were redirected to a server-rendered HTML form when GitHub returned no verified email, breaking the SPA experience. The library should support the SPA handling email collection and verification natively through the JSON API, with the app composing and sending the verification email itself.
+
+### 6. Fix spurious token revocation warnings and add proper provider token revocation on logout
+
+**Category**: Bug fix + Security improvement
+
+**What changed**: Logout was producing confusing `Token revocation failed with status 400: invalid_token` warnings and calling the logout handler twice (FastAPI only). Fixed both issues, then added proper provider token revocation as a security measure.
+
+**Root cause (two issues)**:
+
+1. **Wrong token sent to provider**: All three revocation paths were sending the ActingWeb-generated session token to the OAuth provider's (e.g. Google) revocation endpoint. The provider doesn't recognize ActingWeb tokens — it only knows about its own tokens. This always fails with `invalid_token`.
+
+2. **Double logout call**: The FastAPI integration called `_handle_oauth2_endpoint(request, "logout")` twice — once for "MCP token revocation" and again at the end of the handler.
+
+**Fix (two parts)**:
+
+1. **Proper token lookup chain**: Instead of sending the ActingWeb session token to the provider, the handlers now:
+   - Validate the session token via `session_manager.validate_access_token(token)` → get `actor_id`
+   - Load the `Actor` and read `actor.store.oauth_token` (the actual provider-issued token)
+   - Send that token to the provider's revocation endpoint (if the provider supports it)
+   - Clear `actor.store.oauth_token` and `oauth_token_expiry` on success
+   - Skip silently for GitHub (no revocation URI)
+
+2. **Restructured FastAPI logout handler**: Made the cookie path and Bearer token path mutually exclusive, eliminating the double call.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_endpoints.py` — `_handle_provider_token_logout()`: rewrote to look up actor and revoke provider token; new `_revoke_provider_token_for_actor()` helper
+- `actingweb/handlers/oauth2_spa.py` — `_handle_revoke()` and `_handle_logout()`: updated to call `_revoke_provider_token_for_actor()`; new `_revoke_provider_token_for_actor()` helper (same logic)
+- `actingweb/interface/integrations/fastapi_integration.py` — Restructured `/oauth/logout` handler to avoid double call
+
+**Rationale**: The warnings were confusing because the wrong token was being sent. The user also requested that provider tokens be revoked on logout as a security measure to prevent the backend from making API calls on behalf of the user after logout. GitHub does not support revocation (no `revocation_uri`) so only Google tokens are revoked. Flask integration was not affected by the double-call bug and does not require changes.
+
 ---
 
 ## Evaluation Notes

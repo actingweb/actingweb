@@ -10,7 +10,9 @@ ADDED
 
 - **Multi-Provider OAuth Support**: Multiple OAuth providers (e.g., Google and GitHub) can now be configured simultaneously using ``.with_oauth(provider="google", ...).with_oauth(provider="github", ...)``. The factory login page renders buttons for all configured providers, OAuth state parameter carries the provider name for correct callback routing, and ``/oauth/config`` (SPA endpoint) returns all configured providers. Fully backward compatible — existing single-provider configurations work without modification.
 
-- **SPA Email Form Fallback for GitHub**: When GitHub returns no verified emails and ``require_email=True``, the SPA OAuth callback now redirects to ``/oauth/email`` (email collection form) instead of returning a hard error. This matches the existing Web UI behavior and provides a recovery path for GitHub users with private/unverified emails.
+- **SPA Email Collection Flow**: When the OAuth provider cannot supply a verified email, the SPA OAuth callback now redirects back to the SPA URL with ``?email_required=true&session=<id>`` parameters so SPAs can display their own email input UI instead of being redirected to a server-rendered form.
+
+- **Email Verification via ``/oauth/email?verify=<token>``**: New GET handler provides actor-ID-free email verification URLs. The ``email_verification_required`` lifecycle hook now fires consistently for both SPA and HTML template flows, allowing app backends to send verification emails through a single hook regardless of flow type.
 
 - **Provider Display Name Helper**: New ``get_provider_display_name()`` public function in ``oauth2`` module for consistent provider name formatting (e.g., "GitHub" instead of "Github").
 
@@ -25,6 +27,10 @@ CHANGED
 
 - **Make ``get_github_verified_emails()`` public**: Renamed from ``_get_github_verified_emails()`` on ``OAuth2Authenticator`` to remove the private prefix, as it is called across class boundaries.
 
+- **Email verification URL format**: Verification links now use ``/oauth/email?verify=<token>`` instead of ``/{actor_id}/www/verify_email?token=<token>``. The legacy URL remains functional for backward compatibility.
+
+- **Revoke OAuth provider token on logout**: Logout now revokes the stored OAuth provider token (e.g., Google access token) from ``actor.store`` in addition to the ActingWeb session token, preventing the backend from making API calls on behalf of the user after logout. Providers without a revocation endpoint (e.g., GitHub) are silently skipped.
+
 FIXED
 ~~~~~
 
@@ -34,7 +40,9 @@ FIXED
 
 - **MCP Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear ``invalid_grant`` error message when no verified email is available from the provider, explaining that a verified email is required and suggesting the user add one to their provider account.
 
-- **Token revocation uses correct provider**: Logout and token revocation endpoints now look up the OAuth provider from the session cookie instead of always using the default provider. Ensures tokens are sent to the correct revocation endpoint in multi-provider deployments.
+- **Fix spurious ``invalid_token`` warnings on logout**: Logout was sending the ActingWeb-generated session token to the OAuth provider's revocation endpoint, which always fails because the provider only recognises its own tokens. Logout now looks up and revokes the actual provider token stored in ``actor.store``.
+
+- **Fix FastAPI double logout invocation**: The FastAPI ``/oauth/logout`` handler was calling the underlying logout handler twice when a Bearer token was present alongside an ``oauth_token`` cookie, causing redundant token revocation attempts.
 
 IMPROVED
 ~~~~~~~~

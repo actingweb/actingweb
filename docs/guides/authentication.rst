@@ -968,12 +968,16 @@ Verification Flow
 -----------------
 
 1. **Token Generation**: 32-byte URL-safe random token, 24-hour expiry
-2. **Storage**: Token stored in ``actor.store.email_verification_token``
-3. **Email Sent**: Lifecycle hook ``email_verification_required`` triggered
-4. **User Clicks Link**: ``GET /<actor_id>/www/verify_email?token=abc123``
-5. **Validation**: Token checked against stored value and expiry
+2. **Storage**: Token stored in ``actor.store.email_verification_token``; reverse index stored for token lookup
+3. **Email Sent**: Lifecycle hook ``email_verification_required`` triggered with ``verification_url``
+4. **User Clicks Link**: ``GET /oauth/email?verify=<token>``
+5. **Validation**: Token looked up via reverse index, checked against stored value and expiry
 6. **Mark Verified**: ``actor.store.email_verified`` set to ``"true"``
 7. **Hook Triggered**: Lifecycle hook ``email_verified`` executed
+
+The verification flow is the same for both SPA and HTML template applications — the
+``email_verification_required`` lifecycle hook is responsible for sending the verification
+email in both cases. See :doc:`spa-authentication` for the SPA-specific email collection flow.
 
 Implementing Email Verification
 --------------------------------
@@ -1025,16 +1029,22 @@ Implementing Email Verification
 Verification Endpoints
 ----------------------
 
-``GET /<actor_id>/www/verify_email?token=<token>``
-    Validates the verification token and marks email as verified.
+``GET /oauth/email?verify=<token>``
+    Primary verification endpoint. Validates the verification token via reverse index
+    lookup and marks the email as verified. No actor ID needed in the URL.
 
     **Responses:**
-        - Success: Shows "Email Verified!" page
-        - Invalid token: Shows error with explanation
-        - Expired token: Shows error with "Resend" button
+        - Success: Shows "Email Verified!" page (HTML) or JSON success response
+        - Invalid/expired token: Shows error with explanation
+        - Already verified: Shows confirmation message
+
+``GET /<actor_id>/www/verify_email?token=<token>``
+    Legacy verification endpoint. Still functional for backward compatibility.
+    Validates the token directly against the actor's stored token.
 
 ``POST /<actor_id>/www/verify_email``
-    Resends the verification email with a new token.
+    Resends the verification email with a new token. Generates a new token,
+    stores the reverse index, and fires the ``email_verification_required`` hook.
 
     **Use case:** User didn't receive the original email or token expired
 

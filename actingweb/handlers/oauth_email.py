@@ -4,6 +4,8 @@ OAuth2 email input handler for ActingWeb.
 This handler manages the email input form when OAuth2 providers cannot provide
 an email address. It allows users to manually enter their email to complete
 actor creation.
+
+Also handles email verification via GET /oauth/email?verify=<token>.
 """
 
 import json
@@ -69,16 +71,146 @@ class OAuth2EmailHandler(BaseHandler):
             )
             self.response.headers["Access-Control-Allow-Credentials"] = "true"
 
+    def _handle_email_verification(self, token: str) -> dict[str, Any]:
+        """
+        Handle email verification via GET /oauth/email?verify=<token>.
+
+        Looks up the actor from the token index, validates the token,
+        and marks the email as verified.
+        """
+        from .. import actor as actor_module
+        from ..attribute import Attributes
+        from ..constants import (
+            ACTINGWEB_SYSTEM_ACTOR,
+            EMAIL_VERIFICATION_TOKEN_EXPIRY,
+            EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
+        )
+
+        # Look up actor_id from token index
+        index = Attributes(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
+            config=self.config,
+        )
+        token_entry = index.get_attr(token)
+        if not token_entry or not token_entry.get("data"):
+            logger.warning("Email verification: invalid or expired token")
+            return self.error_response(403, "Invalid or expired verification link")
+
+        actor_id = token_entry["data"]
+
+        # Load actor
+        actor = actor_module.Actor(actor_id=actor_id, config=self.config)
+        if not actor.id:
+            logger.error(f"Email verification: actor {actor_id} not found")
+            return self.error_response(404, "Actor not found")
+
+        # Check if already verified
+        if actor.store and actor.store.email_verified == "true":
+            logger.info(f"Email already verified for actor {actor_id}")
+            if self._wants_json():
+                self._set_cors_headers()
+                response_data = {
+                    "success": True,
+                    "status": "already_verified",
+                    "message": "Your email address has already been verified.",
+                    "email": actor.store.email or actor.creator,
+                }
+                self.response.write(json.dumps(response_data))
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.set_status(200)
+                return response_data
+            self.response.template_values = {
+                "status": "already_verified",
+                "message": "Your email address has already been verified.",
+                "actor_id": actor_id,
+                "email": actor.store.email or actor.creator,
+            }
+            return {}
+
+        if not actor.store:
+            return self.error_response(500, "Internal error")
+
+        # Validate stored token matches
+        stored_token = actor.store.email_verification_token or ""
+        token_created_at = actor.store.email_verification_created_at or "0"
+
+        if not stored_token or stored_token != token:
+            logger.warning(f"Invalid verification token for actor {actor_id}")
+            return self.error_response(403, "Invalid verification token")
+
+        # Check token expiry
+        if int(time.time()) - int(token_created_at) > EMAIL_VERIFICATION_TOKEN_EXPIRY:
+            logger.warning(f"Verification token expired for actor {actor_id}")
+            return self.error_response(410, "Verification link has expired")
+
+        # Mark email as verified
+        actor.store.email_verified = "true"
+        actor.store.email_verification_token = None
+        actor.store.email_verification_created_at = None
+        actor.store.email_verified_at = str(int(time.time()))
+
+        # Clean up the token index entry
+        index.delete_attr(token)
+
+        logger.info(
+            f"Email verified successfully for actor {actor_id}: {actor.creator}"
+        )
+
+        # Execute verification success lifecycle hook
+        if self.hooks:
+            try:
+                from ..interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor, service_registry=registry
+                )
+                self.hooks.execute_lifecycle_hooks(
+                    "email_verified", actor_interface, email=actor.creator
+                )
+            except Exception as e:
+                logger.error(f"Error in email_verified lifecycle hook: {e}")
+
+        if self._wants_json():
+            self._set_cors_headers()
+            response_data = {
+                "success": True,
+                "status": "verified",
+                "message": "Your email address has been verified successfully!",
+                "email": actor.creator,
+                "redirect_url": f"/{actor_id}/www",
+            }
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+            return response_data
+
+        # Show success page
+        self.response.template_values = {
+            "status": "success",
+            "message": "Your email address has been verified successfully!",
+            "actor_id": actor_id,
+            "email": actor.creator,
+            "redirect_url": f"/{actor_id}/www",
+        }
+        return {}
+
     def get(self) -> dict[str, Any]:
         """
-        Handle GET request to /oauth/email - show email input form.
+        Handle GET request to /oauth/email.
 
-        Expected parameters:
-        - session: Session ID from OAuth2 callback
-
-        For SPAs (Accept: application/json), returns JSON with form data.
-        For browsers, sets template_values for app to render email input form.
+        Two modes:
+        1. Email verification: GET /oauth/email?verify=<token>
+           Validates the token and marks the email as verified.
+        2. Email input form: GET /oauth/email?session=<session_id>
+           Shows email input form (JSON for SPAs, template for browsers).
         """
+        # Check for verification token first
+        verify_token = self.request.get("verify") or ""
+        if verify_token:
+            return self._handle_email_verification(verify_token)
+
         session_id = self.request.get("session") or ""
 
         if not session_id:
@@ -261,17 +393,41 @@ class OAuth2EmailHandler(BaseHandler):
         if email_requires_verification and actor_instance.store:
             import secrets
 
-            from ..constants import EMAIL_VERIFICATION_TOKEN_LENGTH
+            from ..attribute import Attributes
+            from ..constants import (
+                ACTINGWEB_SYSTEM_ACTOR,
+                EMAIL_VERIFICATION_TOKEN_EXPIRY,
+                EMAIL_VERIFICATION_TOKEN_LENGTH,
+                EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
+            )
 
             # Generate verification token
             verification_token = secrets.token_urlsafe(EMAIL_VERIFICATION_TOKEN_LENGTH)
 
-            # Store verification state
+            # Store verification state on actor
             actor_instance.store.email_verified = "false"
             actor_instance.store.email_verification_token = verification_token
             actor_instance.store.email_verification_created_at = str(int(time.time()))
 
+            # Store token → actor_id index for reverse lookup
+            # This enables the clean /oauth/email?verify=<token> URL
+            index = Attributes(
+                actor_id=ACTINGWEB_SYSTEM_ACTOR,
+                bucket=EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
+                config=self.config,
+            )
+            index.set_attr(
+                name=verification_token,
+                data=actor_instance.id,
+                ttl_seconds=EMAIL_VERIFICATION_TOKEN_EXPIRY,
+            )
+
             logger.info(f"Email verification required for {email}, token generated")
+
+            verification_url = (
+                f"{self.config.proto}{self.config.fqdn}"
+                f"/oauth/email?verify={verification_token}"
+            )
 
             # Execute hook to send verification email
             if self.hooks:
@@ -282,8 +438,6 @@ class OAuth2EmailHandler(BaseHandler):
                     actor_interface = ActorInterface(
                         core_actor=actor_instance, service_registry=registry
                     )
-
-                    verification_url = f"{self.config.proto}{self.config.fqdn}/{actor_instance.id}/www/verify_email?token={verification_token}"
 
                     self.hooks.execute_lifecycle_hooks(
                         "email_verification_required",
@@ -320,7 +474,7 @@ class OAuth2EmailHandler(BaseHandler):
         # For SPA clients, return JSON instead of redirecting
         if self._wants_json():
             self._set_cors_headers()
-            response_data = {
+            response_data: dict[str, Any] = {
                 "success": True,
                 "status": "success",
                 "message": "Actor created successfully",
@@ -329,7 +483,12 @@ class OAuth2EmailHandler(BaseHandler):
                 "redirect_url": redirect_url,
                 "email_requires_verification": email_requires_verification,
             }
-            # Include token if available
+            # Verification token is NOT included in the response.
+            # The email_verification_required lifecycle hook fires for both
+            # SPA and HTML flows — the app backend hook handler sends the
+            # verification email in both cases.
+            #
+            # Include OAuth token if available
             if actor_instance.store and actor_instance.store.oauth_token:
                 response_data["access_token"] = actor_instance.store.oauth_token
                 response_data["token_type"] = "Bearer"

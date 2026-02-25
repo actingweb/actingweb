@@ -867,17 +867,26 @@ A security hardening was applied to GitHub email handling:
 This change only affects **new** GitHub OAuth logins. Existing actors already linked via
 GitHub are not affected.
 
-SPA Flow: Email Form Fallback
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SPA Flow: Email Collection
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 When GitHub returns no verified emails and ``require_email=True``, the SPA OAuth callback
-now redirects to ``/oauth/email`` (the email collection form) instead of returning a hard
-error. This matches the existing Web UI behavior. The email form flow:
+redirects **back to the SPA** with ``email_required=true&session=<id>`` query parameters
+instead of returning a hard error. The SPA handles email collection natively via the
+JSON API at ``POST /oauth/email``.
 
-1. Collects the user's email address
-2. Creates the actor with ``email_verified = "false"``
+For HTML template applications, the callback redirects to ``/oauth/email?session=<id>``
+where the server-rendered ``aw-oauth-email.html`` template collects the email.
+
+In both cases, the email verification flow is the same:
+
+1. Collects the user's email address (SPA form or HTML template)
+2. ``POST /oauth/email`` creates the actor with ``email_verified = "false"``
 3. Fires the ``email_verification_required`` lifecycle hook
-4. The application can then send a verification email
+4. The application's hook handler sends a verification email
+5. User clicks ``GET /oauth/email?verify=<token>`` to complete verification
+
+See :doc:`../guides/spa-authentication` for the SPA-specific flow details.
 
 MCP Flow: Verified Email Required
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -77,7 +77,8 @@ The factory handler (`actingweb.handlers.factory`) now exposes OAuth URLs in `te
 The OAuth2 callback handler (`actingweb.handlers.oauth2_callback`) now handles missing email gracefully:
 
 - If email is successfully extracted: Creates actor and redirects to `/{actor_id}/www` (existing behavior)
-- If email cannot be extracted: Redirects to `/oauth/email` with a session token
+- If email cannot be extracted (HTML template flow): Redirects to `/oauth/email` with a session token
+- If email cannot be extracted (SPA flow): Redirects back to SPA with `?email_required=true&session=<id>`
 
 ### 3. OAuth Session Management
 
@@ -94,7 +95,8 @@ Sessions are stored in the database using ActingWeb's attribute bucket system wi
 
 New handler `actingweb.handlers.oauth_email.OAuth2EmailHandler`:
 
-- **GET /oauth/email**: Shows email input form (sets `template_values` for app to render)
+- **GET /oauth/email?session=...**: Shows email input form (sets `template_values` for app to render, or returns JSON for SPAs)
+- **GET /oauth/email?verify=...**: Validates email verification token and marks email as verified
 - **POST /oauth/email**: Processes email input and completes actor creation
 
 Both Flask and FastAPI integrations automatically route `/oauth/email` to this handler.
@@ -274,13 +276,22 @@ app = (
    ↓
    Store OAuth tokens in temporary session
    ↓
-   Redirect to /oauth/email?session=<session_id>
+   HTML template flow: Redirect to /oauth/email?session=<session_id>
+   SPA flow: Redirect to {spa_redirect_url}?email_required=true&session=<session_id>
 
-4. OAuth email handler returns template_values
+4a. HTML template flow:
+   OAuth email handler returns template_values
    ↓
    App renders aw-oauth-email.html with email input form
    ↓
    User enters their email address and submits
+
+4b. SPA flow:
+   SPA detects email_required=true parameter
+   ↓
+   SPA shows its own email input form
+   ↓
+   SPA POSTs to /oauth/email with Accept: application/json
 
 5. POST /oauth/email
    ↓
@@ -288,13 +299,23 @@ app = (
    ↓
    Create actor with provided email
    ↓
+   If email needs verification:
+     - Store verification token and reverse index
+     - Fire email_verification_required lifecycle hook
+     - App backend sends verification email
+   ↓
    Generate ActingWeb session token
    ↓
-   Store in session manager for fast validation
+   HTML template flow: Set HttpOnly cookie, redirect to /{actor_id}/www
+   SPA flow: Return JSON with actor_id, access_token, email_requires_verification
+
+6. Email verification (if required):
    ↓
-   Set HttpOnly cookie with ActingWeb token
+   User clicks link in email: GET /oauth/email?verify=<token>
    ↓
-   Redirect to /{actor_id}/www
+   Token validated, email marked as verified
+   ↓
+   email_verified lifecycle hook fired
 ```
 
 ### Flow 2.3: MCP Authorization with trust_type (No Email Available)
@@ -457,13 +478,25 @@ To test the OAuth login flow:
 5. Complete OAuth flow
 6. Verify actor creation and redirection
 
-For testing email input flow with GitHub:
+For testing email input flow with GitHub (HTML template):
 
 1. Configure GitHub OAuth app
 2. Set your GitHub email to private in settings
 3. Complete OAuth flow
 4. Verify redirect to `/oauth/email`
 5. Enter email and verify actor creation
+6. Check that `email_verification_required` hook fires
+7. Click verification link (`/oauth/email?verify=<token>`) to complete
+
+For testing email input flow with GitHub (SPA):
+
+1. Configure GitHub OAuth app
+2. Set your GitHub email to private in settings
+3. Complete SPA OAuth flow
+4. Verify redirect back to SPA with `?email_required=true&session=...`
+5. POST email to `/oauth/email` with `Accept: application/json`
+6. Check that `email_verification_required` hook fires
+7. Verify `email_requires_verification: true` in JSON response
 
 ## Troubleshooting
 

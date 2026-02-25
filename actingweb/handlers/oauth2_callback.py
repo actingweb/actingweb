@@ -844,9 +844,10 @@ class OAuth2CallbackHandler(BaseHandler):
 
         if not identifier:
             if require_email:
-                # Email required but not available — redirect to email form
+                # Email required but not available — redirect back to SPA
                 logger.info(
-                    "SPA OAuth: No verified email from provider, redirecting to email form"
+                    "SPA OAuth: No verified email from provider, "
+                    "redirecting to SPA with email_required"
                 )
 
                 # Try to get verified emails for dropdown
@@ -869,13 +870,30 @@ class OAuth2CallbackHandler(BaseHandler):
                         verified_emails=verified_emails,
                     )
 
-                    email_form_url = f"/oauth/email?session={session_id}"
+                    # Redirect back to SPA with email_required flag,
+                    # matching the existing SPA redirect patterns
+                    # (success: ?session=..., error: ?error=...)
+                    parsed = urlparse(spa_redirect_url)
+                    email_params = {
+                        "email_required": "true",
+                        "session": session_id,
+                    }
+                    spa_email_url = urlunparse(
+                        (
+                            parsed.scheme or "",
+                            parsed.netloc or "",
+                            parsed.path,
+                            parsed.params,
+                            urlencode(email_params),
+                            parsed.fragment,
+                        )
+                    )
                     self.response.set_status(302, "Found")
-                    self.response.set_redirect(email_form_url)
+                    self.response.set_redirect(spa_email_url)
                     return {
                         "status": "email_required",
                         "session_id": session_id,
-                        "redirect_url": email_form_url,
+                        "redirect_url": spa_email_url,
                         "redirect_performed": True,
                     }
                 except Exception as session_error:

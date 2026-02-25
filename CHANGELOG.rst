@@ -5,6 +5,17 @@ CHANGELOG
 Unreleased
 ----------
 
+FIXED
+~~~~~
+
+- **PostgreSQL Properties Value Index Removed**: Dropped the ``idx_properties_value`` B-tree index on the ``properties.value`` column. This index blocked storage of large values (embeddings, JSON blobs) that exceed the B-tree page size limit (~2700 bytes). The ``property_lookup`` table already provides targeted reverse-index lookups for properties that need value-based search. Includes Alembic migration ``c3d4e5f6a7b8`` to drop the index on existing databases.
+
+IMPROVED
+~~~~~~~~
+
+- **Logging in register_diffs()**: Replaced string concatenation logging with parameterized ``%s`` formatting in ``Actor.register_diffs()``. Diff blob contents are no longer logged verbatim; instead only the byte length is logged (e.g. ``diff(1234 bytes)``), reducing log noise and avoiding accidental exposure of large payloads.
+- **Flattened out the thoughts dir**: Moved all the sub-dirs under thoughts/ to simplify where AI docs live
+
 v3.10.0b3: Feb 6, 2026
 -----------------------
 

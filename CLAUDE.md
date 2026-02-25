@@ -305,10 +305,10 @@ Parallel tests are 2-3x faster but may have occasional isolation issues. If para
 
 ## Project Documentation System
 
-The `thoughts/shared/` directory tracks development work:
+The `thoughts/` directory tracks development work:
 
 ```text
-thoughts/shared/
+thoughts/
 ├── research/    # Architecture analysis and design investigations
 ├── patterns/    # Reusable patterns and best practices
 ├── plans/       # Implementation plans (YYYY-MM-DD-*.md)

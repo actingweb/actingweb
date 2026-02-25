@@ -174,6 +174,7 @@ In your application initialization:
 ```python
 from actingweb.interface import ActingWebApp
 
+# Single provider (backward compatible)
 app = (
     ActingWebApp(
         aw_type="urn:actingweb:myapp",
@@ -182,19 +183,36 @@ app = (
         proto="https://"
     )
     .with_oauth(
-        client_id="your-oauth-client-id",
-        client_secret="your-oauth-client-secret",
+        provider="google",
+        client_id="your-google-client-id",
+        client_secret="your-google-client-secret",
         scope="openid email profile",
-        auth_uri="https://accounts.google.com/o/oauth2/v2/auth",
-        token_uri="https://oauth2.googleapis.com/token",
-        redirect_uri="https://myapp.example.com/oauth/callback"
     )
     .with_web_ui(enable=True)  # Required for template rendering
 )
 
-# Set OAuth2 provider (google or github)
-config = app.get_config()
-config.oauth2_provider = "google"  # or "github"
+# Multiple providers (Google + GitHub simultaneously)
+app = (
+    ActingWebApp(
+        aw_type="urn:actingweb:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com",
+        proto="https://"
+    )
+    .with_oauth(
+        provider="google",
+        client_id="your-google-client-id",
+        client_secret="your-google-client-secret",
+        scope="openid email profile",
+    )
+    .with_oauth(
+        provider="github",
+        client_id="your-github-client-id",
+        client_secret="your-github-client-secret",
+        scope="read:user user:email",
+    )
+    .with_web_ui(enable=True)
+)
 ```
 
 ## Complete Flow Examples
@@ -358,15 +376,39 @@ Example usage:
 
 ### Multiple OAuth Providers
 
-To support both Google and GitHub:
+Multiple OAuth providers can be configured simultaneously using the ``provider`` parameter:
 
 ```python
-# Currently, only one provider can be configured at a time
-# Set via config.oauth2_provider = "google" or "github"
-
-# Future enhancement: Support multiple providers simultaneously
-# by checking additional config flags in factory handler
+app = (
+    ActingWebApp(
+        aw_type="urn:actingweb:myapp",
+        database="dynamodb",
+        fqdn="myapp.example.com",
+        proto="https://"
+    )
+    .with_oauth(
+        provider="google",
+        client_id="your-google-client-id",
+        client_secret="your-google-client-secret",
+        scope="openid email profile",
+    )
+    .with_oauth(
+        provider="github",
+        client_id="your-github-client-id",
+        client_secret="your-github-client-secret",
+        scope="read:user user:email",
+    )
+    .with_web_ui(enable=True)
+)
 ```
+
+When multiple providers are configured:
+
+- The factory page (``/``) shows login buttons for all configured providers
+- The ``/oauth/config`` endpoint returns all providers in its ``oauth_providers`` array
+- Each OAuth callback identifies the correct provider via the ``provider`` field in the state parameter
+- ``config.oauth`` still points to the first provider for backward compatibility
+- Users typically log in via one provider; email-based linking allows the same user to use both providers
 
 ### Session Storage Architecture
 

@@ -185,9 +185,10 @@ class ActingWebOAuth2Server:
                     original_state=state,
                     redirect_uri=redirect_uri,
                     email_hint=email if email else None,
-                    trust_type=trust_type,  # Add trust type to state
+                    trust_type=trust_type,
                     code_challenge=code_challenge,
                     code_challenge_method=code_challenge_method,
+                    provider=provider,
                 )
 
                 # Create OAuth2 authorization URL based on provider
@@ -285,29 +286,39 @@ class ActingWebOAuth2Server:
                     "invalid_request", "Invalid MCP context in state"
                 )
 
-            # Exchange Google authorization code for tokens
-            google_token_data = self.google_authenticator.exchange_code_for_token(
-                code, ""
-            )
-            if not google_token_data:
+            # Select the correct authenticator based on provider in MCP state
+            provider_name = mcp_context.get("provider", "google")
+            if provider_name == "github":
+                authenticator = self.github_authenticator
+            else:
+                authenticator = self.google_authenticator
+
+            # Exchange authorization code for tokens
+            token_data = authenticator.exchange_code_for_token(code, "")
+            if not token_data:
                 return self._error_response(
-                    "invalid_grant", "Failed to exchange Google authorization code"
+                    "invalid_grant",
+                    f"Failed to exchange {provider_name} authorization code",
                 )
 
-            # Get user info from Google
-            access_token = google_token_data.get("access_token", "")
-            user_info = self.google_authenticator.validate_token_and_get_user_info(
-                access_token
-            )
+            # Get user info from provider
+            access_token = token_data.get("access_token", "")
+            user_info = authenticator.validate_token_and_get_user_info(access_token)
             if not user_info:
                 return self._error_response(
-                    "invalid_grant", "Failed to get user information from Google"
+                    "invalid_grant",
+                    f"Failed to get user information from {provider_name}",
                 )
 
-            email = user_info.get("email")
+            # Extract email — GitHub may need a separate API call
+            email = authenticator.get_email_from_user_info(
+                user_info, access_token, require_email=True
+            )
             if not email:
                 return self._error_response(
-                    "invalid_grant", "No email address from Google"
+                    "invalid_grant",
+                    f"No verified email address available from {provider_name}. "
+                    f"Please add a verified email to your {provider_name} account.",
                 )
 
             # Get or create actor for this user
@@ -342,7 +353,7 @@ class ActingWebOAuth2Server:
                     actor=actor_interface,
                     email=email,
                     trust_type=str(effective_trust_type),
-                    oauth_tokens=dict(google_token_data),
+                    oauth_tokens=dict(token_data),
                     established_via=established_via,
                     client_id=client_id,
                 )
@@ -359,7 +370,7 @@ class ActingWebOAuth2Server:
             auth_code = self.token_manager.create_authorization_code(
                 actor_id=actor_obj.id,
                 client_id=client_id,
-                google_token_data=google_token_data,
+                google_token_data=token_data,
                 user_email=email,
                 trust_type=trust_type,
                 code_challenge=code_challenge,

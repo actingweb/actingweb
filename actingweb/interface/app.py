@@ -55,7 +55,9 @@ class ActingWebApp:
         self.proto = proto or os.getenv("APP_HOST_PROTOCOL", "https://")
 
         # Configuration options
-        self._oauth_config: dict[str, Any] | None = None
+        # Multi-provider OAuth: dict of provider_name -> config dict
+        # Empty string key "" is used for backward-compat single-provider calls
+        self._oauth_configs: dict[str, dict[str, Any]] = {}
         self._actors_config: dict[str, dict[str, Any]] = {}
         self._enable_ui = False
         self._enable_devtest = False
@@ -147,10 +149,23 @@ class ActingWebApp:
         self._config.www_auth = self._www_auth
         self._config.unique_creator = self._unique_creator
         self._config.force_email_prop_as_creator = self._force_email_prop_as_creator
-        # OAuth configuration
-        if self._oauth_config is not None:
-            # Replace with latest provided OAuth settings
-            self._config.oauth = dict(self._oauth_config)
+        # OAuth configuration — multi-provider support
+        if self._oauth_configs:
+            # Build named providers (skip the empty-string default key)
+            named: dict[str, dict[str, Any]] = {
+                k: dict(v) for k, v in self._oauth_configs.items() if k
+            }
+            if named:
+                self._config.oauth_providers = named
+                # Backward compat: oauth points to the first named provider
+                first_name = next(iter(named))
+                self._config.oauth = dict(named[first_name])
+                self._config.oauth2_provider = first_name
+            else:
+                # Single unnamed provider (backward compat path)
+                default_cfg = self._oauth_configs.get("")
+                if default_cfg is not None:
+                    self._config.oauth = dict(default_cfg)
         # Actor types and bot config
         if self._actors_config:
             self._config.actors = dict(self._actors_config)
@@ -197,10 +212,26 @@ class ActingWebApp:
         scope: str = "",
         auth_uri: str = "",
         token_uri: str = "",
+        provider: str = "",
         **kwargs: Any,
     ) -> "ActingWebApp":
-        """Configure OAuth authentication."""
-        self._oauth_config = {
+        """Configure OAuth authentication.
+
+        Can be called multiple times with different ``provider`` values to
+        configure multiple OAuth providers simultaneously.
+
+        Args:
+            client_id: OAuth client ID
+            client_secret: OAuth client secret
+            scope: OAuth scope string
+            auth_uri: Authorization endpoint URL
+            token_uri: Token exchange endpoint URL
+            provider: Provider name (e.g. ``"google"``, ``"github"``).
+                When empty, stores as the single default provider for
+                backward compatibility.
+            **kwargs: Additional OAuth config values
+        """
+        oauth_cfg: dict[str, Any] = {
             "client_id": client_id,
             "client_secret": client_secret,
             "redirect_uri": f"{self.proto}{self.fqdn}/oauth",
@@ -212,6 +243,8 @@ class ActingWebApp:
             "refresh_type": "refresh_token",
             **kwargs,
         }
+        # Store under the provider key (empty string for backward-compat default)
+        self._oauth_configs[provider] = oauth_cfg
         self._www_auth = "oauth"
         # Ensure existing config (if already created) is updated
         self._apply_runtime_changes_to_config()
@@ -796,6 +829,18 @@ class ActingWebApp:
         """Get the subscription processing configuration."""
         return self._subscription_config
 
+    def _get_default_oauth_config(self) -> dict[str, Any]:
+        """Return the OAuth config dict to pass as ``oauth=`` to Config.
+
+        If named providers are configured, returns the first one.
+        Otherwise returns the unnamed default (or empty dict).
+        """
+        named = {k: v for k, v in self._oauth_configs.items() if k}
+        if named:
+            return dict(next(iter(named.values())))
+        default = self._oauth_configs.get("")
+        return dict(default) if default else {}
+
     def get_config(self) -> Config:
         """Get the underlying ActingWeb Config object."""
         if self._config is None:
@@ -818,7 +863,7 @@ class ActingWebApp:
                 logLevel=os.getenv("LOG_LEVEL", "INFO"),
                 ui=self._enable_ui,
                 bot=self._bot_config or {},
-                oauth=self._oauth_config or {},
+                oauth=self._get_default_oauth_config(),
                 mcp=self._enable_mcp,
                 indexed_properties=self._indexed_properties,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
@@ -827,6 +872,11 @@ class ActingWebApp:
                 peer_capabilities_caching=self._peer_capabilities_caching,
                 peer_permissions_caching=self._peer_permissions_caching,
             )
+            # Populate multi-provider OAuth config on initial creation
+            named = {k: dict(v) for k, v in self._oauth_configs.items() if k}
+            if named:
+                self._config.oauth_providers = named
+                self._config.oauth2_provider = next(iter(named))
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them
             self._config._hooks = self.hooks

@@ -81,7 +81,8 @@ class OAuth2CallbackHandler(BaseHandler):
 
             webobj = aw_web_request.AWWebObj()
         super().__init__(webobj, config, hooks)
-        # Use generic OAuth2 authenticator (configurable provider)
+        # Create a default authenticator; may be replaced once state is parsed
+        # and the actual provider is known.
         self.authenticator = create_oauth2_authenticator(config) if config else None
 
     def get(self) -> dict[str, Any]:
@@ -126,6 +127,13 @@ class OAuth2CallbackHandler(BaseHandler):
         # Extract extra fields including spa_mode
         state_extras = _decode_state_with_extras(state)
         spa_mode = state_extras.get("spa_mode", False)
+
+        # Re-create authenticator with the correct provider from state (if present)
+        state_provider = state_extras.get("provider", "")
+        if state_provider and self.config:
+            self.authenticator = create_oauth2_authenticator(
+                self.config, state_provider
+            )
 
         # For SPA mode, use redirect_url from state_extras (JSON format)
         # The legacy decode_state() doesn't parse JSON state properly
@@ -835,6 +843,52 @@ class OAuth2CallbackHandler(BaseHandler):
         )
 
         if not identifier:
+            if require_email:
+                # Email required but not available — redirect to email form
+                logger.info(
+                    "SPA OAuth: No verified email from provider, redirecting to email form"
+                )
+
+                # Try to get verified emails for dropdown
+                verified_emails: list[str] | None = None
+                if (
+                    self.authenticator.provider.name == "github"
+                    and access_token
+                ):
+                    verified_emails = (
+                        self.authenticator._get_github_verified_emails(
+                            access_token
+                        )
+                    )
+
+                try:
+                    provider_name = state_extras.get(
+                        "provider",
+                        getattr(self.config, "oauth2_provider", "github"),
+                    )
+                    session_id = session_manager.store_session(
+                        token_data=token_data,
+                        user_info=user_info,
+                        state=state,
+                        provider=provider_name,
+                        verified_emails=verified_emails,
+                    )
+
+                    email_form_url = f"/oauth/email?session={session_id}"
+                    self.response.set_status(302, "Found")
+                    self.response.set_redirect(email_form_url)
+                    return {
+                        "status": "email_required",
+                        "session_id": session_id,
+                        "redirect_url": email_form_url,
+                        "redirect_performed": True,
+                    }
+                except Exception as session_error:
+                    logger.error(
+                        f"SPA OAuth: Failed to create email session: {session_error}"
+                    )
+
+            # Provider ID mode or session creation failed — hard error
             logger.error("SPA OAuth: Failed to extract identifier")
             parsed = urlparse(spa_redirect_url)
             params = {
@@ -965,7 +1019,9 @@ class OAuth2CallbackHandler(BaseHandler):
             },
             user_info=user_info,
             state=state,
-            provider=getattr(self.config, "oauth2_provider", "google"),
+            provider=state_extras.get(
+                "provider", getattr(self.config, "oauth2_provider", "google")
+            ),
         )
 
         # Set HttpOnly cookie for refresh token (hybrid mode)

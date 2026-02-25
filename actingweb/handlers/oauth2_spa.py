@@ -221,45 +221,45 @@ class OAuth2SPAHandler(BaseHandler):
         oauth_providers = []
         oauth_enabled = False
 
-        if self.config.oauth and self.config.oauth.get("client_id"):
-            try:
-                from ..oauth2 import (
-                    create_github_authenticator,
-                    create_google_authenticator,
-                )
+        try:
+            from ..oauth2 import create_oauth2_authenticator
 
-                oauth2_provider = getattr(self.config, "oauth2_provider", "google")
-
-                if oauth2_provider == "google":
-                    google_auth = create_google_authenticator(self.config)
-                    if google_auth.is_enabled():
+            providers_cfg = getattr(self.config, "oauth_providers", {})
+            if providers_cfg:
+                # Multi-provider path: iterate all configured providers
+                for prov_name in providers_cfg:
+                    auth = create_oauth2_authenticator(self.config, prov_name)
+                    if auth.is_enabled():
                         oauth_providers.append(
                             {
-                                "name": "google",
-                                "display_name": "Google",
-                                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                                "token_endpoint": "https://oauth2.googleapis.com/token",
-                                "userinfo_endpoint": "https://www.googleapis.com/oauth2/v3/userinfo",
+                                "name": auth.provider.name,
+                                "display_name": prov_name.capitalize()
+                                if prov_name != "github"
+                                else "GitHub",
+                                "authorization_endpoint": auth.provider.auth_uri,
+                                "token_endpoint": auth.provider.token_uri,
+                                "userinfo_endpoint": auth.provider.userinfo_uri,
                             }
                         )
                         oauth_enabled = True
-
-                elif oauth2_provider == "github":
-                    github_auth = create_github_authenticator(self.config)
-                    if github_auth.is_enabled():
-                        oauth_providers.append(
-                            {
-                                "name": "github",
-                                "display_name": "GitHub",
-                                "authorization_endpoint": "https://github.com/login/oauth/authorize",
-                                "token_endpoint": "https://github.com/login/oauth/access_token",
-                                "userinfo_endpoint": "https://api.github.com/user",
-                            }
-                        )
-                        oauth_enabled = True
-
-            except Exception as e:
-                logger.warning(f"Failed to get OAuth providers: {e}")
+            elif self.config.oauth and self.config.oauth.get("client_id"):
+                # Single-provider backward-compat path
+                auth = create_oauth2_authenticator(self.config)
+                if auth.is_enabled():
+                    oauth_providers.append(
+                        {
+                            "name": auth.provider.name,
+                            "display_name": auth.provider.name.capitalize()
+                            if auth.provider.name != "github"
+                            else "GitHub",
+                            "authorization_endpoint": auth.provider.auth_uri,
+                            "token_endpoint": auth.provider.token_uri,
+                            "userinfo_endpoint": auth.provider.userinfo_uri,
+                        }
+                    )
+                    oauth_enabled = True
+        except Exception as e:
+            logger.warning(f"Failed to get OAuth providers: {e}")
 
         return {
             "oauth_enabled": oauth_enabled,
@@ -401,6 +401,7 @@ class OAuth2SPAHandler(BaseHandler):
         # Only include trust_type if provided (for MCP client auth, not user login)
         state_data: dict[str, Any] = {
             "spa_mode": True,
+            "provider": provider,
             "redirect_url": redirect_uri,
             "return_path": return_path,  # Final redirect path after auth
             "token_delivery": token_delivery,
@@ -845,11 +846,12 @@ class OAuth2SPAHandler(BaseHandler):
             else:
                 session_manager.revoke_access_token(token)
 
-            # Also try to revoke with OAuth provider
+            # Also try to revoke with OAuth provider (best-effort;
+            # GitHub does not support token revocation).
             try:
-                from ..oauth2 import OAuth2Authenticator
+                from ..oauth2 import create_oauth2_authenticator
 
-                authenticator = OAuth2Authenticator(self.config)
+                authenticator = create_oauth2_authenticator(self.config)
                 authenticator.revoke_token(token)
             except Exception as e:
                 logger.debug(f"Provider token revocation failed (non-critical): {e}")
@@ -896,10 +898,11 @@ class OAuth2SPAHandler(BaseHandler):
                 session_manager = get_oauth2_session_manager(self.config)
                 session_manager.revoke_access_token(token)
 
-                # Also revoke with OAuth provider
-                from ..oauth2 import OAuth2Authenticator
+                # Also revoke with OAuth provider (best-effort;
+                # GitHub does not support token revocation).
+                from ..oauth2 import create_oauth2_authenticator
 
-                authenticator = OAuth2Authenticator(self.config)
+                authenticator = create_oauth2_authenticator(self.config)
                 authenticator.revoke_token(token)
             except Exception as e:
                 logger.debug(f"Token revocation during logout: {e}")

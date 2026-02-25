@@ -67,11 +67,13 @@ class TestOAuthConfiguration:
                 token_uri="https://auth.example.com/token",
             )
 
-        assert app._oauth_config is not None
-        assert app._oauth_config["client_id"] == "test_client_id"
-        assert app._oauth_config["client_secret"] == "test_client_secret"
-        assert app._oauth_config["scope"] == "openid email profile"
-        assert app._oauth_config["auth_uri"] == "https://auth.example.com/authorize"
+        # Backward-compat call (no provider) stores under "" key
+        assert "" in app._oauth_configs
+        cfg = app._oauth_configs[""]
+        assert cfg["client_id"] == "test_client_id"
+        assert cfg["client_secret"] == "test_client_secret"
+        assert cfg["scope"] == "openid email profile"
+        assert cfg["auth_uri"] == "https://auth.example.com/authorize"
 
     def test_with_oauth_sets_www_auth(self):
         """Test with_oauth sets www_auth to oauth."""
@@ -418,3 +420,289 @@ class TestHookRegistry:
             app = ActingWebApp(aw_type="urn:actingweb:test:hooks")
 
         assert isinstance(app.hooks, HookRegistry)
+
+
+class TestMultiProviderOAuth:
+    """Test multi-provider OAuth configuration."""
+
+    def test_with_oauth_two_providers_accumulates(self):
+        """Test with_oauth() called twice with different providers accumulates both."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(
+                aw_type="urn:actingweb:test:multi", fqdn="test.example.com"
+            )
+            app.with_oauth(
+                provider="google",
+                client_id="google_id",
+                client_secret="google_secret",
+                scope="openid email profile",
+            )
+            app.with_oauth(
+                provider="github",
+                client_id="github_id",
+                client_secret="github_secret",
+                scope="user:email",
+            )
+
+        assert "google" in app._oauth_configs
+        assert "github" in app._oauth_configs
+        assert app._oauth_configs["google"]["client_id"] == "google_id"
+        assert app._oauth_configs["github"]["client_id"] == "github_id"
+
+    def test_with_oauth_no_provider_backward_compat(self):
+        """Test with_oauth() without provider param maintains backward compat."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(
+                aw_type="urn:actingweb:test:compat", fqdn="test.example.com"
+            )
+            app.with_oauth(
+                client_id="my_id",
+                client_secret="my_secret",
+            )
+
+        # Stored under empty-string key
+        assert "" in app._oauth_configs
+        assert app._oauth_configs[""]["client_id"] == "my_id"
+
+    def test_config_oauth_backward_compat_points_to_first_provider(self):
+        """Test config.oauth backward compat points to first named provider."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(
+                aw_type="urn:actingweb:test:compat", fqdn="test.example.com"
+            )
+            app.with_oauth(
+                provider="google",
+                client_id="google_id",
+                client_secret="google_secret",
+            )
+            app.with_oauth(
+                provider="github",
+                client_id="github_id",
+                client_secret="github_secret",
+            )
+            config = app.get_config()
+
+        # config.oauth should point to the first named provider (google)
+        assert config.oauth["client_id"] == "google_id"
+        assert config.oauth2_provider == "google"
+
+    def test_config_oauth_providers_populated(self):
+        """Test config.oauth_providers is populated with both providers."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(
+                aw_type="urn:actingweb:test:providers", fqdn="test.example.com"
+            )
+            app.with_oauth(
+                provider="google",
+                client_id="g_id",
+                client_secret="g_secret",
+            )
+            app.with_oauth(
+                provider="github",
+                client_id="gh_id",
+                client_secret="gh_secret",
+            )
+            config = app.get_config()
+
+        assert "google" in config.oauth_providers
+        assert "github" in config.oauth_providers
+        assert config.oauth_providers["google"]["client_id"] == "g_id"
+        assert config.oauth_providers["github"]["client_id"] == "gh_id"
+
+    def test_factory_uses_google_credentials_from_oauth_providers(self):
+        """Test create_oauth2_authenticator('google') uses per-provider credentials."""
+        from actingweb.config import Config
+        from actingweb.oauth2 import create_oauth2_authenticator
+
+        config = Config(
+            fqdn="test.example.com",
+            database="dynamodb",
+        )
+        config.oauth_providers = {
+            "google": {
+                "client_id": "google_cid",
+                "client_secret": "google_csec",
+            },
+            "github": {
+                "client_id": "github_cid",
+                "client_secret": "github_csec",
+            },
+        }
+        config.oauth2_provider = "google"
+
+        auth = create_oauth2_authenticator(config, "google")
+        assert auth.provider.client_id == "google_cid"
+        assert auth.provider.client_secret == "google_csec"
+        assert auth.provider.name == "google"
+
+    def test_factory_uses_github_credentials_from_oauth_providers(self):
+        """Test create_oauth2_authenticator('github') uses per-provider credentials."""
+        from actingweb.config import Config
+        from actingweb.oauth2 import create_oauth2_authenticator
+
+        config = Config(
+            fqdn="test.example.com",
+            database="dynamodb",
+        )
+        config.oauth_providers = {
+            "google": {
+                "client_id": "google_cid",
+                "client_secret": "google_csec",
+            },
+            "github": {
+                "client_id": "github_cid",
+                "client_secret": "github_csec",
+            },
+        }
+        config.oauth2_provider = "google"
+
+        auth = create_oauth2_authenticator(config, "github")
+        assert auth.provider.client_id == "github_cid"
+        assert auth.provider.client_secret == "github_csec"
+        assert auth.provider.name == "github"
+
+    def test_provider_class_with_explicit_provider_config(self):
+        """Test provider classes constructed with explicit provider_config."""
+        from actingweb.config import Config
+        from actingweb.oauth2 import GitHubOAuth2Provider, GoogleOAuth2Provider
+
+        config = Config(fqdn="test.example.com", database="dynamodb")
+
+        explicit = {"client_id": "explicit_id", "client_secret": "explicit_sec"}
+        google = GoogleOAuth2Provider(config, provider_config=explicit)
+        assert google.client_id == "explicit_id"
+        assert google.client_secret == "explicit_sec"
+
+        github = GitHubOAuth2Provider(config, provider_config=explicit)
+        assert github.client_id == "explicit_id"
+        assert github.client_secret == "explicit_sec"
+
+
+class TestGitHubEmailVerification:
+    """Test GitHub email verification security in _get_github_primary_email()."""
+
+    def _make_authenticator(self):
+        """Create a GitHub OAuth2Authenticator for testing."""
+        from actingweb.config import Config
+        from actingweb.oauth2 import create_github_authenticator
+
+        config = Config(fqdn="test.example.com", database="dynamodb")
+        config.oauth = {"client_id": "test_id", "client_secret": "test_secret"}
+        config.oauth2_provider = "github"
+        return create_github_authenticator(config)
+
+    def test_primary_verified_email_returned(self):
+        """Test primary+verified email is returned (normal case)."""
+        auth = self._make_authenticator()
+        mock_response = patch(
+            "requests.get",
+            return_value=type(
+                "Response",
+                (),
+                {
+                    "status_code": 200,
+                    "json": lambda self: [
+                        {
+                            "email": "user@example.com",
+                            "primary": True,
+                            "verified": True,
+                        },
+                        {
+                            "email": "alt@example.com",
+                            "primary": False,
+                            "verified": True,
+                        },
+                    ],
+                },
+            )(),
+        )
+        with mock_response:
+            result = auth._get_github_primary_email("fake_token")
+        assert result == "user@example.com"
+
+    def test_unverified_primary_email_skipped(self):
+        """Test primary but unverified email is skipped — falls back to first verified."""
+        auth = self._make_authenticator()
+        mock_response = patch(
+            "requests.get",
+            return_value=type(
+                "Response",
+                (),
+                {
+                    "status_code": 200,
+                    "json": lambda self: [
+                        {
+                            "email": "attacker@evil.com",
+                            "primary": True,
+                            "verified": False,
+                        },
+                        {
+                            "email": "real@example.com",
+                            "primary": False,
+                            "verified": True,
+                        },
+                    ],
+                },
+            )(),
+        )
+        with mock_response:
+            result = auth._get_github_primary_email("fake_token")
+        assert result == "real@example.com"
+
+    def test_no_verified_emails_returns_none(self):
+        """Test all unverified emails returns None."""
+        auth = self._make_authenticator()
+        mock_response = patch(
+            "requests.get",
+            return_value=type(
+                "Response",
+                (),
+                {
+                    "status_code": 200,
+                    "json": lambda self: [
+                        {
+                            "email": "a@example.com",
+                            "primary": True,
+                            "verified": False,
+                        },
+                        {
+                            "email": "b@example.com",
+                            "primary": False,
+                            "verified": False,
+                        },
+                    ],
+                },
+            )(),
+        )
+        with mock_response:
+            result = auth._get_github_primary_email("fake_token")
+        assert result is None
+
+    def test_no_primary_but_verified_email_returned(self):
+        """Test no primary email but verified non-primary is returned."""
+        auth = self._make_authenticator()
+        mock_response = patch(
+            "requests.get",
+            return_value=type(
+                "Response",
+                (),
+                {
+                    "status_code": 200,
+                    "json": lambda self: [
+                        {
+                            "email": "noprimary@example.com",
+                            "primary": False,
+                            "verified": True,
+                        },
+                        {
+                            "email": "other@example.com",
+                            "primary": False,
+                            "verified": False,
+                        },
+                    ],
+                },
+            )(),
+        )
+        with mock_response:
+            result = auth._get_github_primary_email("fake_token")
+        assert result == "noprimary@example.com"

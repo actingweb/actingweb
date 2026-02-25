@@ -625,7 +625,19 @@ class Auth:
             if "/oauth/callback" in path:
                 return False
 
-            # Create redirect to OAuth2
+            # When multiple providers are configured, redirect to the factory
+            # page (/login) so the user can choose their provider.
+            providers_cfg = getattr(self.config, "oauth_providers", {})
+            if len(providers_cfg) > 1:
+                login_url = f"{self.config.proto}{self.config.fqdn}/"
+                self.authn_done = True
+                self.response["code"] = 302
+                self.response["text"] = "Redirecting to login"
+                self.redirect = login_url
+                logger.debug("Redirecting to factory login (multi-provider)")
+                return True
+
+            # Single provider: redirect directly to OAuth2
             original_url = self._get_original_url(appreq, path)
             auth_url = authenticator.create_authorization_url(
                 redirect_after_auth=original_url

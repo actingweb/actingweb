@@ -768,10 +768,129 @@ stores the updated permissions. You can register a hook for app-specific handlin
                if pattern.startswith("memory_"):
                    sync_memory_type(actor, granting_actor_id, pattern)
 
+Multi-Provider OAuth Support
+============================
+
+ActingWeb 3.10 adds support for configuring **multiple OAuth providers simultaneously**
+(e.g., Google and GitHub). Previously, only one provider could be active at a time.
+
+**This is a non-breaking, additive change.** All existing single-provider configurations
+continue to work without modification.
+
+What Changed
+------------
+
+- ``.with_oauth()`` now accepts an optional ``provider`` parameter
+- New ``config.oauth_providers`` attribute (dict-of-dicts) stores per-provider credentials
+- Factory login page renders buttons for all configured providers
+- OAuth state parameter carries the ``provider`` name for correct callback routing
+- ``/oauth/config`` (SPA endpoint) returns all configured providers
+- GitHub email verification enforces ``verified`` flag on primary emails
+
+Backward Compatibility
+----------------------
+
+All 12 public API surface areas were verified as fully backward compatible:
+
+- **``with_oauth()`` without ``provider``**: Works identically to before — single-provider config
+- **``config.oauth``**: Still populated (points to first configured provider's credentials)
+- **``config.oauth2_provider``**: Still populated (set to first configured provider name)
+- **``create_oauth2_authenticator(config)``**: Default provider used when no provider specified
+- **``create_google_authenticator()`` / ``create_github_authenticator()``**: Unchanged signatures
+- **OAuth callback state parsing**: Absent ``provider`` field falls back to ``config.oauth2_provider``
+- **Template variables**: ``oauth_providers`` list already existed; new providers append to it
+- **REST API responses**: ``/oauth/config`` returns same structure; additional providers are additive
+- **SPA state format**: Missing ``provider`` key falls back to default provider
+- **MCP encrypted state**: Missing ``provider`` field falls back to default
+- **Email verification flow**: No signature changes; new ``email_verification_required`` hook is additive
+- **Factory ``/login`` endpoint**: Single-provider still renders single button
+
+No Action Required for Existing Applications
+---------------------------------------------
+
+If you are using a single OAuth provider, **no changes are needed**. Your existing
+configuration continues to work:
+
+.. code-block:: python
+
+   # This still works exactly as before
+   app = ActingWebApp(
+       aw_type="urn:actingweb:example.com:myapp",
+       database="dynamodb",
+       fqdn="myapp.example.com"
+   ).with_oauth(
+       client_id="your-client-id",
+       client_secret="your-client-secret"
+   )
+
+Opting In to Multiple Providers
+-------------------------------
+
+To add a second provider, call ``.with_oauth()`` again with the ``provider`` parameter:
+
+.. code-block:: python
+
+   app = ActingWebApp(
+       aw_type="urn:actingweb:example.com:myapp",
+       database="dynamodb",
+       fqdn="myapp.example.com"
+   ).with_oauth(
+       provider="google",
+       client_id="google-client-id",
+       client_secret="google-client-secret",
+       scope="openid email profile"
+   ).with_oauth(
+       provider="github",
+       client_id="github-client-id",
+       client_secret="github-client-secret",
+       scope="read:user user:email"
+   )
+
+When multiple providers are configured:
+
+- The factory login page (``/login``) shows buttons for all providers
+- 401 redirects go to ``/login`` (not directly to a single provider's OAuth page)
+- Each provider's credentials are isolated in ``config.oauth_providers``
+
+GitHub Email Verification Security Fix
+---------------------------------------
+
+A security hardening was applied to GitHub email handling:
+
+- ``_get_github_primary_email()`` now requires both ``primary`` **and** ``verified`` flags
+- Previously, an unverified primary email was accepted, which could allow account-linking
+  attacks via the GitHub ``/user/emails`` API
+- If no verified primary email is available, the first verified non-primary email is used
+- If no verified emails exist at all, the email form fallback is triggered (when
+  ``require_email=True``) or ``None`` is returned
+
+This change only affects **new** GitHub OAuth logins. Existing actors already linked via
+GitHub are not affected.
+
+SPA Flow: Email Form Fallback
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When GitHub returns no verified emails and ``require_email=True``, the SPA OAuth callback
+now redirects to ``/oauth/email`` (the email collection form) instead of returning a hard
+error. This matches the existing Web UI behavior. The email form flow:
+
+1. Collects the user's email address
+2. Creates the actor with ``email_verified = "false"``
+3. Fires the ``email_verification_required`` lifecycle hook
+4. The application can then send a verification email
+
+MCP Flow: Verified Email Required
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The MCP OAuth flow requires a verified email from the provider. If no verified email is
+available, the flow returns an ``invalid_grant`` error with a message explaining that a
+verified email is required.
+
 See Also
 ========
 
 - :doc:`../guides/subscriptions` - Full subscription processing guide
 - :doc:`../guides/trust-relationships` - Trust and subscription lifecycle
+- :doc:`../guides/authentication` - Authentication and OAuth2 guide
 - :doc:`../guides/troubleshooting` - Troubleshooting guide
 - `CHANGELOG <https://github.com/actingweb/actingweb/blob/master/CHANGELOG.rst>`_ - Full changelog

@@ -124,6 +124,7 @@ class OAuth2StateManager:
         trust_type: str | None = None,
         code_challenge: str | None = None,
         code_challenge_method: str | None = None,
+        provider: str | None = None,
     ) -> str:
         """
         Create state parameter for MCP OAuth2 flow with trust type selection.
@@ -136,20 +137,23 @@ class OAuth2StateManager:
             trust_type: Trust relationship type to establish
             code_challenge: PKCE code challenge
             code_challenge_method: PKCE code challenge method
+            provider: OAuth provider name (e.g. "google", "github")
 
         Returns:
             Encrypted state parameter
         """
-        mcp_context = {
+        mcp_context: dict[str, Any] = {
             "client_id": client_id,
             "original_state": original_state,
             "redirect_uri": redirect_uri,
             "email_hint": email_hint,
-            "trust_type": trust_type,  # Add trust type to context
+            "trust_type": trust_type,
             "flow_type": "mcp_oauth2",
             "code_challenge": code_challenge,
             "code_challenge_method": code_challenge_method,
         }
+        if provider:
+            mcp_context["provider"] = provider
 
         return self.create_state(mcp_context)
 

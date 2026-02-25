@@ -5,10 +5,21 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Multi-Provider OAuth Support**: Multiple OAuth providers (e.g., Google and GitHub) can now be configured simultaneously using ``.with_oauth(provider="google", ...).with_oauth(provider="github", ...)``. The factory login page renders buttons for all configured providers, OAuth state parameter carries the provider name for correct callback routing, and ``/oauth/config`` (SPA endpoint) returns all configured providers. Fully backward compatible — existing single-provider configurations work without modification.
+
+- **SPA Email Form Fallback for GitHub**: When GitHub returns no verified emails and ``require_email=True``, the SPA OAuth callback now redirects to ``/oauth/email`` (email collection form) instead of returning a hard error. This matches the existing Web UI behavior and provides a recovery path for GitHub users with private/unverified emails.
+
 FIXED
 ~~~~~
 
 - **PostgreSQL Properties Value Index Removed**: Dropped the ``idx_properties_value`` B-tree index on the ``properties.value`` column. This index blocked storage of large values (embeddings, JSON blobs) that exceed the B-tree page size limit (~2700 bytes). The ``property_lookup`` table already provides targeted reverse-index lookups for properties that need value-based search. Includes Alembic migration ``c3d4e5f6a7b8`` to drop the index on existing databases.
+
+- **GitHub Email Verification Security**: ``_get_github_primary_email()`` now requires both ``primary`` and ``verified`` flags when selecting the email for actor linking. Previously, an unverified primary email was accepted, which could allow account-linking attacks via the GitHub ``/user/emails`` API. If no verified primary email is available, falls back to the first verified non-primary email.
+
+- **MCP Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear ``invalid_grant`` error message when no verified email is available from the provider, explaining that a verified email is required and suggesting the user add one to their provider account.
 
 IMPROVED
 ~~~~~~~~

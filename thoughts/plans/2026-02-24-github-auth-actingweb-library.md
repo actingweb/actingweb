@@ -1,7 +1,7 @@
 # Implementation Plan: Multi-Provider OAuth Support (ActingWeb Library)
 
 **Date:** 2026-02-24
-**Status:** Ready for Implementation (Updated 2026-02-25)
+**Status:** Implemented
 **Research:** thoughts/research/2026-02-24-github-auth-provider.md
 **Branch:** support-github-as-auth-provider-alongside-google-auth
 **Repo:** ../actingweb
@@ -66,7 +66,10 @@ Extend the ActingWeb library to support multiple OAuth providers simultaneously 
 - [ ] `cd ../actingweb && poetry run ruff check . --fix` passes
 - [ ] `cd ../actingweb && poetry run pyright` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:** All changes implemented as specified. Existing test `test_with_oauth_sets_config` updated
+for new `_oauth_configs` dict structure. 7 new tests added and passing. Pyright 0 errors.
 
 ---
 
@@ -140,7 +143,12 @@ Extend the ActingWeb library to support multiple OAuth providers simultaneously 
 - [ ] `cd ../actingweb && poetry run ruff check . --fix` passes
 - [ ] `cd ../actingweb && poetry run pyright` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:** All code changes implemented as specified. SPA state includes provider field, OAuth callbacks
+dispatch to correct authenticator based on provider in state, MCP state includes provider, factory and
+discovery endpoints iterate providers, token revocation uses correct authenticator, 401 redirects to
+factory login page when multiple providers configured. Pyright 0 errors, ruff clean, all tests passing.
 
 ---
 
@@ -163,7 +171,12 @@ Extend the ActingWeb library to support multiple OAuth providers simultaneously 
 - [ ] `cd ../actingweb && poetry run ruff check . --fix` passes
 - [ ] `cd ../actingweb && poetry run pyright` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:** Updated `_get_github_primary_email()` to require both `primary` and `verified` flags.
+Added 4 unit tests covering: verified primary (normal case), unverified primary (falls back to
+first verified), all unverified (returns None), and no primary but verified (returns first verified).
+Pyright 0 errors, ruff clean, all tests passing.
 
 ---
 
@@ -226,7 +239,56 @@ Update all documentation to reflect multi-provider OAuth support and the GitHub 
 - [ ] Security docs mention GitHub email verification fix
 - [ ] Backward-compatible single-provider examples still shown alongside multi-provider
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:** Updated 8 documentation files: oauth-login-flow.md (configuration + multi-provider section),
+authentication.rst (provider config, factory functions, migration guide, GitHub verified email note),
+configuration.rst (quick start + OAuth2 section), spa-authentication.rst (config response examples + API reference),
+security.rst (GitHub email verification + multi-provider redirect), getting-started.rst (with_oauth example + config methods list).
+No remaining references to "only one provider can be configured at a time" or `config.oauth2_provider = "google"  # or "github"`.
+
+---
+
+## Implementation Summary
+
+**Completed:** 2026-02-25
+**All phases:** Complete
+**Test status:** All passing (47 failures in parallel mode are known isolation issues, all pass sequentially)
+
+### Deviations from Plan
+- Phase 2 `oauth_state.py` changes were not needed — the SPA flow uses its own JSON state dict (not `encode_state()`), and MCP flow uses encrypted state via `state_manager.py`. Both were updated as specified.
+
+### Learnings
+- The `replace_all` Edit tool can have unintended side effects when renaming variables that share names with function parameters
+- Parallel test failures (port conflicts, timing) should always be verified sequentially before investigating
+
+## Post-Verification Changes (2026-02-25)
+
+After the initial implementation was completed, the following changes were made during iteration.
+
+### 1. SPA flow email form fallback when GitHub returns no verified emails
+
+**Category**: Bug fix
+
+**What changed**: When `require_email=True` and GitHub returns no verified emails, the SPA OAuth callback flow now redirects to the `/oauth/email` form instead of returning a hard `identifier_failed` error. This matches the Web UI flow behavior. The email form flow creates the actor with `email_verified = "false"` and fires the `email_verification_required` lifecycle hook so the app can send a verification email.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_callback.py` — `_process_spa_oauth_and_create_session()`: added email form redirect path when `identifier` is None and `require_email` is True, including fetching verified emails for the dropdown
+- `actingweb/oauth2_server/oauth2_server.py` — Improved MCP error message to explain that a verified email is required and suggest adding one to the provider account
+
+**Rationale**: The Web UI flow already had this fallback (redirect to email form → email verification), but the SPA flow returned a hard error. Users logging in via GitHub with private/unverified emails had no recovery path in the SPA flow.
+
+### 2. Migration notes and backward compatibility documentation
+
+**Category**: New functionality
+
+**What changed**: Added migration notes to `docs/migration/v3.10.rst` documenting the multi-provider OAuth support as a non-breaking, additive change. All 12 public API surface areas verified as fully backward compatible. Also added CHANGELOG entries under "Unreleased" for: multi-provider OAuth support, SPA email form fallback for GitHub, GitHub email verification security fix, and MCP verified email requirement.
+
+**Files affected**:
+- `docs/migration/v3.10.rst` — Added "Multi-Provider OAuth Support" section with: what changed, backward compatibility evidence (12 items), no-action-required note, opt-in multi-provider example, GitHub email verification security fix details, SPA email form fallback, MCP verified email requirement
+- `CHANGELOG.rst` — Added 4 entries under "Unreleased": 2 ADDED (multi-provider OAuth, SPA email form fallback) and 2 FIXED (GitHub email verification, MCP verified email)
+
+**Rationale**: User requested verification that changes are non-breaking and documentation in migration notes for the feature release.
 
 ---
 

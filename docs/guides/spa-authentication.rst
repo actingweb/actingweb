@@ -227,6 +227,11 @@ Before initiating login, fetch the available OAuth providers:
    //       "name": "google",
    //       "display_name": "Google",
    //       "authorization_endpoint": "..."
+   //     },
+   //     {
+   //       "name": "github",
+   //       "display_name": "GitHub",
+   //       "authorization_endpoint": "..."
    //     }
    //   ],
    //   "pkce_supported": true,
@@ -835,6 +840,11 @@ Returns OAuth configuration.
                "name": "google",
                "display_name": "Google",
                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth"
+           },
+           {
+               "name": "github",
+               "display_name": "GitHub",
+               "authorization_endpoint": "https://github.com/login/oauth/authorize"
            }
        ],
        "pkce_supported": true,
@@ -844,6 +854,8 @@ Returns OAuth configuration.
        "refresh_token_rotation": true,
        "endpoints": {...}
    }
+
+The ``oauth_providers`` array contains one entry per configured provider. When only one provider is configured, the array has a single entry.
 
 .. note::
 

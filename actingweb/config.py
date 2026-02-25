@@ -146,7 +146,11 @@ class Config:
             "refresh_type": "refresh_token",
         }
         # OAuth2 provider name (google, github, or custom provider name)
+        # This becomes the "default" provider name when oauth_providers is populated.
         self.oauth2_provider = "google"
+        # Multi-provider OAuth configuration: dict of provider_name -> config dict
+        # When populated, self.oauth points to the first provider's config for backward compat.
+        self.oauth_providers: dict[str, dict[str, str]] = {}
         self.bot = {
             "token": "",
             "email": "",

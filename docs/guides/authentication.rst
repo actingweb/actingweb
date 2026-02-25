@@ -97,15 +97,16 @@ Provider Implementations
 Google OAuth2 Provider
 -----------------------
 
-**Configuration:**
+**Configuration (fluent API):**
 
 .. code-block:: python
 
-    config.oauth = {
-        "client_id": "your_google_client_id",
-        "client_secret": "your_google_client_secret"
-    }
-    config.oauth2_provider = "google"  # Optional: default provider
+    app = ActingWebApp(...).with_oauth(
+        provider="google",
+        client_id="your_google_client_id",
+        client_secret="your_google_client_secret",
+        scope="openid email profile",
+    )
 
 **Endpoints:**
     - Auth URI: ``https://accounts.google.com/o/oauth2/v2/auth``
@@ -121,15 +122,16 @@ Google OAuth2 Provider
 GitHub OAuth2 Provider
 -----------------------
 
-**Configuration:**
+**Configuration (fluent API):**
 
 .. code-block:: python
 
-    config.oauth = {
-        "client_id": "your_github_client_id",
-        "client_secret": "your_github_client_secret"
-    }
-    config.oauth2_provider = "github"
+    app = ActingWebApp(...).with_oauth(
+        provider="github",
+        client_id="your_github_client_id",
+        client_secret="your_github_client_secret",
+        scope="read:user user:email",
+    )
 
 **Endpoints:**
     - Auth URI: ``https://github.com/login/oauth/authorize``
@@ -142,6 +144,7 @@ GitHub OAuth2 Provider
     - **JSON Accept Header**: GitHub OAuth2 endpoints require ``Accept: application/json``
     - **No Refresh Tokens**: GitHub doesn't support OAuth2 refresh tokens
     - **Private Email Handling**: Special logic for users with private email addresses
+    - **Verified Email Required**: Only verified primary emails are accepted for actor linking. Unverified primary emails are skipped to prevent account-linking attacks.
 
 **Email Handling:**
     GitHub users may have private email addresses. The system provides multiple strategies:
@@ -150,6 +153,10 @@ GitHub OAuth2 Provider
     2. Fetching verified emails via GitHub's emails API (dropdown selection)
     3. Manual email input with verification link (see Email Verification below)
     4. Provider ID mode: using stable GitHub user ID as identifier (no email required)
+
+    .. note::
+
+       Only verified emails from the GitHub ``/user/emails`` API are accepted for actor creation and linking. If the user's primary email is not verified, the first verified email is used instead. If no verified emails are found, the email-based flow fails gracefully.
 
 GitHub App Setup
 ----------------
@@ -181,12 +188,14 @@ The system provides several factory functions for creating authenticators:
 .. code-block:: python
 
     from actingweb.oauth2 import create_oauth2_authenticator
-    
+
     # Auto-detect provider from config.oauth2_provider
     auth = create_oauth2_authenticator(config)
-    
+
     # Explicitly specify provider
     github_auth = create_oauth2_authenticator(config, provider_name="github")
+
+When ``config.oauth_providers`` is populated (via the multi-provider ``with_oauth()`` API), the factory functions automatically extract per-provider credentials from that dict.
 
 **Custom Provider:**
 
@@ -882,18 +891,27 @@ Old configuration:
         "client_secret": "google_client_secret"
     }
 
-New configuration (backward compatible):
+New configuration (fluent API):
 
 .. code-block:: python
 
-    # Provider-agnostic config (defaults to Google)
-    config.oauth = {
-        "client_id": "google_client_id", 
-        "client_secret": "google_client_secret"
-    }
-    
-    # Or explicitly specify provider
-    config.oauth2_provider = "google"  # or "github"
+    # Single provider (backward compatible)
+    app = ActingWebApp(...).with_oauth(
+        provider="google",
+        client_id="google_client_id",
+        client_secret="google_client_secret",
+    )
+
+    # Multiple providers simultaneously
+    app = ActingWebApp(...).with_oauth(
+        provider="google",
+        client_id="google_client_id",
+        client_secret="google_client_secret",
+    ).with_oauth(
+        provider="github",
+        client_id="github_client_id",
+        client_secret="github_client_secret",
+    )
 
 Email Verification System
 ==========================

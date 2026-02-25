@@ -15,7 +15,7 @@ Quick Start
         database="postgresql",  # or "dynamodb" (default)
         fqdn="myapp.example.com",
         proto="https://"
-    ).with_oauth(client_id="...", client_secret="...") \
+    ).with_oauth(provider="google", client_id="...", client_secret="...") \
      .with_web_ui(enable=True) \
      .with_devtest(enable=False) \
      .add_actor_type("myself", relationship="friend")
@@ -84,10 +84,21 @@ OAuth2
 
 Configured by ``with_oauth(...)``. Common fields:
 
+- ``provider``: Provider name (``"google"`` or ``"github"``). Multiple calls with different providers configure multiple providers simultaneously.
 - ``client_id``, ``client_secret``: Provider credentials.
 - ``redirect_uri``: Defaults to ``{proto}{fqdn}/oauth``.
 - ``auth_uri``, ``token_uri``: Authorization and token endpoints.
 - ``scope``: Provider-specific scopes.
+
+Multi-provider example:
+
+.. code-block:: python
+
+    app = ActingWebApp(...) \
+        .with_oauth(provider="google", client_id="...", client_secret="...") \
+        .with_oauth(provider="github", client_id="...", client_secret="...")
+
+When multiple providers are configured, ``config.oauth_providers`` contains per-provider credential dicts. ``config.oauth`` still points to the first provider for backward compatibility.
 
 Actors Registry
 ---------------

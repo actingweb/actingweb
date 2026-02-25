@@ -12,6 +12,19 @@ ADDED
 
 - **SPA Email Form Fallback for GitHub**: When GitHub returns no verified emails and ``require_email=True``, the SPA OAuth callback now redirects to ``/oauth/email`` (email collection form) instead of returning a hard error. This matches the existing Web UI behavior and provides a recovery path for GitHub users with private/unverified emails.
 
+- **Provider Display Name Helper**: New ``get_provider_display_name()`` public function in ``oauth2`` module for consistent provider name formatting (e.g., "GitHub" instead of "Github").
+
+CHANGED
+~~~~~~~
+
+- **Loosen dependency version constraints**: Runtime dependencies now use more permissive version ranges (e.g., ``boto3 >=1.26``, ``requests >=2.20``, ``cryptography >=43.0``) to reduce version conflicts for downstream consumers. Optional framework dependencies (Flask, FastAPI, uvicorn) also loosened.
+
+- **Update dev dependencies**: Bump ``ruff`` to 0.15.x, ``responses`` to 0.26.x, ``pytest-rerunfailures`` to 16.x. Remove ``black`` (redundant with ``ruff format``).
+
+- **Rename ``google_token_data`` parameter**: ``TokenManager.create_authorization_code()`` parameter renamed from ``google_token_data`` to ``provider_token_data`` to reflect multi-provider support.
+
+- **Make ``get_github_verified_emails()`` public**: Renamed from ``_get_github_verified_emails()`` on ``OAuth2Authenticator`` to remove the private prefix, as it is called across class boundaries.
+
 FIXED
 ~~~~~
 
@@ -20,6 +33,8 @@ FIXED
 - **GitHub Email Verification Security**: ``_get_github_primary_email()`` now requires both ``primary`` and ``verified`` flags when selecting the email for actor linking. Previously, an unverified primary email was accepted, which could allow account-linking attacks via the GitHub ``/user/emails`` API. If no verified primary email is available, falls back to the first verified non-primary email.
 
 - **MCP Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear ``invalid_grant`` error message when no verified email is available from the provider, explaining that a verified email is required and suggesting the user add one to their provider account.
+
+- **Token revocation uses correct provider**: Logout and token revocation endpoints now look up the OAuth provider from the session cookie instead of always using the default provider. Ensures tokens are sent to the correct revocation endpoint in multi-provider deployments.
 
 IMPROVED
 ~~~~~~~~

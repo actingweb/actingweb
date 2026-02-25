@@ -223,14 +223,36 @@ class EmailVerificationHandler(BaseHandler):
             return self.error_response(400, "Email already verified")
 
         # Generate new verification token
-        from ..constants import EMAIL_VERIFICATION_TOKEN_LENGTH
+        from ..attribute import Attributes
+        from ..constants import (
+            ACTINGWEB_SYSTEM_ACTOR,
+            EMAIL_VERIFICATION_TOKEN_EXPIRY,
+            EMAIL_VERIFICATION_TOKEN_LENGTH,
+            EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
+        )
 
         token = secrets.token_urlsafe(EMAIL_VERIFICATION_TOKEN_LENGTH)
 
-        # Store token
+        # Store token on actor
         if actor.store:
             actor.store.email_verification_token = token
             actor.store.email_verification_created_at = str(int(time.time()))
+
+        # Store token → actor_id index for reverse lookup
+        index = Attributes(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
+            config=self.config,
+        )
+        index.set_attr(
+            name=token,
+            data=actor_id,
+            ttl_seconds=EMAIL_VERIFICATION_TOKEN_EXPIRY,
+        )
+
+        verification_url = (
+            f"{self.config.proto}{self.config.fqdn}/oauth/email?verify={token}"
+        )
 
         # Execute hook to send verification email
         if self.hooks:
@@ -241,8 +263,6 @@ class EmailVerificationHandler(BaseHandler):
                 actor_interface = ActorInterface(
                     core_actor=actor, service_registry=registry
                 )
-
-                verification_url = f"{self.config.proto}{self.config.fqdn}/{actor_id}/www/verify_email?token={token}"
 
                 self.hooks.execute_lifecycle_hooks(
                     "email_verification_required",

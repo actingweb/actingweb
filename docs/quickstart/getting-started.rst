@@ -56,6 +56,7 @@ For production applications, integrate with Flask:
         database="dynamodb",
         fqdn="myapp.example.com"
     ).with_oauth(
+        provider="google",
         client_id="your-client-id",
         client_secret="your-client-secret"
     ).with_web_ui()
@@ -170,7 +171,7 @@ The ``ActingWebApp`` constructor accepts these parameters:
 
 Configuration methods:
 
-- ``.with_oauth(client_id, client_secret, scope, ...)`` - Configure OAuth authentication
+- ``.with_oauth(provider, client_id, client_secret, scope, ...)`` - Configure OAuth authentication (call multiple times for multiple providers)
 - ``.with_web_ui(enable=True)`` - Enable/disable web UI at /www
 - ``.with_devtest(enable=True)`` - Enable/disable development endpoints (MUST be False in production)
 - ``.with_bot(token, email, secret, admin_room)`` - Configure bot integration

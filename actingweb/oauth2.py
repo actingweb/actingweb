@@ -54,8 +54,12 @@ class OAuth2Provider:
 class GoogleOAuth2Provider(OAuth2Provider):
     """Google OAuth2 provider with specific configuration."""
 
-    def __init__(self, config: config_class.Config):
-        oauth_config = config.oauth or {}
+    def __init__(
+        self,
+        config: config_class.Config,
+        provider_config: dict[str, Any] | None = None,
+    ):
+        oauth_config = provider_config or config.oauth or {}
         google_config = {
             "client_id": oauth_config.get("client_id", ""),
             "client_secret": oauth_config.get("client_secret", ""),
@@ -72,8 +76,12 @@ class GoogleOAuth2Provider(OAuth2Provider):
 class GitHubOAuth2Provider(OAuth2Provider):
     """GitHub OAuth2 provider with specific configuration."""
 
-    def __init__(self, config: config_class.Config):
-        oauth_config = config.oauth or {}
+    def __init__(
+        self,
+        config: config_class.Config,
+        provider_config: dict[str, Any] | None = None,
+    ):
+        oauth_config = provider_config or config.oauth or {}
         github_config = {
             "client_id": oauth_config.get("client_id", ""),
             "client_secret": oauth_config.get("client_secret", ""),
@@ -580,13 +588,16 @@ class OAuth2Authenticator:
 
             emails = response.json()
 
-            # Find the primary email
+            # Find the primary email (must also be verified to prevent
+            # account-linking attacks via unverified primary emails).
             for email_info in emails:
-                if email_info.get("primary", False):
+                if email_info.get("primary", False) and email_info.get(
+                    "verified", False
+                ):
                     email = email_info.get("email")
                     return str(email) if email else None
 
-            # If no primary email found, use the first verified email
+            # If no verified primary email found, use the first verified email
             for email_info in emails:
                 if email_info.get("verified", False):
                     email = email_info.get("email")
@@ -598,7 +609,7 @@ class OAuth2Authenticator:
             logger.warning(f"Failed to get GitHub primary email: {e}")
             return None
 
-    def _get_github_verified_emails(self, access_token: str) -> list[str] | None:
+    def get_github_verified_emails(self, access_token: str) -> list[str] | None:
         """
         Fetch ALL verified emails from GitHub's emails API.
 
@@ -873,6 +884,27 @@ class OAuth2Authenticator:
 # Factory functions for backward compatibility and convenience
 
 
+def _get_provider_config(
+    config: config_class.Config, provider_name: str
+) -> dict[str, Any] | None:
+    """Look up per-provider credentials from ``config.oauth_providers``.
+
+    Returns the provider's config dict, or ``None`` if not found
+    (in which case the provider class will fall back to ``config.oauth``).
+    """
+    providers = getattr(config, "oauth_providers", {})
+    return providers.get(provider_name)  # type: ignore[no-any-return]
+
+
+# Display-name mapping for known OAuth providers.
+_PROVIDER_DISPLAY_NAMES: dict[str, str] = {"github": "GitHub", "google": "Google"}
+
+
+def get_provider_display_name(name: str) -> str:
+    """Return a human-friendly display name for an OAuth provider."""
+    return _PROVIDER_DISPLAY_NAMES.get(name, name.capitalize())
+
+
 def create_oauth2_authenticator(
     config: config_class.Config, provider_name: str = ""
 ) -> OAuth2Authenticator:
@@ -890,14 +922,22 @@ def create_oauth2_authenticator(
     if not provider_name:
         provider_name = getattr(config, "oauth2_provider", "google")
 
+    prov_cfg = _get_provider_config(config, provider_name)
+
     # Built-in provider support
     if provider_name == "google":
-        return OAuth2Authenticator(config, GoogleOAuth2Provider(config))
+        return OAuth2Authenticator(
+            config, GoogleOAuth2Provider(config, provider_config=prov_cfg)
+        )
     elif provider_name == "github":
-        return OAuth2Authenticator(config, GitHubOAuth2Provider(config))
+        return OAuth2Authenticator(
+            config, GitHubOAuth2Provider(config, provider_config=prov_cfg)
+        )
     else:
         # Default to Google if provider not recognized
-        return OAuth2Authenticator(config, GoogleOAuth2Provider(config))
+        return OAuth2Authenticator(
+            config, GoogleOAuth2Provider(config, provider_config=prov_cfg)
+        )
 
 
 def create_google_authenticator(config: config_class.Config) -> OAuth2Authenticator:
@@ -910,7 +950,10 @@ def create_google_authenticator(config: config_class.Config) -> OAuth2Authentica
     Returns:
         OAuth2Authenticator configured for Google
     """
-    return OAuth2Authenticator(config, GoogleOAuth2Provider(config))
+    prov_cfg = _get_provider_config(config, "google")
+    return OAuth2Authenticator(
+        config, GoogleOAuth2Provider(config, provider_config=prov_cfg)
+    )
 
 
 def create_github_authenticator(config: config_class.Config) -> OAuth2Authenticator:
@@ -923,7 +966,10 @@ def create_github_authenticator(config: config_class.Config) -> OAuth2Authentica
     Returns:
         OAuth2Authenticator configured for GitHub
     """
-    return OAuth2Authenticator(config, GitHubOAuth2Provider(config))
+    prov_cfg = _get_provider_config(config, "github")
+    return OAuth2Authenticator(
+        config, GitHubOAuth2Provider(config, provider_config=prov_cfg)
+    )
 
 
 def create_generic_authenticator(

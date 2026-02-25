@@ -221,45 +221,46 @@ class OAuth2SPAHandler(BaseHandler):
         oauth_providers = []
         oauth_enabled = False
 
-        if self.config.oauth and self.config.oauth.get("client_id"):
-            try:
-                from ..oauth2 import (
-                    create_github_authenticator,
-                    create_google_authenticator,
-                )
+        try:
+            from ..oauth2 import (
+                create_oauth2_authenticator,
+                get_provider_display_name,
+            )
 
-                oauth2_provider = getattr(self.config, "oauth2_provider", "google")
-
-                if oauth2_provider == "google":
-                    google_auth = create_google_authenticator(self.config)
-                    if google_auth.is_enabled():
+            providers_cfg = getattr(self.config, "oauth_providers", {})
+            if providers_cfg:
+                # Multi-provider path: iterate all configured providers
+                for prov_name in providers_cfg:
+                    auth = create_oauth2_authenticator(self.config, prov_name)
+                    if auth.is_enabled():
                         oauth_providers.append(
                             {
-                                "name": "google",
-                                "display_name": "Google",
-                                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                                "token_endpoint": "https://oauth2.googleapis.com/token",
-                                "userinfo_endpoint": "https://www.googleapis.com/oauth2/v3/userinfo",
+                                "name": auth.provider.name,
+                                "display_name": get_provider_display_name(prov_name),
+                                "authorization_endpoint": auth.provider.auth_uri,
+                                "token_endpoint": auth.provider.token_uri,
+                                "userinfo_endpoint": auth.provider.userinfo_uri,
                             }
                         )
                         oauth_enabled = True
-
-                elif oauth2_provider == "github":
-                    github_auth = create_github_authenticator(self.config)
-                    if github_auth.is_enabled():
-                        oauth_providers.append(
-                            {
-                                "name": "github",
-                                "display_name": "GitHub",
-                                "authorization_endpoint": "https://github.com/login/oauth/authorize",
-                                "token_endpoint": "https://github.com/login/oauth/access_token",
-                                "userinfo_endpoint": "https://api.github.com/user",
-                            }
-                        )
-                        oauth_enabled = True
-
-            except Exception as e:
-                logger.warning(f"Failed to get OAuth providers: {e}")
+            elif self.config.oauth and self.config.oauth.get("client_id"):
+                # Single-provider backward-compat path
+                auth = create_oauth2_authenticator(self.config)
+                if auth.is_enabled():
+                    oauth_providers.append(
+                        {
+                            "name": auth.provider.name,
+                            "display_name": get_provider_display_name(
+                                auth.provider.name
+                            ),
+                            "authorization_endpoint": auth.provider.auth_uri,
+                            "token_endpoint": auth.provider.token_uri,
+                            "userinfo_endpoint": auth.provider.userinfo_uri,
+                        }
+                    )
+                    oauth_enabled = True
+        except Exception as e:
+            logger.warning(f"Failed to get OAuth providers: {e}")
 
         return {
             "oauth_enabled": oauth_enabled,
@@ -401,6 +402,7 @@ class OAuth2SPAHandler(BaseHandler):
         # Only include trust_type if provided (for MCP client auth, not user login)
         state_data: dict[str, Any] = {
             "spa_mode": True,
+            "provider": provider,
             "redirect_url": redirect_uri,
             "return_path": return_path,  # Final redirect path after auth
             "token_delivery": token_delivery,
@@ -843,16 +845,18 @@ class OAuth2SPAHandler(BaseHandler):
             if token_type_hint == "refresh_token":
                 session_manager.revoke_refresh_token(token)
             else:
+                # Look up actor from session token and revoke provider token
+                try:
+                    token_data = session_manager.validate_access_token(token)
+                    if token_data:
+                        actor_id = token_data.get("actor_id")
+                        if actor_id:
+                            self._revoke_provider_token_for_actor(actor_id)
+                except Exception as lookup_error:
+                    logger.debug(
+                        f"Provider token lookup during revoke: {lookup_error}"
+                    )
                 session_manager.revoke_access_token(token)
-
-            # Also try to revoke with OAuth provider
-            try:
-                from ..oauth2 import OAuth2Authenticator
-
-                authenticator = OAuth2Authenticator(self.config)
-                authenticator.revoke_token(token)
-            except Exception as e:
-                logger.debug(f"Provider token revocation failed (non-critical): {e}")
 
         except Exception as e:
             logger.warning(f"Token revocation error: {e}")
@@ -871,7 +875,9 @@ class OAuth2SPAHandler(BaseHandler):
 
         POST /oauth/spa/logout
 
-        Clears all tokens and cookies.
+        Clears all tokens and cookies. Also revokes the stored provider token
+        (e.g., Google) so the backend can no longer make API calls on behalf
+        of the user.
         """
         # Get token to revoke
         token = None
@@ -888,19 +894,26 @@ class OAuth2SPAHandler(BaseHandler):
                 "access_token"
             ) or self.request.cookies.get("oauth_token")
 
-        # Revoke tokens if we have one
         if token:
             try:
                 from ..oauth_session import get_oauth2_session_manager
 
                 session_manager = get_oauth2_session_manager(self.config)
+
+                # Revoke provider token (e.g., Google) stored in actor.store
+                try:
+                    token_data = session_manager.validate_access_token(token)
+                    if token_data:
+                        actor_id = token_data.get("actor_id")
+                        if actor_id:
+                            self._revoke_provider_token_for_actor(actor_id)
+                except Exception as lookup_error:
+                    logger.debug(
+                        f"Provider token lookup during logout: {lookup_error}"
+                    )
+
+                # Revoke the ActingWeb session token
                 session_manager.revoke_access_token(token)
-
-                # Also revoke with OAuth provider
-                from ..oauth2 import OAuth2Authenticator
-
-                authenticator = OAuth2Authenticator(self.config)
-                authenticator.revoke_token(token)
             except Exception as e:
                 logger.debug(f"Token revocation during logout: {e}")
 
@@ -1076,6 +1089,56 @@ class OAuth2SPAHandler(BaseHandler):
                         path="/oauth/spa/token",
                         secure=True,
                     )
+
+    def _revoke_provider_token_for_actor(self, actor_id: str) -> None:
+        """
+        Revoke the OAuth provider's token stored in actor.store.
+
+        Looks up the actor, reads the provider token and provider name
+        from the store, and sends the token to the provider's revocation
+        endpoint. Only effective for providers that support revocation
+        (e.g., Google). GitHub does not support token revocation.
+
+        This is best-effort — failures are logged but do not affect logout.
+        """
+        try:
+            from .. import actor as actor_module
+            from ..oauth2 import create_oauth2_authenticator
+
+            actor = actor_module.Actor(actor_id=actor_id, config=self.config)
+            if not actor.id or not actor.store:
+                return
+
+            provider_token = actor.store.oauth_token
+            provider_name = getattr(actor.store, "oauth_provider", "") or ""
+
+            if not provider_token:
+                logger.debug(f"No provider token stored for actor {actor_id}")
+                return
+
+            authenticator = create_oauth2_authenticator(self.config, provider_name)
+
+            if not authenticator.provider.revocation_uri:
+                logger.debug(
+                    f"Provider {provider_name or 'default'} does not support "
+                    f"token revocation, skipping"
+                )
+                return
+
+            if authenticator.revoke_token(str(provider_token)):
+                logger.info(
+                    f"Revoked {provider_name or 'default'} provider token "
+                    f"for actor {actor_id}"
+                )
+                # Clear the stored provider token
+                actor.store.oauth_token = None
+                actor.store.oauth_token_expiry = None
+            else:
+                logger.debug(
+                    f"Provider token revocation returned false for actor {actor_id}"
+                )
+        except Exception as e:
+            logger.debug(f"Provider token revocation for actor {actor_id}: {e}")
 
     def _json_error(self, status_code: int, message: str) -> dict[str, Any]:
         """Create JSON error response."""

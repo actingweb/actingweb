@@ -143,6 +143,9 @@ ESTABLISHED_VIA_OAUTH2_CLIENT = (
 # Email verification settings
 EMAIL_VERIFICATION_TOKEN_LENGTH = 32  # Length of URL-safe verification tokens
 EMAIL_VERIFICATION_TOKEN_EXPIRY = 86400  # 24 hours in seconds
+EMAIL_VERIFY_TOKEN_INDEX_BUCKET = (
+    "_email_verify_tokens"  # Reverse index: verification token → actor_id
+)
 
 # TTL Values for Attribute Storage (in seconds)
 # =============================================

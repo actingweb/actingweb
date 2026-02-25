@@ -177,9 +177,7 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
     if os.environ["DATABASE_BACKEND"] == "dynamodb":
         os.environ["AWS_ACCESS_KEY_ID"] = "test"
         os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-        os.environ["AWS_DB_HOST"] = os.getenv(
-            "AWS_DB_HOST", "http://localhost:8001"
-        )
+        os.environ["AWS_DB_HOST"] = os.getenv("AWS_DB_HOST", "http://localhost:8001")
         os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
     elif os.environ["DATABASE_BACKEND"] == "postgresql":
         os.environ["PG_DB_HOST"] = os.getenv("PG_DB_HOST", "localhost")

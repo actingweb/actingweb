@@ -252,6 +252,16 @@ def create_oauth_redirect_response(
     try:
         from ...oauth2 import create_oauth2_authenticator
 
+        # When multiple providers are configured, redirect to the factory
+        # page so the user can choose their provider.
+        providers_cfg = getattr(config, "oauth_providers", {})
+        if len(providers_cfg) > 1:
+            login_url = f"{config.proto}{config.fqdn}/"
+            redirect_response = RedirectResponse(url=login_url, status_code=302)
+            if clear_cookie:
+                redirect_response.delete_cookie("oauth_token", path="/")
+            return redirect_response
+
         authenticator = create_oauth2_authenticator(config)
         if authenticator.is_enabled():
             auth_url = authenticator.create_authorization_url(
@@ -731,19 +741,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 or request.headers.get("x-requested-with") == "XMLHttpRequest"
             )
 
-            # First, handle MCP OAuth2 token revocation if Authorization header present
             auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                self.logger.info("Logout: Revoking MCP OAuth2 token")
+            oauth_cookie = request.cookies.get("oauth_token")
+
+            # Web UI logout (oauth_token cookie present) — clear cookie
+            # and also revoke the session token via the handler
+            if oauth_cookie:
+                self.logger.info("Logout: Clearing web UI session")
+                # Delegate to handler for session token revocation
                 await self._handle_oauth2_endpoint(request, "logout")
 
-            # Check if this is a web UI logout (oauth_token cookie present)
-            oauth_cookie = request.cookies.get("oauth_token")
-            if oauth_cookie:
-                self.logger.info("Logout: Clearing web UI session (oauth_token cookie)")
-
                 if is_ajax:
-                    # Return JSON response for AJAX requests
                     response = JSONResponse(
                         {
                             "success": True,
@@ -755,25 +763,24 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     response.delete_cookie("oauth_token", path="/")
                     return response
                 else:
-                    # Return redirect for direct navigation
                     response = RedirectResponse(url="/", status_code=302)
                     response.delete_cookie("oauth_token", path="/")
-                    # Add CORS headers even for redirects
                     for key, value in get_spa_cors_headers().items():
                         response.headers[key] = value
                     return response
 
-            # If neither token nor cookie, just return success
-            if not auth_header and not oauth_cookie:
-                self.logger.info("Logout: No active session found")
-                return JSONResponse(
-                    {"message": "No active session to logout"},
-                    status_code=200,
-                    headers=get_spa_cors_headers(),
-                )
+            # SPA/MCP client logout (Bearer token, no cookie)
+            if auth_header.startswith("Bearer "):
+                self.logger.info("Logout: Revoking session token")
+                return await self._handle_oauth2_endpoint(request, "logout")
 
-            # MCP client logout without web UI redirect
-            return await self._handle_oauth2_endpoint(request, "logout")
+            # No active session
+            self.logger.info("Logout: No active session found")
+            return JSONResponse(
+                {"message": "No active session to logout"},
+                status_code=200,
+                headers=get_spa_cors_headers(),
+            )
 
         # Unified OAuth endpoints (JSON API, accessible at /oauth/*)
         @self.fastapi_app.get("/oauth/config")
@@ -2523,36 +2530,33 @@ class FastAPIIntegration(BaseActingWebIntegration):
         return self.get_handler_class(endpoint, webobj, config, **kwargs)
 
     def _create_oauth_discovery_response(self) -> dict[str, Any]:
-        """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
+        """Create OAuth2 Authorization Server Discovery response (RFC 8414).
+
+        Describes the ActingWeb OAuth2 server endpoints for MCP clients.
+        Upstream provider info comes from the default configured provider.
+
+        .. note::
+
+            In a multi-provider deployment this response only reflects
+            the default provider.  MCP clients that need to use a
+            non-default provider should use the ``/oauth/authorize``
+            endpoint directly with the appropriate ``provider`` state
+            parameter.
+        """
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
-        oauth_provider = getattr(config, "oauth2_provider", "google")
 
-        if oauth_provider == "google":
-            return {
+        try:
+            from ...oauth2 import create_oauth2_authenticator
+
+            auth = create_oauth2_authenticator(config)
+            provider = auth.provider
+            result: dict[str, Any] = {
                 "issuer": base_url,
-                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                "token_endpoint": "https://oauth2.googleapis.com/token",
-                "userinfo_endpoint": "https://www.googleapis.com/oauth2/v2/userinfo",
-                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
-                "scopes_supported": ["openid", "email", "profile"],
-                "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code", "refresh_token"],
-                "subject_types_supported": ["public"],
-                "id_token_signing_alg_values_supported": ["RS256"],
-                "code_challenge_methods_supported": ["S256"],
-                "token_endpoint_auth_methods_supported": [
-                    "client_secret_post",
-                    "client_secret_basic",
-                ],
-            }
-        elif oauth_provider == "github":
-            return {
-                "issuer": base_url,
-                "authorization_endpoint": "https://github.com/login/oauth/authorize",
-                "token_endpoint": "https://github.com/login/oauth/access_token",
-                "userinfo_endpoint": "https://api.github.com/user",
-                "scopes_supported": ["user:email"],
+                "authorization_endpoint": provider.auth_uri,
+                "token_endpoint": provider.token_uri,
+                "userinfo_endpoint": provider.userinfo_uri,
+                "scopes_supported": provider.scope.split() if provider.scope else [],
                 "response_types_supported": ["code"],
                 "grant_types_supported": ["authorization_code"],
                 "subject_types_supported": ["public"],
@@ -2561,14 +2565,22 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     "client_secret_basic",
                 ],
             }
-        else:
-            return {"error": "Unknown OAuth provider"}
+            if provider.name == "google":
+                result["jwks_uri"] = "https://www.googleapis.com/oauth2/v3/certs"
+                result["id_token_signing_alg_values_supported"] = ["RS256"]
+                result["code_challenge_methods_supported"] = ["S256"]
+                result["grant_types_supported"] = [
+                    "authorization_code",
+                    "refresh_token",
+                ]
+            return result
+        except Exception:
+            return {"error": "OAuth provider not configured"}
 
     def _create_mcp_info_response(self) -> dict[str, Any]:
         """Create MCP information response."""
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
-        oauth_provider = getattr(config, "oauth2_provider", "google")
 
         return {
             "mcp_enabled": True,
@@ -2589,10 +2601,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 "enabled": True,
             },
             "supported_features": ["tools", "prompts"],
-            "tools_count": 4,  # search, fetch, create_note, create_reminder
-            "prompts_count": 3,  # analyze_notes, create_learning_prompt, create_meeting_prep
+            "tools_count": 4,
+            "prompts_count": 3,
             "actor_lookup": "email_based",
-            "description": f"ActingWeb MCP Demo - AI can interact with actors through MCP protocol using {oauth_provider.title()} OAuth2",
+            "description": "ActingWeb MCP Demo - AI can interact with actors through MCP protocol using OAuth2",
         }
 
     def _create_services_handler(self, webobj: AWWebObj, config) -> Any:

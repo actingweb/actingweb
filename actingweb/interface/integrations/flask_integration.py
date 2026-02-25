@@ -1421,9 +1421,20 @@ class FlaskIntegration(BaseActingWebIntegration):
     ) -> Response | WerkzeugResponse | str:
         """Create OAuth2 redirect response."""
         try:
+            config = self.aw_app.get_config()
             from ...oauth2 import create_oauth2_authenticator
 
-            authenticator = create_oauth2_authenticator(self.aw_app.get_config())
+            # When multiple providers are configured, redirect to the factory
+            # page so the user can choose their provider.
+            providers_cfg = getattr(config, "oauth_providers", {})
+            if len(providers_cfg) > 1:
+                login_url = f"{config.proto}{config.fqdn}/"
+                resp = redirect(login_url, code=302)
+                if clear_cookie:
+                    resp.delete_cookie("oauth_token", path="/")
+                return resp
+
+            authenticator = create_oauth2_authenticator(config)
             if authenticator.is_enabled():
                 auth_url = authenticator.create_authorization_url(
                     redirect_after_auth=redirect_after_auth
@@ -1626,36 +1637,34 @@ class FlaskIntegration(BaseActingWebIntegration):
         return self.get_handler_class(endpoint, webobj, config, **kwargs)
 
     def _create_oauth_discovery_response(self) -> dict[str, Any]:
-        """Create OAuth2 Authorization Server Discovery response (RFC 8414)."""
+        """Create OAuth2 Authorization Server Discovery response (RFC 8414).
+
+        This describes the ActingWeb OAuth2 server endpoints that MCP
+        clients use.  The upstream provider info is derived from the
+        default (first) configured provider.
+
+        .. note::
+
+            In a multi-provider deployment this response only reflects
+            the default provider.  MCP clients that need to use a
+            non-default provider should use the ``/oauth/authorize``
+            endpoint directly with the appropriate ``provider`` state
+            parameter.
+        """
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
-        oauth_provider = getattr(config, "oauth2_provider", "google")
 
-        if oauth_provider == "google":
-            return {
+        try:
+            from ...oauth2 import create_oauth2_authenticator
+
+            auth = create_oauth2_authenticator(config)
+            provider = auth.provider
+            result: dict[str, Any] = {
                 "issuer": base_url,
-                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                "token_endpoint": "https://oauth2.googleapis.com/token",
-                "userinfo_endpoint": "https://www.googleapis.com/oauth2/v2/userinfo",
-                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
-                "scopes_supported": ["openid", "email", "profile"],
-                "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code", "refresh_token"],
-                "subject_types_supported": ["public"],
-                "id_token_signing_alg_values_supported": ["RS256"],
-                "code_challenge_methods_supported": ["S256"],
-                "token_endpoint_auth_methods_supported": [
-                    "client_secret_post",
-                    "client_secret_basic",
-                ],
-            }
-        elif oauth_provider == "github":
-            return {
-                "issuer": base_url,
-                "authorization_endpoint": "https://github.com/login/oauth/authorize",
-                "token_endpoint": "https://github.com/login/oauth/access_token",
-                "userinfo_endpoint": "https://api.github.com/user",
-                "scopes_supported": ["user:email"],
+                "authorization_endpoint": provider.auth_uri,
+                "token_endpoint": provider.token_uri,
+                "userinfo_endpoint": provider.userinfo_uri,
+                "scopes_supported": provider.scope.split() if provider.scope else [],
                 "response_types_supported": ["code"],
                 "grant_types_supported": ["authorization_code"],
                 "subject_types_supported": ["public"],
@@ -1664,14 +1673,23 @@ class FlaskIntegration(BaseActingWebIntegration):
                     "client_secret_basic",
                 ],
             }
-        else:
-            return {"error": "Unknown OAuth provider"}
+            # Google-specific extras
+            if provider.name == "google":
+                result["jwks_uri"] = "https://www.googleapis.com/oauth2/v3/certs"
+                result["id_token_signing_alg_values_supported"] = ["RS256"]
+                result["code_challenge_methods_supported"] = ["S256"]
+                result["grant_types_supported"] = [
+                    "authorization_code",
+                    "refresh_token",
+                ]
+            return result
+        except Exception:
+            return {"error": "OAuth provider not configured"}
 
     def _create_mcp_info_response(self) -> dict[str, Any]:
         """Create MCP information response."""
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"
-        oauth_provider = getattr(config, "oauth2_provider", "google")
 
         return {
             "mcp_enabled": True,
@@ -1692,10 +1710,10 @@ class FlaskIntegration(BaseActingWebIntegration):
                 "enabled": True,
             },
             "supported_features": ["tools", "prompts"],
-            "tools_count": 4,  # search, fetch, create_note, create_reminder
-            "prompts_count": 3,  # analyze_notes, create_learning_prompt, create_meeting_prep
+            "tools_count": 4,
+            "prompts_count": 3,
             "actor_lookup": "email_based",
-            "description": f"ActingWeb MCP Demo - AI can interact with actors through MCP protocol using {oauth_provider.title()} OAuth2",
+            "description": "ActingWeb MCP Demo - AI can interact with actors through MCP protocol using OAuth2",
         }
 
     def _create_services_handler(self, webobj: AWWebObj, config) -> Any:

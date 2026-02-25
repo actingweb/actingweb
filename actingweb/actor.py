@@ -1688,7 +1688,9 @@ class Actor:
                     # Mark for cleanup after successful deletion
                     should_cleanup_remote_peer_store = True
             except Exception as e:
-                logger.warning(f"Failed to check RemotePeerStore cleanup for {peerid}: {e}")
+                logger.warning(
+                    f"Failed to check RemotePeerStore cleanup for {peerid}: {e}"
+                )
 
         sub = subscription.Subscription(
             actor_id=self.id,

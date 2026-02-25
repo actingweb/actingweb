@@ -64,7 +64,9 @@ class TestSubscriptionDeletedHook:
 
         TestSubscriptionDeletedHook.subscriber_url = response.headers.get("Location")
         TestSubscriptionDeletedHook.subscriber_id = response.json()["id"]
-        TestSubscriptionDeletedHook.subscriber_passphrase = response.json()["passphrase"]
+        TestSubscriptionDeletedHook.subscriber_passphrase = response.json()[
+            "passphrase"
+        ]
 
     def test_003_establish_trust(self, http_client):
         """Establish trust between publisher and subscriber."""
@@ -374,7 +376,9 @@ class TestRevokePeerSubscription:
 
         if "data" in data:
             for sub in data["data"]:
-                TestRevokePeerSubscription.subscription_ids.append(sub["subscriptionid"])
+                TestRevokePeerSubscription.subscription_ids.append(
+                    sub["subscriptionid"]
+                )
 
         assert len(self.subscription_ids) >= 2
 
@@ -485,8 +489,12 @@ class TestUnsubscribeVsRevoke:
     trust_secret_a: str | None = None
     trust_secret_b: str | None = None
 
-    sub_a_to_b_id: str | None = None  # A subscribes to B (outbound for A, inbound for B)
-    sub_b_to_a_id: str | None = None  # B subscribes to A (outbound for B, inbound for A)
+    sub_a_to_b_id: str | None = (
+        None  # A subscribes to B (outbound for A, inbound for B)
+    )
+    sub_b_to_a_id: str | None = (
+        None  # B subscribes to A (outbound for B, inbound for A)
+    )
 
     def test_001_create_actors(self, http_client):
         """Create both actors."""
@@ -556,8 +564,16 @@ class TestUnsubscribeVsRevoke:
 
         # Grant mutual permissions
         for actor_url, actor_auth, peer_id in [
-            (self.actor_a_url, (self.actor_a_creator, self.actor_a_passphrase), self.actor_b_id),
-            (self.actor_b_url, (self.actor_b_creator, self.actor_b_passphrase), self.actor_a_id),
+            (
+                self.actor_a_url,
+                (self.actor_a_creator, self.actor_a_passphrase),
+                self.actor_b_id,
+            ),
+            (
+                self.actor_b_url,
+                (self.actor_b_creator, self.actor_b_passphrase),
+                self.actor_a_id,
+            ),
         ]:
             response = requests.put(
                 f"{actor_url}/trust/friend/{peer_id}/permissions",
@@ -594,7 +610,9 @@ class TestUnsubscribeVsRevoke:
         if response.status_code == 200:
             data = response.json()
             if "data" in data and len(data["data"]) > 0:
-                TestUnsubscribeVsRevoke.sub_a_to_b_id = data["data"][0]["subscriptionid"]
+                TestUnsubscribeVsRevoke.sub_a_to_b_id = data["data"][0][
+                    "subscriptionid"
+                ]
 
         # B subscribes to A (outbound for B, inbound for A)
         response = requests.post(
@@ -617,7 +635,9 @@ class TestUnsubscribeVsRevoke:
         if response.status_code == 200:
             data = response.json()
             if "data" in data and len(data["data"]) > 0:
-                TestUnsubscribeVsRevoke.sub_b_to_a_id = data["data"][0]["subscriptionid"]
+                TestUnsubscribeVsRevoke.sub_b_to_a_id = data["data"][0][
+                    "subscriptionid"
+                ]
 
     def test_010_verify_both_subscriptions_exist(self, http_client):
         """Verify both subscriptions exist."""

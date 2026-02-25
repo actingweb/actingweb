@@ -27,7 +27,9 @@ OAuth2
 
 - Always validate provider config; use the provider-agnostic factory.
 - Google: refresh tokens available; GitHub: no refresh tokens.
+- GitHub: only verified primary emails are accepted for actor linking. Unverified primary emails are skipped to prevent account-linking attacks via the GitHub ``/user/emails`` API.
 - Expect 401 at protected endpoints with a proper `WWW-Authenticate` header.
+- When multiple providers are configured, 401 redirects go to the factory login page (not directly to a provider) to let the user choose.
 
 Custom Routes
 -------------

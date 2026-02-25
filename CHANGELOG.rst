@@ -5,10 +5,44 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Multi-Provider OAuth Support**: Multiple OAuth providers (e.g., Google and GitHub) can now be configured simultaneously using ``.with_oauth(provider="google", ...).with_oauth(provider="github", ...)``. The factory login page renders buttons for all configured providers, OAuth state parameter carries the provider name for correct callback routing, and ``/oauth/config`` (SPA endpoint) returns all configured providers. Fully backward compatible — existing single-provider configurations work without modification.
+
+- **SPA Email Collection Flow**: When the OAuth provider cannot supply a verified email, the SPA OAuth callback now redirects back to the SPA URL with ``?email_required=true&session=<id>`` parameters so SPAs can display their own email input UI instead of being redirected to a server-rendered form.
+
+- **Email Verification via ``/oauth/email?verify=<token>``**: New GET handler provides actor-ID-free email verification URLs. The ``email_verification_required`` lifecycle hook now fires consistently for both SPA and HTML template flows, allowing app backends to send verification emails through a single hook regardless of flow type.
+
+- **Provider Display Name Helper**: New ``get_provider_display_name()`` public function in ``oauth2`` module for consistent provider name formatting (e.g., "GitHub" instead of "Github").
+
+CHANGED
+~~~~~~~
+
+- **Loosen dependency version constraints**: Runtime dependencies now use more permissive version ranges (e.g., ``boto3 >=1.26``, ``requests >=2.20``, ``cryptography >=43.0``) to reduce version conflicts for downstream consumers. Optional framework dependencies (Flask, FastAPI, uvicorn) also loosened.
+
+- **Update dev dependencies**: Bump ``ruff`` to 0.15.x, ``responses`` to 0.26.x, ``pytest-rerunfailures`` to 16.x. Remove ``black`` (redundant with ``ruff format``).
+
+- **Rename ``google_token_data`` parameter**: ``TokenManager.create_authorization_code()`` parameter renamed from ``google_token_data`` to ``provider_token_data`` to reflect multi-provider support.
+
+- **Make ``get_github_verified_emails()`` public**: Renamed from ``_get_github_verified_emails()`` on ``OAuth2Authenticator`` to remove the private prefix, as it is called across class boundaries.
+
+- **Email verification URL format**: Verification links now use ``/oauth/email?verify=<token>`` instead of ``/{actor_id}/www/verify_email?token=<token>``. The legacy URL remains functional for backward compatibility.
+
+- **Revoke OAuth provider token on logout**: Logout now revokes the stored OAuth provider token (e.g., Google access token) from ``actor.store`` in addition to the ActingWeb session token, preventing the backend from making API calls on behalf of the user after logout. Providers without a revocation endpoint (e.g., GitHub) are silently skipped.
+
 FIXED
 ~~~~~
 
 - **PostgreSQL Properties Value Index Removed**: Dropped the ``idx_properties_value`` B-tree index on the ``properties.value`` column. This index blocked storage of large values (embeddings, JSON blobs) that exceed the B-tree page size limit (~2700 bytes). The ``property_lookup`` table already provides targeted reverse-index lookups for properties that need value-based search. Includes Alembic migration ``c3d4e5f6a7b8`` to drop the index on existing databases.
+
+- **GitHub Email Verification Security**: ``_get_github_primary_email()`` now requires both ``primary`` and ``verified`` flags when selecting the email for actor linking. Previously, an unverified primary email was accepted, which could allow account-linking attacks via the GitHub ``/user/emails`` API. If no verified primary email is available, falls back to the first verified non-primary email.
+
+- **MCP Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear ``invalid_grant`` error message when no verified email is available from the provider, explaining that a verified email is required and suggesting the user add one to their provider account.
+
+- **Fix spurious ``invalid_token`` warnings on logout**: Logout was sending the ActingWeb-generated session token to the OAuth provider's revocation endpoint, which always fails because the provider only recognises its own tokens. Logout now looks up and revokes the actual provider token stored in ``actor.store``.
+
+- **Fix FastAPI double logout invocation**: The FastAPI ``/oauth/logout`` handler was calling the underlying logout handler twice when a Bearer token was present alongside an ``oauth_token`` cookie, causing redundant token revocation attempts.
 
 IMPROVED
 ~~~~~~~~

@@ -625,81 +625,66 @@ class OAuth2EndpointsHandler(BaseHandler):
             oauth_enabled = False
             oauth_providers = []
 
-            # Check if OAuth is configured (same check as factory handler)
-            if self.config.oauth and self.config.oauth.get("client_id"):
-                try:
-                    from ..oauth2 import (
-                        create_github_authenticator,
-                        create_google_authenticator,
-                    )
+            # Check if OAuth is configured and generate provider URLs
+            try:
+                from ..oauth2 import (
+                    create_oauth2_authenticator,
+                    get_provider_display_name,
+                )
+                from ..oauth2_server.oauth2_server import (
+                    get_actingweb_oauth2_server,
+                )
 
-                    # Determine which provider(s) to support based on configuration
-                    oauth2_provider = getattr(self.config, "oauth2_provider", "google")
+                providers_cfg = getattr(self.config, "oauth_providers", {})
+                # Determine list of provider names to iterate
+                provider_names: list[str] = []
+                if providers_cfg:
+                    provider_names = list(providers_cfg.keys())
+                elif self.config.oauth and self.config.oauth.get("client_id"):
+                    # Single-provider backward-compat
+                    provider_names = [getattr(self.config, "oauth2_provider", "google")]
 
-                    # Build MCP context to embed in state using OAuth2Server's state manager
-                    from ..oauth2_server.oauth2_server import (
-                        get_actingweb_oauth2_server,
-                    )
-
+                if provider_names:
                     oauth2_server = get_actingweb_oauth2_server(self.config)
-                    mcp_context = {
-                        "client_id": form_data.get("client_id", ""),
-                        "redirect_uri": form_data.get("redirect_uri", ""),
-                        "original_state": form_data.get(
-                            "state", ""
-                        ),  # Original MCP state from ChatGPT
-                        "trust_type": default_trust_type,
-                        "flow_type": "mcp_oauth2",  # Required to identify this as MCP OAuth2 flow
-                    }
 
-                    # Create encrypted state with MCP context embedded
-                    encrypted_state = oauth2_server.state_manager.create_state(
-                        mcp_context
-                    )
+                    for prov_name in provider_names:
+                        # Each provider gets its own encrypted state with provider embedded
+                        mcp_context = {
+                            "client_id": form_data.get("client_id", ""),
+                            "redirect_uri": form_data.get("redirect_uri", ""),
+                            "original_state": form_data.get("state", ""),
+                            "trust_type": default_trust_type,
+                            "flow_type": "mcp_oauth2",
+                            "provider": prov_name,
+                        }
+                        encrypted_state = oauth2_server.state_manager.create_state(
+                            mcp_context
+                        )
 
-                    if oauth2_provider == "google":
-                        google_auth = create_google_authenticator(self.config)
-                        if google_auth.is_enabled():
-                            # Pass encrypted state and trust_type as separate parameters
-                            auth_url = google_auth.create_authorization_url(
+                        auth = create_oauth2_authenticator(self.config, prov_name)
+                        if auth.is_enabled():
+                            auth_url = auth.create_authorization_url(
                                 state=encrypted_state,
                                 trust_type=default_trust_type or "",
                             )
                             oauth_providers.append(
                                 {
-                                    "name": "google",
-                                    "display_name": "Google",
+                                    "name": prov_name,
+                                    "display_name": get_provider_display_name(
+                                        prov_name
+                                    ),
                                     "url": auth_url,
                                 }
                             )
                             oauth_enabled = True
                             logger.debug(
-                                "Generated Google OAuth authorization URL for MCP client with encrypted state"
+                                f"Generated {prov_name} OAuth authorization URL for MCP client"
                             )
 
-                    elif oauth2_provider == "github":
-                        github_auth = create_github_authenticator(self.config)
-                        if github_auth.is_enabled():
-                            auth_url = github_auth.create_authorization_url(
-                                state=encrypted_state,
-                                trust_type=default_trust_type or "",
-                            )
-                            oauth_providers.append(
-                                {
-                                    "name": "github",
-                                    "display_name": "GitHub",
-                                    "url": auth_url,
-                                }
-                            )
-                            oauth_enabled = True
-                            logger.debug(
-                                "Generated GitHub OAuth authorization URL for MCP client with encrypted state"
-                            )
-
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to generate OAuth URLs for authorization form: {e}"
-                    )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to generate OAuth URLs for authorization form: {e}"
+                )
 
             # Set template values for HTML rendering (like factory handler does)
             self.response.template_values = {
@@ -836,10 +821,10 @@ class OAuth2EndpointsHandler(BaseHandler):
                 else:
                     logger.debug("No token found in cookies or Authorization header")
 
-            # Handle Google OAuth2 token logout (web UI authentication)
+            # Handle OAuth2 token logout (web UI authentication)
             try:
                 if token:
-                    response = self._handle_google_token_logout(token)
+                    response = self._handle_provider_token_logout(token)
                 else:
                     # No token provided - just clear cookies
                     response = {
@@ -865,10 +850,10 @@ class OAuth2EndpointsHandler(BaseHandler):
                         )
                         # Non-critical - token will expire from cache naturally
             except Exception as logout_error:
-                logger.error(f"Google token logout error: {logout_error}")
+                logger.error(f"Token logout error: {logout_error}")
                 import traceback
 
-                logger.error(f"Full Google logout error: {traceback.format_exc()}")
+                logger.error(f"Full logout error: {traceback.format_exc()}")
                 # Continue with basic logout even if Google revocation fails
                 response = {
                     "action": "success",
@@ -919,50 +904,58 @@ class OAuth2EndpointsHandler(BaseHandler):
             logger.error(f"Full logout handler traceback: {traceback.format_exc()}")
             return self.error_response(500, "Internal server error during logout")
 
-    def _handle_google_token_logout(self, google_token: str) -> dict[str, Any]:
+    def _handle_provider_token_logout(self, token: str) -> dict[str, Any]:
         """
-        Handle logout for Google OAuth2 tokens.
+        Handle logout by invalidating the ActingWeb session and revoking
+        the provider's OAuth token (for providers that support revocation).
 
-        Google tokens need to be revoked directly with Google's revocation endpoint
-        to ensure they are immediately invalidated.
+        The token passed here is an ActingWeb-generated session token.
+        We look up the actor from it, then revoke the actual provider
+        token stored in actor.store with the provider's revocation endpoint.
 
         Args:
-            google_token: Google OAuth2 access token
+            token: ActingWeb session token
 
         Returns:
             Response dict indicating logout success/failure
         """
         try:
-            # Revoke the token with Google
-            revocation_successful = False
+            from ..oauth_session import get_oauth2_session_manager
+
+            session_manager = get_oauth2_session_manager(self.config)
+
+            # Look up actor from the session token so we can revoke
+            # the provider's token stored in actor.store
             try:
-                from ..oauth2 import OAuth2Authenticator
+                token_data = session_manager.validate_access_token(token)
+                if token_data:
+                    actor_id = token_data.get("actor_id")
+                    if actor_id:
+                        self._revoke_provider_token_for_actor(actor_id)
+            except Exception as lookup_error:
+                logger.debug(f"Provider token lookup during logout: {lookup_error}")
 
-                authenticator = OAuth2Authenticator(self.config)
-                revocation_successful = authenticator.revoke_token(google_token)
+            # Revoke the ActingWeb session token
+            try:
+                session_manager.revoke_access_token(token)
+                logger.debug("Revoked ActingWeb session token")
             except Exception as revoke_error:
-                logger.error(f"Error during Google token revocation: {revoke_error}")
-                # Continue with logout even if Google revocation fails
+                logger.debug(f"Session token revocation: {revoke_error}")
+                # Non-critical — token will expire naturally
 
-            # Always return success and clear cookies, even if Google revocation failed
-            # The user should be logged out from the local session regardless
+            # Always return success and clear cookies
             return {
                 "action": "success",
-                "message": "Successfully logged out"
-                + (
-                    "" if revocation_successful else " (Google token revocation failed)"
-                ),
+                "message": "Successfully logged out",
                 "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
 
         except Exception as e:
-            logger.error(f"Error handling Google token logout: {e}")
+            logger.error(f"Error handling token logout: {e}")
             import traceback
 
-            logger.error(
-                f"Google token logout error traceback: {traceback.format_exc()}"
-            )
+            logger.error(f"Token logout error traceback: {traceback.format_exc()}")
 
             # Still return success to clear cookies and log user out locally
             return {
@@ -971,6 +964,56 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
+
+    def _revoke_provider_token_for_actor(self, actor_id: str) -> None:
+        """
+        Revoke the OAuth provider's token stored in actor.store.
+
+        Looks up the actor, reads the provider token and provider name
+        from the store, and sends the token to the provider's revocation
+        endpoint. Only effective for providers that support revocation
+        (e.g., Google). GitHub does not support token revocation.
+
+        This is best-effort — failures are logged but do not affect logout.
+        """
+        try:
+            from .. import actor as actor_module
+            from ..oauth2 import create_oauth2_authenticator
+
+            actor = actor_module.Actor(actor_id=actor_id, config=self.config)
+            if not actor.id or not actor.store:
+                return
+
+            provider_token = actor.store.oauth_token
+            provider_name = getattr(actor.store, "oauth_provider", "") or ""
+
+            if not provider_token:
+                logger.debug(f"No provider token stored for actor {actor_id}")
+                return
+
+            authenticator = create_oauth2_authenticator(self.config, provider_name)
+
+            if not authenticator.provider.revocation_uri:
+                logger.debug(
+                    f"Provider {provider_name or 'default'} does not support "
+                    f"token revocation, skipping"
+                )
+                return
+
+            if authenticator.revoke_token(str(provider_token)):
+                logger.info(
+                    f"Revoked {provider_name or 'default'} provider token "
+                    f"for actor {actor_id}"
+                )
+                # Clear the stored provider token
+                actor.store.oauth_token = None
+                actor.store.oauth_token_expiry = None
+            else:
+                logger.debug(
+                    f"Provider token revocation returned false for actor {actor_id}"
+                )
+        except Exception as e:
+            logger.debug(f"Provider token revocation for actor {actor_id}: {e}")
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create OAuth2 error response."""

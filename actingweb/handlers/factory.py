@@ -47,45 +47,36 @@ class RootFactoryHandler(base_handler.BaseHandler):
         oauth_providers = []
         oauth_enabled = False
 
-        if self.config.oauth and self.config.oauth.get("client_id"):
-            try:
-                from actingweb.oauth2 import (
-                    create_github_authenticator,
-                    create_google_authenticator,
-                )
+        try:
+            from actingweb.oauth2 import (
+                create_oauth2_authenticator,
+                get_provider_display_name,
+            )
 
-                oauth2_provider = getattr(self.config, "oauth2_provider", "google")
+            providers_cfg = getattr(self.config, "oauth_providers", {})
+            provider_names: list[str] = []
+            if providers_cfg:
+                provider_names = list(providers_cfg.keys())
+            elif self.config.oauth and self.config.oauth.get("client_id"):
+                provider_names = [getattr(self.config, "oauth2_provider", "google")]
 
-                if oauth2_provider == "google":
-                    google_auth = create_google_authenticator(self.config)
-                    if google_auth.is_enabled():
-                        oauth_urls["google"] = google_auth.create_authorization_url()
-                        oauth_providers.append(
-                            {
-                                "name": "google",
-                                "display_name": "Google",
-                                "authorization_url": oauth_urls["google"],
-                                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                            }
-                        )
-                        oauth_enabled = True
+            for prov_name in provider_names:
+                auth = create_oauth2_authenticator(self.config, prov_name)
+                if auth.is_enabled():
+                    auth_url = auth.create_authorization_url()
+                    oauth_urls[prov_name] = auth_url
+                    oauth_providers.append(
+                        {
+                            "name": prov_name,
+                            "display_name": get_provider_display_name(prov_name),
+                            "authorization_url": auth_url,
+                            "authorization_endpoint": auth.provider.auth_uri,
+                        }
+                    )
+                    oauth_enabled = True
 
-                elif oauth2_provider == "github":
-                    github_auth = create_github_authenticator(self.config)
-                    if github_auth.is_enabled():
-                        oauth_urls["github"] = github_auth.create_authorization_url()
-                        oauth_providers.append(
-                            {
-                                "name": "github",
-                                "display_name": "GitHub",
-                                "authorization_url": oauth_urls["github"],
-                                "authorization_endpoint": "https://github.com/login/oauth/authorize",
-                            }
-                        )
-                        oauth_enabled = True
-
-            except Exception as e:
-                logger.warning(f"Failed to generate OAuth URLs for JSON config: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to generate OAuth URLs for JSON config: {e}")
 
         # Build response
         response_data = {
@@ -149,56 +140,37 @@ class RootFactoryHandler(base_handler.BaseHandler):
             oauth_urls = {}
             oauth_providers = []
 
-            # Check if OAuth is configured
-            if self.config.oauth and self.config.oauth.get("client_id"):
-                try:
-                    from actingweb.oauth2 import (
-                        create_github_authenticator,
-                        create_google_authenticator,
-                    )
+            try:
+                from actingweb.oauth2 import (
+                    create_oauth2_authenticator,
+                    get_provider_display_name,
+                )
 
-                    # Determine which provider(s) to support based on configuration
-                    oauth2_provider = getattr(self.config, "oauth2_provider", "google")
+                providers_cfg = getattr(self.config, "oauth_providers", {})
+                provider_names: list[str] = []
+                if providers_cfg:
+                    provider_names = list(providers_cfg.keys())
+                elif self.config.oauth and self.config.oauth.get("client_id"):
+                    provider_names = [getattr(self.config, "oauth2_provider", "google")]
 
-                    if oauth2_provider == "google":
-                        google_auth = create_google_authenticator(self.config)
-                        if google_auth.is_enabled():
-                            oauth_urls["google"] = (
-                                google_auth.create_authorization_url()
-                            )
-                            oauth_providers.append(
-                                {
-                                    "name": "google",
-                                    "display_name": "Google",
-                                    "url": oauth_urls["google"],
-                                }
-                            )
-                            logger.debug(
-                                f"Google OAuth URL generated: {oauth_urls['google'][:100]}..."
-                            )
+                for prov_name in provider_names:
+                    auth = create_oauth2_authenticator(self.config, prov_name)
+                    if auth.is_enabled():
+                        auth_url = auth.create_authorization_url()
+                        oauth_urls[prov_name] = auth_url
+                        oauth_providers.append(
+                            {
+                                "name": prov_name,
+                                "display_name": get_provider_display_name(prov_name),
+                                "url": auth_url,
+                            }
+                        )
+                        logger.debug(
+                            f"{prov_name} OAuth URL generated: {auth_url[:100]}..."
+                        )
 
-                    elif oauth2_provider == "github":
-                        github_auth = create_github_authenticator(self.config)
-                        if github_auth.is_enabled():
-                            oauth_urls["github"] = (
-                                github_auth.create_authorization_url()
-                            )
-                            oauth_providers.append(
-                                {
-                                    "name": "github",
-                                    "display_name": "GitHub",
-                                    "url": oauth_urls["github"],
-                                }
-                            )
-                            logger.debug(
-                                f"GitHub OAuth URL generated: {oauth_urls['github'][:100]}..."
-                            )
-
-                    # Support multiple providers if configured (future enhancement)
-                    # Apps can extend this by checking additional config flags
-
-                except Exception as e:
-                    logger.warning(f"Failed to generate OAuth URLs: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to generate OAuth URLs: {e}")
 
             self.response.template_values = {
                 "oauth_urls": oauth_urls,  # Dict: {'google': url, 'github': url}

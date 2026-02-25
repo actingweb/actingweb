@@ -222,7 +222,10 @@ class OAuth2SPAHandler(BaseHandler):
         oauth_enabled = False
 
         try:
-            from ..oauth2 import create_oauth2_authenticator
+            from ..oauth2 import (
+                create_oauth2_authenticator,
+                get_provider_display_name,
+            )
 
             providers_cfg = getattr(self.config, "oauth_providers", {})
             if providers_cfg:
@@ -233,9 +236,7 @@ class OAuth2SPAHandler(BaseHandler):
                         oauth_providers.append(
                             {
                                 "name": auth.provider.name,
-                                "display_name": prov_name.capitalize()
-                                if prov_name != "github"
-                                else "GitHub",
+                                "display_name": get_provider_display_name(prov_name),
                                 "authorization_endpoint": auth.provider.auth_uri,
                                 "token_endpoint": auth.provider.token_uri,
                                 "userinfo_endpoint": auth.provider.userinfo_uri,
@@ -249,9 +250,9 @@ class OAuth2SPAHandler(BaseHandler):
                     oauth_providers.append(
                         {
                             "name": auth.provider.name,
-                            "display_name": auth.provider.name.capitalize()
-                            if auth.provider.name != "github"
-                            else "GitHub",
+                            "display_name": get_provider_display_name(
+                                auth.provider.name
+                            ),
                             "authorization_endpoint": auth.provider.auth_uri,
                             "token_endpoint": auth.provider.token_uri,
                             "userinfo_endpoint": auth.provider.userinfo_uri,
@@ -846,12 +847,29 @@ class OAuth2SPAHandler(BaseHandler):
             else:
                 session_manager.revoke_access_token(token)
 
-            # Also try to revoke with OAuth provider (best-effort;
+            # Also try to revoke with the correct OAuth provider (best-effort;
             # GitHub does not support token revocation).
             try:
                 from ..oauth2 import create_oauth2_authenticator
 
-                authenticator = create_oauth2_authenticator(self.config)
+                # Look up the provider from the session cookie
+                provider_name = ""
+                try:
+                    session_id = (
+                        self.request.cookies.get("session_id")
+                        if self.request.cookies
+                        else None
+                    )
+                    if session_id:
+                        session = session_manager.get_session(session_id)
+                        if session:
+                            provider_name = session.get("provider", "")
+                except Exception as session_err:
+                    logger.debug(
+                        f"Could not look up provider from session: {session_err}"
+                    )
+
+                authenticator = create_oauth2_authenticator(self.config, provider_name)
                 authenticator.revoke_token(token)
             except Exception as e:
                 logger.debug(f"Provider token revocation failed (non-critical): {e}")
@@ -898,11 +916,28 @@ class OAuth2SPAHandler(BaseHandler):
                 session_manager = get_oauth2_session_manager(self.config)
                 session_manager.revoke_access_token(token)
 
-                # Also revoke with OAuth provider (best-effort;
+                # Also revoke with the correct OAuth provider (best-effort;
                 # GitHub does not support token revocation).
                 from ..oauth2 import create_oauth2_authenticator
 
-                authenticator = create_oauth2_authenticator(self.config)
+                # Look up the provider from the session cookie
+                provider_name = ""
+                try:
+                    session_id = (
+                        self.request.cookies.get("session_id")
+                        if self.request.cookies
+                        else None
+                    )
+                    if session_id:
+                        session = session_manager.get_session(session_id)
+                        if session:
+                            provider_name = session.get("provider", "")
+                except Exception as session_err:
+                    logger.debug(
+                        f"Could not look up provider from session: {session_err}"
+                    )
+
+                authenticator = create_oauth2_authenticator(self.config, provider_name)
                 authenticator.revoke_token(token)
             except Exception as e:
                 logger.debug(f"Token revocation during logout: {e}")

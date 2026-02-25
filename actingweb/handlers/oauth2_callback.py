@@ -218,7 +218,7 @@ class OAuth2CallbackHandler(BaseHandler):
             verified_emails: list[str] | None = None
 
             if self.authenticator.provider.name == "github" and access_token:
-                verified_emails = self.authenticator._get_github_verified_emails(
+                verified_emails = self.authenticator.get_github_verified_emails(
                     access_token
                 )
                 if verified_emails:
@@ -851,14 +851,9 @@ class OAuth2CallbackHandler(BaseHandler):
 
                 # Try to get verified emails for dropdown
                 verified_emails: list[str] | None = None
-                if (
-                    self.authenticator.provider.name == "github"
-                    and access_token
-                ):
-                    verified_emails = (
-                        self.authenticator._get_github_verified_emails(
-                            access_token
-                        )
+                if self.authenticator.provider.name == "github" and access_token:
+                    verified_emails = self.authenticator.get_github_verified_emails(
+                        access_token
                     )
 
                 try:

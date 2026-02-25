@@ -220,6 +220,14 @@ class ActingWebApp:
         Can be called multiple times with different ``provider`` values to
         configure multiple OAuth providers simultaneously.
 
+        .. note::
+
+            When calling ``with_oauth()`` multiple times for different
+            providers, **every** call must include an explicit ``provider``
+            name.  Mixing a nameless call (legacy single-provider API) with
+            named calls will silently drop the nameless provider from the
+            multi-provider configuration.
+
         Args:
             client_id: OAuth client ID
             client_secret: OAuth client secret

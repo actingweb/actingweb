@@ -1642,6 +1642,14 @@ class FlaskIntegration(BaseActingWebIntegration):
         This describes the ActingWeb OAuth2 server endpoints that MCP
         clients use.  The upstream provider info is derived from the
         default (first) configured provider.
+
+        .. note::
+
+            In a multi-provider deployment this response only reflects
+            the default provider.  MCP clients that need to use a
+            non-default provider should use the ``/oauth/authorize``
+            endpoint directly with the appropriate ``provider`` state
+            parameter.
         """
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"

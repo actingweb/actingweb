@@ -48,7 +48,10 @@ class RootFactoryHandler(base_handler.BaseHandler):
         oauth_enabled = False
 
         try:
-            from actingweb.oauth2 import create_oauth2_authenticator
+            from actingweb.oauth2 import (
+                create_oauth2_authenticator,
+                get_provider_display_name,
+            )
 
             providers_cfg = getattr(self.config, "oauth_providers", {})
             provider_names: list[str] = []
@@ -65,9 +68,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                     oauth_providers.append(
                         {
                             "name": prov_name,
-                            "display_name": prov_name.capitalize()
-                            if prov_name != "github"
-                            else "GitHub",
+                            "display_name": get_provider_display_name(prov_name),
                             "authorization_url": auth_url,
                             "authorization_endpoint": auth.provider.auth_uri,
                         }
@@ -140,7 +141,10 @@ class RootFactoryHandler(base_handler.BaseHandler):
             oauth_providers = []
 
             try:
-                from actingweb.oauth2 import create_oauth2_authenticator
+                from actingweb.oauth2 import (
+                    create_oauth2_authenticator,
+                    get_provider_display_name,
+                )
 
                 providers_cfg = getattr(self.config, "oauth_providers", {})
                 provider_names: list[str] = []
@@ -157,9 +161,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                         oauth_providers.append(
                             {
                                 "name": prov_name,
-                                "display_name": prov_name.capitalize()
-                                if prov_name != "github"
-                                else "GitHub",
+                                "display_name": get_provider_display_name(prov_name),
                                 "url": auth_url,
                             }
                         )

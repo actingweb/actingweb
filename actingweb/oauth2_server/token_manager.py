@@ -60,7 +60,7 @@ class ActingWebTokenManager:
         self,
         actor_id: str,
         client_id: str,
-        google_token_data: dict[str, Any],
+        provider_token_data: dict[str, Any],
         user_email: str | None = None,
         trust_type: str | None = None,
         code_challenge: str | None = None,
@@ -72,7 +72,7 @@ class ActingWebTokenManager:
         Args:
             actor_id: The actor this code is for
             client_id: The MCP client requesting authorization
-            google_token_data: Google OAuth2 token data from user auth
+            provider_token_data: OAuth2 token data from the upstream provider
 
         Returns:
             Authorization code to return to MCP client
@@ -80,9 +80,9 @@ class ActingWebTokenManager:
         # Generate authorization code
         auth_code = f"ac_{secrets.token_urlsafe(32)}"
 
-        # Store Google token data in private attributes
+        # Store provider token data in private attributes
         google_token_key = f"google_token_{auth_code}"
-        self._store_google_token_data(actor_id, google_token_key, google_token_data)
+        self._store_google_token_data(actor_id, google_token_key, provider_token_data)
 
         # Store minimal authorization data (expires in 10 minutes)
         auth_data = {
@@ -336,15 +336,15 @@ class ActingWebTokenManager:
         return False
 
     def _create_access_token(
-        self, actor_id: str, client_id: str, google_token_data: dict[str, Any]
+        self, actor_id: str, client_id: str, provider_token_data: dict[str, Any]
     ) -> dict[str, Any]:
         """Create an ActingWeb access token."""
         token_id = secrets.token_hex(16)
         token = f"{self.token_prefix}{secrets.token_urlsafe(32)}"
 
-        # Store Google token data in private attributes
+        # Store provider token data in private attributes
         google_token_key = f"google_token_access_{token_id}"
-        self._store_google_token_data(actor_id, google_token_key, google_token_data)
+        self._store_google_token_data(actor_id, google_token_key, provider_token_data)
 
         token_data = {
             "token_id": token_id,

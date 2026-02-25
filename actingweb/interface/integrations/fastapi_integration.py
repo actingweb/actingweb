@@ -2537,6 +2537,14 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         Describes the ActingWeb OAuth2 server endpoints for MCP clients.
         Upstream provider info comes from the default configured provider.
+
+        .. note::
+
+            In a multi-provider deployment this response only reflects
+            the default provider.  MCP clients that need to use a
+            non-default provider should use the ``/oauth/authorize``
+            endpoint directly with the appropriate ``provider`` state
+            parameter.
         """
         config = self.aw_app.get_config()
         base_url = f"{config.proto}{config.fqdn}"

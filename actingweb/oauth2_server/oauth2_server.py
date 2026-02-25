@@ -370,7 +370,7 @@ class ActingWebOAuth2Server:
             auth_code = self.token_manager.create_authorization_code(
                 actor_id=actor_obj.id,
                 client_id=client_id,
-                google_token_data=token_data,
+                provider_token_data=token_data,
                 user_email=email,
                 trust_type=trust_type,
                 code_challenge=code_challenge,

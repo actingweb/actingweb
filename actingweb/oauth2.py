@@ -609,7 +609,7 @@ class OAuth2Authenticator:
             logger.warning(f"Failed to get GitHub primary email: {e}")
             return None
 
-    def _get_github_verified_emails(self, access_token: str) -> list[str] | None:
+    def get_github_verified_emails(self, access_token: str) -> list[str] | None:
         """
         Fetch ALL verified emails from GitHub's emails API.
 
@@ -894,6 +894,15 @@ def _get_provider_config(
     """
     providers = getattr(config, "oauth_providers", {})
     return providers.get(provider_name)  # type: ignore[no-any-return]
+
+
+# Display-name mapping for known OAuth providers.
+_PROVIDER_DISPLAY_NAMES: dict[str, str] = {"github": "GitHub", "google": "Google"}
+
+
+def get_provider_display_name(name: str) -> str:
+    """Return a human-friendly display name for an OAuth provider."""
+    return _PROVIDER_DISPLAY_NAMES.get(name, name.capitalize())
 
 
 def create_oauth2_authenticator(

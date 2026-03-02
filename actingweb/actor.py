@@ -2065,7 +2065,7 @@ class Actor:
             db = get_subscription_suspension(self.config, self.id)
             return db.is_suspended(target, subtarget)
         except Exception as e:
-            logger.error(f"Error checking suspension: {e}")
+            logger.debug(f"Error checking suspension: {e}")
             return False
 
     def suspend_subscriptions(self, target: str, subtarget: str | None = None) -> bool:

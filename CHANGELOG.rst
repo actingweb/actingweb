@@ -5,478 +5,278 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.10.0b4: Feb 25, 2026
+v3.10.0rc1: Mar 2, 2026
 ------------------------
-
-ADDED
-~~~~~
-
-- **Multi-Provider OAuth Support**: Multiple OAuth providers (e.g., Google and GitHub) can now be configured simultaneously using ``.with_oauth(provider="google", ...).with_oauth(provider="github", ...)``. The factory login page renders buttons for all configured providers, OAuth state parameter carries the provider name for correct callback routing, and ``/oauth/config`` (SPA endpoint) returns all configured providers. Fully backward compatible — existing single-provider configurations work without modification.
-
-- **SPA Email Collection Flow**: When the OAuth provider cannot supply a verified email, the SPA OAuth callback now redirects back to the SPA URL with ``?email_required=true&session=<id>`` parameters so SPAs can display their own email input UI instead of being redirected to a server-rendered form.
-
-- **Email Verification via ``/oauth/email?verify=<token>``**: New GET handler provides actor-ID-free email verification URLs. The ``email_verification_required`` lifecycle hook now fires consistently for both SPA and HTML template flows, allowing app backends to send verification emails through a single hook regardless of flow type.
-
-- **Provider Display Name Helper**: New ``get_provider_display_name()`` public function in ``oauth2`` module for consistent provider name formatting (e.g., "GitHub" instead of "Github").
-
-CHANGED
-~~~~~~~
-
-- **Loosen dependency version constraints**: Runtime dependencies now use more permissive version ranges (e.g., ``boto3 >=1.26``, ``requests >=2.20``, ``cryptography >=43.0``) to reduce version conflicts for downstream consumers. Optional framework dependencies (Flask, FastAPI, uvicorn) also loosened.
-
-- **Update dev dependencies**: Bump ``ruff`` to 0.15.x, ``responses`` to 0.26.x, ``pytest-rerunfailures`` to 16.x. Remove ``black`` (redundant with ``ruff format``).
-
-- **Rename ``google_token_data`` parameter**: ``TokenManager.create_authorization_code()`` parameter renamed from ``google_token_data`` to ``provider_token_data`` to reflect multi-provider support.
-
-- **Make ``get_github_verified_emails()`` public**: Renamed from ``_get_github_verified_emails()`` on ``OAuth2Authenticator`` to remove the private prefix, as it is called across class boundaries.
-
-- **Email verification URL format**: Verification links now use ``/oauth/email?verify=<token>`` instead of ``/{actor_id}/www/verify_email?token=<token>``. The legacy URL remains functional for backward compatibility.
-
-- **Revoke OAuth provider token on logout**: Logout now revokes the stored OAuth provider token (e.g., Google access token) from ``actor.store`` in addition to the ActingWeb session token, preventing the backend from making API calls on behalf of the user after logout. Providers without a revocation endpoint (e.g., GitHub) are silently skipped.
-
-FIXED
-~~~~~
-
-- **PostgreSQL Properties Value Index Removed**: Dropped the ``idx_properties_value`` B-tree index on the ``properties.value`` column. This index blocked storage of large values (embeddings, JSON blobs) that exceed the B-tree page size limit (~2700 bytes). The ``property_lookup`` table already provides targeted reverse-index lookups for properties that need value-based search. Includes Alembic migration ``c3d4e5f6a7b8`` to drop the index on existing databases.
-
-- **GitHub Email Verification Security**: ``_get_github_primary_email()`` now requires both ``primary`` and ``verified`` flags when selecting the email for actor linking. Previously, an unverified primary email was accepted, which could allow account-linking attacks via the GitHub ``/user/emails`` API. If no verified primary email is available, falls back to the first verified non-primary email.
-
-- **MCP Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear ``invalid_grant`` error message when no verified email is available from the provider, explaining that a verified email is required and suggesting the user add one to their provider account.
-
-- **Fix spurious ``invalid_token`` warnings on logout**: Logout was sending the ActingWeb-generated session token to the OAuth provider's revocation endpoint, which always fails because the provider only recognises its own tokens. Logout now looks up and revokes the actual provider token stored in ``actor.store``.
-
-- **Fix FastAPI double logout invocation**: The FastAPI ``/oauth/logout`` handler was calling the underlying logout handler twice when a Bearer token was present alongside an ``oauth_token`` cookie, causing redundant token revocation attempts.
-
-IMPROVED
-~~~~~~~~
-
-- **Logging in register_diffs()**: Replaced string concatenation logging with parameterized ``%s`` formatting in ``Actor.register_diffs()``. Diff blob contents are no longer logged verbatim; instead only the byte length is logged (e.g. ``diff(1234 bytes)``), reducing log noise and avoiding accidental exposure of large payloads.
-- **Flattened out the thoughts dir**: Moved all the sub-dirs under thoughts/ to simplify where AI docs live
-
-v3.10.0b3: Feb 6, 2026
------------------------
-
-FIXED
-~~~~~
-
-- **Async MCP Resource Lookup**: Fixed three critical bugs in ``AsyncMCPHandler._handle_resource_read_async()`` that prevented MCP resources from being discovered and executed. (1) Handler checked ``metadata.get("uri")`` but resources are registered with ``"uri_template"`` field - added fallback chain checking ``uri_template`` first, then ``uri``, then generating default. (2) URI template matching called with reversed parameters ``_match_uri_template(uri, uri_template)`` instead of correct order ``(uri_template, uri)``. (3) Match result checked with ``if match_result:`` which treated empty dict ``{}`` (valid match with no variables) as falsy - changed to ``if match_result is not None:``. Resources now work correctly in async MCP handler.
-
-v3.10.0b2: Feb 5, 2026
------------------------
-
-ADDED
-~~~~~
-
-- **Revoke Peer Subscription Method**: New ``SubscriptionManager.revoke_peer_subscription(peer_id, subscription_id)`` method provides semantically clear way to delete inbound subscriptions (peer's subscription to our data). This method notifies the peer to delete their outbound subscription and deletes our local inbound record. Improves API clarity compared to the generic ``unsubscribe()`` method which works for both directions but has misleading naming for inbound subscriptions.
-
-- **Subscription Deleted Lifecycle Hook**: New ``subscription_deleted`` lifecycle event triggered when a subscription is deleted, particularly useful for cleanup when peers unsubscribe. The hook receives ``actor``, ``peer_id``, ``subscription_id``, ``subscription_data``, and ``initiated_by_peer`` flag. Applications can use this to revoke permissions, clean up cached data, or send notifications when peers unsubscribe. Only triggered for inbound subscriptions (where peer subscribes to us) to prevent duplicate cleanup.
-
-- **Revoked Trust Detection**: Automatic detection and cleanup when a peer has revoked a trust relationship. During subscription sync, if all subscriptions return 404, the system verifies the trust relationship with the peer and either cleans up dead subscriptions (if trust still exists) or removes the local trust entirely, triggering the ``trust_deleted`` lifecycle hook.
-
-- **Baseline Sync on Subscription Creation**: ``subscribe_to_peer()`` and new ``subscribe_to_peer_async()`` now perform an immediate baseline data fetch after creating the subscription. This ensures consistent initial state regardless of whether the peer has existing data or pending diffs.
-
-- **Peer Metadata Refresh on Subscribe**: Initial subscription creation now automatically refreshes cached peer profile, capabilities, and permissions metadata when configured, eliminating the need for a separate sync cycle.
-
-- **RemotePeerStore Enumeration**: Added ``list_all_scalars()`` and ``get_all_properties()`` methods to ``RemotePeerStore`` for enumerating stored peer data. ``get_all_properties()`` returns a combined view of all lists and scalars with type metadata (type, value, item_count).
-
-FIXED
-~~~~~
-
-- **RemotePeerStore Cleanup with Multiple Subscriptions**: Fixed a bug where deleting one outbound subscription would incorrectly clean up the RemotePeerStore even when other active outbound subscriptions to the same peer still existed. Moved cleanup logic from low-level ``Subscription.delete()`` to ``Actor.delete_subscription()`` where it can properly check for remaining subscriptions using the Actor interface (``get_subscriptions()``), ensuring cached peer data is preserved when still needed by other subscriptions.
-
-- **Missing Callback Parameter in Unsubscribe**: Fixed a critical bug in ``SubscriptionManager.unsubscribe()`` where the ``callback=True`` parameter wasn't passed to ``delete_subscription()`` when deleting the local outbound subscription. This caused RemotePeerStore cleanup to be skipped entirely, leaving cached peer data orphaned after unsubscribing. The method now correctly passes ``callback=True`` to trigger proper cleanup of outbound subscriptions.
-
-- **Stale Subscription Cache Preventing Cleanup**: Fixed a bug in ``Actor.delete_subscription()`` where the subscription list cache (``self.subs_list``) was not cleared before checking for remaining subscriptions, causing the check to use stale data including already-deleted or currently-deleting subscriptions. This prevented RemotePeerStore cleanup from running even when deleting the last subscription to a peer. The method now clears the cache before checking and after deletion to ensure fresh data.
-
-- **Wrong Field Name in Subscription Filtering**: Fixed a critical bug in ``Actor.delete_subscription()`` where the filter checked ``s.get("subid")`` instead of ``s.get("subscriptionid")``, causing the filter to never match any subscriptions. This meant every subscription deletion would find "other subscriptions still active" (the one being deleted) and skip RemotePeerStore cleanup entirely, leaving orphaned peer data. The filter now uses the correct field name ``subscriptionid``.
-
-- **Subscription Deletion Cleanup**: Fixed a bug in the subscription handler where the actual ``callback`` value from the subscription record wasn't passed to ``delete_subscription()``, causing incorrect RemotePeerStore cleanup. The handler now fetches the subscription first to determine whether it's inbound (``callback=False``) or outbound (``callback=True``), then passes the correct value to ensure proper cleanup: outbound subscriptions clean up cached peer data, while inbound subscriptions don't.
-
-- **Subscription Listing by Peer**: Fixed a bug in the subscription handler where ``GET /subscriptions?peerid=X`` only returned outbound subscriptions (where we subscribed to peer) instead of all subscriptions involving that peer. The endpoint now returns both outbound and inbound subscriptions (where peer subscribed to us), matching the expected API behavior.
-
-- **Permission Diff Asymmetry**: Fixed a bug where permission callbacks sent only override fields instead of the full effective permissions (base trust-type defaults merged with overrides). This caused ``detect_permission_changes()`` to incorrectly report base permissions as revoked when only new permissions were granted, leading to potential data loss via ``_delete_revoked_peer_data()``. The ``GET /permissions/{peer_id}`` endpoint now also returns merged effective permissions for consistency.
-
-- **Non-Destructive Resync**: ``RemotePeerStore.apply_resync_data()`` now replaces only the specific properties included in the resync data instead of deleting all peer data first. This prevents data loss when multiple subscriptions exist to the same peer (e.g., subscription A syncs ``memory_*`` properties, subscription B resyncs ``status`` - previously, B's resync would delete all of A's data).
-
-- **Permission Format Normalization**: Both shorthand list format (``["pattern1", "pattern2"]``) and spec-compliant dict format (``{"patterns": [...], "operations": [...]}``) are now accepted and normalized consistently across all permission APIs. Shorthand format defaults to read-only operations. This applies to ``TrustPermissions`` storage, ``PeerPermissions`` callbacks, and ``AccessControlConfig.add_trust_type()``.
-
-IMPROVED
-~~~~~~~~
-
-- **Incremental Sync on Permission Grant**: Permission grant auto-sync now fetches only the newly granted properties instead of doing a full ``sync_peer()`` which refetched the entire baseline, capabilities, and permissions. Reduces HTTP requests from ~7 to 1-2 per permission grant.
-
-- **Capability Cache Staleness Check**: ``sync_peer()`` now checks if cached peer capabilities (methods/actions) are fresh before refetching. Capabilities are only refetched when the cache is older than ``peer_capabilities_max_age_seconds`` (default: 1 hour, configurable via ``with_peer_capabilities(max_age_seconds=...)``). A new ``force_refresh`` parameter on ``sync_peer()`` and ``sync_peer_async()`` bypasses staleness checks for manual/developer-triggered syncs.
-
-- **Structured Proxy Error Responses**: All ``aw_proxy`` resource methods (GET, POST, PUT, DELETE, sync and async) now return structured error dicts (with ``code`` and ``message``) for all error responses, including when the peer returns JSON with a string-typed ``error`` field (e.g., ``{"error": "Not found"}``). Previously, the actual HTTP status code (e.g., 404) was lost and replaced with a hardcoded 500 in downstream error handling.
-
-- **Robust Error Format Handling**: ``peer_permissions`` now handles both dict and string error formats in peer responses, preventing ``AttributeError`` on unexpected error shapes.
-
-- **Privacy in List Attribute Logging**: ``ListAttribute.append()`` no longer logs actual user data values; only metadata (type and size) is logged.
-
-- **Consolidated Baseline Fetch Logic**: Resync callbacks and subscription creation now share the same baseline fetch and transformation helpers (``_fetch_and_transform_baseline``), ensuring consistent handling of ``?metadata=true`` expansion and property list transformations.
-
-- **Parallel Test Isolation**: Significantly improved pytest-xdist parallel test execution reliability, reducing flakiness from ~5% to <1%:
-
-  - Worker-namespaced OAuth2 client registration prevents token exchange conflicts between parallel workers
-  - Pre/post cleanup for both DynamoDB and PostgreSQL ensures clean database state between runs
-  - Enhanced botocore pre-warming with timeout handling prevents initialization hangs
-  - Added pytest-rerunfailures with retry logic for transient failures (temporary safety net)
-
-- **Test Infrastructure Documentation**: Created comprehensive xdist group documentation (``tests/integration/XDIST_GROUPS.md``) covering all 42 test groups with categorization and rationale.
-
-- **CI/CD Reliability**: Enhanced GitHub Actions workflow with automated group verification, flakiness reporting, and retry logic for improved stability across both DynamoDB and PostgreSQL matrix jobs.
-
-CHANGED
-~~~~~~~
-
-- **SDK Documentation**: Updated ``developer-api.rst`` and ``async-operations.rst`` to reflect new ``subscribe_to_peer()`` and ``subscribe_to_peer_async()`` signatures and baseline sync behavior.
-
-- **Subscription Management Documentation**: Enhanced ``developer-api.rst`` with comprehensive guide for subscription directions (inbound vs outbound), ``unsubscribe()`` vs ``revoke_peer_subscription()`` usage, and subscription lifecycle hook integration.
-
-ADDED (Test Infrastructure)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-- **Test Group Verification**: New ``tests/integration/verify_groups.py`` script ensures all xdist groups are documented, integrated into CI pipeline to prevent undocumented groups.
-
-- **Subscription Lifecycle Integration Tests**: New ``test_subscription_lifecycle_hooks.py`` with 29 tests covering ``subscription_deleted`` hook execution, ``revoke_peer_subscription()`` method, and bidirectional subscription management (unsubscribe vs revoke).
-
-v3.10.0b1: Jan 30, 2026
------------------------
-
-ActingWeb 3.10 introduces **automatic subscription processing**, comprehensive **request correlation and logging**, and major improvements to subscription reliability. This beta includes all features from alpha releases plus critical bug fixes for subscription handling.
-
-**Highlights:**
-
-- **Automatic Subscription Processing**: CallbackProcessor, RemotePeerStore, and FanOutManager reduce callback handling from ~500 lines to ~30 lines
-- **Request Correlation**: Full distributed tracing with request IDs, actor IDs, and peer IDs in every log line
-- **Subscription Reliability**: Fixed critical bugs in callback sequencing, diff handling, and resync operations
-- **Security**: Comprehensive logging hardening and remote peer data sanitization
-- **Performance**: Bulk permission evaluation, configurable thread pools, and optimized property filtering
-
-ADDED
-~~~~~
-
-- **Inbound Subscription Query Method**: New ``SubscriptionManager.get_subscriptions_from_peer(peer_id)`` method for querying inbound subscriptions where a peer has subscribed to our data. Complements existing ``get_subscriptions_to_peer()`` for symmetric subscription discovery.
-
-- **Lambda Environment Detection**: Automatic detection of AWS Lambda deployments with warnings when asynchronous subscription callbacks are enabled. Helps prevent callback loss when Lambda functions freeze by recommending ``with_sync_callbacks()``.
-
-- **Configurable FastAPI Thread Pool**: New ``ActingWebApp.with_thread_pool_workers(workers)`` method for tuning thread pool size (1-100 workers, default 10). Includes documentation with tuning guidelines for Lambda, container, and CPU-bound scenarios.
-
-- **Request Correlation in Logging**: Comprehensive logging framework with automatic context injection. Every log line includes ``[request_id:actor_id:peer_id]`` for distributed request tracing across actor-to-actor communication.
-
-  - New modules: ``actingweb.request_context`` (thread-safe context storage), ``actingweb.log_filter`` (context injection)
-  - New functions: ``enable_request_context_filter()``, ``configure_production_logging()``, ``configure_development_logging()``
-  - Request IDs extracted from ``X-Request-ID`` header or auto-generated
-  - Response headers include ``X-Request-ID`` for client correlation
-  - Context automatically managed by Flask and FastAPI integrations
-  - Minimal overhead: <1% performance impact
-
-- **Inter-Actor Request Correlation**: Request correlation headers (``X-Request-ID``, ``X-Parent-Request-ID``) automatically added to all peer-to-peer communication, enabling complete request chain tracing across actor networks.
-
-- **Request Context API**: Public API for custom integrations: ``set_request_context()``, ``get_request_id()``, ``get_actor_id()``, ``get_peer_id()``, ``clear_request_context()``. Thread-safe and async-safe using Python's ``contextvars``.
-
-CHANGED
-~~~~~~~
-
-- **Authentication Sets Peer Context**: Authentication layer now automatically sets peer ID in request context after successful authentication for logging correlation.
-
-- **Flask/FastAPI Integration Context Management**: Both integrations now automatically manage request context lifecycle with hooks/middleware for extracting request IDs, actor IDs, and adding correlation headers to responses.
-
-IMPROVED
-~~~~~~~~
-
-- **Bulk Property Permission Evaluation**: Optimized property permission checks to use bulk evaluation, reducing DEBUG log volume by 10-50x for multi-property operations. Single log line for batch operations with summary: "N properties: X allowed, Y denied, Z not found".
-
-- **Action and Method List Filtering**: Actions and methods list endpoints now filter results based on peer permissions, preventing information disclosure of restricted capabilities.
-
-- **FastAPI Context Propagation**: Fixed context propagation to thread pool workers, ensuring log statements from synchronous handlers preserve request ID, actor ID, and peer ID context.
-
-- **Logging Configuration**: Enhanced ``actingweb.logging_config`` with per-component log levels (``db_level``, ``auth_level``, ``handlers_level``, ``proxy_level``) and convenience functions for common scenarios.
-
-SECURITY
-~~~~~~~~
-
-- **Remote Peer Data Sanitization**: Comprehensive sanitization of all data from remote peers to prevent JSON encoding failures from malformed Unicode. Removes invalid UTF-16 surrogate pairs and replaces invalid UTF-8 sequences. Applied to all RemotePeerStore operations and database writes.
-
-- **Logging Security Hardening**: Comprehensive audit of all log statements to prevent sensitive information leakage:
-  - Token masking (shows only first 8 characters)
-  - Removed full access/refresh tokens from logs (18 statements)
-  - Removed OAuth2 request bodies containing client secrets
-  - Removed HTTP headers containing Authorization headers
-  - Removed property values from property handler logs
-  - Removed HTTP response content from debug logs
-  - Changed verbose INFO logs to DEBUG for high-frequency operations
-
-FIXED
-~~~~~
-
-- **Property Deletion via Subscription Callbacks**: ``RemotePeerStore.apply_callback_data()`` now correctly handles property deletion. Per the ActingWeb spec, an empty string value in a diff callback means the property was deleted. Previously, deleted properties were stored as ``{"value": ""}`` instead of being removed from the store.
-
-- **List Property Format Parameter**: Added ``format`` query parameter to list property GET requests. Use ``?format=short`` to retrieve metadata only (count, description, explanation) without fetching all items.
-
-DOCUMENTATION
-~~~~~~~~~~~~~
-
-- Added FastAPI performance tuning section with thread pool configuration, Lambda deployment best practices, and automatic Lambda detection documentation
-- Added comprehensive logging and correlation guide (``docs/guides/logging-and-correlation.rst``) with grepping examples and request chain tracing patterns
-- Documented request context API for custom integrations
-- Updated configuration quickstart with logging configuration section
-
-For complete details on features introduced in alpha releases (automatic subscription processing, peer profile/capabilities/permissions caching, subscription suspension, attribute list storage, etc.), see the v3.10.0a5 and earlier entries below.
-
-Unreleased
-----------
-
-v3.10.0a5: Jan 26, 2026
------------------------
 
 BREAKING CHANGES
 ~~~~~~~~~~~~~~~~
 
-- **Library Bucket Naming Convention**: All library-internal buckets now use ``_`` prefix to avoid namespace collisions with user-defined buckets. Application code can create arbitrary buckets via ``Attributes(actor_id=..., bucket="mydata")``. Without a reserved prefix, a user's ``bucket="peer_permissions"`` would collide with the library's.
+- **Library Bucket Naming Convention**: All library-internal attribute buckets now use ``_``
+  prefix to avoid namespace collisions with user-defined buckets. Renamed: ``trust_types`` →
+  ``_trust_types``, ``trust_permissions`` → ``_trust_permissions``, ``peer_profiles`` →
+  ``_peer_profiles``, ``peer_capabilities`` → ``_peer_capabilities``, and all OAuth index
+  buckets. Existing transient data (tokens, sessions) will naturally be recreated; trust types
+  and permissions may need explicit migration.
 
-  **Renamed buckets** (old -> new):
-
-  - ``trust_types`` -> ``_trust_types``
-  - ``trust_permissions`` -> ``_trust_permissions``
-  - ``peer_profiles`` -> ``_peer_profiles``
-  - ``peer_capabilities`` -> ``_peer_capabilities``
-  - ``auth_code_index`` -> ``_auth_code_index``
-  - ``access_token_index`` -> ``_access_token_index``
-  - ``refresh_token_index`` -> ``_refresh_token_index``
-  - ``client_index`` -> ``_client_index``
-  - ``oauth_sessions`` -> ``_oauth_sessions``
-
-  **Migration**: Existing data in old bucket names will need to be migrated. For most deployments, the data is transient (OAuth sessions, token indexes) and will naturally be recreated. Trust types and permissions may need explicit migration if you have existing trust relationships.
-
+- **``google_token_data`` parameter renamed**: ``TokenManager.create_authorization_code()``
+  parameter renamed to ``provider_token_data`` to reflect multi-provider OAuth support.
 
 ADDED
 ~~~~~
 
-- **AsyncMCPHandler for FastAPI**: Added ``AsyncMCPHandler`` class for optimal async performance with FastAPI integration. MCP tools and prompts with async hooks now execute natively in the FastAPI event loop without thread pool overhead, enabling true concurrent execution and significantly better performance for I/O-bound operations.
+- **Multi-Provider OAuth Support**: Multiple OAuth providers (e.g., Google and GitHub) can now
+  be configured simultaneously using
+  ``.with_oauth(provider="google", ...).with_oauth(provider="github", ...)``. The login page
+  renders buttons for all configured providers, and ``/oauth/config`` returns all providers.
+  Fully backward compatible — existing single-provider configurations work without modification.
 
-  - New handler: ``actingweb.handlers.async_mcp.AsyncMCPHandler``
-  - FastAPI integration automatically uses ``AsyncMCPHandler`` for MCP endpoints
-  - Async MCP tools (action hooks) and prompts (method hooks) execute without thread pool bouncing
-  - Backward compatible: sync MCP hooks continue to work
-  - Performance improvement: 30-50% reduction in response time for async I/O operations
-  - Flask integration continues using sync ``MCPHandler`` (appropriate for WSGI)
-  - See ``docs/guides/async-hooks-migration.rst`` for detailed async MCP usage patterns
+- **SPA Email Collection Flow**: When an OAuth provider cannot supply a verified email, the SPA
+  OAuth callback now redirects back to the SPA with ``?email_required=true&session=<id>`` so
+  SPAs can display their own email input UI.
 
-- **Database Accessor Pattern**: Added factory functions in ``actingweb.db`` module for creating database instances with configuration automatically injected. This ensures all DB objects respect application settings like ``indexed_properties`` and ``use_lookup_table``.
+- **Email Verification via ``/oauth/email?verify=<token>``**: New GET handler provides
+  actor-ID-free email verification URLs. The ``email_verification_required`` hook now fires
+  consistently for both SPA and HTML template flows. The legacy
+  ``/{actor_id}/www/verify_email?token=<token>`` URL remains functional for backward
+  compatibility.
 
-  - New accessor functions: ``get_property()``, ``get_property_list()``, ``get_actor()``, ``get_actor_list()``, ``get_trust()``, ``get_trust_list()``, ``get_peer_trustee()``, ``get_peer_trustee_list()``, ``get_subscription()``, ``get_subscription_list()``, ``get_subscription_diff()``, ``get_subscription_diff_list()``, ``get_subscription_suspension()``, ``get_attribute()``, ``get_attribute_bucket_list()``
-  - New utility function: ``get_db_accessors()`` returns dictionary of all accessor functions
-  - New protocol definitions in ``actingweb.db.protocols`` for all database interfaces
-  - Improved type safety: Full IDE autocomplete and type checking support
-  - Simplified usage pattern: ``db = get_property(config)`` instead of ``db = config.DbProperty.DbProperty()``
+- **Provider Display Name Helper**: New ``get_provider_display_name()`` public function in the
+  ``oauth2`` module for consistent provider name formatting (e.g., "GitHub").
 
-- **Auto-Delete Cached Peer Data on Permission Revocation**: Added optional automatic deletion of cached peer data when permissions are revoked.
+- **Peer Profile Caching**: Cache profile attributes (displayname, email, etc.) from trusted
+  peer actors to eliminate repeated API calls. Configure with
+  ``ActingWebApp.with_peer_profile(attributes=[...])``. New ``TrustManager`` methods:
+  ``get_peer_profile()``, ``refresh_peer_profile()``, ``refresh_peer_profile_async()``.
 
-  - New parameter: ``ActingWebApp.with_peer_permissions(auto_delete_on_revocation=True)``
-  - New helper functions in ``actingweb.peer_permissions``: ``detect_revoked_property_patterns()``, ``detect_permission_changes()``
-  - Permission callback hooks now receive ``permission_changes`` dict with revocation details
-  - When enabled, cached data in ``RemotePeerStore`` matching revoked property patterns is automatically deleted
-  - Disabled by default for backwards compatibility
+- **Peer Capabilities Caching**: Cache methods and actions that peer actors expose. Configure
+  with ``ActingWebApp.with_peer_capabilities(enable=True)``. New ``TrustManager`` methods:
+  ``get_peer_capabilities()``, ``get_peer_methods()``, ``get_peer_actions()``,
+  ``refresh_peer_capabilities()``, ``refresh_peer_capabilities_async()``.
 
-- **Peer Profile Caching**: Added first-class support for caching profile attributes from peer actors with trust relationships. This enables applications to access peer information (displayname, email, etc.) without making repeated API calls.
+- **Peer Permissions Caching**: Cache permissions that peer actors have granted us (distinct
+  from ``TrustPermissions``, which stores what we grant to peers). Configure with
+  ``ActingWebApp.with_peer_permissions(enable=True)``. Includes access-checking methods:
+  ``has_property_access()``, ``has_method_access()``, ``has_tool_access()``.
 
-  - New module: ``actingweb.peer_profile`` - ``PeerProfile`` dataclass and ``PeerProfileStore`` for storage
-  - New configuration method: ``ActingWebApp.with_peer_profile(attributes=["displayname", "email", "description"])``
-  - New TrustManager methods: ``get_peer_profile()``, ``refresh_peer_profile()``, ``refresh_peer_profile_async()``
-  - Automatic profile fetch on trust approval via lifecycle hooks (``trust_fully_approved_local``, ``trust_fully_approved_remote``)
-  - Automatic profile cleanup on trust deletion via ``trust_deleted`` hook
-  - Profile refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
-  - Both sync and async fetch functions for flexible usage patterns
+- **Permission Query Endpoint**: New ``GET /{actor_id}/permissions/{peer_id}`` endpoint allows
+  peers to query the permissions they have been granted, including effective trust type defaults.
 
-- **Peer Capabilities Caching (Methods & Actions)**: Added first-class support for caching methods and actions that peer actors expose. This enables applications to discover and access peer RPC methods and state-modifying actions without making repeated API calls.
+- **Automatic Peer Notification on Permission Change**: When permissions are updated, the peer
+  is automatically notified via a POST to their ``/callbacks/permissions/{actor_id}`` endpoint.
+  Configure with ``ActingWebApp.with_peer_permissions(notify_peer_on_change=True)``
+  (default: ``True``).
 
-  - Extended ``actingweb.peer_capabilities`` module with ``CachedCapability``, ``CachedPeerCapabilities``, and ``CachedCapabilitiesStore``
-  - New configuration method: ``ActingWebApp.with_peer_capabilities(enable=True)``
-  - New TrustManager methods: ``get_peer_capabilities()``, ``get_peer_methods()``, ``get_peer_actions()``, ``refresh_peer_capabilities()``, ``refresh_peer_capabilities_async()``
-  - Automatic capabilities fetch on trust approval via lifecycle hooks (``trust_fully_approved_local``, ``trust_fully_approved_remote``)
-  - Automatic capabilities cleanup on trust deletion via ``trust_deleted`` hook
-  - Capabilities refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
-  - Both sync and async fetch functions: ``fetch_peer_methods_and_actions()``, ``fetch_peer_methods_and_actions_async()``
-  - New constant: ``PEER_CAPABILITIES_BUCKET`` for attribute storage
+- **Auto-Delete Cached Peer Data on Permission Revocation**: Optionally delete cached peer data
+  when permissions are revoked. Enable with
+  ``ActingWebApp.with_peer_permissions(auto_delete_on_revocation=True)``.
 
-- **Peer Permissions Caching**: Added first-class support for caching permissions that peer actors have granted us. This is distinct from TrustPermissions which stores what WE grant to peers; PeerPermissions stores what PEERS grant to us.
+- **Automatic Subscription Processing**: New ``CallbackProcessor``, ``RemotePeerStore``, and
+  ``FanOutManager`` modules handle incoming subscription callbacks with automatic sequence
+  validation, gap detection, resync triggering, and back-pressure support.
 
-  - New module: ``actingweb.peer_permissions`` - ``PeerPermissions`` dataclass and ``PeerPermissionStore`` for storage
-  - New configuration method: ``ActingWebApp.with_peer_permissions(enable=True)``
-  - Automatic permissions fetch on trust approval via lifecycle hooks
-  - Automatic permissions cleanup on trust deletion via ``trust_deleted`` hook
-  - Permissions refresh during ``sync_peer()`` and ``sync_peer_async()`` operations
-  - Both sync and async fetch functions: ``fetch_peer_permissions()``, ``fetch_peer_permissions_async()``
-  - Permission access checking methods: ``has_property_access()``, ``has_method_access()``, ``has_tool_access()``
-  - New constant: ``PEER_PERMISSIONS_BUCKET`` for attribute storage
+- **Pull-Based Subscription Sync**: New ``SubscriptionManager.sync_subscription()`` and
+  ``sync_peer()`` methods (and async variants) for explicitly fetching and processing pending
+  diffs from peers. Complements push-based callbacks for "Sync All" workflows.
 
-- **Permission Callback Type**: Added support for permission callbacks in the subscription callback system. Permission callbacks notify peers when their granted permissions change, enabling reactive permission synchronization without polling.
+- **Subscription Suspension**: Subscriptions can be suspended on repeated delivery failures and
+  resumed later, with automatic resync on resume. New ``SubscriptionSuspension`` database table
+  in both DynamoDB and PostgreSQL backends.
 
-  - New ``CallbackType.PERMISSION`` enum value in ``callback_processor.py``
-  - Permission callbacks use URL pattern ``/callbacks/permissions/{granting_actor_id}``
-  - Permission callbacks are idempotent and use full replacement (not diffs)
-  - Automatic storage in ``PeerPermissionStore`` when callbacks are received
-  - App-specific handling via ``@app.callback_hook("permissions")`` decorator
-  - New ``RemotePeerStore.apply_permission_data()`` method for programmatic permission updates
+- **Revoke Peer Subscription**: New
+  ``SubscriptionManager.revoke_peer_subscription(peer_id, subscription_id)`` for semantically
+  clear deletion of inbound subscriptions (peer's subscription to our data). Notifies the peer
+  and removes the local record.
 
-- **Automatic Peer Notification on Permission Change**: Added automatic notification of peers when their permissions are changed via ``TrustPermissionStore.store_permissions()``.
+- **Subscription Deleted Lifecycle Hook**: New ``subscription_deleted`` lifecycle event triggered
+  when an inbound subscription is deleted, receiving ``actor``, ``peer_id``,
+  ``subscription_id``, ``subscription_data``, and ``initiated_by_peer`` flag.
 
-  - New configuration option: ``ActingWebApp.with_peer_permissions(notify_peer_on_change=True)`` (default: ``True``)
-  - New ``TrustPermissionStore`` methods: ``store_permissions_async()``, ``_notify_peer()``, ``_notify_peer_async()``
-  - Notifications are fire-and-forget (failures logged but don't block storage)
-  - Sends POST to peer's ``/callbacks/permissions/{actor_id}`` endpoint
-  - Can be disabled per-call via ``store_permissions(permissions, notify_peer=False)``
+- **Inbound Subscription Query**: New
+  ``SubscriptionManager.get_subscriptions_from_peer(peer_id)`` for querying inbound
+  subscriptions (peers subscribed to our data). Complements existing
+  ``get_subscriptions_to_peer()``.
 
-- **Automatic Subscription Handling**: Comprehensive subscription callback processing with automatic gap detection, resync handling, and back-pressure support. Peer capabilities are now exchanged during trust establishment to negotiate optimal callback behavior.
+- **AsyncMCPHandler for FastAPI**: MCP tools and prompts with async hooks now execute natively
+  in the FastAPI event loop, without thread pool overhead. FastAPI automatically uses
+  ``AsyncMCPHandler``; Flask continues using the sync ``MCPHandler``.
 
-  - New module: ``actingweb.callback_processor`` - Processes incoming subscription callbacks with sequence validation
-  - New module: ``actingweb.remote_storage`` - Manages storing remote subscription data locally
-  - New module: ``actingweb.peer_capabilities`` - Peer capability negotiation during trust establishment
-  - New module: ``actingweb.subscription_config`` - Configuration for subscription behavior (gap thresholds, resync policies)
-  - New module: ``actingweb.fanout`` - Fan-out delivery for subscription callbacks
-  - Enhanced ``Trust`` model with ``peer_capabilities`` field for storing negotiated capabilities
-  - Automatic resync request when sequence gaps exceed configured thresholds
-  - Subscription suspension support for temporary delivery failures
-  - Circuit breaker pattern for handling unresponsive subscribers
+- **Database Accessor Pattern**: New factory functions in ``actingweb.db`` (``get_property()``,
+  ``get_actor()``, ``get_trust()``, etc.) create database instances with configuration
+  automatically injected. New protocol definitions in ``actingweb.db.protocols`` provide full
+  type safety and IDE support.
 
-- **Pull-Based Subscription Sync API**: Added ``sync_subscription()`` and ``sync_peer()`` methods to ``SubscriptionManager`` for explicitly fetching and processing pending diffs from peers.
+- **Attribute List Storage**: New ``ListAttribute`` and ``AttributeListStore`` classes for
+  storing distributed lists in attribute buckets (not exposed via REST API). Same semantics as
+  ``ListProperty``/``PropertyListStore`` but stored in attributes, bypassing the 400 KB
+  property size limit.
 
-  - New method: ``sync_subscription(peer_id, subscription_id, config?)`` - Sync a single subscription
-  - New method: ``sync_peer(peer_id, config?)`` - Sync all outbound subscriptions to a peer
-  - Async variants: ``sync_subscription_async()`` and ``sync_peer_async()``
-  - New dataclass: ``SubscriptionSyncResult`` - Result of syncing a single subscription
-  - New dataclass: ``PeerSyncResult`` - Aggregate result of syncing all subscriptions to a peer
-  - Supports configurable processing via ``SubscriptionProcessingConfig``
-  - Complements push-based callbacks for manual "Sync All" workflows
+- **List Metadata Access**: New ``get_metadata()`` method on both ``ListProperty`` and
+  ``ListAttribute`` exposes internal metadata (``created_at``, ``updated_at``, ``version``,
+  ``item_type``, ``chunk_size``, ``length``).
 
-- **Subscription Suspension**: Added suspension/resume support for subscription delivery failures.
+- **Property/List Name Collision Detection**: Creating a property when a list already exists
+  with the same name (or vice versa) now raises ``ValueError``, preventing ambiguity and data
+  loss.
 
-  - New database table: ``SubscriptionSuspension`` for tracking suspended subscriptions
-  - DynamoDB and PostgreSQL backends with migration support
-  - Automatic suspension on repeated delivery failures
-  - Resync triggered on subscription resume
-  - Scoped suspensions by subtarget for granular control
+- **Configurable AwProxy Timeout**: New ``timeout`` parameter on the ``AwProxy`` constructor.
+  Accepts a single value or a ``(connect_timeout, read_timeout)`` tuple. Default changed to
+  ``(5, 20)`` seconds.
 
-- **Passphrase-to-SPA-Token Exchange**: Added ``grant_type="passphrase"`` to the ``POST /oauth/spa/token`` endpoint for exchanging a valid creator passphrase for SPA tokens. This enables automated testing tools like Playwright to obtain authenticated access without going through the full OAuth2 flow.
+- **Request Correlation in Logging**: Every log line now includes ``[request_id:actor_id:peer_id]``
+  context for distributed tracing. New public API: ``enable_request_context_filter()``,
+  ``set_request_context()``, ``get_request_id()``, ``get_actor_id()``, ``get_peer_id()``.
+  Request IDs are extracted from the ``X-Request-ID`` header or auto-generated, and included in
+  response headers.
 
-  - Devtest-mode only (returns 403 if ``config.devtest=False``) for security
-  - Returns ``access_token`` and ``refresh_token`` with standard OAuth2 response format
-  - Supports all token delivery modes: ``json``, ``cookie``, ``hybrid``
-  - Tokens can be used immediately to access actor resources via Bearer authentication
+- **Inter-Actor Request Correlation**: Correlation headers (``X-Request-ID``,
+  ``X-Parent-Request-ID``) are automatically added to all peer-to-peer HTTP calls for complete
+  request chain tracing.
 
-- **Attribute List Storage**: Added ``ListAttribute`` and ``AttributeListStore`` for storing distributed lists in internal attributes (not exposed via REST API). This provides the same API as ``ListProperty``/``PropertyListStore`` but stores data in attribute buckets instead of properties, bypassing the 400KB property size limit while maintaining list semantics.
+- **Lambda Environment Detection**: Automatic detection of AWS Lambda deployments with a warning
+  when async subscription callbacks are enabled, recommending ``with_sync_callbacks()`` to
+  prevent callback loss on function freeze.
 
-  - New class: ``ListAttribute`` - Distributed list implementation using attributes
-  - New class: ``AttributeListStore`` - Per-actor-per-bucket list management
-  - Supports all standard list operations: append, extend, insert, pop, remove, index, count, clear, delete
-  - Metadata support with ``get_description()``, ``set_description()``, ``get_explanation()``, ``set_explanation()``, and ``get_metadata()`` for accessing list metadata (created_at, updated_at, version, etc.)
-  - Discovery methods: ``exists()``, ``list_all()``
-  - Bucket isolation: Same list name can exist independently in different buckets
-  - Lazy loading with ``ListAttributeIterator`` for efficient iteration
-  - Attribute naming pattern: ``list:{name}:{index}`` for items, ``list:{name}:meta`` for metadata
-  - Comprehensive test coverage: 12 unit tests for ListAttribute, 21 unit tests for AttributeListStore, 18 integration tests
+- **Configurable FastAPI Thread Pool**: New ``ActingWebApp.with_thread_pool_workers(workers)``
+  method for tuning the thread pool size (1–100 workers, default 10).
 
-- **List Metadata Access**: Added ``get_metadata()`` method to both ``ListProperty`` and ``ListAttribute`` to expose internal metadata (created_at, updated_at, version, item_type, chunk_size, length). Previously, users needed to access private ``_load_metadata()`` method to get timestamps and other readonly metadata fields.
+- **Passphrase-to-SPA-Token Exchange**: ``POST /oauth/spa/token`` now accepts
+  ``grant_type="passphrase"`` to exchange a valid creator passphrase for SPA tokens. Devtest
+  mode only (returns 403 in production). Useful for Playwright and automated testing tools.
 
-- **Property/List Name Collision Detection**: Added automatic collision detection to enforce namespace exclusivity between properties and lists. Creating a property or list with a name that already exists as the other type raises a ``ValueError`` to prevent ambiguity and data loss.
+- **Revoked Trust Detection**: During subscription sync, if a peer has revoked a trust
+  relationship (all subscriptions returning 404), the system automatically detects this and
+  either cleans up dead subscriptions (if trust still exists) or removes the local trust
+  entirely, triggering the ``trust_deleted`` lifecycle hook.
 
-  - List creation error: Attempting to create a list when a property with the same name exists raises ``ValueError``
-  - Property creation error: Attempting to set a property when a list with the same name exists raises ``ValueError``
-  - Clear error messages: Exception messages indicate the conflict and suggest deleting the existing item or using a different name
-  - Clean namespace: Property names and list names are strictly mutually exclusive
-  - Internal ``list:`` prefix remains an implementation detail, never exposed in public APIs
-  - List operations: PUT requests with ``?index=N`` parameter correctly route to list item operations instead of triggering collision detection
-  - Comprehensive test coverage: 4 unit tests in ``tests/test_property_list.py``, 4 integration tests in ``tests/integration/test_property_list_collision.py``
+- **Baseline Sync on Subscription Creation**: ``subscribe_to_peer()`` now performs an immediate
+  baseline data fetch after creating the subscription, ensuring consistent initial state
+  regardless of whether the peer has existing data or pending diffs. New async variant:
+  ``subscribe_to_peer_async()``.
 
-- **Comprehensive Integration Tests for Subscriptions**: Added extensive test coverage for subscription handling flows.
+- **Peer Metadata Refresh on Subscribe**: Subscription creation automatically refreshes cached
+  peer profile, capabilities, and permissions metadata (when those features are configured),
+  eliminating the need for a separate sync cycle.
 
-  - ``test_subscription_processing_flow.py``: Callback sequencing, gap detection, resync handling
-  - ``test_fanout_flow.py``: Fan-out delivery, large payloads, concurrent changes, circuit breaker
-  - ``test_subscription_suspension_flow.py``: Suspension/resume, subtarget scoping, multiple subscribers
-  - New test fixtures: ``callback_sender``, ``trust_helper`` for subscription testing
+- **RemotePeerStore Enumeration**: New ``list_all_scalars()`` and ``get_all_properties()``
+  methods on ``RemotePeerStore`` for enumerating stored peer data. ``get_all_properties()``
+  returns a combined view of all lists and scalars with type metadata (``type``, ``value``,
+  ``item_count``).
 
-- **CI/CD Documentation Build**: Added documentation build job to GitHub Actions workflow.
+- **List Property Format Parameter**: ``GET`` requests on list properties now accept
+  ``?format=short`` to retrieve only metadata (count, description, explanation) without
+  fetching all items.
 
-- **Configurable AwProxy Timeout**: Added ``timeout`` parameter to ``AwProxy`` constructor for configurable HTTP request timeouts. Accepts either a single value (used for both connect and read) or a tuple ``(connect_timeout, read_timeout)``. Default changed from hardcoded ``(5, 10)`` to ``(5, 20)`` seconds for better handling of slow peer responses.
+- **Permission Callbacks**: Incoming permission change notifications from peers are handled
+  automatically and stored in ``PeerPermissionStore``. Use
+  ``@app.callback_hook("permissions")`` to receive them in application code. Callbacks are
+  delivered to ``/callbacks/permissions/{granting_actor_id}``.
 
-- **Permission Query Endpoint**: Added ``GET /{actor_id}/permissions/{peer_id}`` endpoint allowing peers to query what permissions they've been granted. This supports proactive permission discovery, complementing the reactive callback-based push mechanism.
-
-  - New handler: ``actingweb.handlers.permissions.PermissionsHandler``
-  - Returns custom permission overrides or trust type defaults
-  - Includes metadata: ``source`` (custom_override or trust_type_default), ``trust_type``, ``created_by``, ``updated_at``, ``notes``
-  - Authentication required: peer must authenticate as the ``peer_id`` in the URL
-  - Authorization: peer can only query their own granted permissions
-  - Error responses: 404 (no trust relationship), 403 (not authorized), 500 (retrieval failed)
-  - Both Flask and FastAPI integrations supported
-  - Comprehensive test coverage in ``tests/test_permissions_handler.py``
-
-- **Permission Protocol Option Tags**: Added automatic advertisement of permission-related capabilities via ActingWeb protocol option tags in ``/meta/actingweb/supported`` endpoint.
-
-  - New option tag: ``permissioncallback`` - indicates support for receiving permission change notifications
-  - New option tag: ``permissionquery`` - indicates support for ``GET /{actor_id}/permissions/{peer_id}`` endpoint
-  - Tags automatically added when ``ActingWebApp.with_peer_permissions(enable=True)`` is called
-  - New method: ``Config.update_supported_options()`` - dynamically updates option tags based on enabled features
-  - Complies with ActingWeb Protocol Specification v1.4 requirements (spec lines 2064-2065, 2830)
-
-- **Peer Profile Extraction from Subscriptions**: Added automatic extraction of peer profile attributes from synced subscription data in ``sync_peer()`` and ``sync_peer_async()``. When peer permissions caching is enabled and a subscription exists for profile properties, the profile is extracted from the cached subscription data before falling back to a direct HTTP fetch. This reduces unnecessary API calls and improves performance.
-
-  - Profile attributes extracted from ``RemotePeerStore`` when available
-  - Handles wrapped property values (``{"value": ...}``) correctly
-  - Type conversion to strings for standard profile fields (displayname, email, description)
-  - Extra attributes stored with original types preserved
-  - Graceful fallback to HTTP fetch if extraction fails
-
-SECURITY
-~~~~~~~~
-
-- **Logging Security Hardening**: Comprehensive audit and remediation of all log statements to prevent sensitive information leakage in production logs.
-
-  - **Token masking**: Added ``_mask_token()`` helper in ``token_manager.py`` that shows only first 8 characters of tokens. Fixed 18 log statements that were previously logging full access/refresh tokens.
-  - **Request body removal**: Removed logging of OAuth2 token request body in ``oauth2_endpoints.py`` which could contain client_secret, authorization codes, and refresh tokens.
-  - **Headers removal**: Removed logging of HTTP request headers in ``trust.py`` which could expose Authorization headers.
-  - **State data protection**: Changed ``state_manager.py`` to only log flow_type instead of full OAuth2 state data.
-  - **Trust object protection**: Fixed ``auth.py`` to only log peer_id instead of full trust objects which could contain secrets.
-  - **Property value protection**: Removed property values from log messages in ``handlers/properties.py``, ``db/dynamodb/property.py``, ``db/postgresql/property.py``, and ``db/postgresql/property_lookup.py``.
-  - **Response content removal**: Removed HTTP response content from debug logs in ``aw_proxy.py`` (7 occurrences) - now only logs status codes.
-  - **Peer creation data removal**: Removed data payload from peer actor creation logs in ``actor.py``.
+- **Permission Protocol Option Tags**: When ``with_peer_permissions(enable=True)`` is
+  configured, ``/meta/actingweb/supported`` automatically advertises the
+  ``permissioncallback`` and ``permissionquery`` capability tags per ActingWeb Protocol
+  Specification v1.4.
 
 CHANGED
 ~~~~~~~
 
-- **Log level adjustments for production**: Changed verbose INFO-level logs to DEBUG for high-frequency operations:
+- **Loosen dependency version constraints**: Runtime dependencies now use more permissive version
+  ranges (e.g., ``boto3 >=1.26``, ``requests >=2.20``, ``cryptography >=43.0``) to reduce
+  version conflicts for downstream consumers. Optional framework dependencies (Flask, FastAPI,
+  uvicorn) also loosened.
 
-  - ``aw_proxy.py``: "Fetching peer resource" logs changed from INFO to DEBUG
-  - ``actor.py``: "Fetching peer info" logs changed from INFO to DEBUG
+- **OAuth provider token revoked on logout**: Logout now revokes the stored OAuth provider token
+  from ``actor.store`` in addition to the ActingWeb session token. Providers without a
+  revocation endpoint (e.g., GitHub) are silently skipped.
 
-- **Debug logging cleanup**: Removed 7 commented-out debug statements in ``handlers/properties.py`` that were logging JSON data and paths.
+- **List properties in ``GET /properties``**: List properties are now included even without
+  ``?metadata=true``, returned as ``{"_list": true, "count": N}``. The full format (with
+  description and explanation) is returned with ``?metadata=true``.
 
-- **List properties in non-metadata responses**: The ``GET /properties`` endpoint now includes list properties even without ``?metadata=true``. List properties are represented with a minimal marker format ``{"_list": true, "count": N}`` to allow clients to detect them without requesting full metadata. With ``?metadata=true``, the full format ``{"_list": true, "count": N, "description": "...", "explanation": "..."}`` is returned. The ``_list`` key is used consistently in both minimal and full metadata formats.
+- **``GET /subscriptions?peerid=X`` returns all subscriptions**: Now returns both inbound and
+  outbound subscriptions for the given peer, rather than only outbound.
+
+- **``get_github_verified_emails()`` made public**: Renamed from ``_get_github_verified_emails()``
+  on ``OAuth2Authenticator`` (private prefix removed), as it is called across class boundaries.
+
+- **Permission format normalization**: Both shorthand list format (``["pattern1", "pattern2"]``)
+  and spec-compliant dict format (``{"patterns": [...], "operations": [...]}``) are now accepted
+  and normalized consistently across all permission APIs (``TrustPermissions`` storage,
+  ``PeerPermissions`` callbacks, ``AccessControlConfig.add_trust_type()``). Shorthand format
+  defaults to read-only operations.
+
+SECURITY
+~~~~~~~~
+
+- **GitHub Email Verification**: ``_get_github_primary_email()`` now requires both ``primary``
+  and ``verified`` flags when selecting the email for actor linking. Previously, an unverified
+  primary email was accepted, which could allow account-linking attacks via the GitHub
+  ``/user/emails`` API.
+
+- **Logging Security Hardening**: Comprehensive audit of all log statements to prevent sensitive
+  data leakage: OAuth tokens masked (first 8 characters only), OAuth request bodies and HTTP
+  Authorization headers removed from logs, property values and HTTP response bodies no longer
+  logged.
+
+- **Remote Peer Data Sanitization**: All data received from remote peers is sanitized to prevent
+  JSON encoding failures from malformed Unicode (invalid UTF-16 surrogate pairs, invalid UTF-8
+  sequences).
 
 FIXED
 ~~~~~
 
-- **Baseline data fetch for new subscriptions**: Fixed ``sync_subscription()`` and ``sync_subscription_async()`` to fetch baseline data from the target resource when no diffs exist. Previously, syncing a fresh subscription with 0 diffs would do nothing, leaving the remote storage empty. Now it properly establishes baseline data via ``RemotePeerStore.apply_resync_data()``, enabling features like Remote Memory to work immediately after subscription creation. The baseline fetch respects subscription scope by including subtarget and resource in the fetch path (e.g., ``/properties/myProp`` for scoped subscriptions, ``/properties?metadata=true`` for collection-level subscriptions).
+- **PostgreSQL Properties Value Index**: Dropped the ``idx_properties_value`` B-tree index on
+  the ``properties.value`` column, which blocked storage of values larger than ~2700 bytes
+  (e.g., embeddings, JSON blobs). The ``property_lookup`` table handles reverse-index lookups
+  for properties that require value-based search. Includes Alembic migration ``c3d4e5f6a7b8``
+  to drop the index on existing databases.
 
-- **Subscription authorization path patterns**: Changed authorization path pattern from ``<id>/<id>`` to ``<id>/<subid>`` in ``handlers/subscription.py`` for clarity and consistency with other handlers.
+- **Async MCP Resource Lookup**: Fixed three bugs in
+  ``AsyncMCPHandler._handle_resource_read_async()`` that prevented MCP resources from being
+  discovered: wrong metadata key (``uri`` vs ``uri_template``), reversed URI template match
+  parameters, and truthy check on an empty-dict match result.
 
-- **List property subscription diff callbacks**: Fixed ``list:`` prefix leakage in subscription diff callbacks. Previously, list property changes registered diffs with ``subtarget="list:myList"`` which exposed the internal ``list:`` prefix in callbacks sent to subscribers. Now uses clean subtarget (``subtarget="myList"``) - the diff blob already contains ``"list": "myList"`` to identify list operations. Subscribers no longer need to strip the prefix when processing list property callbacks.
+- **MCP OAuth Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear
+  ``invalid_grant`` error when no verified email is available from the provider.
 
-- **Profile attribute type conversion in sync**: Fixed type conversion when extracting peer profile attributes from synced subscription data. Profile attributes retrieved from ``RemotePeerStore`` are now properly unwrapped from ``{"value": ...}`` format and converted to strings for standard profile fields (displayname, email, description). This fixes type errors where dict values were being assigned to string-typed profile fields.
+- **Subscription suspension check log level**: ``Actor.is_subscription_suspended()`` now logs
+  at ``DEBUG`` when an exception is caught during the check rather than ``ERROR``, since the
+  condition is non-exceptional.
 
-- Fixed ``DbSubscriptionSuspension`` initialization: ``get_subscription_suspension()`` now requires ``actor_id`` parameter to properly initialize the suspension instance
-- Fixed type annotations across database layer to eliminate pyright errors
-- Fixed ``DbTrustProtocol.modify()`` signature to include missing parameters: ``aw_supported``, ``aw_version``, ``capabilities_fetched_at``
-- Fixed ``DbAttributeBucketListProtocol`` to include ``fetch_timestamps()`` method
-- Fixed return type handling for ``PeerTrustee.get()`` to properly handle ``bool | dict | None`` returns
+- **List property subscription diff callbacks**: Fixed internal ``list:`` prefix leakage in
+  subscription diff callbacks. Subscribers now receive ``subtarget="myList"`` instead of
+  ``subtarget="list:myList"``; applications that were stripping this prefix can remove that
+  workaround.
 
-- **Subscription Baseline Sync for List Properties**: Fixed a bug where subscription baseline sync (when no diffs are available) did not properly fetch and store list property items. The baseline fetch now correctly detects list metadata from the remote peer and fetches the actual list items via ActingWeb protocol, transforming them to the format expected by ``RemotePeerStore``.
+IMPROVED
+~~~~~~~~
 
-  - Added ``SubscriptionManager._transform_baseline_list_properties()`` method to fetch list items from remote peer
-  - Updated ``RemotePeerStore.apply_resync_data()`` to support flag-based list format (``{"_list": true, "items": [...]}``)
-  - Maintains backward compatibility with legacy ``"list:"`` prefix format
-  - Permission filtering happens automatically via remote peer's property hooks
-  - Graceful error handling: skips lists on fetch errors without crashing sync
+- **Bulk Property Permission Evaluation**: Property permission checks now use bulk evaluation,
+  reducing DEBUG log volume by 10–50× for multi-property operations.
+
+- **Action and Method List Filtering**: The ``GET /{actor_id}/actions`` and
+  ``GET /{actor_id}/methods`` endpoints now filter results based on peer permissions, preventing
+  information disclosure of restricted capabilities.
+
+- **Incremental Permission Grant Sync**: Auto-sync on permission grant now fetches only the
+  newly granted properties rather than doing a full peer resync, reducing HTTP requests from ~7
+  to 1–2 per permission grant.
+
+- **Parallel Test Isolation**: Significantly improved pytest-xdist parallel test execution
+  reliability (flakiness reduced from ~5% to <1%) via worker-namespaced OAuth2 registration and
+  improved database state cleanup. All 42 xdist groups are now documented in
+  ``tests/integration/XDIST_GROUPS.md``.
+
+- **Capability Cache Staleness Check**: ``sync_peer()`` and ``sync_peer_async()`` skip
+  refetching peer capabilities (methods/actions) when the cache is fresher than
+  ``peer_capabilities_max_age_seconds`` (default: 1 hour, configurable via
+  ``with_peer_capabilities(max_age_seconds=...)``). A new ``force_refresh`` parameter bypasses
+  the staleness check for developer-triggered syncs.
+
+- **Structured Proxy Error Responses**: All ``AwProxy`` resource methods (``get_resource()``,
+  ``create_resource()``, ``change_resource()``, ``delete_resource()``, and async variants) now
+  return structured error dicts with ``code`` and ``message`` keys for all error conditions,
+  including when the peer returns a string-typed ``error`` field. Previously, the HTTP status
+  code was lost and replaced with a hardcoded 500.
 
 v3.9.2: Jan 16, 2026
 --------------------

@@ -1,4 +1,4 @@
-__version__ = "3.10.0b4"
+__version__ = "3.10.0rc1"
 
 # Modules are lazy-loaded on-demand, so they're not imported here
 __all__ = [

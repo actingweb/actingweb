@@ -195,6 +195,11 @@ CHANGED
 - **``GET /subscriptions?peerid=X`` returns all subscriptions**: Now returns both inbound and
   outbound subscriptions for the given peer, rather than only outbound.
 
+- **Email verification URL format**: Verification links now use ``/oauth/email?verify=<token>``
+  as the preferred format instead of ``/{actor_id}/www/verify_email?token=<token>``. The legacy
+  URL remains functional for backward compatibility, but new integrations should use the new
+  actor-ID-free form.
+
 - **``get_github_verified_emails()`` made public**: Renamed from ``_get_github_verified_emails()``
   on ``OAuth2Authenticator`` (private prefix removed), as it is called across class boundaries.
 
@@ -246,6 +251,16 @@ FIXED
   subscription diff callbacks. Subscribers now receive ``subtarget="myList"`` instead of
   ``subtarget="list:myList"``; applications that were stripping this prefix can remove that
   workaround.
+
+- **Fix spurious ``invalid_token`` warnings on logout**: Logout was sending the ActingWeb
+  session token to the OAuth provider's revocation endpoint, which always rejected it (the
+  provider only recognises its own tokens). Logout now correctly looks up and revokes the stored
+  provider token. Users monitoring logs will no longer see these false warnings.
+
+- **Fix FastAPI double logout invocation**: The FastAPI ``/oauth/logout`` handler was calling
+  the underlying logout handler twice when a Bearer token was present alongside an
+  ``oauth_token`` cookie, causing redundant token revocation attempts against the OAuth
+  provider.
 
 IMPROVED
 ~~~~~~~~

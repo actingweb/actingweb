@@ -238,6 +238,11 @@ FIXED
 - **MCP OAuth Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear
   ``invalid_grant`` error when no verified email is available from the provider.
 
+- **List property subscription diff callbacks**: Fixed internal ``list:`` prefix leakage in
+  subscription diff callbacks. Subscribers now receive ``subtarget="myList"`` instead of
+  ``subtarget="list:myList"``; applications that were stripping this prefix can remove that
+  workaround.
+
 - **Fix FastAPI double logout invocation**: The FastAPI ``/oauth/logout`` handler was calling
   the underlying logout handler twice when a Bearer token was present alongside an
   ``oauth_token`` cookie, causing redundant token revocation attempts against the OAuth

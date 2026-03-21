@@ -5,8 +5,8 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.10.0rc1: Mar 2, 2026
-------------------------
+v3.10.0: Mar 21, 2026
+----------------------
 
 BREAKING CHANGES
 ~~~~~~~~~~~~~~~~
@@ -235,27 +235,13 @@ FIXED
   for properties that require value-based search. Includes Alembic migration ``c3d4e5f6a7b8``
   to drop the index on existing databases.
 
-- **Async MCP Resource Lookup**: Fixed three bugs in
-  ``AsyncMCPHandler._handle_resource_read_async()`` that prevented MCP resources from being
-  discovered: wrong metadata key (``uri`` vs ``uri_template``), reversed URI template match
-  parameters, and truthy check on an empty-dict match result.
-
 - **MCP OAuth Flow Verified Email Requirement**: The MCP OAuth flow now returns a clear
   ``invalid_grant`` error when no verified email is available from the provider.
-
-- **Subscription suspension check log level**: ``Actor.is_subscription_suspended()`` now logs
-  at ``DEBUG`` when an exception is caught during the check rather than ``ERROR``, since the
-  condition is non-exceptional.
 
 - **List property subscription diff callbacks**: Fixed internal ``list:`` prefix leakage in
   subscription diff callbacks. Subscribers now receive ``subtarget="myList"`` instead of
   ``subtarget="list:myList"``; applications that were stripping this prefix can remove that
   workaround.
-
-- **Fix spurious ``invalid_token`` warnings on logout**: Logout was sending the ActingWeb
-  session token to the OAuth provider's revocation endpoint, which always rejected it (the
-  provider only recognises its own tokens). Logout now correctly looks up and revokes the stored
-  provider token. Users monitoring logs will no longer see these false warnings.
 
 - **Fix FastAPI double logout invocation**: The FastAPI ``/oauth/logout`` handler was calling
   the underlying logout handler twice when a Bearer token was present alongside an
@@ -265,27 +251,10 @@ FIXED
 IMPROVED
 ~~~~~~~~
 
-- **Bulk Property Permission Evaluation**: Property permission checks now use bulk evaluation,
-  reducing DEBUG log volume by 10–50× for multi-property operations.
-
-- **Action and Method List Filtering**: The ``GET /{actor_id}/actions`` and
-  ``GET /{actor_id}/methods`` endpoints now filter results based on peer permissions, preventing
-  information disclosure of restricted capabilities.
-
-- **Incremental Permission Grant Sync**: Auto-sync on permission grant now fetches only the
-  newly granted properties rather than doing a full peer resync, reducing HTTP requests from ~7
-  to 1–2 per permission grant.
-
 - **Parallel Test Isolation**: Significantly improved pytest-xdist parallel test execution
   reliability (flakiness reduced from ~5% to <1%) via worker-namespaced OAuth2 registration and
   improved database state cleanup. All 42 xdist groups are now documented in
   ``tests/integration/XDIST_GROUPS.md``.
-
-- **Capability Cache Staleness Check**: ``sync_peer()`` and ``sync_peer_async()`` skip
-  refetching peer capabilities (methods/actions) when the cache is fresher than
-  ``peer_capabilities_max_age_seconds`` (default: 1 hour, configurable via
-  ``with_peer_capabilities(max_age_seconds=...)``). A new ``force_refresh`` parameter bypasses
-  the staleness check for developer-triggered syncs.
 
 - **Structured Proxy Error Responses**: All ``AwProxy`` resource methods (``get_resource()``,
   ``create_resource()``, ``change_resource()``, ``delete_resource()``, and async variants) now

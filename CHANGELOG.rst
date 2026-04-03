@@ -16,7 +16,8 @@ FIXED
   ``TemplateResponse(request, name, context=...)`` instead of the deprecated
   ``TemplateResponse(name, {"request": request, ...})`` convention. This fixes
   an ``unhashable type: 'dict'`` error when rendering OAuth authorization forms
-  with Starlette >= 1.0.0.
+  with Starlette >= 1.0.0. Requires Starlette >= 1.0.0 (included with
+  FastAPI >= 0.112.0).
 
 v3.10.0: Mar 21, 2026
 ----------------------

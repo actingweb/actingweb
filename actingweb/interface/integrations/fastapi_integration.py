@@ -1536,8 +1536,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
         if request.method == "GET" and webobj.response.status_code == 200:
             if self.templates:
                 return self.templates.TemplateResponse(
+                    request,
                     "aw-root-factory.html",
-                    {"request": request, **webobj.response.template_values},
+                    context=webobj.response.template_values,
                 )
         elif request.method == "POST":
             # Only render templates for form submissions, not JSON requests
@@ -1549,8 +1550,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 and self.templates
             ):
                 return self.templates.TemplateResponse(
+                    request,
                     "aw-root-created.html",
-                    {"request": request, **webobj.response.template_values},
+                    context=webobj.response.template_values,
                 )
             elif (
                 not is_json_request
@@ -1558,8 +1560,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 and self.templates
             ):
                 return self.templates.TemplateResponse(
+                    request,
                     "aw-root-failed.html",
-                    {"request": request, **webobj.response.template_values},
+                    context=webobj.response.template_values,
                 )
 
         return self._create_fastapi_response(webobj, request)
@@ -1587,12 +1590,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
         # Render template with populated values (including oauth_enabled, oauth_providers, etc.)
         if self.templates and webobj.response.template_values:
             return self.templates.TemplateResponse(
+                request,
                 "aw-root-factory.html",
-                {"request": request, **webobj.response.template_values},
+                context=webobj.response.template_values,
             )
         elif self.templates:
             return self.templates.TemplateResponse(
-                "aw-root-factory.html", {"request": request}
+                request, "aw-root-factory.html"
             )
         else:
             # Fallback for when templates are not available
@@ -1639,8 +1643,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 # No email provided - return error or redirect back to form
                 if self.templates:
                     return self.templates.TemplateResponse(
+                        request,
                         "aw-root-factory.html",
-                        {"request": request, "error": "Email is required"},
+                        context={"error": "Email is required"},
                     )
                 else:
                     raise HTTPException(status_code=400, detail="Email is required")
@@ -1714,14 +1719,16 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if webobj.response.status_code in [200, 201]:
                 if self.templates:
                     return self.templates.TemplateResponse(
+                        request,
                         "aw-root-created.html",
-                        {"request": request, **webobj.response.template_values},
+                        context=webobj.response.template_values,
                     )
             elif webobj.response.status_code == 400:
                 if self.templates:
                     return self.templates.TemplateResponse(
+                        request,
                         "aw-root-failed.html",
-                        {"request": request, **webobj.response.template_values},
+                        context=webobj.response.template_values,
                     )
 
             return self._create_fastapi_response(webobj, request)
@@ -1730,8 +1737,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
             self.logger.error(f"Error in standard actor creation: {e}")
             if self.templates:
                 return self.templates.TemplateResponse(
+                    request,
                     "aw-root-failed.html",
-                    {"request": request, "error": "Actor creation failed"},
+                    context={"error": "Actor creation failed"},
                 )
             else:
                 raise HTTPException(
@@ -1776,8 +1784,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
         ):
             if self.templates and webobj.response.template_values:
                 return self.templates.TemplateResponse(
+                    request,
                     "aw-root-failed.html",
-                    {"request": request, **webobj.response.template_values},
+                    context=webobj.response.template_values,
                 )
 
         return self._create_fastapi_response(webobj, request)
@@ -1814,8 +1823,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 try:
                     # App provides aw-oauth-email.html template
                     return self.templates.TemplateResponse(
+                        request,
                         "aw-oauth-email.html",
-                        {"request": request, **webobj.response.template_values},
+                        context=webobj.response.template_values,
                     )
                 except Exception as e:
                     # Template not found - provide basic HTML form as fallback
@@ -1896,8 +1906,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 try:
                     # App provides aw-verify-email.html template
                     return self.templates.TemplateResponse(
+                        request,
                         "aw-verify-email.html",
-                        {"request": request, **webobj.response.template_values},
+                        context=webobj.response.template_values,
                     )
                 except Exception as e:
                     # Template not found - provide basic HTML as fallback
@@ -1989,8 +2000,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 try:
                     self.logger.debug(f"Attempting to render template: {template_name}")
                     return self.templates.TemplateResponse(
+                        request,
                         template_name,
-                        {"request": request, **webobj.response.template_values},
+                        context=webobj.response.template_values,
                     )
                 except Exception as e:
                     # Template not found or rendering error - fall back to JSON
@@ -2510,8 +2522,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
             if template_name:
                 return self.templates.TemplateResponse(
+                    request,
                     template_name,
-                    {"request": request, **webobj.response.template_values},
+                    context=webobj.response.template_values,
                 )
 
         return self._create_fastapi_response(webobj, request)

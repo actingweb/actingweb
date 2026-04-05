@@ -5,6 +5,20 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.1: Apr 2, 2026
+---------------------
+
+FIXED
+~~~~~
+
+- **Starlette 1.0 compatibility**: Update all ``TemplateResponse`` calls in
+  ``fastapi_integration.py`` to use the new Starlette 1.0 signature
+  ``TemplateResponse(request, name, context=...)`` instead of the deprecated
+  ``TemplateResponse(name, {"request": request, ...})`` convention. This fixes
+  an ``unhashable type: 'dict'`` error when rendering OAuth authorization forms
+  with Starlette >= 1.0.0. Requires Starlette >= 1.0.0 (included with
+  FastAPI >= 0.112.0).
+
 v3.10.0: Mar 21, 2026
 ----------------------
 

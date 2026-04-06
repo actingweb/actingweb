@@ -502,6 +502,11 @@ class OAuth2SPAHandler(BaseHandler):
         grant_type = params.get("grant_type")
         token_delivery = params.get("token_delivery", "json")
 
+        if token_delivery not in ["json", "cookie", "hybrid"]:
+            return self._json_error(
+                400, f"Invalid token_delivery mode: {token_delivery}"
+            )
+
         if grant_type == "refresh_token":
             return self._handle_refresh_token(params, token_delivery)
         elif grant_type == "authorization_code":
@@ -669,7 +674,7 @@ class OAuth2SPAHandler(BaseHandler):
         - code: Authorization code from OAuth provider
         - provider: Provider name (e.g. "google-mobile", "github-mobile")
         - redirect_uri: The redirect_uri used in the authorization request
-        - code_verifier: Optional PKCE code verifier
+        - code_verifier: PKCE code verifier (recommended for mobile apps per RFC 7636)
         - token_delivery: "json", "cookie", or "hybrid"
         """
         code = params.get("code")
@@ -679,6 +684,15 @@ class OAuth2SPAHandler(BaseHandler):
 
         if not code:
             return self._json_error(400, "Missing authorization code")
+
+        if not code_verifier:
+            logger.warning(
+                "Mobile OAuth authorization_code exchange without PKCE code_verifier. "
+                "PKCE is strongly recommended for native apps (RFC 7636)."
+            )
+
+        if not _is_known_provider(provider):
+            return self._json_error(400, f"Unknown OAuth provider: {provider}")
 
         # Create authenticator for the specified provider
         try:
@@ -738,11 +752,17 @@ class OAuth2SPAHandler(BaseHandler):
 
         existing_check = actor_module.Actor(config=self.config)
         actor_exists = existing_check.get_from_creator(identifier)
-        is_new_actor = not actor_exists
 
-        actor_instance = authenticator.lookup_or_create_actor_by_identifier(
-            identifier, user_info=user_info
-        )
+        if actor_exists:
+            # Use the already-fetched actor instead of doing another DB lookup
+            actor_instance = existing_check
+            is_new_actor = False
+        else:
+            actor_instance = authenticator.lookup_or_create_actor_by_identifier(
+                identifier, user_info=user_info
+            )
+            is_new_actor = True
+
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
             return self._json_error(500, "Actor creation failed")

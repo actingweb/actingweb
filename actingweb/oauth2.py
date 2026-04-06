@@ -277,9 +277,8 @@ class OAuth2Authenticator:
             "Accept": "application/json",
         }
 
-        # GitHub requires specific Accept header for JSON response
+        # GitHub requires User-Agent header
         if self.provider.name == "github":
-            headers["Accept"] = "application/json"
             headers["User-Agent"] = "ActingWeb-OAuth2-Client"
 
         try:

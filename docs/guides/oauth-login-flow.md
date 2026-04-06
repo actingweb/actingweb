@@ -343,6 +343,76 @@ app = (
 
 **Note:** Flow 2.3 demonstrates that MCP authorization flows with `trust_type` cannot fall back to email input forms because MCP clients are programmatic and cannot interact with web UIs. Users should ensure their OAuth provider (Google/GitHub) is configured to provide email addresses publicly.
 
+### Flow 2.4: Mobile App OAuth (Authorization Code Exchange)
+
+```
+1. Mobile app opens system browser to OAuth provider
+   ↓
+   User authenticates with Google/GitHub in system browser
+
+2. OAuth provider redirects to custom URL scheme
+   ↓
+   e.g. io.actingweb.myapp://callback?code=AUTH_CODE&state=...
+   ↓
+   Mobile OS routes deep link back to the app
+   ↓
+   App extracts authorization code from the URL
+
+3. App sends POST /oauth/spa/token
+   ↓
+   Body: {
+     "grant_type": "authorization_code",
+     "code": "AUTH_CODE",
+     "provider": "google-mobile",
+     "redirect_uri": "io.actingweb.myapp://callback",
+     "token_delivery": "json"
+   }
+   ↓
+   ActingWeb exchanges code with OAuth provider
+   ↓
+   Extract email from user info
+   ↓
+   Create actor (or lookup existing)
+   ↓
+   Generate ActingWeb session tokens
+   ↓
+   Return JSON: {
+     "success": true,
+     "actor_id": "abc123",
+     "email": "user@example.com",
+     "access_token": "...",
+     "refresh_token": "...",
+     "token_type": "Bearer",
+     "expires_in": 3600,
+     "expires_at": ...
+   }
+
+4. App stores tokens in secure storage
+   ↓
+   iOS: Keychain Services
+   Android: Android Keystore / EncryptedSharedPreferences
+   ↓
+   App uses access_token for subsequent API requests
+```
+
+**Google Mobile Flow:**
+- Provider variant: `google-mobile`
+- Custom URL scheme: configured in Google Cloud Console as an authorized redirect URI
+- Supports PKCE (recommended)
+- Refresh tokens available
+
+**GitHub Mobile Flow:**
+- Provider variant: `github-mobile`
+- Custom URL scheme: configured in GitHub OAuth App settings
+- No refresh tokens (GitHub limitation)
+- Token renewal requires re-authentication
+
+**Key Differences from Web/SPA Flows:**
+- No `/oauth/callback` round-trip -- the app receives the code directly via deep link
+- Uses `grant_type=authorization_code` on `/oauth/spa/token` instead of the callback endpoint
+- `redirect_uri` must match the custom URL scheme registered with the OAuth provider
+- Tokens stored in platform-secure storage, not browser memory or cookies
+
 ## Template Variables Reference
 
 ### Factory Template (aw-root-factory.html)

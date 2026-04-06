@@ -1,8 +1,13 @@
 # Implementation Plan: Mobile App OAuth2 Support
 
 **Date:** 2026-04-05
-**Status:** Planned
-**Branch:** TBD (library changes in actingweb, app changes in actingweb_mcp/mobile_apps)
+**Status:** Implemented (library changes)
+**Branch:** feature/mobile-oauth2-support
+
+## Update Log
+
+- **2026-04-06**: Generalized plan to support all OAuth providers on mobile (Google + GitHub), not just GitHub. Google standard OAuth2 works without the native SDK via authorization code flow per RFC 8252. Added documentation update phase (Change 6).
+- **2026-04-06**: Implementation complete (Changes 1-4, 6). Key deviation: `redirect_uri` override only reads from explicit `provider_config`, not from `config.oauth` (which has a different default path `/oauth` vs `/oauth/callback`). SPA handler's authorize method refactored to use `create_oauth2_authenticator` factory instead of separate `create_google_authenticator`/`create_github_authenticator`. Change 5 (app changes) is in a separate repo.
 
 ## Context
 
@@ -14,7 +19,7 @@ Per RFC 8252 (OAuth 2.0 for Native Apps), the standard flow is:
 
 ActingWeb already has `POST /oauth/spa/token` as a token endpoint, and it already dispatches on `grant_type`. The `authorization_code` grant type is stubbed out — implementing it completes the mobile flow without inventing new endpoints.
 
-Google Sign-In on mobile uses the native SDK (ID token flow) which is app-specific and doesn't require library changes. This plan covers the **authorization code flow** used by GitHub (and any future OAuth providers on mobile).
+This plan covers the **authorization code flow** for all OAuth providers on mobile (Google, GitHub, and any future providers). Google's standard OAuth2 authorization code flow works via system browser without requiring the native Google Sign-In SDK — this is the recommended approach per RFC 8252 and avoids app-specific native SDK dependencies.
 
 ## Problem Summary
 
@@ -70,9 +75,11 @@ This provides defense-in-depth: even if the provider's stored redirect_uri is wr
 
 **Files:** `actingweb/oauth2.py` lines 928-940
 
-The `create_oauth2_authenticator` factory needs to handle provider names like `github-mobile` using `GitHubOAuth2Provider`. Change the `elif` from exact match to prefix match:
+The `create_oauth2_authenticator` factory needs to handle provider names like `google-mobile` and `github-mobile` using their respective provider classes. Change the exact matches to prefix matches:
 
 ```python
+if provider_name == "google" or provider_name.startswith("google-"):
+    return OAuth2Authenticator(config, GoogleOAuth2Provider(config, provider_config=prov_cfg))
 elif provider_name == "github" or provider_name.startswith("github-"):
     return OAuth2Authenticator(config, GitHubOAuth2Provider(config, provider_config=prov_cfg))
 ```
@@ -134,31 +141,66 @@ This is the core change. Replace the stub with a full implementation that mirror
 
 ### 5. App changes (actingweb_mcp — separate commits)
 
-**`application.py`** — Register `github-mobile` provider (already done):
+**`application.py`** — Register mobile providers:
 ```python
+app.with_oauth(
+    provider="google-mobile",
+    client_id=google_mobile_client_id,
+    client_secret=google_mobile_client_secret,
+    redirect_uri="io.actingweb.memory://callback",
+    scope="openid email profile",
+)
 app.with_oauth(
     provider="github-mobile",
     client_id=gh_mobile_client_id,
     client_secret=gh_mobile_client_secret,
     redirect_uri="io.actingweb.memory://callback",
-    ...
+    scope="read:user user:email",
 )
 ```
 
 **`frontend/src/auth/MobileAuthProvider.ts`** — Add `redirect_uri` to token exchange request:
 ```typescript
+// Works for any provider: 'google-mobile', 'github-mobile', etc.
 body: JSON.stringify({
   grant_type: 'authorization_code',
   code,
-  provider: 'github-mobile',
+  provider: selectedProvider,  // 'google-mobile' or 'github-mobile'
   redirect_uri: 'io.actingweb.memory://callback',
   token_delivery: 'json',
 })
 ```
 
+### 6. Documentation updates (`docs/`)
+
+**Files:**
+
+**`docs/guides/authentication.rst`** — Add "Mobile App OAuth2" section after the existing OAuth2 Flow section:
+- Document provider variant naming convention (`google-mobile`, `github-mobile`)
+- Explain that mobile apps use the same authorization code flow via system browser (RFC 8252)
+- Show configuration example with `redirect_uri` for custom URL schemes
+- Reference the `/oauth/spa/token` endpoint with `grant_type=authorization_code`
+
+**`docs/guides/spa-authentication.rst`** — Add "Mobile App Authentication" section after the existing "Getting Started" section:
+- Document the `authorization_code` grant type on `POST /oauth/spa/token`
+- Add the request/response format for mobile token exchange
+- Explain differences from SPA flow (mobile catches code via deep link, exchanges directly at token endpoint vs. browser callback)
+- Add mobile-specific code example showing the full flow
+- Update the API Reference for `POST /oauth/spa/token` to document the `authorization_code` grant type alongside the existing `refresh_token` grant type
+
+**`docs/guides/oauth-login-flow.md`** — Add "Flow 2.4: Mobile App OAuth (Authorization Code Exchange)":
+- New flow diagram showing: App opens system browser → provider redirects to custom URL scheme → app catches code → `POST /oauth/spa/token` with `grant_type=authorization_code` → JSON response with tokens
+- Document both Google and GitHub mobile flows
+
+**`docs/reference/security.rst`** — Add "Mobile OAuth2" subsection under the existing OAuth2 section:
+- PKCE recommended for mobile even with client_secret (defense-in-depth)
+- Custom URL scheme security (only one app should register a given scheme)
+- BFF pattern: backend holds client_secret, mobile never sees it
+- Token storage guidance: iOS Keychain / Android Keystore
+- Note that `redirect_uri` validation happens at the OAuth provider level
+
 ## What Does NOT Change
 
-- Google native sign-in flow (`POST /api/auth/google-mobile`) — app-specific, not a library concern
 - Existing SPA web OAuth flow — the callback handler path is untouched
 - Token refresh flow (`grant_type=refresh_token`) — already works
 - Existing `with_oauth()` API — only behavior change is that `redirect_uri` kwarg now takes effect
@@ -175,19 +217,35 @@ body: JSON.stringify({
 ### Library tests
 - Unit test: `exchange_code_for_token` with explicit `redirect_uri` override
 - Unit test: `GoogleOAuth2Provider` and `GitHubOAuth2Provider` respect `redirect_uri` from provider_config
-- Unit test: `create_oauth2_authenticator` handles `github-mobile` provider name
-- Integration test: `POST /oauth/spa/token` with `grant_type=authorization_code` — mock the provider's token endpoint and userinfo endpoint, verify actor creation and token response
+- Unit test: `create_oauth2_authenticator` handles `google-mobile` and `github-mobile` provider names
+- Integration test: `POST /oauth/spa/token` with `grant_type=authorization_code` — mock the provider's token endpoint and userinfo endpoint, verify actor creation and token response (test with both Google and GitHub providers)
 
 ### App tests
-- Frontend unit test: `githubMobileLogin` sends correct provider and redirect_uri
-- Backend integration test: `github-mobile` provider registered and enabled
+- Frontend unit test: mobile login sends correct provider and redirect_uri for both `google-mobile` and `github-mobile`
+- Backend integration test: both `google-mobile` and `github-mobile` providers registered and enabled
 
 ## Verification
 
-- [ ] Existing `poetry run pytest` passes in actingweb library (no regressions)
+- [x] Existing `poetry run pytest` passes in actingweb library (1298 unit tests pass, 0 failures)
+- [x] `poetry run ruff check` clean in actingweb
+- [x] `poetry run pyright` clean in actingweb (0 errors, 0 warnings)
 - [ ] Existing `poetry run pytest` passes in actingweb_mcp
 - [ ] `npm --prefix frontend run test:run` passes
-- [ ] `poetry run ruff check . --fix` clean in both repos
-- [ ] `poetry run pyright` clean in both repos
+- [ ] Manual: Google OAuth works on iOS simulator via mobile flow
 - [ ] Manual: GitHub OAuth works on iOS simulator via mobile flow
 - [ ] Manual: Web OAuth flows unchanged (Google + GitHub)
+- [x] Documentation reviewed: all four docs files updated and consistent
+
+## Implementation Summary
+
+**Completed:** 2026-04-06
+**All library phases:** Complete (Changes 1-4, 6)
+**Test status:** 1298 unit tests passing, 16 new tests added
+
+### Deviations from Plan
+- **redirect_uri override**: Only reads from explicit `provider_config` dict, not from `config.oauth` which has a different default path (`/oauth` vs `/oauth/callback`). This avoids a regression for existing web app deployments.
+- **SPA authorize refactored**: Uses `create_oauth2_authenticator` factory instead of separate `create_google_authenticator`/`create_github_authenticator`. Added `_is_known_provider()` validation to reject unknown provider names.
+
+### Learnings
+- `config.oauth["redirect_uri"]` is set to `{proto}{fqdn}/oauth` (not `/oauth/callback`), so blindly using `oauth_config.get("redirect_uri")` would break existing web flows.
+- The `actor_module` import in `_handle_authorization_code` is local (inside the method body), so test mocking must target `actingweb.actor.Actor` not a module-level attribute.

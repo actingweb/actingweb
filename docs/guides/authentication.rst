@@ -1338,6 +1338,83 @@ Comparison: Email vs Provider ID Modes
 |                           | (enable=True)``         | (enable=False)``          |
 +---------------------------+-------------------------+---------------------------+
 
+Mobile App OAuth2
+=================
+
+ActingWeb supports OAuth2 authentication from native mobile apps (iOS and Android)
+following `RFC 8252 <https://datatracker.ietf.org/doc/html/rfc8252>`_ best practices.
+Mobile apps open the system browser for authentication, then receive the authorization
+code via a custom URL scheme deep link.
+
+Provider Variant Naming
+-----------------------
+
+Mobile apps use provider name variants with a ``-mobile`` suffix to distinguish their
+configuration from web-based providers. ActingWeb uses prefix matching, so ``google-mobile``
+resolves to the ``google`` provider type:
+
+- ``google-mobile`` -- Google OAuth2 for mobile apps
+- ``github-mobile`` -- GitHub OAuth2 for mobile apps
+
+This allows mobile-specific configuration (such as a different ``redirect_uri``) while
+reusing the same provider logic.
+
+Configuration
+-------------
+
+Configure mobile provider variants with ``redirect_uri`` set to a custom URL scheme:
+
+.. code-block:: python
+
+    app = (
+        ActingWebApp(...)
+        # Web provider
+        .with_oauth(
+            provider="google",
+            client_id="your-web-client-id",
+            client_secret="your-web-client-secret",
+            scope="openid email profile",
+        )
+        # Mobile provider variant
+        .with_oauth(
+            provider="google-mobile",
+            client_id="your-mobile-client-id",
+            client_secret="your-mobile-client-secret",
+            scope="openid email profile",
+            redirect_uri="io.actingweb.myapp://callback",
+        )
+    )
+
+The ``redirect_uri`` in provider config is used when exchanging authorization codes,
+overriding the default server callback URL.
+
+Mobile Authentication Flow
+--------------------------
+
+1. Mobile app opens system browser to the OAuth provider's authorization URL
+2. User authenticates in the browser
+3. Provider redirects to the custom URL scheme (e.g., ``io.actingweb.myapp://callback?code=...``)
+4. Mobile OS routes the deep link back to the app
+5. App extracts the authorization code and calls ``POST /oauth/spa/token``
+   with ``grant_type=authorization_code``
+6. ActingWeb exchanges the code, creates/looks up the actor, and returns tokens as JSON
+
+.. code-block:: text
+
+    Mobile App          System Browser        OAuth Provider        ActingWeb
+    ─────────┐         ──────────────┐       ──────────────┐      ──────────┐
+             │─open──────────────────│                      │               │
+             │                       │──auth request────────│               │
+             │                       │◄─login page──────────│               │
+             │                       │──user credentials───▷│               │
+             │◄─deep link (code)─────│◄─redirect to app─────│               │
+             │                       │                      │               │
+             │──POST /oauth/spa/token (grant_type=authorization_code)──────▷│
+             │◄──JSON { access_token, refresh_token, actor_id }────────────│
+
+See :doc:`spa-authentication` for the ``POST /oauth/spa/token`` request and
+response format for authorization code exchange.
+
 Future Enhancements
 ===================
 

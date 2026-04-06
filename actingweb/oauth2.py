@@ -60,6 +60,9 @@ class GoogleOAuth2Provider(OAuth2Provider):
         provider_config: dict[str, Any] | None = None,
     ):
         oauth_config = provider_config or config.oauth or {}
+        # Only use redirect_uri from explicit provider_config (e.g. mobile apps),
+        # not from config.oauth which has a different default path.
+        custom_redirect = provider_config.get("redirect_uri") if provider_config else ""
         google_config = {
             "client_id": oauth_config.get("client_id", ""),
             "client_secret": oauth_config.get("client_secret", ""),
@@ -68,7 +71,8 @@ class GoogleOAuth2Provider(OAuth2Provider):
             "userinfo_uri": "https://www.googleapis.com/oauth2/v2/userinfo",
             "revocation_uri": "https://oauth2.googleapis.com/revoke",
             "scope": "openid email profile",
-            "redirect_uri": f"{config.proto}{config.fqdn}/oauth/callback",
+            "redirect_uri": custom_redirect
+            or f"{config.proto}{config.fqdn}/oauth/callback",
         }
         super().__init__("google", google_config)
 
@@ -82,6 +86,7 @@ class GitHubOAuth2Provider(OAuth2Provider):
         provider_config: dict[str, Any] | None = None,
     ):
         oauth_config = provider_config or config.oauth or {}
+        custom_redirect = provider_config.get("redirect_uri") if provider_config else ""
         github_config = {
             "client_id": oauth_config.get("client_id", ""),
             "client_secret": oauth_config.get("client_secret", ""),
@@ -89,7 +94,8 @@ class GitHubOAuth2Provider(OAuth2Provider):
             "token_uri": "https://github.com/login/oauth/access_token",
             "userinfo_uri": "https://api.github.com/user",
             "scope": "user:email",
-            "redirect_uri": f"{config.proto}{config.fqdn}/oauth/callback",
+            "redirect_uri": custom_redirect
+            or f"{config.proto}{config.fqdn}/oauth/callback",
         }
         super().__init__("github", github_config)
 
@@ -232,7 +238,11 @@ class OAuth2Authenticator:
         return False
 
     def exchange_code_for_token(
-        self, code: str, state: str = "", code_verifier: str | None = None
+        self,
+        code: str,
+        state: str = "",
+        code_verifier: str | None = None,
+        redirect_uri: str | None = None,
     ) -> dict[str, Any] | None:  # pylint: disable=unused-argument
         """
         Exchange authorization code for access token using oauthlib.
@@ -241,6 +251,7 @@ class OAuth2Authenticator:
             code: Authorization code from OAuth2 provider
             state: State parameter from callback
             code_verifier: PKCE code verifier (required if PKCE was used in authorization)
+            redirect_uri: Override redirect_uri for the token exchange (e.g. for mobile apps)
 
         Returns:
             Token response from OAuth2 provider or None if failed
@@ -252,7 +263,7 @@ class OAuth2Authenticator:
         # Include code_verifier if PKCE was used
         prepare_kwargs: dict[str, Any] = {
             "code": code,
-            "redirect_uri": self.provider.redirect_uri,
+            "redirect_uri": redirect_uri or self.provider.redirect_uri,
             "client_id": self.provider.client_id,
             "client_secret": self.provider.client_secret,
         }
@@ -924,12 +935,12 @@ def create_oauth2_authenticator(
 
     prov_cfg = _get_provider_config(config, provider_name)
 
-    # Built-in provider support
-    if provider_name == "google":
+    # Built-in provider support (prefix match for variants like google-mobile, github-mobile)
+    if provider_name == "google" or provider_name.startswith("google-"):
         return OAuth2Authenticator(
             config, GoogleOAuth2Provider(config, provider_config=prov_cfg)
         )
-    elif provider_name == "github":
+    elif provider_name == "github" or provider_name.startswith("github-"):
         return OAuth2Authenticator(
             config, GitHubOAuth2Provider(config, provider_config=prov_cfg)
         )

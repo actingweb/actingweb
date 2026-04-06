@@ -608,6 +608,81 @@ ActingWeb implements refresh token rotation for enhanced security:
        }
    }
 
+Mobile App Authentication
+-------------------------
+
+Native mobile apps (iOS and Android) can authenticate using the ``authorization_code``
+grant type on ``POST /oauth/spa/token``. Unlike SPAs, mobile apps catch the authorization
+code via a custom URL scheme deep link rather than a browser callback page.
+
+**How It Differs from SPA Flow:**
+
+- Mobile apps open the system browser for OAuth (per RFC 8252)
+- The OAuth provider redirects to a custom URL scheme (e.g., ``io.actingweb.myapp://callback``)
+- The mobile OS routes the deep link back to the app with the authorization code
+- The app sends the code directly to ``POST /oauth/spa/token`` -- no ``/oauth/callback`` round-trip needed
+
+Authorization Code Exchange
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+After receiving the authorization code via deep link, the mobile app exchanges it for tokens:
+
+**Request:**
+
+.. code-block:: json
+
+   {
+       "grant_type": "authorization_code",
+       "code": "AUTH_CODE_FROM_PROVIDER",
+       "provider": "github-mobile",
+       "redirect_uri": "io.actingweb.myapp://callback",
+       "token_delivery": "json"
+   }
+
+**Parameters:**
+
+- ``grant_type``: Must be ``authorization_code``
+- ``code``: The authorization code received from the OAuth provider via deep link
+- ``provider``: The provider variant name (e.g., ``google-mobile``, ``github-mobile``)
+- ``redirect_uri``: The custom URL scheme used for the OAuth redirect
+- ``token_delivery``: Token delivery mode (``json`` recommended for mobile)
+
+**Response:**
+
+.. code-block:: json
+
+   {
+       "success": true,
+       "actor_id": "abc123",
+       "email": "user@example.com",
+       "access_token": "eyJhbGciOiJIUzI1NiIs...",
+       "refresh_token": "dGhpcyBpcyBhIHJlZnJlc2g...",
+       "token_type": "Bearer",
+       "expires_in": 3600,
+       "expires_at": 1699876543
+   }
+
+**Error Response:**
+
+.. code-block:: json
+
+   {
+       "success": false,
+       "error": "invalid_grant",
+       "message": "Authorization code exchange failed"
+   }
+
+Mobile Token Storage
+~~~~~~~~~~~~~~~~~~~~
+
+Unlike SPAs (which store tokens in memory), mobile apps should use platform-secure storage:
+
+- **iOS**: Keychain Services
+- **Android**: Android Keystore / EncryptedSharedPreferences
+
+Token refresh works identically to SPA flow using ``grant_type=refresh_token``
+on the same ``POST /oauth/spa/token`` endpoint.
+
 Session Management
 ------------------
 

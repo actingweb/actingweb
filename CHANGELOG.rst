@@ -5,6 +5,17 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b1: Apr 7, 2026
+-----------------------
+
+ADDED
+~~~~~
+
+- **Mobile app OAuth2 support**: Implement ``authorization_code`` grant type on ``POST /oauth/spa/token`` for native mobile apps to exchange OAuth codes received via deep link for ActingWeb SPA tokens (per RFC 8252)
+- **Provider name variants**: Support ``google-mobile``, ``github-mobile`` (and other ``-suffix`` variants) in ``create_oauth2_authenticator`` via prefix matching, allowing separate mobile provider configuration
+- **``redirect_uri`` override**: ``exchange_code_for_token()`` accepts an optional ``redirect_uri`` parameter; provider classes respect ``redirect_uri`` from explicit ``provider_config`` for custom URL schemes
+- **Provider validation**: Add ``_is_known_provider()`` validation in SPA authorize endpoint to reject unknown provider names
+
 v3.10.1: Apr 2, 2026
 ---------------------
 

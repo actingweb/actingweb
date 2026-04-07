@@ -50,6 +50,17 @@ GRACE_PERIOD_EXTENDED = 60  # Network delays or slow processing
 # Beyond GRACE_PERIOD_EXTENDED is considered potential token theft
 
 
+_KNOWN_PROVIDER_PREFIXES = ("google", "github")
+
+
+def _is_known_provider(name: str) -> bool:
+    """Check if a provider name is a known provider or variant (e.g. google-mobile)."""
+    return any(
+        name == prefix or name.startswith(f"{prefix}-")
+        for prefix in _KNOWN_PROVIDER_PREFIXES
+    )
+
+
 def generate_pkce_pair() -> tuple[str, str]:
     """
     Generate PKCE code verifier and challenge pair.
@@ -356,19 +367,15 @@ class OAuth2SPAHandler(BaseHandler):
                 400, f"Invalid token_delivery mode: {token_delivery}"
             )
 
+        # Validate provider name (must be a known provider or variant)
+        if not _is_known_provider(provider):
+            return self._json_error(400, f"Unknown OAuth provider: {provider}")
+
         # Get the appropriate authenticator
         try:
-            from ..oauth2 import (
-                create_github_authenticator,
-                create_google_authenticator,
-            )
+            from ..oauth2 import create_oauth2_authenticator
 
-            if provider == "google":
-                authenticator = create_google_authenticator(self.config)
-            elif provider == "github":
-                authenticator = create_github_authenticator(self.config)
-            else:
-                return self._json_error(400, f"Unknown OAuth provider: {provider}")
+            authenticator = create_oauth2_authenticator(self.config, provider)
 
             if not authenticator.is_enabled():
                 return self._json_error(
@@ -494,6 +501,11 @@ class OAuth2SPAHandler(BaseHandler):
 
         grant_type = params.get("grant_type")
         token_delivery = params.get("token_delivery", "json")
+
+        if token_delivery not in ["json", "cookie", "hybrid"]:
+            return self._json_error(
+                400, f"Invalid token_delivery mode: {token_delivery}"
+            )
 
         if grant_type == "refresh_token":
             return self._handle_refresh_token(params, token_delivery)
@@ -652,38 +664,204 @@ class OAuth2SPAHandler(BaseHandler):
     def _handle_authorization_code(
         self, params: dict[str, Any], token_delivery: str
     ) -> dict[str, Any]:
-        """Handle authorization code grant."""
+        """
+        Handle authorization code grant for mobile apps.
+
+        Mobile apps receive the authorization code directly via deep link
+        (custom URL scheme) and exchange it here for ActingWeb SPA tokens.
+
+        Request params:
+        - code: Authorization code from OAuth provider
+        - provider: Provider name (e.g. "google-mobile", "github-mobile")
+        - redirect_uri: The redirect_uri used in the authorization request
+        - code_verifier: PKCE code verifier (recommended for mobile apps per RFC 7636)
+        - token_delivery: "json", "cookie", or "hybrid"
+        """
         code = params.get("code")
+        provider = params.get("provider", "google")
+        redirect_uri = params.get("redirect_uri")
         code_verifier = params.get("code_verifier")
-        state = params.get("state")
 
         if not code:
             return self._json_error(400, "Missing authorization code")
 
-        # If code_verifier provided, verify PKCE
-        if code_verifier and state:
-            try:
-                state_data = json.loads(state)
-                pkce_session_id = state_data.get("pkce_session_id")
-                if pkce_session_id:
-                    from ..oauth_session import get_oauth2_session_manager
+        if not code_verifier:
+            logger.warning(
+                "Mobile OAuth authorization_code exchange without PKCE code_verifier. "
+                "PKCE is strongly recommended for native apps (RFC 7636)."
+            )
 
-                    session_manager = get_oauth2_session_manager(self.config)
-                    pkce_session = session_manager.get_session(pkce_session_id)
+        if not _is_known_provider(provider):
+            return self._json_error(400, f"Unknown OAuth provider: {provider}")
 
-                    if pkce_session:
-                        stored_verifier = pkce_session.get("pkce_verifier")
-                        if stored_verifier and stored_verifier != code_verifier:
-                            return self._json_error(400, "PKCE verification failed")
-            except Exception as e:
-                logger.warning(f"PKCE verification error: {e}")
+        # Create authenticator for the specified provider
+        try:
+            from ..oauth2 import create_oauth2_authenticator
 
-        # Delegate to callback handler logic
-        # For now, redirect to callback endpoint
-        return self._json_error(
-            400,
-            "Use /oauth/spa/callback for authorization code exchange after redirect",
+            authenticator = create_oauth2_authenticator(self.config, provider)
+
+            if not authenticator.is_enabled():
+                return self._json_error(
+                    400, f"OAuth provider {provider} is not enabled"
+                )
+        except Exception as e:
+            logger.error(f"Failed to create authenticator for {provider}: {e}")
+            return self._json_error(500, "OAuth configuration error")
+
+        # Exchange authorization code for tokens
+        token_data = authenticator.exchange_code_for_token(
+            code, code_verifier=code_verifier, redirect_uri=redirect_uri
         )
+        if not token_data or "access_token" not in token_data:
+            logger.error("Failed to exchange authorization code for access token")
+            return self._json_error(401, "Token exchange failed")
+
+        provider_access_token = token_data["access_token"]
+        provider_refresh_token = token_data.get("refresh_token")
+        provider_expires_in = token_data.get("expires_in", 3600)
+
+        # Validate token and get user info
+        user_info = authenticator.validate_token_and_get_user_info(
+            provider_access_token
+        )
+        if not user_info:
+            logger.error("Failed to validate token or extract user info")
+            return self._json_error(401, "Token validation failed")
+
+        # Extract identifier (email or provider ID)
+        require_email = bool(
+            self.config and getattr(self.config, "force_email_prop_as_creator", False)
+        )
+        identifier = authenticator.get_email_from_user_info(
+            user_info, provider_access_token, require_email=require_email
+        )
+
+        if not identifier:
+            if not require_email:
+                return self._json_error(
+                    401, "OAuth provider did not return user identifier"
+                )
+            return self._json_error(
+                401,
+                "Email required but not provided by OAuth provider. "
+                f"Configure your {authenticator.provider.name} account to make email public.",
+            )
+
+        # Lookup or create actor
+        from .. import actor as actor_module
+
+        existing_check = actor_module.Actor(config=self.config)
+        actor_exists = existing_check.get_from_creator(identifier)
+
+        if actor_exists:
+            # Use the already-fetched actor instead of doing another DB lookup
+            actor_instance = existing_check
+            is_new_actor = False
+        else:
+            actor_instance = authenticator.lookup_or_create_actor_by_identifier(
+                identifier, user_info=user_info
+            )
+            is_new_actor = True
+
+        if not actor_instance:
+            logger.error(f"Failed to lookup or create actor for {identifier}")
+            return self._json_error(500, "Actor creation failed")
+
+        # Store OAuth tokens in actor properties
+        if actor_instance.store:
+            actor_instance.store.oauth_token = provider_access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + provider_expires_in)
+                if provider_expires_in
+                else None
+            )
+            if provider_refresh_token:
+                actor_instance.store.oauth_refresh_token = provider_refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+
+        # Execute actor_created lifecycle hook for new actors
+        if is_new_actor and self.hooks:
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
+                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for actor_created: {e}")
+
+        # Execute OAuth success lifecycle hook
+        oauth_valid = True
+        if self.hooks:
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
+                result = self.hooks.execute_lifecycle_hooks(
+                    "oauth_success",
+                    actor_interface,
+                    email=identifier,
+                    access_token=provider_access_token,
+                    token_data=token_data,
+                    user_info=user_info,
+                )
+                oauth_valid = bool(result) if result is not None else True
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for oauth_success: {e}")
+                oauth_valid = False
+
+        if not oauth_valid:
+            logger.warning(
+                f"OAuth success hook rejected authentication for {identifier}"
+            )
+            return self._json_error(403, "Authentication rejected")
+
+        # Generate ActingWeb SPA tokens
+        actor_id = actor_instance.id or ""
+        spa_access_token = self._generate_actingweb_token(actor_id, identifier)
+
+        from ..oauth_session import get_oauth2_session_manager
+
+        session_manager = get_oauth2_session_manager(self.config)
+        spa_refresh_token = session_manager.create_refresh_token(actor_id, identifier)
+
+        expires_in = 3600  # 1 hour for access token
+        refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
+
+        response_data: dict[str, Any] = {
+            "success": True,
+            "actor_id": actor_id,
+            "email": identifier,
+            "expires_in": expires_in,
+            "expires_at": int(time.time()) + expires_in,
+        }
+
+        if token_delivery == "json":
+            response_data["access_token"] = spa_access_token
+            response_data["refresh_token"] = spa_refresh_token
+            response_data["token_type"] = "Bearer"
+            response_data["refresh_token_expires_in"] = refresh_expires_in
+        elif token_delivery == "cookie":
+            self._set_token_cookies(
+                spa_access_token, spa_refresh_token, expires_in, httponly=True
+            )
+            response_data["token_delivery"] = "cookie"
+        elif token_delivery == "hybrid":
+            response_data["access_token"] = spa_access_token
+            response_data["token_type"] = "Bearer"
+            self._set_refresh_token_cookie(spa_refresh_token, httponly=True)
+            response_data["token_delivery"] = "hybrid"
+
+        logger.info(
+            f"Mobile OAuth authorization_code exchange successful for {identifier} "
+            f"via {provider}"
+        )
+        return response_data
 
     def _handle_passphrase_exchange(
         self, params: dict[str, Any], token_delivery: str

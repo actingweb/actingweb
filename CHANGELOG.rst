@@ -5,6 +5,15 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b2: May 1, 2026
+-----------------------
+
+ADDED
+~~~~~
+
+- **MCP tool per-actor visibility**: ``@mcp_tool`` accepts a ``visibility_predicate(actor) -> bool`` to omit tools from ``tools/list`` for actors that should not see them (fail-closed on predicate errors)
+- **MCP tool per-actor descriptions**: ``@mcp_tool`` accepts a ``description_predicate(actor) -> str | None`` to override the tool description per actor, taking precedence over ``client_descriptions`` and the static ``description`` (useful for keeping feature-flagged terminology out of descriptions for actors without the feature)
+
 v3.10.2b1: Apr 7, 2026
 -----------------------
 

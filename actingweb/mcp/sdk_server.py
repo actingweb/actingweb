@@ -137,6 +137,23 @@ class ActingWebMCPServer:
                             if metadata and metadata.get("type") == "tool":
                                 tool_name = metadata.get("name", action_name)
 
+                                # Filter by visibility_predicate (per-actor gating)
+                                visibility_predicate = metadata.get(
+                                    "visibility_predicate"
+                                )
+                                if visibility_predicate is not None:
+                                    try:
+                                        if not visibility_predicate(self.actor):
+                                            logger.debug(
+                                                f"Tool '{tool_name}' filtered out by visibility_predicate for actor {self.actor_id}"
+                                            )
+                                            continue
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"visibility_predicate for tool '{tool_name}' raised {e}; treating as not visible (fail-closed)"
+                                        )
+                                        continue
+
                                 # Check permission for this tool
                                 if peer_id and evaluator:
                                     permission_result = evaluator.evaluate_permission(
@@ -151,12 +168,33 @@ class ActingWebMCPServer:
                                         )
                                         continue
 
+                                # Resolve description: per-actor predicate wins
+                                # over static base description (keeps
+                                # feature-flagged terminology out of descriptions
+                                # for actors without the feature).
+                                description = None
+                                description_predicate = metadata.get(
+                                    "description_predicate"
+                                )
+                                if description_predicate is not None:
+                                    try:
+                                        override = description_predicate(self.actor)
+                                        if override is not None:
+                                            description = override
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"description_predicate for tool '{tool_name}' raised {e}; falling back to static description"
+                                        )
+                                if description is None:
+                                    description = metadata.get(
+                                        "description",
+                                        f"Execute {action_name} action",
+                                    )
+
                                 # Build tool with optional fields
                                 tool_kwargs = {
                                     "name": tool_name,
-                                    "description": metadata.get(
-                                        "description", f"Execute {action_name} action"
-                                    ),
+                                    "description": description,
                                     "inputSchema": metadata.get(
                                         "input_schema",
                                         {

@@ -20,6 +20,8 @@ def mcp_tool(
     title: str | None = None,
     output_schema: dict[str, Any] | None = None,
     annotations: dict[str, Any] | None = None,
+    visibility_predicate: Callable[[Any], bool] | None = None,
+    description_predicate: Callable[[Any], str | None] | None = None,
 ) -> Callable[..., Any]:
     """
     Decorator to expose an ActingWeb action as an MCP tool.
@@ -43,6 +45,19 @@ def mcp_tool(
                         "idempotentHint": False,  # Repeated calls have different effects
                         "openWorldHint": False    # Tool doesn't interact with outside world
                     }
+        visibility_predicate: Optional callable that takes the resolved ActorInterface
+                    for the request and returns True if the tool should appear in
+                    tools/list for that actor, False to omit it. Tools omitted from
+                    listing can still be called by name; gated tools should also
+                    enforce access at call time. Predicate exceptions are logged
+                    and treated as False (fail-closed).
+        description_predicate: Optional callable that takes the resolved ActorInterface
+                    for the request and returns a per-actor description override (or
+                    None to fall back to the static ``description`` / ``client_descriptions``).
+                    Useful for feature-flagged tools whose description should mention
+                    the feature only to actors who have it enabled, avoiding
+                    information leakage to actors without the feature. Predicate
+                    exceptions are logged and treated as None (fall back to default).
 
     Example:
         @action_hook("delete_note")
@@ -73,6 +88,8 @@ def mcp_tool(
             "title": title,
             "output_schema": output_schema,
             "annotations": annotations,
+            "visibility_predicate": visibility_predicate,
+            "description_predicate": description_predicate,
         }
         return func
 

@@ -408,6 +408,21 @@ class MCPHandler(BaseHandler):
                             )
                             continue
 
+                    # Filter by visibility_predicate (per-actor gating)
+                    visibility_predicate = metadata.get("visibility_predicate")
+                    if visibility_predicate is not None:
+                        try:
+                            if not visibility_predicate(actor):
+                                logger.debug(
+                                    f"Tool '{tool_name}' filtered out by visibility_predicate for actor {getattr(actor, 'id', '?')}"
+                                )
+                                continue
+                        except Exception as e:
+                            logger.warning(
+                                f"visibility_predicate for tool '{tool_name}' raised {e}; treating as not visible (fail-closed)"
+                            )
+                            continue
+
                     # Filter by permissions when we have context
                     if peer_id and evaluator:
                         try:
@@ -429,15 +444,33 @@ class MCPHandler(BaseHandler):
                             )
                             # Fail-open on evaluation errors to avoid hard lockouts
 
-                    # Use client-specific description if available
-                    client_descriptions = metadata.get("client_descriptions", {})
-                    if client_type and client_type in client_descriptions:
-                        description = client_descriptions[client_type]
-                    else:
-                        description = (
-                            metadata.get("description")
-                            or f"Execute {action_name} action"
-                        )
+                    # Description precedence (most specific wins):
+                    #   1. description_predicate(actor) — per-actor override.
+                    #      Used by feature-flagged tools to keep feature names out
+                    #      of descriptions for actors without the feature.
+                    #   2. client_descriptions[client_type] — per-client override.
+                    #   3. metadata["description"] — static base description.
+                    description = None
+                    description_predicate = metadata.get("description_predicate")
+                    if description_predicate is not None:
+                        try:
+                            override = description_predicate(actor)
+                            if override is not None:
+                                description = override
+                        except Exception as e:
+                            logger.warning(
+                                f"description_predicate for tool '{tool_name}' raised {e}; falling back to static description"
+                            )
+
+                    if description is None:
+                        client_descriptions = metadata.get("client_descriptions", {})
+                        if client_type and client_type in client_descriptions:
+                            description = client_descriptions[client_type]
+                        else:
+                            description = (
+                                metadata.get("description")
+                                or f"Execute {action_name} action"
+                            )
 
                     tool_def = {
                         "name": tool_name,

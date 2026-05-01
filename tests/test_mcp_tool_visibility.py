@@ -125,5 +125,115 @@ class TestVisibilityPredicateFiltering(unittest.TestCase):
         self.assertIs(seen[0], self.actor)
 
 
+def _make_hooks_with_description_predicates(predicates: dict) -> HookRegistry:
+    """Build hooks where each tool name maps to its description predicate."""
+    hooks = HookRegistry()
+
+    for tool_name, predicate in predicates.items():
+
+        def make_hook(name=tool_name, pred=predicate):
+            @mcp_tool(description=f"static {name}", description_predicate=pred)
+            def hook(actor, action_name, data):
+                return {"name": name}
+
+            return hook
+
+        hooks.register_action_hook(tool_name, make_hook())
+
+    return hooks
+
+
+class TestDescriptionPredicate(unittest.TestCase):
+    def setUp(self) -> None:
+        self.actor = FakeActor()
+        self.handler = MCPHandler()
+
+    def _list_tools(self) -> list:
+        with patch.object(
+            MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
+        ), patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc:
+            mock_mcp_context = Mock()
+            mock_mcp_context.peer_id = None
+            mock_rc.return_value.get_mcp_context.return_value = mock_mcp_context
+            resp = self.handler.post(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "method": "tools/list",
+                    "params": {},
+                }
+            )
+        return resp.get("result", {}).get("tools", [])
+
+    def _description_for(self, name: str) -> str | None:
+        for t in self._list_tools():
+            if t.get("name") == name:
+                return t.get("description")
+        return None
+
+    def test_predicate_string_overrides_description(self) -> None:
+        self.handler.hooks = _make_hooks_with_description_predicates(
+            {"t": lambda actor: "per-actor description"}
+        )
+        self.assertEqual(self._description_for("t"), "per-actor description")
+
+    def test_predicate_none_falls_back_to_static(self) -> None:
+        self.handler.hooks = _make_hooks_with_description_predicates(
+            {"t": lambda actor: None}
+        )
+        self.assertEqual(self._description_for("t"), "static t")
+
+    def test_predicate_exception_falls_back_to_static(self) -> None:
+        def boom(actor):
+            raise RuntimeError("kaboom")
+
+        self.handler.hooks = _make_hooks_with_description_predicates({"t": boom})
+        self.assertEqual(self._description_for("t"), "static t")
+
+    def test_no_predicate_uses_static_description(self) -> None:
+        hooks = HookRegistry()
+
+        @mcp_tool(description="legacy desc")
+        def legacy(actor, action_name, data):
+            return {}
+
+        hooks.register_action_hook("legacy_tool", legacy)
+        self.handler.hooks = hooks
+        self.assertEqual(self._description_for("legacy_tool"), "legacy desc")
+
+    def test_predicate_takes_precedence_over_client_descriptions(self) -> None:
+        hooks = HookRegistry()
+
+        @mcp_tool(
+            description="static",
+            client_descriptions={"claude": "claude-specific"},
+            description_predicate=lambda actor: "predicate wins",
+        )
+        def hook(actor, action_name, data):
+            return {}
+
+        hooks.register_action_hook("t", hook)
+        self.handler.hooks = hooks
+        # Even with a matching client_type, the predicate should win.
+        with patch.object(
+            MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
+        ), patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc, patch.object(
+            self.handler, "_get_client_type", return_value="claude", create=True
+        ):
+            mock_mcp_context = Mock()
+            mock_mcp_context.peer_id = None
+            mock_rc.return_value.get_mcp_context.return_value = mock_mcp_context
+            resp = self.handler.post(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "method": "tools/list",
+                    "params": {},
+                }
+            )
+        tools = resp.get("result", {}).get("tools", [])
+        self.assertEqual(tools[0]["description"], "predicate wins")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -186,6 +186,12 @@ class ActingWebMCPServer:
                                             f"description_predicate for tool '{tool_name}' raised {e}; falling back to static description"
                                         )
                                 if description is None:
+                                    # Note: client_descriptions[client_type] is
+                                    # honored by the legacy MCPHandler path but
+                                    # not here — the SDK server has no
+                                    # client_type detection. Adding it requires
+                                    # plumbing client identity through the MCP
+                                    # SDK session.
                                     description = metadata.get(
                                         "description",
                                         f"Execute {action_name} action",

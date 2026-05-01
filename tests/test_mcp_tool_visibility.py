@@ -47,8 +47,8 @@ def _make_hooks_with_predicates(predicates: dict) -> HookRegistry:
 
     for tool_name, predicate in predicates.items():
 
-        def make_hook(name=tool_name):
-            @mcp_tool(description=f"tool {name}", visibility_predicate=predicate)
+        def make_hook(name=tool_name, pred=predicate):
+            @mcp_tool(description=f"tool {name}", visibility_predicate=pred)
             def hook(actor, action_name, data):
                 return {"name": name}
 

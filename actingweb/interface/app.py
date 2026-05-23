@@ -67,6 +67,7 @@ class ActingWebApp:
         self._unique_creator = False
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
+        self._mcp_server_name = "actingweb"
         self._sync_subscription_callbacks = False  # Async by default
         self._thread_pool_workers = (
             10  # Default thread pool size for FastAPI integration
@@ -352,9 +353,22 @@ class ActingWebApp:
         self._apply_runtime_changes_to_config()
         return self
 
-    def with_mcp(self, enable: bool = True) -> "ActingWebApp":
-        """Enable or disable MCP (Model Context Protocol) functionality."""
+    def with_mcp(
+        self, enable: bool = True, server_name: str = "actingweb"
+    ) -> "ActingWebApp":
+        """Enable or disable MCP (Model Context Protocol) functionality.
+
+        Args:
+            enable: If True, enable MCP support.
+            server_name: Name announced in the MCP initialise handshake.
+                Some clients use this as the default tool prefix
+                (``emm:search`` vs ``actingweb:search``). Defaults to
+                ``"actingweb"``. The first ``with_mcp()`` call sets the
+                process-wide singleton name; subsequent re-configuration
+                does not rename existing per-actor servers.
+        """
         self._enable_mcp = enable
+        self._mcp_server_name = server_name
         # Note: aw_supported is computed in Config.__init__. We keep this minimal
         # to avoid touching unrelated features; OAuth fix does not require recompute.
         return self
@@ -873,6 +887,7 @@ class ActingWebApp:
                 bot=self._bot_config or {},
                 oauth=self._get_default_oauth_config(),
                 mcp=self._enable_mcp,
+                mcp_server_name=self._mcp_server_name,
                 indexed_properties=self._indexed_properties,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
                 use_lookup_table=self._use_lookup_table,

@@ -1224,6 +1224,11 @@ MCP Capability
 
 - Toggle with ``ActingWebApp.with_mcp(enable=True|False)``.
 - When enabled, ``mcp`` appears in supported options returned by meta discovery.
+- Set the server name announced in the MCP initialise handshake with
+  ``with_mcp(server_name="emm")``. Some clients use this as the default tool
+  prefix (``emm:search`` vs ``actingweb:search``). Defaults to ``"actingweb"``.
+  The first call sets the process-wide name; later changes won't rename
+  already-created per-actor servers.
 
 Notes
 -----

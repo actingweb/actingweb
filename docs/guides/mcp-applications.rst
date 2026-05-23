@@ -89,7 +89,12 @@ Basic MCP Application
     ).with_oauth(
         client_id=os.getenv("OAUTH_CLIENT_ID"),
         client_secret=os.getenv("OAUTH_CLIENT_SECRET")
-    ).with_web_ui()
+    ).with_web_ui().with_mcp(
+        # Name announced in the MCP initialise handshake. Some clients use
+        # this as the default tool prefix (e.g. "myapp:search"). Defaults to
+        # "actingweb"; set it once at startup.
+        server_name="myapp",
+    )
 
     # Register hooks
     register_property_hooks(aw_app)

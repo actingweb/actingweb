@@ -318,6 +318,8 @@ class Config:
         if kwargs.get("mcp", False):
             base_supported.append("mcp")
 
+        self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")
+
         self.aw_supported = ",".join(base_supported)
 
         # These are the supported formats

@@ -84,7 +84,24 @@ class ActingWebMCPServer:
     exposing actor functionality as MCP tools, resources, and prompts.
     """
 
-    def __init__(self, actor_id: str, hooks: HookRegistry, actor: ActorInterface):
+    def __init__(
+        self,
+        actor_id: str,
+        hooks: HookRegistry,
+        actor: ActorInterface,
+        server_name: str = "actingweb",
+    ):
+        """
+        Args:
+            actor_id: Unique identifier for the actor (per-OAuth-identity).
+            hooks: The hook registry containing registered hooks.
+            actor: The actor instance.
+            server_name: The MCP server name announced in the initialise
+                handshake. Some clients use it as the tool-prefix default
+                ("emm:search" vs "actingweb:search"). The actor_id is
+                intentionally NOT folded in — each MCP connection is
+                already per-actor, so the name doesn't need disambiguation.
+        """
         if not MCP_AVAILABLE:
             raise ImportError(
                 "Official MCP SDK not available. Install with: pip install mcp"
@@ -93,7 +110,8 @@ class ActingWebMCPServer:
         self.actor_id = actor_id
         self.hooks = hooks
         self.actor = actor
-        self.server = Server(f"actingweb-{actor_id}")
+        self.server_name = server_name
+        self.server = Server(server_name)
 
         # Set up MCP handlers
         self._setup_handlers()
@@ -620,8 +638,9 @@ class MCPServerManager:
     ensuring efficient resource usage and proper isolation between actors.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, server_name: str = "actingweb") -> None:
         self._servers: dict[str, ActingWebMCPServer] = {}
+        self._server_name = server_name
 
     def get_server(
         self, actor_id: str, hook_registry: HookRegistry, actor: ActorInterface
@@ -638,7 +657,9 @@ class MCPServerManager:
             ActingWebMCPServer instance for the actor
         """
         if actor_id not in self._servers:
-            self._servers[actor_id] = ActingWebMCPServer(actor_id, hook_registry, actor)
+            self._servers[actor_id] = ActingWebMCPServer(
+                actor_id, hook_registry, actor, server_name=self._server_name,
+            )
             logger.debug(f"Created MCP server for actor {actor_id}")
 
         return self._servers[actor_id]
@@ -658,11 +679,27 @@ class MCPServerManager:
 _server_manager: MCPServerManager | None = None
 
 
-def get_server_manager() -> MCPServerManager:
-    """Get or create the global MCP server manager instance."""
+def get_server_manager(server_name: str = "actingweb") -> MCPServerManager:
+    """Get or create the global MCP server manager instance.
+
+    On first call ``server_name`` sets the announced server name for
+    every per-actor MCP server the manager creates. Subsequent calls
+    return the same singleton — passing a different name later won't
+    rename existing servers. Apps embedding ActingWeb call this once
+    at startup with their canonical name (e.g. ``"emm"``).
+    """
     global _server_manager
     if _server_manager is None:
-        _server_manager = MCPServerManager()
+        _server_manager = MCPServerManager(server_name=server_name)
+    elif server_name != _server_manager._server_name:
+        logger.warning(
+            "get_server_manager() called with server_name=%r but the singleton "
+            "was already created with server_name=%r — keeping the existing name. "
+            "Configure the name on the first call (e.g. via ActingWebApp.with_mcp"
+            "(server_name=...)) before any MCP request is handled.",
+            server_name,
+            _server_manager._server_name,
+        )
     return _server_manager
 
 

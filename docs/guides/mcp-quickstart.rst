@@ -40,6 +40,10 @@ Minimal App
            fqdn=os.getenv("APP_HOST_FQDN", "localhost:5000"),
        )
        .with_web_ui(True)
+       # MCP is on by default. Optionally set the server name announced in
+       # the initialise handshake — some clients use this as the default
+       # tool prefix (e.g. "myapp:create_note").
+       .with_mcp(server_name="myapp")
        # Configure OAuth2 for real auth in production (example only)
        # .with_oauth(client_id=os.getenv("OAUTH_CLIENT_ID"), client_secret=os.getenv("OAUTH_CLIENT_SECRET"))
    )

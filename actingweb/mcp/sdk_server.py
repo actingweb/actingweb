@@ -691,6 +691,15 @@ def get_server_manager(server_name: str = "actingweb") -> MCPServerManager:
     global _server_manager
     if _server_manager is None:
         _server_manager = MCPServerManager(server_name=server_name)
+    elif server_name != _server_manager._server_name:
+        logger.warning(
+            "get_server_manager() called with server_name=%r but the singleton "
+            "was already created with server_name=%r — keeping the existing name. "
+            "Configure the name on the first call (e.g. via ActingWebApp.with_mcp"
+            "(server_name=...)) before any MCP request is handled.",
+            server_name,
+            _server_manager._server_name,
+        )
     return _server_manager
 
 

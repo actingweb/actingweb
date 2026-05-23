@@ -68,7 +68,9 @@ class MCPHandler(BaseHandler):
         hooks: HookRegistry | None = None,
     ) -> None:
         super().__init__(webobj, config, hooks)
-        self.server_manager = get_server_manager()
+        self.server_manager = get_server_manager(
+            server_name=getattr(config, "mcp_server_name", "actingweb")
+        )
 
     def _cleanup_expired_cache_entries(self) -> None:
         """Remove expired entries from all caches."""

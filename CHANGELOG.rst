@@ -11,7 +11,8 @@ v3.10.2b3: May 23, 2026
 ADDED
 ~~~~~
 
-- **Configurable MCP server name**: ``get_server_manager()``, ``MCPServerManager`` and ``ActingWebMCPServer`` accept a ``server_name`` parameter so embedding apps can announce a canonical name (e.g. ``"emm"``) in the MCP initialise handshake. Some clients use this as the default tool prefix (``emm:search`` vs ``actingweb:search``).
+- **Configurable MCP server name via the fluent API**: ``ActingWebApp.with_mcp(server_name="myapp")`` sets the name announced in the MCP initialise handshake. Some clients use this as the default tool prefix (``myapp:search`` vs ``actingweb:search``). The underlying ``get_server_manager()``, ``MCPServerManager`` and ``ActingWebMCPServer`` also accept a ``server_name`` parameter for direct use.
+- **Singleton conflict warning**: ``get_server_manager()`` now logs a warning when called with a ``server_name`` that differs from the existing singleton's name, since the late name is silently ignored.
 
 CHANGED
 ~~~~~~~

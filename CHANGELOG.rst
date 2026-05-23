@@ -5,6 +5,19 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b3: May 23, 2026
+------------------------
+
+ADDED
+~~~~~
+
+- **Configurable MCP server name**: ``get_server_manager()``, ``MCPServerManager`` and ``ActingWebMCPServer`` accept a ``server_name`` parameter so embedding apps can announce a canonical name (e.g. ``"emm"``) in the MCP initialise handshake. Some clients use this as the default tool prefix (``emm:search`` vs ``actingweb:search``).
+
+CHANGED
+~~~~~~~
+
+- **MCP server name no longer includes actor_id**: The announced MCP server name defaults to ``"actingweb"`` instead of ``"actingweb-{actor_id}"``. Each MCP connection is already per-actor, so disambiguation in the name was unnecessary and made client-side tool prefixes noisy.
+
 v3.10.2b2: May 1, 2026
 -----------------------
 

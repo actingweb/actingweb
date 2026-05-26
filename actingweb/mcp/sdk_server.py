@@ -712,7 +712,8 @@ def get_server_manager(
         _server_manager = MCPServerManager(
             server_name=server_name, instructions=instructions
         )
-    elif server_name != _server_manager._server_name:
+        return _server_manager
+    if server_name != _server_manager._server_name:
         logger.warning(
             "get_server_manager() called with server_name=%r but the singleton "
             "was already created with server_name=%r — keeping the existing name. "
@@ -720,6 +721,16 @@ def get_server_manager(
             "(server_name=...)) before any MCP request is handled.",
             server_name,
             _server_manager._server_name,
+        )
+    if instructions is not None and instructions != _server_manager._instructions:
+        logger.warning(
+            "get_server_manager() called with instructions=%r but the singleton "
+            "was already created with instructions=%r — keeping the existing "
+            "instructions. Configure them on the first call (e.g. via "
+            "ActingWebApp.with_mcp(instructions=...)) before any MCP request is "
+            "handled.",
+            instructions,
+            _server_manager._instructions,
         )
     return _server_manager
 

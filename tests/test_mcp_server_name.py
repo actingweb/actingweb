@@ -132,6 +132,26 @@ class TestMCPInstructionsPropagation(unittest.TestCase):
         manager = get_server_manager(server_name="emm", instructions="Hello LLM")
         self.assertEqual(manager._instructions, "Hello LLM")
 
+    def test_get_server_manager_singleton_warns_on_instructions_conflict(self) -> None:
+        get_server_manager(server_name="emm", instructions="Hello LLM")
+        with patch.object(sdk_server.logger, "warning") as mock_warn:
+            again = get_server_manager(server_name="emm", instructions="Goodbye LLM")
+            self.assertTrue(mock_warn.called)
+            # The original instructions are kept; the late value is ignored.
+            self.assertEqual(again._instructions, "Hello LLM")
+
+    def test_get_server_manager_singleton_silent_when_instructions_omitted(self) -> None:
+        get_server_manager(server_name="emm", instructions="Hello LLM")
+        with patch.object(sdk_server.logger, "warning") as mock_warn:
+            get_server_manager(server_name="emm")
+            mock_warn.assert_not_called()
+
+    def test_get_server_manager_singleton_silent_when_instructions_match(self) -> None:
+        get_server_manager(server_name="emm", instructions="Hello LLM")
+        with patch.object(sdk_server.logger, "warning") as mock_warn:
+            get_server_manager(server_name="emm", instructions="Hello LLM")
+            mock_warn.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

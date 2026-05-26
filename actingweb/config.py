@@ -319,6 +319,7 @@ class Config:
             base_supported.append("mcp")
 
         self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")
+        self.mcp_instructions: str | None = kwargs.get("mcp_instructions", None)
 
         self.aw_supported = ",".join(base_supported)
 

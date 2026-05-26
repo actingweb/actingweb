@@ -80,5 +80,78 @@ class TestMCPServerNamePropagation(unittest.TestCase):
             mock_warn.assert_not_called()
 
 
+class TestMCPInstructionsPropagation(unittest.TestCase):
+    """Plumbing for the MCP protocol `InitializeResult.instructions` field."""
+
+    def setUp(self) -> None:
+        sdk_server._server_manager = None
+
+    def tearDown(self) -> None:
+        sdk_server._server_manager = None
+
+    def test_default_instructions_is_none(self) -> None:
+        manager = MCPServerManager()
+        self.assertIsNone(manager._instructions)
+
+    def test_instructions_stored_on_manager(self) -> None:
+        manager = MCPServerManager(server_name="emm", instructions="Call how_to_use()")
+        self.assertEqual(manager._instructions, "Call how_to_use()")
+
+    def test_actingweb_server_passes_instructions_to_underlying_mcp_server(
+        self,
+    ) -> None:
+        actor = Mock()
+        server = ActingWebMCPServer(
+            actor_id="actor1",
+            hooks=HookRegistry(),
+            actor=actor,
+            server_name="emm",
+            instructions="Hello LLM",
+        )
+        self.assertEqual(server.instructions, "Hello LLM")
+        # The underlying mcp.Server exposes instructions on the same attribute
+        self.assertEqual(server.server.instructions, "Hello LLM")
+
+    def test_actingweb_server_default_instructions_is_none(self) -> None:
+        actor = Mock()
+        server = ActingWebMCPServer(
+            actor_id="actor1", hooks=HookRegistry(), actor=actor
+        )
+        self.assertIsNone(server.instructions)
+        self.assertIsNone(server.server.instructions)
+
+    def test_manager_propagates_instructions_to_per_actor_servers(self) -> None:
+        manager = MCPServerManager(server_name="emm", instructions="Hello LLM")
+        hooks = HookRegistry()
+        actor = Mock()
+        server = manager.get_server("actor1", hooks, actor)
+        self.assertEqual(server.instructions, "Hello LLM")
+        self.assertEqual(server.server.instructions, "Hello LLM")
+
+    def test_get_server_manager_first_call_sets_instructions(self) -> None:
+        manager = get_server_manager(server_name="emm", instructions="Hello LLM")
+        self.assertEqual(manager._instructions, "Hello LLM")
+
+    def test_get_server_manager_singleton_warns_on_instructions_conflict(self) -> None:
+        get_server_manager(server_name="emm", instructions="Hello LLM")
+        with patch.object(sdk_server.logger, "warning") as mock_warn:
+            again = get_server_manager(server_name="emm", instructions="Goodbye LLM")
+            self.assertTrue(mock_warn.called)
+            # The original instructions are kept; the late value is ignored.
+            self.assertEqual(again._instructions, "Hello LLM")
+
+    def test_get_server_manager_singleton_silent_when_instructions_omitted(self) -> None:
+        get_server_manager(server_name="emm", instructions="Hello LLM")
+        with patch.object(sdk_server.logger, "warning") as mock_warn:
+            get_server_manager(server_name="emm")
+            mock_warn.assert_not_called()
+
+    def test_get_server_manager_singleton_silent_when_instructions_match(self) -> None:
+        get_server_manager(server_name="emm", instructions="Hello LLM")
+        with patch.object(sdk_server.logger, "warning") as mock_warn:
+            get_server_manager(server_name="emm", instructions="Hello LLM")
+            mock_warn.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

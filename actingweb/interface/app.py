@@ -68,6 +68,7 @@ class ActingWebApp:
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
         self._mcp_server_name = "actingweb"
+        self._mcp_instructions: str | None = None
         self._sync_subscription_callbacks = False  # Async by default
         self._thread_pool_workers = (
             10  # Default thread pool size for FastAPI integration
@@ -354,7 +355,10 @@ class ActingWebApp:
         return self
 
     def with_mcp(
-        self, enable: bool = True, server_name: str = "actingweb"
+        self,
+        enable: bool = True,
+        server_name: str = "actingweb",
+        instructions: str | None = None,
     ) -> "ActingWebApp":
         """Enable or disable MCP (Model Context Protocol) functionality.
 
@@ -366,9 +370,16 @@ class ActingWebApp:
                 ``"actingweb"``. The first ``with_mcp()`` call sets the
                 process-wide singleton name; subsequent re-configuration
                 does not rename existing per-actor servers.
+            instructions: Optional server-level orientation string
+                surfaced on the MCP ``InitializeResult.instructions``
+                field per protocol. Clients display it to the LLM on
+                initial connection. Use it to point new LLMs at an
+                entry-point tool (e.g. ``how_to_use()``). Like
+                ``server_name``, the first call wins for the singleton.
         """
         self._enable_mcp = enable
         self._mcp_server_name = server_name
+        self._mcp_instructions = instructions
         # Note: aw_supported is computed in Config.__init__. We keep this minimal
         # to avoid touching unrelated features; OAuth fix does not require recompute.
         return self
@@ -888,6 +899,7 @@ class ActingWebApp:
                 oauth=self._get_default_oauth_config(),
                 mcp=self._enable_mcp,
                 mcp_server_name=self._mcp_server_name,
+                mcp_instructions=self._mcp_instructions,
                 indexed_properties=self._indexed_properties,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
                 use_lookup_table=self._use_lookup_table,

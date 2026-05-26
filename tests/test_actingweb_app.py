@@ -145,6 +145,24 @@ class TestFeatureToggles:
 
         assert app._enable_mcp is False
 
+    def test_with_mcp_default_instructions_is_none(self):
+        """with_mcp without instructions leaves _mcp_instructions as None."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:mcp")
+            app.with_mcp(enable=True, server_name="emm")
+
+        assert app._mcp_instructions is None
+
+    def test_with_mcp_stores_instructions(self):
+        """with_mcp(instructions=...) stores the string on the app builder."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:mcp")
+            app.with_mcp(
+                enable=True, server_name="emm", instructions="Call how_to_use()"
+            )
+
+        assert app._mcp_instructions == "Call how_to_use()"
+
     def test_with_unique_creator(self):
         """Test with_unique_creator enables unique creator constraint."""
         with patch.object(ActingWebApp, "_initialize_permission_system"):

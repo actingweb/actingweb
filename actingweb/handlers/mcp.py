@@ -69,7 +69,8 @@ class MCPHandler(BaseHandler):
     ) -> None:
         super().__init__(webobj, config, hooks)
         self.server_manager = get_server_manager(
-            server_name=getattr(config, "mcp_server_name", "actingweb")
+            server_name=getattr(config, "mcp_server_name", "actingweb"),
+            instructions=getattr(config, "mcp_instructions", None),
         )
 
     def _cleanup_expired_cache_entries(self) -> None:

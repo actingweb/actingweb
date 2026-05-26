@@ -5,6 +5,14 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b4: May 26, 2026
+------------------------
+
+ADDED
+~~~~~
+
+- **Configurable MCP server instructions**: ``ActingWebApp.with_mcp(instructions="...")`` sets the server-level orientation string surfaced on the MCP ``InitializeResult.instructions`` field. Clients display it to the LLM on initial connection — useful for pointing new LLMs at an entry-point tool (e.g. ``how_to_use()``). ``get_server_manager()``, ``MCPServerManager`` and ``ActingWebMCPServer`` also accept an ``instructions`` parameter for direct use. Like ``server_name``, the first ``with_mcp()`` call wins for the process-wide singleton.
+
 v3.10.2b3: May 23, 2026
 ------------------------
 

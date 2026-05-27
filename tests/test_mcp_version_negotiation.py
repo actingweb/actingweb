@@ -10,7 +10,6 @@ Covers:
 
 import pytest
 
-from actingweb import aw_web_request, config
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.mcp.protocol import (
     DEFAULT_NEGOTIATED_VERSION,
@@ -19,26 +18,11 @@ from actingweb.mcp.protocol import (
     negotiate_protocol_version,
     supports_structured_content,
 )
-
-
-def _make_config() -> config.Config:
-    cfg = config.Config()
-    cfg.fqdn = "test.example.com"
-    cfg.proto = "https://"
-    cfg.aw_type = "urn:actingweb:test:mcp_version"
-    cfg.devtest = True
-    return cfg
+from tests.mcp_helpers import make_mcp_handler
 
 
 def _make_handler(headers: dict[str, str] | None = None) -> MCPHandler:
-    webobj = aw_web_request.AWWebObj(
-        url="https://test.example.com/mcp",
-        params={},
-        body="",
-        headers=headers or {},
-        cookies={},
-    )
-    return MCPHandler(webobj, _make_config(), hooks=None)
+    return make_mcp_handler(headers)
 
 
 def _initialize(handler: MCPHandler, protocol_version: str | None) -> dict:

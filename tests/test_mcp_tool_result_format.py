@@ -10,12 +10,12 @@ Covers:
 
 import pytest
 
-from actingweb import aw_web_request, config
 from actingweb.handlers.async_mcp import AsyncMCPHandler
 from actingweb.handlers.mcp import MCPHandler, format_call_tool_result
 from actingweb.interface import ActingWebApp
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.mcp import mcp_tool
+from tests.mcp_helpers import make_mcp_config, make_mcp_webobj
 
 
 class TestFormatCallToolResult:
@@ -96,25 +96,6 @@ class TestFormatCallToolResult:
         assert "hello" in out["content"][0]["text"]
 
 
-def _make_config() -> config.Config:
-    cfg = config.Config()
-    cfg.fqdn = "test.example.com"
-    cfg.proto = "https://"
-    cfg.aw_type = "urn:actingweb:test:mcp_format"
-    cfg.devtest = True
-    return cfg
-
-
-def _make_webobj(headers: dict[str, str]) -> aw_web_request.AWWebObj:
-    return aw_web_request.AWWebObj(
-        url="https://test.example.com/mcp",
-        params={},
-        body="",
-        headers=headers,
-        cookies={},
-    )
-
-
 class TestSyncAsyncParity:
     """The sync and async handlers must format identical results identically."""
 
@@ -153,13 +134,13 @@ class TestSyncAsyncParity:
         }
 
         sync_handler = MCPHandler(
-            _make_webobj(headers), _make_config(), hooks=app.hooks
+            make_mcp_webobj(headers), make_mcp_config(), hooks=app.hooks
         )
         sync_handler.authenticate_and_get_actor_cached = lambda: mock_actor
         sync_result = sync_handler.post(request_data)
 
         async_handler = AsyncMCPHandler(
-            _make_webobj(headers), _make_config(), hooks=app.hooks
+            make_mcp_webobj(headers), make_mcp_config(), hooks=app.hooks
         )
         async_handler.authenticate_and_get_actor_cached = lambda: mock_actor
         async_result = await async_handler.post_async(request_data)

@@ -16,7 +16,7 @@ client-specific descriptions when available.
 Spec: Client-specific tool descriptions in MCP SDK server
 """
 
-from mcp.types import LATEST_PROTOCOL_VERSION
+from actingweb.mcp.protocol import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client, client_name="Test Client"):

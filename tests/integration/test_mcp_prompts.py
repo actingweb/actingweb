@@ -7,7 +7,7 @@ Prompts in MCP map to ActingWeb methods - predefined workflows or
 interactions that can be exposed to MCP clients.
 """
 
-from mcp.types import LATEST_PROTOCOL_VERSION
+from actingweb.mcp.protocol import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client):

@@ -7,7 +7,7 @@ Resources in MCP map to ActingWeb actor properties, meta information,
 and other actor data accessible to the MCP client.
 """
 
-from mcp.types import LATEST_PROTOCOL_VERSION
+from actingweb.mcp.protocol import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client):

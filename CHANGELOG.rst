@@ -5,6 +5,33 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b5: May 27, 2026
+------------------------
+
+ADDED
+~~~~~
+
+- **MCP protocol version negotiation**: The ``/mcp`` handler now negotiates the protocol version during ``initialize`` instead of hardcoding ``2024-11-05``. It echoes the client's requested ``protocolVersion`` when supported, otherwise returns the server's latest supported version (maintained in ``actingweb/mcp/protocol.py``, currently through ``2025-11-25``). The ``MCP-Protocol-Version`` request header is honored on post-initialize requests (defaulting to ``2025-03-26`` when absent, ``400`` when present-but-unsupported), and GET discovery now reports the full supported-version set. Backward compatible: ``2024-11-05``-only clients still negotiate ``2024-11-05``.
+- **Structured tool output (``structuredContent``)**: ``tools/call`` results now populate the spec ``structuredContent`` field when the negotiated protocol version supports it (>= ``2025-06-18``). A hook returning a dict with ``content`` plus extra top-level keys has those extras promoted into ``structuredContent``; an explicit ``structuredContent`` from the hook is passed through, and a hook-supplied ``_meta`` is preserved. For older negotiated versions ``structuredContent`` is omitted (the payload is still carried by ``content``).
+- New ``actingweb/mcp/protocol.py`` module exposing the version constants and ``negotiate_protocol_version`` / ``is_supported_protocol_version`` / ``supports_structured_content`` helpers as a single source of truth (also now used by the OAuth2 discovery endpoint).
+
+CHANGED
+~~~~~~~
+
+- **``tools/call`` results always include ``isError``**: the normalized result now always carries an explicit ``isError`` (defaulting to ``false``) per the MCP spec, where previously a hook returning ``{"content": [...]}`` without ``isError`` was passed through verbatim. Clients doing strict equality on the result object may observe the added field.
+
+FIXED
+~~~~~
+
+- **MCP ``tools/call`` formatting divergence between Flask and FastAPI**: the sync (``MCPHandler``) and async (``AsyncMCPHandler``) handlers now share a single ``format_call_tool_result`` implementation, so both frameworks format tool-call responses identically.
+- **Configurable MCP ``server_name`` / ``instructions`` now reach clients**: previously the values from ``with_mcp(server_name=..., instructions=...)`` (added in v3.10.2b3/b4) flowed only into the unused SDK-backed server and never appeared in the live ``initialize`` response. ``_handle_initialize`` now sets ``serverInfo.name`` from ``mcp_server_name`` and emits ``instructions`` from ``mcp_instructions``. ``serverInfo.version`` now reports the ActingWeb version.
+
+REMOVED
+~~~~~~~
+
+- **Dropped the optional ``mcp`` (MCP Python SDK) dependency.** ActingWeb's MCP support is fully hand-rolled and did not functionally depend on the SDK (the SDK-backed ``ActingWebMCPServer`` was never wired to serve requests). Removing it also drops ~a dozen transitive packages (the SSE/streaming + jsonschema + pydantic-settings stack). The ``mcp`` install extra is removed; MCP support no longer requires any extra.
+- **Removed ``actingweb.mcp.get_server_manager``, ``MCPServerManager`` and ``ActingWebMCPServer``** (the vestigial SDK-backed server). The supported way to configure the MCP server name and instructions remains ``ActingWebApp.with_mcp(server_name=..., instructions=...)``, which now takes effect on the live endpoint. The internal ``_match_uri_template`` helper moved to ``actingweb/mcp/uri.py`` as ``match_uri_template``.
+
 v3.10.2b4: May 26, 2026
 ------------------------
 

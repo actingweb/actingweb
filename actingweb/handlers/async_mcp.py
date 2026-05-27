@@ -10,7 +10,7 @@ import inspect
 import logging
 from typing import Any
 
-from actingweb.handlers.mcp import MCPHandler
+from actingweb.handlers.mcp import MCPHandler, format_call_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +51,22 @@ class AsyncMCPHandler(MCPHandler):
             params = data.get("params", {})
             request_id = data.get("id")
 
-            # Handle methods that don't require authentication
+            # initialize establishes the version (it carries no
+            # MCP-Protocol-Version header), so handle it before header
+            # validation — otherwise a client sending a bad version header on
+            # initialize would be rejected before it could learn what to use.
             if method == "initialize":
                 return self._handle_initialize(request_id, params)
-            elif method == "notifications/initialized":
+
+            # All other methods: resolve/validate the negotiated protocol
+            # version from the header (sets self._negotiated_version; returns
+            # 400 if the header is present but unsupported).
+            version_error = self._resolve_request_protocol_version(request_id)
+            if version_error is not None:
+                return version_error
+
+            # Other methods that don't require authentication
+            if method == "notifications/initialized":
                 return self._handle_notifications_initialized(request_id, params)
             elif method == "ping":
                 return self._handle_ping(request_id, params)
@@ -169,28 +181,13 @@ class AsyncMCPHandler(MCPHandler):
                                 else:
                                     result = hook(actor, action_name, arguments)
 
-                                # Check if result is already properly structured MCP content
-                                if isinstance(result, dict) and "content" in result:
-                                    # Result is already MCP-formatted, use it directly
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": result,
-                                    }
-                                else:
-                                    # Legacy handling: wrap in text item
-                                    if not isinstance(result, dict):
-                                        result = {"result": result}
-
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": {
-                                            "content": [
-                                                {"type": "text", "text": str(result)}
-                                            ]
-                                        },
-                                    }
+                                return {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "result": format_call_tool_result(
+                                        result, self._negotiated_version
+                                    ),
+                                }
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
                                 return self._create_jsonrpc_error(
@@ -358,8 +355,7 @@ class AsyncMCPHandler(MCPHandler):
 
         # Import URI template matching logic
         try:
-            # Reuse URI template matching from SDK server implementation
-            from ..mcp.sdk_server import _match_uri_template
+            from ..mcp.uri import match_uri_template
 
             for method_name, hooks in self.hooks._method_hooks.items():
                 for hook in hooks:
@@ -373,7 +369,7 @@ class AsyncMCPHandler(MCPHandler):
                                 or f"actingweb://{method_name}"
                             )
                             if uri_template:
-                                match_result = _match_uri_template(uri_template, uri)
+                                match_result = match_uri_template(uri_template, uri)
                                 if match_result is not None:
                                     try:
                                         # Extract variables from URI
@@ -438,7 +434,7 @@ class AsyncMCPHandler(MCPHandler):
                                         )
 
         except ImportError:
-            logger.warning("Failed to import URI template matching from SDK server")
+            logger.warning("Failed to import URI template matching helper")
         except Exception as e:
             logger.error(f"Unexpected error during resource lookup: {e}", exc_info=True)
 

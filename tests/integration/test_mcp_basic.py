@@ -9,7 +9,7 @@ This test suite demonstrates the pattern for testing OAuth2-protected endpoints:
 3. Make authenticated requests with Bearer token
 """
 
-from mcp.types import LATEST_PROTOCOL_VERSION
+from actingweb.mcp.protocol import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client):

@@ -7,7 +7,7 @@ using the JSON-RPC 2.0 protocol at /mcp endpoint.
 This extends test_mcp_basic.py with comprehensive tool testing.
 """
 
-from mcp.types import LATEST_PROTOCOL_VERSION
+from actingweb.mcp.protocol import LATEST_PROTOCOL_VERSION
 
 
 def initialize_mcp_session(oauth2_client):
@@ -488,152 +488,69 @@ class TestMCPToolResponseFormatRegression:
     """
     Regression tests for tool response format handling.
 
-    These tests ensure critical response metadata is preserved through
-    the SDK server's response handling pipeline.
+    These tests ensure critical response metadata (isError, structured payload)
+    is preserved through ActingWeb's live ``format_call_tool_result`` — the
+    shared formatter used by both the sync and async ``tools/call`` paths.
     """
 
-    def test_sdk_server_preserves_is_error_field_success(self):
+    def test_preserves_is_error_field_success(self):
         """
-        Unit test: Verify SDK server preserves isError=false in CallToolResult.
+        isError=false must survive formatting.
 
-        **Problem (Oct 2025):**
-        When tools returned storage confirmations with isError: false, the SDK server
-        extracted only the text content and discarded the isError field. This caused
-        ChatGPT to misinterpret successful operations as errors.
-
-        **Root Cause:**
-        sdk_server.py:260-269 was converting responses with content arrays to plain
-        TextContent lists, losing all metadata including isError.
-
-        **Fix:**
-        Modified SDK server to detect isError field and return CallToolResult object
-        to preserve the flag through the MCP protocol.
-
-        **This test ensures:**
-        - Storage confirmations include isError: false
-        - The isError field survives the SDK server's response handling
-        - ChatGPT receives proper success indicators
-
-        Related files:
-        - actingweb/mcp/sdk_server.py:271-278 (CallToolResult with isError)
-        - hooks/mcp/protocol/mcp_response.py:136 (adds isError to responses)
+        Regression: a storage-confirmation tool returning ``isError: false``
+        plus extra keys must keep ``isError`` (so clients like ChatGPT don't
+        misread success as error) and surface the extras as structuredContent.
         """
-        from mcp.types import CallToolResult, TextContent
+        from actingweb.handlers.mcp import format_call_tool_result
 
-        # Simulate the SDK server's response handling logic
-        # This is the response format that comes from storage confirmation tools
         tool_response = {
             "content": [{"type": "text", "text": "✅ Successfully stored: test data"}],
-            "isError": False,  # This field MUST be preserved
+            "isError": False,
             "success": True,
             "memory_type": "memory_test",
         }
 
-        # Extract content items (simulating sdk_server.py:264-269)
-        content_items = tool_response["content"]
-        text_contents = []
-        for item in content_items:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text_contents.append(TextContent(type="text", text=item["text"]))
+        out = format_call_tool_result(tool_response, "2025-06-18")
 
-        # CRITICAL TEST: Verify isError flag is detected and preserved
-        # This simulates sdk_server.py:271-278
-        if "isError" in tool_response:
-            is_error = tool_response["isError"]
+        assert out["isError"] is False
+        assert out["content"][0]["text"] == "✅ Successfully stored: test data"
+        assert out["structuredContent"] == {
+            "success": True,
+            "memory_type": "memory_test",
+        }
 
-            # SDK server should create CallToolResult with isError flag
-            result = CallToolResult(
-                content=text_contents
-                if text_contents
-                else [TextContent(type="text", text="")],
-                isError=is_error,
-            )
+    def test_preserves_is_error_field_failure(self):
+        """isError=true must survive formatting (companion to the success case)."""
+        from actingweb.handlers.mcp import format_call_tool_result
 
-            # Verify the CallToolResult preserves the flag
-            assert hasattr(result, "isError"), (
-                "CallToolResult missing isError attribute - regression detected!"
-            )
-            assert result.isError is False, (
-                f"isError should be False for success, got: {result.isError}"
-            )
-            assert len(result.content) > 0, "Content should not be empty"
-            assert result.content[0].text == "✅ Successfully stored: test data"  # type: ignore[arg-type,union-attr,attr-defined,return-value]
-
-    def test_sdk_server_preserves_is_error_field_failure(self):
-        """
-        Unit test: Verify SDK server preserves isError=true in CallToolResult.
-
-        Companion test to success case - ensures error responses also preserve
-        the isError flag.
-        """
-        from mcp.types import CallToolResult, TextContent
-
-        # Simulate error response from tool
         tool_response = {
             "content": [
                 {"type": "text", "text": "❌ Storage failed: validation error"}
             ],
-            "isError": True,  # This field MUST be preserved
+            "isError": True,
             "success": False,
             "error": "Validation failed",
         }
 
-        # Extract content items
-        content_items = tool_response["content"]
-        text_contents = []
-        for item in content_items:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text_contents.append(TextContent(type="text", text=item["text"]))
+        out = format_call_tool_result(tool_response, "2025-06-18")
 
-        # CRITICAL TEST: Verify isError=true is preserved
-        if "isError" in tool_response:
-            is_error = tool_response["isError"]
-
-            result = CallToolResult(
-                content=text_contents
-                if text_contents
-                else [TextContent(type="text", text="")],
-                isError=is_error,
-            )
-
-            # Verify the CallToolResult preserves the error flag
-            assert hasattr(result, "isError"), (
-                "CallToolResult missing isError attribute for errors - regression detected!"
-            )
-            assert result.isError is True, (
-                f"isError should be True for errors, got: {result.isError}"
-            )
-            assert len(result.content) > 0, "Content should not be empty"
-            assert "❌" in result.content[0].text, "Error indicator missing"  # type: ignore[arg-type,union-attr,attr-defined,return-value]
+        assert out["isError"] is True
+        assert "❌" in out["content"][0]["text"]
+        assert out["structuredContent"] == {
+            "success": False,
+            "error": "Validation failed",
+        }
 
     def test_tool_response_without_is_error_field(self):
-        """
-        Test that responses without isError field still work correctly.
+        """A content-only response gets isError defaulted to False, no structuredContent."""
+        from actingweb.handlers.mcp import format_call_tool_result
 
-        Not all tool responses need isError - only storage confirmations and errors.
-        This test ensures backward compatibility.
-        """
-        from mcp.types import TextContent
-
-        # Response without isError field (e.g., from structuredContent responses)
         tool_response = {
             "content": [{"type": "text", "text": "Search results: 5 items found"}]
         }
 
-        # Extract content items
-        content_items = tool_response["content"]
-        text_contents = []
-        for item in content_items:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text_contents.append(TextContent(type="text", text=item["text"]))
+        out = format_call_tool_result(tool_response, "2025-06-18")
 
-        # When no isError flag present, return plain content list (old behavior)
-        if "isError" not in tool_response:
-            result = (
-                text_contents if text_contents else [TextContent(type="text", text="")]
-            )
-
-            # Verify plain list works
-            assert isinstance(result, list), "Should return list when no isError"
-            assert len(result) > 0, "Content should not be empty"
-            assert result[0].text == "Search results: 5 items found"
+        assert out["isError"] is False
+        assert out["content"][0]["text"] == "Search results: 5 items found"
+        assert "structuredContent" not in out

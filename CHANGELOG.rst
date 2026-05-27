@@ -12,6 +12,11 @@ ADDED
 - **Structured tool output (``structuredContent``)**: ``tools/call`` results now populate the spec ``structuredContent`` field when the negotiated protocol version supports it (>= ``2025-06-18``). A hook returning a dict with ``content`` plus extra top-level keys has those extras promoted into ``structuredContent``; an explicit ``structuredContent`` from the hook is passed through, and a hook-supplied ``_meta`` is preserved. For older negotiated versions ``structuredContent`` is omitted (the payload is still carried by ``content``).
 - New ``actingweb/mcp/protocol.py`` module exposing the version constants and ``negotiate_protocol_version`` / ``is_supported_protocol_version`` / ``supports_structured_content`` helpers as a single source of truth (also now used by the OAuth2 discovery endpoint).
 
+CHANGED
+~~~~~~~
+
+- **``tools/call`` results always include ``isError``**: the normalized result now always carries an explicit ``isError`` (defaulting to ``false``) per the MCP spec, where previously a hook returning ``{"content": [...]}`` without ``isError`` was passed through verbatim. Clients doing strict equality on the result object may observe the added field.
+
 FIXED
 ~~~~~
 

@@ -15,6 +15,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# NOTE: ``SUPPORTED_PROTOCOL_VERSIONS`` reflects the revisions this handler can
+# *negotiate* (tools/resources/prompts semantics + structuredContent), which the
+# SDK enumerates. It is not a claim of full transport compliance: the modern
+# Streamable HTTP transport and the newer OAuth model are tracked separately in
+# the Phase 3 roadmap (see thoughts/plans/2026-05-26-mcp-version-negotiation-
+# structuredcontent.md). "Supported" here means "negotiable", not "fully
+# implemented end to end".
 try:
     from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS as _SDK_SUPPORTED
     from mcp.types import LATEST_PROTOCOL_VERSION as _SDK_LATEST
@@ -22,10 +29,19 @@ try:
     SUPPORTED_PROTOCOL_VERSIONS: list[str] = list(_SDK_SUPPORTED)
     LATEST_PROTOCOL_VERSION: str = _SDK_LATEST
 except ImportError:
-    # MCP SDK not installed; the /mcp endpoint won't serve real traffic, but
-    # keep importable constants for discovery/metadata code paths.
-    SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]  # pyright: ignore[reportConstantRedefinition]
-    LATEST_PROTOCOL_VERSION = "2024-11-05"  # pyright: ignore[reportConstantRedefinition]
+    # MCP SDK not installed (the optional ``mcp`` extra). The default
+    # ``poetry install`` omits extras, so the fallback must still list the
+    # revisions this hand-rolled handler implements — negotiation and
+    # structuredContent are pure-Python and work without the SDK. Falling back
+    # to only ``2024-11-05`` would silently disable those features. Keep this
+    # aligned with the SDK's SUPPORTED_PROTOCOL_VERSIONS.
+    SUPPORTED_PROTOCOL_VERSIONS = [  # pyright: ignore[reportConstantRedefinition]
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18",
+        "2025-11-25",
+    ]
+    LATEST_PROTOCOL_VERSION = "2025-11-25"  # pyright: ignore[reportConstantRedefinition]
 
 # Per the MCP HTTP transport spec, a server that receives no
 # ``MCP-Protocol-Version`` header (and has no other way to identify the

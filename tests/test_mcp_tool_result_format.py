@@ -11,7 +11,8 @@ Covers:
 import pytest
 
 from actingweb import aw_web_request, config
-from actingweb.handlers.mcp import format_call_tool_result
+from actingweb.handlers.async_mcp import AsyncMCPHandler
+from actingweb.handlers.mcp import MCPHandler, format_call_tool_result
 from actingweb.interface import ActingWebApp
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.mcp import mcp_tool
@@ -78,7 +79,10 @@ class TestFormatCallToolResult:
     def test_content_only_no_structured_content(self) -> None:
         result = {"content": [{"type": "text", "text": "ok"}]}
         out = format_call_tool_result(result, "2025-11-25")
-        assert out == {"content": [{"type": "text", "text": "ok"}], "isError": False}
+        assert out["content"] == [{"type": "text", "text": "ok"}]
+        assert out["isError"] is False
+        assert "structuredContent" not in out
+        assert "_meta" not in out
 
     def test_plain_dict_legacy_text_wrap(self) -> None:
         out = format_call_tool_result({"status": "deleted"}, "2025-11-25")
@@ -131,9 +135,6 @@ class TestSyncAsyncParity:
                 "success": True,
                 "memory_type": "note",
             }
-
-        from actingweb.handlers.async_mcp import AsyncMCPHandler
-        from actingweb.handlers.mcp import MCPHandler
 
         class MockActorObj:
             id = "actor_parity"

@@ -51,16 +51,22 @@ class AsyncMCPHandler(MCPHandler):
             params = data.get("params", {})
             request_id = data.get("id")
 
-            # Resolve/validate the negotiated protocol version for this request
-            # (sets self._negotiated_version; returns 400 if header unsupported)
+            # initialize establishes the version (it carries no
+            # MCP-Protocol-Version header), so handle it before header
+            # validation — otherwise a client sending a bad version header on
+            # initialize would be rejected before it could learn what to use.
+            if method == "initialize":
+                return self._handle_initialize(request_id, params)
+
+            # All other methods: resolve/validate the negotiated protocol
+            # version from the header (sets self._negotiated_version; returns
+            # 400 if the header is present but unsupported).
             version_error = self._resolve_request_protocol_version(request_id)
             if version_error is not None:
                 return version_error
 
-            # Handle methods that don't require authentication
-            if method == "initialize":
-                return self._handle_initialize(request_id, params)
-            elif method == "notifications/initialized":
+            # Other methods that don't require authentication
+            if method == "notifications/initialized":
                 return self._handle_notifications_initialized(request_id, params)
             elif method == "ping":
                 return self._handle_ping(request_id, params)

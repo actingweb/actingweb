@@ -23,16 +23,9 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
+# MCP protocol version constants (single source of truth)
+from ..mcp.protocol import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 from .base_handler import BaseHandler
-
-# Import MCP protocol version constants
-try:
-    from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
-    from mcp.types import LATEST_PROTOCOL_VERSION
-except ImportError:
-    # Fallback if MCP SDK not available
-    LATEST_PROTOCOL_VERSION = "2024-11-05"  # pyright: ignore[reportConstantRedefinition]
-    SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]  # pyright: ignore[reportConstantRedefinition]
 
 if TYPE_CHECKING:
     from .. import aw_web_request

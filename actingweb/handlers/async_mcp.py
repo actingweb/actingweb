@@ -10,7 +10,7 @@ import inspect
 import logging
 from typing import Any
 
-from actingweb.handlers.mcp import MCPHandler
+from actingweb.handlers.mcp import MCPHandler, format_call_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,12 @@ class AsyncMCPHandler(MCPHandler):
             method = data.get("method")
             params = data.get("params", {})
             request_id = data.get("id")
+
+            # Resolve/validate the negotiated protocol version for this request
+            # (sets self._negotiated_version; returns 400 if header unsupported)
+            version_error = self._resolve_request_protocol_version(request_id)
+            if version_error is not None:
+                return version_error
 
             # Handle methods that don't require authentication
             if method == "initialize":
@@ -169,28 +175,13 @@ class AsyncMCPHandler(MCPHandler):
                                 else:
                                     result = hook(actor, action_name, arguments)
 
-                                # Check if result is already properly structured MCP content
-                                if isinstance(result, dict) and "content" in result:
-                                    # Result is already MCP-formatted, use it directly
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": result,
-                                    }
-                                else:
-                                    # Legacy handling: wrap in text item
-                                    if not isinstance(result, dict):
-                                        result = {"result": result}
-
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": {
-                                            "content": [
-                                                {"type": "text", "text": str(result)}
-                                            ]
-                                        },
-                                    }
+                                return {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "result": format_call_tool_result(
+                                        result, self._negotiated_version
+                                    ),
+                                }
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
                                 return self._create_jsonrpc_error(

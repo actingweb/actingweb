@@ -5,6 +5,18 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **MCP protocol version negotiation**: The ``/mcp`` handler now negotiates the protocol version during ``initialize`` instead of hardcoding ``2024-11-05``. It echoes the client's requested ``protocolVersion`` when supported, otherwise returns the server's latest supported version (sourced from the installed MCP SDK, currently through ``2025-11-25``). The ``MCP-Protocol-Version`` request header is honored on post-initialize requests (defaulting to ``2025-03-26`` when absent, ``400`` when present-but-unsupported), and GET discovery now reports the full supported-version set. Backward compatible: ``2024-11-05``-only clients still negotiate ``2024-11-05``.
+- **Structured tool output (``structuredContent``)**: ``tools/call`` results now populate the spec ``structuredContent`` field when the negotiated protocol version supports it (>= ``2025-06-18``). A hook returning a dict with ``content`` plus extra top-level keys has those extras promoted into ``structuredContent``; an explicit ``structuredContent`` from the hook is passed through, and a hook-supplied ``_meta`` is preserved. For older negotiated versions ``structuredContent`` is omitted (the payload is still carried by ``content``).
+- New ``actingweb/mcp/protocol.py`` module exposing the version constants and ``negotiate_protocol_version`` / ``is_supported_protocol_version`` / ``supports_structured_content`` helpers as a single source of truth (also now used by the OAuth2 discovery endpoint).
+
+FIXED
+~~~~~
+
+- **MCP ``tools/call`` formatting divergence between Flask and FastAPI**: the sync (``MCPHandler``) and async (``AsyncMCPHandler``) handlers now share a single ``format_call_tool_result`` implementation, so both frameworks format tool-call responses identically.
+
 v3.10.2b4: May 26, 2026
 ------------------------
 

@@ -25,6 +25,14 @@ from .. import aw_web_request  # noqa: E402
 from .. import config as config_class  # noqa: E402
 from ..interface.actor_interface import ActorInterface  # noqa: E402
 from ..interface.hooks import HookRegistry  # noqa: E402
+from ..mcp.protocol import (  # noqa: E402
+    DEFAULT_NEGOTIATED_VERSION,
+    LATEST_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+    is_supported_protocol_version,
+    negotiate_protocol_version,
+    supports_structured_content,
+)
 from ..mcp.sdk_server import get_server_manager  # noqa: E402
 from ..runtime_context import RuntimeContext  # noqa: E402
 from .base_handler import BaseHandler  # noqa: E402
@@ -50,6 +58,56 @@ _cache_stats = {
 }
 
 
+# Keys that are part of the CallToolResult wire shape and must not be swept
+# into structuredContent. The MCP wire field is ``_meta`` (the SDK maps
+# ``_meta`` <-> ``.meta``), so reserve ``_meta`` rather than ``meta``.
+_CALL_TOOL_RESERVED_KEYS = frozenset(
+    {"content", "isError", "_meta", "structuredContent"}
+)
+
+
+def format_call_tool_result(result: Any, negotiated_version: str) -> dict[str, Any]:
+    """Normalize a tool hook's return value into a ``CallToolResult`` shape.
+
+    Shared by the sync (Flask) and async (FastAPI) handlers so both format
+    ``tools/call`` responses identically.
+
+    - A dict containing ``content`` is treated as MCP-formatted: ``content`` and
+      ``isError`` are forwarded, and a hook-supplied ``_meta`` is preserved.
+      When the negotiated protocol version supports structured output
+      (>= 2025-06-18), an explicit ``structuredContent`` is passed through;
+      otherwise any extra top-level keys are promoted into ``structuredContent``.
+      For older negotiated versions ``structuredContent`` is omitted (the
+      payload is already carried by ``content``).
+    - Anything else is wrapped as a single text content item (legacy behavior).
+    """
+    if isinstance(result, dict) and "content" in result:
+        out: dict[str, Any] = {
+            "content": result["content"],
+            "isError": bool(result.get("isError", False)),
+        }
+        meta = result.get("_meta")
+        if isinstance(meta, dict):
+            out["_meta"] = meta
+
+        if supports_structured_content(negotiated_version):
+            explicit_struct = result.get("structuredContent")
+            if isinstance(explicit_struct, dict):
+                out["structuredContent"] = explicit_struct
+            else:
+                extras = {
+                    k: v for k, v in result.items() if k not in _CALL_TOOL_RESERVED_KEYS
+                }
+                if extras:
+                    out["structuredContent"] = extras
+        return out
+
+    # Legacy handling: wrap non-MCP results in a text content item.
+    if not isinstance(result, dict):
+        result = {"result": result}
+    return {"content": [{"type": "text", "text": str(result)}]}
+
+
 class MCPHandler(BaseHandler):
     """
     Handler for the /mcp endpoint.
@@ -72,6 +130,10 @@ class MCPHandler(BaseHandler):
             server_name=getattr(config, "mcp_server_name", "actingweb"),
             instructions=getattr(config, "mcp_instructions", None),
         )
+        # Protocol version in effect for the current request. Resolved per
+        # request from the MCP-Protocol-Version header (post-initialize) and
+        # consulted when formatting version-gated response fields.
+        self._negotiated_version: str = DEFAULT_NEGOTIATED_VERSION
 
     def _cleanup_expired_cache_entries(self) -> None:
         """Remove expired entries from all caches."""
@@ -113,7 +175,7 @@ class MCPHandler(BaseHandler):
             # For initial discovery, don't require authentication
             # Return basic server information that MCP clients can use
             return {
-                "version": "2024-11-05",
+                "version": LATEST_PROTOCOL_VERSION,
                 "server_name": "actingweb-mcp",
                 "capabilities": {
                     "tools": True,  # We support tools
@@ -123,7 +185,7 @@ class MCPHandler(BaseHandler):
                 "transport": {
                     "type": "http",
                     "endpoint": "/mcp",
-                    "supported_versions": ["2024-11-05"],
+                    "supported_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
                 },
                 "authentication": {
                     "required": True,
@@ -147,6 +209,12 @@ class MCPHandler(BaseHandler):
             method = data.get("method")
             params = data.get("params", {})
             request_id = data.get("id")
+
+            # Resolve/validate the negotiated protocol version for this request
+            # (sets self._negotiated_version; returns 400 if header unsupported)
+            version_error = self._resolve_request_protocol_version(request_id)
+            if version_error is not None:
+                return version_error
 
             # Handle methods that don't require authentication
             if method == "initialize":
@@ -255,6 +323,12 @@ class MCPHandler(BaseHandler):
         self, request_id: Any, params: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle MCP initialize request."""
+        # Negotiate the protocol version: echo the client's requested version
+        # when we support it, otherwise return our latest supported version
+        # (per the MCP lifecycle spec). Record it for the rest of the request.
+        negotiated_version = negotiate_protocol_version(params.get("protocolVersion"))
+        self._negotiated_version = negotiated_version
+
         # Store client info for later use during OAuth2 authentication
         client_info = params.get("clientInfo", {})
         if client_info:
@@ -301,7 +375,7 @@ class MCPHandler(BaseHandler):
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": negotiated_version,
                 "capabilities": capabilities,
                 "serverInfo": {"name": "ActingWeb MCP Server", "version": "1.0.0"},
             },
@@ -739,28 +813,13 @@ class MCPHandler(BaseHandler):
                                 # Execute the action hook
                                 result = hook(actor, action_name, arguments)
 
-                                # Check if result is already properly structured MCP content
-                                if isinstance(result, dict) and "content" in result:
-                                    # Result is already MCP-formatted, use it directly
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": result,
-                                    }
-                                else:
-                                    # Legacy handling: wrap in text item
-                                    if not isinstance(result, dict):
-                                        result = {"result": result}
-
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": {
-                                            "content": [
-                                                {"type": "text", "text": str(result)}
-                                            ]
-                                        },
-                                    }
+                                return {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "result": format_call_tool_result(
+                                        result, self._negotiated_version
+                                    ),
+                                }
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
                                 return self._create_jsonrpc_error(
@@ -1046,6 +1105,46 @@ class MCPHandler(BaseHandler):
             "id": request_id,
             "error": {"code": code, "message": message},
         }
+
+    def _resolve_request_protocol_version(
+        self, request_id: Any
+    ) -> dict[str, Any] | None:
+        """Resolve the protocol version for the current request.
+
+        Reads the ``MCP-Protocol-Version`` header that clients send on
+        requests after ``initialize`` and stores the result on
+        ``self._negotiated_version``. Per the MCP HTTP transport spec: when the
+        header is absent, assume :data:`DEFAULT_NEGOTIATED_VERSION`; when it is
+        present but unsupported, respond with HTTP 400.
+
+        Returns a JSON-RPC error response (and sets HTTP 400) when the header is
+        unsupported, otherwise ``None``.
+        """
+        header_value: str | None = None
+        if (
+            hasattr(self, "request")
+            and self.request
+            and hasattr(self.request, "headers")
+            and self.request.headers
+        ):
+            header_value = self.request.headers.get(
+                "MCP-Protocol-Version"
+            ) or self.request.headers.get("mcp-protocol-version")
+
+        if not header_value:
+            self._negotiated_version = DEFAULT_NEGOTIATED_VERSION
+            return None
+
+        if not is_supported_protocol_version(header_value):
+            self.response.set_status(400, "Bad Request")
+            return self._create_jsonrpc_error(
+                request_id,
+                -32600,
+                f"Unsupported MCP-Protocol-Version: {header_value}",
+            )
+
+        self._negotiated_version = header_value
+        return None
 
     def authenticate_and_get_actor_cached(self) -> Any:
         """

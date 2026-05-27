@@ -1,10 +1,29 @@
 # Implementation Plan: MCP Version Negotiation + structuredContent (with 2025-11-25 roadmap)
 
 **Date:** 2026-05-26
-**Status:** Phases 1 & 2 implemented; Decision Gate + roadmap pending
+**Status:** Phases 1 & 2 implemented (PR #100); Decision Gate decided (keep hand-rolled); roadmap pending
 **Branch:** master (uncommitted)
 
 ## Update Log
+
+- **2026-05-27 — Dropped the `mcp` SDK dependency entirely (option A), folded into PR #100.**
+  Review of SDK usage showed the live path had no functional dependency on `mcp` (only two
+  version constants with a fallback, plus the vestigial server). Actions taken: made
+  `protocol.py` version constants first-class literals; deleted `sdk_server.py`
+  (`ActingWebMCPServer`/`MCPServerManager`/`get_server_manager`) and moved `_match_uri_template`
+  → `mcp/uri.py` as `match_uri_template`; wired `serverInfo.name`/`instructions` into the live
+  `_handle_initialize` (the #98/#99 bug fix); removed the `mcp` dep + extra + mypy override from
+  `pyproject.toml` and re-locked (12 transitive packages removed); repointed test imports to
+  `actingweb.mcp.protocol` and rewrote the SDK-coupled regression / server-name tests against
+  the live handler. 139 MCP+OAuth2 tests pass with no SDK installed; pyright/ruff clean.
+- **2026-05-27 — Decision Gate decided: keep the hand-rolled handler, do not migrate to
+  the SDK server.** Driven by the SDK transport being ASGI/async-only (incompatible with
+  ActingWeb's Flask + serverless support) and the high blast radius of re-porting the
+  auth/cache/trust/permission surface. Full evaluation + a found latent bug (configurable
+  `server_name`/`instructions` never reach clients via the live path) recorded in the
+  "Decision Gate" section below. Spawned a small follow-up: wire server_name/instructions
+  into `_handle_initialize`, drop the unused `self.server_manager`, and resolve the
+  vestigial `sdk_server.py`.
 
 - **2026-05-27 — Phase 2 implemented.** Extracted a shared module-level
   `format_call_tool_result(result, negotiated_version)` in `handlers/mcp.py`; both
@@ -187,24 +206,95 @@ Behavior:
 
 ## Decision Gate — SDK migration vs. continue hand-rolling
 
-Before investing in Phase 3 (transport + OAuth), make an explicit, documented call:
-continue hand-rolling the newer protocol features, or migrate the live path to the
-official SDK's `ActingWebMCPServer` (which already implements 2025-11-25, Streamable HTTP,
-and the modern OAuth model).
+**Evaluated 2026-05-27. Decision: KEEP the hand-rolled handler; do NOT migrate the live
+`/mcp` path to the SDK's `ActingWebMCPServer`. Adopt SDK *types/helpers* only (already
+done). Resolve the vestigial SDK server and a latent bug it masked.**
 
-**Evaluate against:**
-- **Effort parity:** cost of hand-rolling Streamable HTTP (SSE, sessions, resumability) +
-  RFC 9728 / OIDC discovery vs. cost of reconciling ActingWeb's custom auth cache
-  (`authenticate_and_get_actor_cached`), trust lookup, and permission filtering with the
-  SDK's session model.
-- **Feature parity gaps:** the SDK server currently lacks client-type detection,
-  `client_descriptions`, `visibility_predicate`/`description_predicate` (only partially),
-  and the actor-bridging-on-auth logic the hand-rolled handler has.
-- **Risk/blast radius:** the hand-rolled handler is load-bearing in production; migration
-  touches auth, caching, and permissions simultaneously.
-- **Maintenance:** ongoing cost of tracking spec revisions by hand vs. via SDK upgrades.
+### Decisive factor — the SDK transport is ASGI/async-only; ActingWeb is not
 
-Output: a short decision record appended here (or a new research doc) before Phase 3.
+The official SDK's Streamable HTTP transport (`StreamableHTTPSessionManager`,
+`FastMCP.streamable_http_app()`) is **ASGI/async-only**, requires a persistent task-group
+entered in the host app's lifespan, and in stateful mode keeps an **in-memory session
+dict** keyed by `Mcp-Session-Id`. There is no official synchronous/WSGI path.
+
+ActingWeb, by contrast:
+- Supports **both Flask (WSGI/sync) and FastAPI** — the hand-rolled handler is a single
+  "parsed-JSON-RPC dict in → dict out" cycle that works identically on both.
+- Explicitly targets **Lambda/serverless** (`with_sync_callbacks()`,
+  `docs/quickstart/deployment.rst`); the SDK's in-memory sessions don't survive a freeze,
+  and stateless mode still needs the `run()` task group at cold start (plus open
+  reliability issues, SDK #1658) and has documented mounting friction (SDK #1367, #673,
+  #1220).
+
+A wholesale migration would therefore either **drop Flask support** (ASGI-only) or require
+a fragile, unsupported WSGI↔ASGI bridge — a regression in ActingWeb's framework-agnostic
+value proposition. This alone is disqualifying for now.
+
+### Effort / blast radius — high, on the production-critical auth path
+
+Migration means relocating the entire token→actor→trust→runtime-context chain
+(`mcp.py:1153-1450`, plus the three caches, actor-bridging-on-auth, `_mark_client_peer_
+approved`, and logout cache invalidation at `oauth2_endpoints.py:839`) into ASGI auth
+middleware (the SDK's `TokenVerifier` + `get_access_token()` + per-request `ContextVar`
+model), then injecting per-actor context into a shared `Server`. The SDK's auth/ContextVar
+design is genuinely clean and *would* map onto ActingWeb's per-actor OAuth2 model — but the
+payoff only materializes if we also go ASGI-only, and the change touches auth, caching, and
+permissions simultaneously on the most security-sensitive path.
+
+### Feature parity — the SDK server today implements almost none of it
+
+`ActingWebMCPServer` (`mcp/sdk_server.py`) is missing, vs. the hand-rolled handler: auth
+caching, token validation, actor-bridging-on-auth, trust lookup / peer_id derivation,
+client-type detection, `client_descriptions`, `allowed_clients`, ChatGPT-specific
+formatting, client-info capture into trust, and `structuredContent`/`isError` preservation
+(it `json.dumps`es the whole result and drops `isError`). It also reads
+`actor._mcp_trust_context`, which the **live auth path never sets** (it sets
+`_actingweb_runtime_context["mcp"]` via `RuntimeContext`), so even if invoked it would see
+`peer_id=None` and mis-filter permissions. Porting all of this is a large project for
+little gain.
+
+### Incremental benefit — low
+
+The headline SDK wins are native `structuredContent`/`outputSchema` (we already implemented
+`structuredContent` in Phase 2) and Streamable HTTP streaming (no current client requires
+it — plain POST/JSON is the valid minimal Streamable HTTP mode and is what every target
+client uses). Spec-tracking-via-SDK-upgrade is a real maintenance convenience but does not
+outweigh the transport/risk costs.
+
+### Concrete finding — the vestigial server masked a latent bug
+
+`self.server_manager` is constructed in `MCPHandler.__init__` (`mcp.py:129-132`) with the
+configured `mcp_server_name` / `mcp_instructions` but **never read**. The live
+`_handle_initialize` hardcodes `serverInfo={"name": "ActingWeb MCP Server",
+"version": "1.0.0"}` (`mcp.py:386`) and never emits `instructions`. So the configurable
+server name (#98) and instructions (#99) **never reach MCP clients** through the live path —
+they flow only into the unused SDK server. The vestigial code created a false impression
+that these features were wired.
+
+### Actions (small, separate follow-up PR — not Phase 3)
+
+1. **Wire the config through the live path**: in `_handle_initialize`, set
+   `serverInfo.name` from `config.mcp_server_name` and add `instructions` (from
+   `config.mcp_instructions`) to the `InitializeResult`. Add a test asserting both appear.
+   *(This is a real bug fix for #98/#99.)*
+2. **Remove the dead `self.server_manager`** field from `MCPHandler.__init__`.
+3. **Resolve `mcp/sdk_server.py`**: keep `_match_uri_template` (reused by both handlers) by
+   moving it somewhere neutral (e.g. `mcp/protocol.py` or a small `mcp/uri.py`), then either
+   delete `ActingWebMCPServer`/`MCPServerManager` or clearly mark them experimental/unused
+   in a docstring. Update `get_server_manager` callers accordingly.
+
+### Re-evaluation triggers (revisit migration if any become true)
+
+- ActingWeb drops Flask/WSGI and commits to ASGI-only.
+- A use case needs real streaming/SSE or server→client messages (sampling, elicitation).
+- Hand-maintaining protocol revisions becomes a measurable burden.
+
+### Phase 3 implication
+
+Streamable HTTP (JSON mode) + modern OAuth (RFC 9728 / OIDC) can be added **incrementally on
+the hand-rolled handler** — the handler already implements the simple Streamable-HTTP
+single-POST-returns-JSON shape. Only full SSE streaming is genuinely hard to hand-roll;
+defer it until a concrete need appears. Phase 3 proceeds without an SDK migration.
 
 ---
 

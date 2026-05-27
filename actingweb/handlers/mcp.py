@@ -21,7 +21,7 @@ from typing import Any
 _mcp_client_info_cache: dict[str, dict[str, Any]] = {}
 
 # Imports after MCP availability check
-from .. import aw_web_request  # noqa: E402
+from .. import __version__, aw_web_request  # noqa: E402
 from .. import config as config_class  # noqa: E402
 from ..interface.actor_interface import ActorInterface  # noqa: E402
 from ..interface.hooks import HookRegistry  # noqa: E402
@@ -33,7 +33,6 @@ from ..mcp.protocol import (  # noqa: E402
     negotiate_protocol_version,
     supports_structured_content,
 )
-from ..mcp.sdk_server import get_server_manager  # noqa: E402
 from ..runtime_context import RuntimeContext  # noqa: E402
 from .base_handler import BaseHandler  # noqa: E402
 
@@ -126,10 +125,6 @@ class MCPHandler(BaseHandler):
         hooks: HookRegistry | None = None,
     ) -> None:
         super().__init__(webobj, config, hooks)
-        self.server_manager = get_server_manager(
-            server_name=getattr(config, "mcp_server_name", "actingweb"),
-            instructions=getattr(config, "mcp_instructions", None),
-        )
         # Protocol version in effect for the current request. Resolved per
         # request from the MCP-Protocol-Version header (post-initialize) and
         # consulted when formatting version-gated response fields.
@@ -377,14 +372,24 @@ class MCPHandler(BaseHandler):
                 "listChanged": True
             }  # Prompts can be dynamically discovered
 
+        # Server identity and orientation come from the app's with_mcp(...)
+        # configuration (carried on Config). The server name is what some
+        # clients use as the default tool prefix; instructions are surfaced to
+        # the LLM on initial connection.
+        server_name = getattr(self.config, "mcp_server_name", None) or "actingweb"
+        result: dict[str, Any] = {
+            "protocolVersion": negotiated_version,
+            "capabilities": capabilities,
+            "serverInfo": {"name": server_name, "version": __version__},
+        }
+        instructions = getattr(self.config, "mcp_instructions", None)
+        if instructions:
+            result["instructions"] = instructions
+
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {
-                "protocolVersion": negotiated_version,
-                "capabilities": capabilities,
-                "serverInfo": {"name": "ActingWeb MCP Server", "version": "1.0.0"},
-            },
+            "result": result,
         }
 
     def _handle_tools_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
@@ -988,9 +993,7 @@ class MCPHandler(BaseHandler):
 
             # Find the corresponding resource hook
             from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-            # Reuse URI template matching from SDK server implementation
-            from ..mcp.sdk_server import _match_uri_template
+            from ..mcp.uri import match_uri_template
 
             for method_name, hooks in self.hooks._method_hooks.items():
                 for hook in hooks:
@@ -1009,7 +1012,7 @@ class MCPHandler(BaseHandler):
                             uri_matches = False
                             variables: dict[str, str] | None = None
                             try:
-                                variables = _match_uri_template(
+                                variables = match_uri_template(
                                     str(resource_uri), str(uri)
                                 )
                             except Exception:

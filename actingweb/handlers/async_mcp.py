@@ -355,8 +355,7 @@ class AsyncMCPHandler(MCPHandler):
 
         # Import URI template matching logic
         try:
-            # Reuse URI template matching from SDK server implementation
-            from ..mcp.sdk_server import _match_uri_template
+            from ..mcp.uri import match_uri_template
 
             for method_name, hooks in self.hooks._method_hooks.items():
                 for hook in hooks:
@@ -370,7 +369,7 @@ class AsyncMCPHandler(MCPHandler):
                                 or f"actingweb://{method_name}"
                             )
                             if uri_template:
-                                match_result = _match_uri_template(uri_template, uri)
+                                match_result = match_uri_template(uri_template, uri)
                                 if match_result is not None:
                                     try:
                                         # Extract variables from URI
@@ -435,7 +434,7 @@ class AsyncMCPHandler(MCPHandler):
                                         )
 
         except ImportError:
-            logger.warning("Failed to import URI template matching from SDK server")
+            logger.warning("Failed to import URI template matching helper")
         except Exception as e:
             logger.error(f"Unexpected error during resource lookup: {e}", exc_info=True)
 

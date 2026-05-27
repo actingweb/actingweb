@@ -541,12 +541,11 @@ class TestOAuth2Discovery:
         Test that /.well-known/oauth-protected-resource/mcp reports correct MCP version.
 
         This is a regression test for a bug where the discovery endpoint was hardcoding
-        "2024-11-05" instead of using LATEST_PROTOCOL_VERSION from the MCP SDK.
+        "2024-11-05" instead of using the shared LATEST_PROTOCOL_VERSION constant.
 
-        The SDK was updated to 2025-06-18 but the discovery endpoint was still reporting
-        the old version, which would confuse MCP clients.
+        Reporting a stale version here would confuse MCP clients.
 
-        See: oauth2_endpoints.py line 637
+        See: oauth2_endpoints.py _handle_protected_resource_mcp_discovery
         """
         response = requests.get(f"{test_app}/.well-known/oauth-protected-resource/mcp")
 
@@ -563,9 +562,11 @@ class TestOAuth2Discovery:
         )
         assert "capabilities" in data, "Missing capabilities field"
 
-        # Verify version is from SDK (should be 2025-06-18 or newer, not hardcoded 2024-11-05)
-        from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
-        from mcp.types import LATEST_PROTOCOL_VERSION
+        # Verify version matches the shared constant (not a hardcoded stale value)
+        from actingweb.mcp.protocol import (
+            LATEST_PROTOCOL_VERSION,
+            SUPPORTED_PROTOCOL_VERSIONS,
+        )
 
         assert data["mcp_version"] == LATEST_PROTOCOL_VERSION, (
             f"Expected mcp_version={LATEST_PROTOCOL_VERSION}, got {data['mcp_version']}"

@@ -5,6 +5,15 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b7: May 28, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **MCP ``tools/list`` now surfaces ``title`` and ``outputSchema``**: ``@mcp_tool`` has long accepted ``title`` and ``output_schema`` parameters, but the ``/mcp`` ``tools/list`` builder dropped both fields when constructing the tool definition. Hosts that key on the MCP 2025-11-25 ``Tool.title`` (e.g. Claude Code's tool-permission dialog) therefore saw only the internal ``name``, and clients supporting structured output had no schema to validate against. ``tool_def`` now includes ``title`` and ``outputSchema`` when set on the decorator.
+- **``_get_session_key()`` now prefers the ``Mcp-Session-Id`` header**: the in-memory ``client_info`` cache key was derived from ``client_ip + hash(user_agent[:50])``, so two MCP clients sharing one OAuth2 credential through the same proxy (same IP, near-identical UA prefix) collided on the cache key. The second client's ``initialize`` then silently overwrote the first client's cached identity. ``_get_session_key()`` now uses the spec's ``Mcp-Session-Id`` header (case-insensitive, ``mcp-session:`` prefixed for namespacing) as the canonical per-connection identifier and only falls back to IP+UA when the header is absent. ``_resolve_transport_session_id()`` returns the raw header value (without the cache prefix) for surfacing on ``MCPContext.transport_session_id``.
+
 v3.10.2b6: May 28, 2026
 ------------------------
 

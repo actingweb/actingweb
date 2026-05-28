@@ -565,9 +565,17 @@ class MCPHandler(BaseHandler):
                         "description": description,
                     }
 
+                    title = metadata.get("title")
+                    if title:
+                        tool_def["title"] = title
+
                     input_schema = metadata.get("input_schema")
                     if input_schema:
                         tool_def["inputSchema"] = input_schema
+
+                    output_schema = metadata.get("output_schema")
+                    if output_schema:
+                        tool_def["outputSchema"] = output_schema
 
                     # Add annotations if present (for ChatGPT safety evaluation)
                     annotations = metadata.get("annotations")
@@ -1154,7 +1162,14 @@ class MCPHandler(BaseHandler):
         return None
 
     def _resolve_transport_session_id(self) -> str | None:
-        """Per-MCP-connection id: ``Mcp-Session-Id`` header, else ``_get_session_key()``."""
+        """Per-MCP-connection id: ``Mcp-Session-Id`` header, else ``_get_session_key()``.
+
+        Returns just the session-id value when the header is present
+        (without the ``mcp-session:`` prefix that ``_get_session_key()``
+        adds for cache-namespacing), so the value can be persisted on
+        ``MCPContext.transport_session_id`` and surfaced to callers as
+        the raw MCP-protocol identifier.
+        """
         try:
             headers = getattr(self.request, "headers", None)
             if headers is not None:
@@ -1786,10 +1801,37 @@ class MCPHandler(BaseHandler):
             del _mcp_client_info_cache[key]
 
     def _get_session_key(self) -> str:
-        """Generate a session key based on request characteristics."""
-        # Use client IP as primary identifier
+        """Generate a session key for the in-memory client_info cache.
+
+        Prefers the MCP HTTP-streamable spec's ``Mcp-Session-Id`` header,
+        which is the canonical per-MCP-connection identifier and is
+        distinct across concurrent sessions that share one OAuth2
+        credential. Falls back to ``client_ip + user_agent[:50]`` hash
+        only when the header is genuinely absent.
+
+        Why this matters: the same key stores ``client_info`` at
+        ``initialize`` time and looks it up on every subsequent request.
+        The pure IP+UA fallback collided when two clients on one
+        credential happened to share IP plus the first 50 chars of UA
+        (e.g. both proxied through the same backend), so a second
+        client's ``initialize`` silently overwrote the first client's
+        cached identity — the symptom captured as eval round-11
+        Finding X.
+        """
+        try:
+            headers = getattr(self.request, "headers", None)
+            if headers is not None:
+                session_id = headers.get("Mcp-Session-Id")
+                if not session_id and isinstance(headers, dict):
+                    for k, v in headers.items():
+                        if isinstance(k, str) and k.lower() == "mcp-session-id":
+                            session_id = v
+                            break
+                if session_id:
+                    return f"mcp-session:{session_id}"
+        except Exception:
+            logger.debug("Mcp-Session-Id header lookup failed", exc_info=True)
         client_ip = getattr(self.request, "remote_addr", "unknown")
-        # Add user agent for additional uniqueness
         user_agent = getattr(self.request, "headers", {}).get("User-Agent", "")[:50]
         return f"{client_ip}:{hash(user_agent)}"
 

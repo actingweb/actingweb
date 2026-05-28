@@ -59,6 +59,19 @@ class MCPContext:
     trust_relationship: Any  # Trust database record with client metadata
     peer_id: str  # Normalized peer identifier for permission checking
     token_data: dict[str, Any] | None = None  # OAuth2 token metadata
+    # Per-MCP-connection identifier, distinct from ``peer_id`` (which is
+    # shared across concurrent sessions on the same OAuth2 credential).
+    # Prefer the ``Mcp-Session-Id`` header (MCP HTTP streamable spec);
+    # fall back to ``client_ip + user_agent`` hash when the header is
+    # absent. ``None`` when neither is available.
+    transport_session_id: str | None = None
+    # Live ``clientInfo`` from the active session's ``initialize`` call,
+    # when available. Distinct from ``trust_relationship.client_name``
+    # (which is a per-credential cache overwritten by whichever session
+    # last registered). Use this for self-attribution in tool responses
+    # so two concurrent sessions on one credential don't see each other's
+    # cached identity.
+    client_info: dict[str, Any] | None = None
 
 
 @dataclass
@@ -121,6 +134,8 @@ class RuntimeContext:
         trust_relationship: Any,
         peer_id: str,
         token_data: dict[str, Any] | None = None,
+        transport_session_id: str | None = None,
+        client_info: dict[str, Any] | None = None,
     ) -> None:
         """
         Set MCP context for the current request.
@@ -130,6 +145,12 @@ class RuntimeContext:
             trust_relationship: Trust database record with client metadata
             peer_id: Normalized peer identifier for permission checking
             token_data: Optional OAuth2 token metadata
+            transport_session_id: Optional per-MCP-connection identifier
+                that distinguishes concurrent sessions sharing one
+                OAuth2 credential (see ``MCPContext.transport_session_id``).
+            client_info: Optional live ``clientInfo`` dict from the
+                active session's ``initialize`` call (see
+                ``MCPContext.client_info``).
         """
         context_data = self._get_context_data()
         context_data["mcp"] = MCPContext(
@@ -137,6 +158,8 @@ class RuntimeContext:
             trust_relationship=trust_relationship,
             peer_id=peer_id,
             token_data=token_data,
+            transport_session_id=transport_session_id,
+            client_info=client_info,
         )
         # MCP context set successfully (no logging needed for routine operation)
 
@@ -305,21 +328,38 @@ def get_client_info_from_context(actor: Any) -> dict[str, str] | None:
     """
     runtime_context = RuntimeContext(actor)
 
-    # Try MCP context first
+    # Try MCP context first. Prefer the live ``client_info`` captured
+    # at the current session's ``initialize`` over the trust
+    # relationship's cached ``client_name``: the trust rel is per-OAuth2-
+    # credential and gets overwritten whenever a new session registers,
+    # so two concurrent sessions sharing one credential would otherwise
+    # see each other's identity.
     mcp_context = runtime_context.get_mcp_context()
-    if mcp_context and mcp_context.trust_relationship:
-        trust = mcp_context.trust_relationship
-        client_name = getattr(trust, "client_name", "")
-        client_version = getattr(trust, "client_version", "")
-        client_platform = getattr(trust, "client_platform", "")
-
-        if client_name:  # Only return if we have actual client info
+    if mcp_context:
+        live = mcp_context.client_info if isinstance(mcp_context.client_info, dict) else None
+        if live and live.get("name"):
+            # MCP ``clientInfo`` carries only name/version per spec;
+            # ``platform`` is an ActingWeb enrichment on the trust rel,
+            # so this key is normally "" on the live-info path.
             return {
-                "name": client_name,
-                "version": client_version or "",
-                "platform": client_platform or "",
+                "name": str(live.get("name") or ""),
+                "version": str(live.get("version") or ""),
+                "platform": str(live.get("platform") or ""),
                 "type": "mcp",
             }
+        if mcp_context.trust_relationship:
+            trust = mcp_context.trust_relationship
+            client_name = getattr(trust, "client_name", "")
+            client_version = getattr(trust, "client_version", "")
+            client_platform = getattr(trust, "client_platform", "")
+
+            if client_name:  # Only return if we have actual client info
+                return {
+                    "name": client_name,
+                    "version": client_version or "",
+                    "platform": client_platform or "",
+                    "type": "mcp",
+                }
 
     # Try OAuth2 context
     oauth2_context = runtime_context.get_oauth2_context()

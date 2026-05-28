@@ -1153,6 +1153,38 @@ class MCPHandler(BaseHandler):
         self._negotiated_version = header_value
         return None
 
+    def _resolve_transport_session_id(self) -> str | None:
+        """Per-MCP-connection id: ``Mcp-Session-Id`` header, else ``_get_session_key()``."""
+        try:
+            headers = getattr(self.request, "headers", None)
+            if headers is not None:
+                # Flask/Starlette header objects are case-insensitive;
+                # scan keys defensively for plain-dict request stubs.
+                session_id = headers.get("Mcp-Session-Id")
+                if not session_id and isinstance(headers, dict):
+                    for k, v in headers.items():
+                        if isinstance(k, str) and k.lower() == "mcp-session-id":
+                            session_id = v
+                            break
+                if session_id:
+                    return str(session_id)
+        except Exception:
+            logger.debug("Mcp-Session-Id header lookup failed", exc_info=True)
+        try:
+            return self._get_session_key()
+        except Exception:
+            logger.debug("_get_session_key() failed in transport id resolution", exc_info=True)
+            return None
+
+    def _resolve_live_client_info(self) -> dict[str, Any] | None:
+        """Live ``clientInfo`` from the current session's ``initialize``, if cached."""
+        try:
+            session_key = self._get_session_key()
+        except Exception:
+            logger.debug("_get_session_key() failed in live client_info resolution", exc_info=True)
+            return None
+        return MCPHandler.get_stored_client_info(session_key)
+
     def authenticate_and_get_actor_cached(self) -> Any:
         """
         Optimized authenticate request and get actor with caching.
@@ -1219,6 +1251,8 @@ class MCPHandler(BaseHandler):
                             if trust_relationship
                             else "",
                             token_data=token_data,
+                            transport_session_id=self._resolve_transport_session_id(),
+                            client_info=self._resolve_live_client_info(),
                         )
 
                         # Log cache performance periodically
@@ -1288,6 +1322,8 @@ class MCPHandler(BaseHandler):
                 trust_relationship=trust_relationship,
                 peer_id=trust_relationship.peerid if trust_relationship else "",
                 token_data=token_data,
+                transport_session_id=self._resolve_transport_session_id(),
+                client_info=self._resolve_live_client_info(),
             )
 
             logger.debug(

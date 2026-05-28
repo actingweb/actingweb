@@ -338,6 +338,9 @@ def get_client_info_from_context(actor: Any) -> dict[str, str] | None:
     if mcp_context:
         live = mcp_context.client_info if isinstance(mcp_context.client_info, dict) else None
         if live and live.get("name"):
+            # MCP ``clientInfo`` carries only name/version per spec;
+            # ``platform`` is an ActingWeb enrichment on the trust rel,
+            # so this key is normally "" on the live-info path.
             return {
                 "name": str(live.get("name") or ""),
                 "version": str(live.get("version") or ""),

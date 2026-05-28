@@ -1154,30 +1154,12 @@ class MCPHandler(BaseHandler):
         return None
 
     def _resolve_transport_session_id(self) -> str | None:
-        """Identify the current MCP connection.
-
-        Two concurrent MCP sessions on the same OAuth2 credential share
-        a ``peer_id`` and a single trust relationship — they cannot be
-        told apart from credential data alone. This returns a per-MCP-
-        connection identifier suitable for tagging run records and
-        attributing self-identity in tool responses.
-
-        Preference order:
-        1. ``Mcp-Session-Id`` header (MCP HTTP streamable transport spec).
-        2. The existing ``_get_session_key()`` (``client_ip + UA hash``)
-           used internally for OAuth bootstrap correlation. Stable per
-           connecting client; discriminates the common
-           cron-vs-interactive case.
-        3. ``None`` when neither is available (legacy transports / unit
-           tests). Consumers should treat ``None`` as "ownership cannot
-           be verified" and fall back to today's behaviour.
-        """
+        """Per-MCP-connection id: ``Mcp-Session-Id`` header, else ``_get_session_key()``."""
         try:
             headers = getattr(self.request, "headers", None)
             if headers is not None:
-                # Starlette/FastAPI and Flask header objects are already
-                # case-insensitive. For plain dicts (tests, mocks), scan
-                # for any casing if the direct lookup misses.
+                # Flask/Starlette header objects are case-insensitive;
+                # scan keys defensively for plain-dict request stubs.
                 session_id = headers.get("Mcp-Session-Id")
                 if not session_id and isinstance(headers, dict):
                     for k, v in headers.items():
@@ -1187,31 +1169,21 @@ class MCPHandler(BaseHandler):
                 if session_id:
                     return str(session_id)
         except Exception:
-            pass
+            logger.debug("Mcp-Session-Id header lookup failed", exc_info=True)
         try:
             return self._get_session_key()
         except Exception:
+            logger.debug("_get_session_key() failed in transport id resolution", exc_info=True)
             return None
 
     def _resolve_live_client_info(self) -> dict[str, Any] | None:
-        """Live ``clientInfo`` for the current MCP session, if cached.
-
-        The library stores ``clientInfo`` from ``initialize`` keyed by
-        ``_get_session_key()`` in ``_mcp_client_info_cache``. That cache
-        is per-connection (IP + UA hash), so it discriminates concurrent
-        sessions on one OAuth2 credential — unlike the trust
-        relationship's cached ``client_name`` (which is per-credential
-        and gets overwritten by whichever session last registered).
-
-        Returns the cached client_info dict (typically with ``name`` and
-        ``version`` keys) or ``None`` if no cache entry exists.
-        """
+        """Live ``clientInfo`` from the current session's ``initialize``, if cached."""
         try:
             session_key = self._get_session_key()
         except Exception:
+            logger.debug("_get_session_key() failed in live client_info resolution", exc_info=True)
             return None
-        info = MCPHandler.get_stored_client_info(session_key)
-        return info if isinstance(info, dict) else None
+        return MCPHandler.get_stored_client_info(session_key)
 
     def authenticate_and_get_actor_cached(self) -> Any:
         """

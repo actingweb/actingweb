@@ -5,6 +5,19 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b6: May 28, 2026
+------------------------
+
+ADDED
+~~~~~
+
+- **Per-MCP-session identity on ``MCPContext``**: new optional ``transport_session_id`` and ``client_info`` fields expose per-session identity that is distinct from ``peer_id`` / ``trust_relationship`` (which are per-OAuth2-credential and shared across concurrent sessions on the same credential). ``transport_session_id`` prefers the ``Mcp-Session-Id`` header (per the MCP HTTP streamable transport spec) and falls back to the existing ``client_ip + UA hash`` session key. ``client_info`` carries the live ``clientInfo`` captured at the current session's ``initialize`` call. Backward compatible: both fields default to ``None``.
+
+FIXED
+~~~~~
+
+- **``get_client_info_from_context()`` no longer surfaces another session's identity** when two MCP sessions share one OAuth2 credential. Previously it read ``client_name`` from the trust relationship, which is per-credential and gets overwritten by whichever session most recently registered — so concurrent sessions on one credential would see each other's name. The runtime context now prefers the live ``MCPContext.client_info`` (captured per-session at ``initialize``) and only falls back to the trust relationship's cached fields when no live info is available.
+
 v3.10.2b5: May 27, 2026
 ------------------------
 

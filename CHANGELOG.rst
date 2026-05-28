@@ -5,6 +5,14 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b7: May 28, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **MCP ``tools/list`` now surfaces ``title`` and ``outputSchema``**: ``@mcp_tool`` has long accepted ``title`` and ``output_schema`` parameters, but the ``/mcp`` ``tools/list`` builder dropped both fields when constructing the tool definition. Hosts that key on the MCP 2025-11-25 ``Tool.title`` (e.g. Claude Code's tool-permission dialog) therefore saw only the internal ``name``, and clients supporting structured output had no schema to validate against. ``tool_def`` now includes ``title`` and ``outputSchema`` when set on the decorator.
+
 v3.10.2b6: May 28, 2026
 ------------------------
 

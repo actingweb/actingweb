@@ -565,9 +565,22 @@ class MCPHandler(BaseHandler):
                         "description": description,
                     }
 
+                    # ``title`` and ``outputSchema`` were previously accepted
+                    # by the ``@mcp_tool`` decorator but dropped here — hosts
+                    # that key on the MCP 2025-11-25 ``Tool.title`` (e.g.
+                    # Claude Code's tool-permission dialog) saw only the
+                    # internal ``name``. Serialise them now when set.
+                    title = metadata.get("title")
+                    if title:
+                        tool_def["title"] = title
+
                     input_schema = metadata.get("input_schema")
                     if input_schema:
                         tool_def["inputSchema"] = input_schema
+
+                    output_schema = metadata.get("output_schema")
+                    if output_schema:
+                        tool_def["outputSchema"] = output_schema
 
                     # Add annotations if present (for ChatGPT safety evaluation)
                     annotations = metadata.get("annotations")

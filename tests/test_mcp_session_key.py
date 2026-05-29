@@ -109,13 +109,13 @@ class TestClientInfoCacheIsolation:
 
 class TestTransportSessionIdNoSynthFallback:
     """``_resolve_transport_session_id`` is the *public* per-connection id
-    surfaced to MCP tool callers (eval round 12 / Finding N5) — distinct
-    from ``_get_session_key`` which is an internal cache key. The cache
-    key happily falls back to ``<ip>:<hash(UA)>`` when the
-    ``Mcp-Session-Id`` header is absent; the public id must NOT — earlier
-    versions did, and eval round 7 / Finding T1 saw the placeholder
-    ``unknown:0`` leak into ``status().your_transport_session_id`` for
-    every Claude.ai web session (no header, no remote_addr, no UA).
+    surfaced to MCP tool callers (via ``MCPContext.transport_session_id``) and
+    is distinct from ``_get_session_key`` which is an internal cache key. The
+    cache key falls back to ``<ip>:<hash(UA)>`` when the ``Mcp-Session-Id``
+    header is absent; the public id must NOT. Earlier revisions did fall back,
+    and on transports lacking the header, ``remote_addr`` AND ``User-Agent``
+    (observed for Claude.ai web sessions) the synthetic id degenerated to the
+    string ``"unknown:0"``.
     """
 
     def test_returns_header_value_when_present(self) -> None:
@@ -125,14 +125,19 @@ class TestTransportSessionIdNoSynthFallback:
     def test_returns_none_when_header_absent(self) -> None:
         """No header → ``None``, NOT the synthetic IP+UA fallback."""
         h = make_mcp_handler({"User-Agent": "ua-1"})
-        assert h._resolve_transport_session_id() is None
+        result = h._resolve_transport_session_id()
+        assert result is None
+        # Guard against regression to the synthetic ``<ip>:<hash>`` form.
+        assert not (isinstance(result, str) and ":" in result)
 
     def test_returns_none_when_request_is_minimal(self) -> None:
         """The exact Claude.ai-web case: no header, no UA, no remote_addr.
         Previously yielded ``"unknown:0"``; now returns ``None`` so
         callers can detect "this transport has no per-connection id."""
         h = make_mcp_handler({})
-        assert h._resolve_transport_session_id() is None
+        result = h._resolve_transport_session_id()
+        assert result is None
+        assert result != "unknown:0"
 
     def test_header_lookup_is_case_insensitive(self) -> None:
         h_upper = make_mcp_handler({"Mcp-Session-Id": "abc"})

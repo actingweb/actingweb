@@ -1164,23 +1164,17 @@ class MCPHandler(BaseHandler):
     def _resolve_transport_session_id(self) -> str | None:
         """Per-MCP-connection id from the ``Mcp-Session-Id`` header, else ``None``.
 
-        Returns just the session-id value when the header is present
-        (without the ``mcp-session:`` prefix that ``_get_session_key()``
-        adds for cache-namespacing), so the value can be persisted on
-        ``MCPContext.transport_session_id`` and surfaced to callers as
-        the raw MCP-protocol identifier.
+        Returns the raw header value (without the ``mcp-session:`` cache-namespacing
+        prefix that ``_get_session_key()`` adds) so it can be surfaced on
+        ``MCPContext.transport_session_id`` as the MCP-protocol identifier.
 
-        Returns ``None`` when the transport doesn't carry the header.
-        Earlier revisions fell back to ``_get_session_key()``'s synthetic
-        ``<client_ip>:<hash(UA)>`` form, but that's a *cache* key for
-        the in-process ``client_info`` store — it's not a real
-        per-connection identifier and an LLM eval saw it leak as ``unknown:0`` whenever the request lacked
-        both ``Mcp-Session-Id`` AND a usable ``remote_addr`` / UA.
-        Surfacing the placeholder defeats
-        the very coordination check the field exists for. Callers
-        should treat a ``None`` result as "this transport doesn't
-        expose a per-connection id; the transport-level guard is
-        inactive — use the client-id guard alone."
+        Callers should treat ``None`` as "this transport doesn't expose a
+        per-connection id; the transport-level guard is inactive — use the
+        client-id guard alone." We deliberately do NOT fall back to
+        ``_get_session_key()``: that returns an in-process cache key
+        (``<client_ip>:<hash(UA)>``), not a real per-connection identifier,
+        and degenerates to the placeholder ``"unknown:0"`` when the request
+        carries no ``Mcp-Session-Id``, no ``remote_addr`` and no ``User-Agent``.
         """
         try:
             headers = getattr(self.request, "headers", None)

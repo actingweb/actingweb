@@ -5,6 +5,14 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b8: May 29, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **``_resolve_transport_session_id()`` no longer leaks a synthetic placeholder when the ``Mcp-Session-Id`` header is absent.** Previously it fell back to ``_get_session_key()``, which returns ``<client_ip>:<hash(user_agent[:50])>`` — an in-process *cache* key for the ``client_info`` store, not a real per-connection identifier. On transports that carry neither the header nor a usable ``remote_addr``/``User-Agent`` (e.g. Claude.ai web sessions in some deployments), the placeholder degenerated to ``unknown:0`` and was surfaced to MCP tool callers as ``MCPContext.transport_session_id`` — defeating the very per-connection coordination check the field exists for. The method now returns ``None`` when the header is absent; callers should treat ``None`` as "this transport doesn't expose a per-connection id; rely on the client-id guard alone."
+
 v3.10.2b7: May 28, 2026
 ------------------------
 

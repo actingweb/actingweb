@@ -100,6 +100,45 @@ class TestClientInfoCacheIsolation:
         second._store_mcp_client_info_temporarily({"name": "claude-code"})
 
         # The first session's cached identity must still be intact.
-        info_first = mcp_module.MCPHandler.get_stored_client_info(first._get_session_key())
+        info_first = mcp_module.MCPHandler.get_stored_client_info(
+            first._get_session_key()
+        )
         assert info_first is not None
         assert info_first["name"] == "Anthropic/ClaudeAI"
+
+
+class TestTransportSessionIdNoSynthFallback:
+    """``_resolve_transport_session_id`` is the *public* per-connection id
+    surfaced to MCP tool callers (eval round 12 / Finding N5) — distinct
+    from ``_get_session_key`` which is an internal cache key. The cache
+    key happily falls back to ``<ip>:<hash(UA)>`` when the
+    ``Mcp-Session-Id`` header is absent; the public id must NOT — earlier
+    versions did, and eval round 7 / Finding T1 saw the placeholder
+    ``unknown:0`` leak into ``status().your_transport_session_id`` for
+    every Claude.ai web session (no header, no remote_addr, no UA).
+    """
+
+    def test_returns_header_value_when_present(self) -> None:
+        h = make_mcp_handler({"Mcp-Session-Id": "session-xyz"})
+        assert h._resolve_transport_session_id() == "session-xyz"
+
+    def test_returns_none_when_header_absent(self) -> None:
+        """No header → ``None``, NOT the synthetic IP+UA fallback."""
+        h = make_mcp_handler({"User-Agent": "ua-1"})
+        assert h._resolve_transport_session_id() is None
+
+    def test_returns_none_when_request_is_minimal(self) -> None:
+        """The exact Claude.ai-web case: no header, no UA, no remote_addr.
+        Previously yielded ``"unknown:0"``; now returns ``None`` so
+        callers can detect "this transport has no per-connection id."""
+        h = make_mcp_handler({})
+        assert h._resolve_transport_session_id() is None
+
+    def test_header_lookup_is_case_insensitive(self) -> None:
+        h_upper = make_mcp_handler({"Mcp-Session-Id": "abc"})
+        h_lower = make_mcp_handler({"mcp-session-id": "abc"})
+        assert (
+            h_upper._resolve_transport_session_id()
+            == h_lower._resolve_transport_session_id()
+            == "abc"
+        )

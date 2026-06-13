@@ -637,6 +637,7 @@ class OAuth2SessionManager:
         )
         refresh_tokens = refresh_bucket.get_bucket()
         if refresh_tokens:
+            # Same snapshot needed as the access-token loop above.
             for token, token_attr in list(refresh_tokens.items()):
                 if token_attr and "data" in token_attr:
                     if token_attr["data"].get("actor_id") == actor_id:

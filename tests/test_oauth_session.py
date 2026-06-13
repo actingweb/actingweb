@@ -298,6 +298,7 @@ class TestOAuth2SessionManager:
         )
 
         actor_id = "victim-actor"
+        seeded_per_bucket = 3
         access_bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR, bucket=_ACCESS_TOKEN_BUCKET, config=self.config
         )
@@ -306,7 +307,7 @@ class TestOAuth2SessionManager:
         )
         # Several tokens for the target actor (all revoked) plus one for a
         # different actor (must survive).
-        for i in range(3):
+        for i in range(seeded_per_bucket):
             access_bucket.set_attr(name=f"at{i}", data={"actor_id": actor_id})
             refresh_bucket.set_attr(name=f"rt{i}", data={"actor_id": actor_id})
         access_bucket.set_attr(name="keep_at", data={"actor_id": "other-actor"})
@@ -314,7 +315,10 @@ class TestOAuth2SessionManager:
 
         revoked = self.manager.revoke_all_tokens(actor_id)
 
-        assert revoked == 6  # 3 access + 3 refresh
+        # Derived from what we seeded (access + refresh) rather than hardcoded.
+        # ``self._test_storage`` is isolated per test instance, so only the
+        # victim's seeded tokens are present.
+        assert revoked == seeded_per_bucket * 2
         # Read the shared backing store directly (the per-instance Attributes
         # caches above are stale after revoke's own instances deleted).
         access_store = self._test_storage[f"{OAUTH2_SYSTEM_ACTOR}:{_ACCESS_TOKEN_BUCKET}"]

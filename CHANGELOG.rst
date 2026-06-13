@@ -5,6 +5,22 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b9: June 13, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **``OAuth2SessionManager.revoke_all_tokens()`` no longer crashes on the refresh-token-reuse path**: it iterated the access- and refresh-token bucket dicts with ``for token, token_attr in <bucket>.items()`` while calling ``delete_attr`` inside the loop, raising ``RuntimeError: dictionary changed size during iteration`` whenever an actor had a matching token to revoke. Because ``revoke_all_tokens`` is invoked by the SPA refresh-token reuse-detection path, reusing a rotated refresh token returned a 500 instead of cleanly revoking the actor's tokens. Both loops now snapshot ``list(<bucket>.items())`` before deleting (matching the existing ``cleanup_expired_tokens`` pattern).
+
+v3.10.2b8: May 29, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **``MCPContext.transport_session_id`` no longer leaks a synthetic placeholder when the ``Mcp-Session-Id`` header is absent.** ``_resolve_transport_session_id()`` previously fell back to ``_get_session_key()``'s ``<client_ip>:<hash(UA)>`` form — an internal cache key, not a real per-connection identifier — which degenerated to the string ``"unknown:0"`` on transports lacking the header, ``remote_addr`` and ``User-Agent`` (observed for Claude.ai web sessions). The method now returns ``None`` when the header is absent; callers should treat ``None`` as "this transport has no per-connection id; rely on the client-id guard alone."
+
 v3.10.2b7: May 28, 2026
 ------------------------
 

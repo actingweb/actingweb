@@ -1162,13 +1162,19 @@ class MCPHandler(BaseHandler):
         return None
 
     def _resolve_transport_session_id(self) -> str | None:
-        """Per-MCP-connection id: ``Mcp-Session-Id`` header, else ``_get_session_key()``.
+        """Per-MCP-connection id from the ``Mcp-Session-Id`` header, else ``None``.
 
-        Returns just the session-id value when the header is present
-        (without the ``mcp-session:`` prefix that ``_get_session_key()``
-        adds for cache-namespacing), so the value can be persisted on
-        ``MCPContext.transport_session_id`` and surfaced to callers as
-        the raw MCP-protocol identifier.
+        Returns the raw header value (without the ``mcp-session:`` cache-namespacing
+        prefix that ``_get_session_key()`` adds) so it can be surfaced on
+        ``MCPContext.transport_session_id`` as the MCP-protocol identifier.
+
+        Callers should treat ``None`` as "this transport doesn't expose a
+        per-connection id; the transport-level guard is inactive — use the
+        client-id guard alone." We deliberately do NOT fall back to
+        ``_get_session_key()``: that returns an in-process cache key
+        (``<client_ip>:<hash(UA)>``), not a real per-connection identifier,
+        and degenerates to the placeholder ``"unknown:0"`` when the request
+        carries no ``Mcp-Session-Id``, no ``remote_addr`` and no ``User-Agent``.
         """
         try:
             headers = getattr(self.request, "headers", None)
@@ -1185,18 +1191,17 @@ class MCPHandler(BaseHandler):
                     return str(session_id)
         except Exception:
             logger.debug("Mcp-Session-Id header lookup failed", exc_info=True)
-        try:
-            return self._get_session_key()
-        except Exception:
-            logger.debug("_get_session_key() failed in transport id resolution", exc_info=True)
-            return None
+        return None
 
     def _resolve_live_client_info(self) -> dict[str, Any] | None:
         """Live ``clientInfo`` from the current session's ``initialize``, if cached."""
         try:
             session_key = self._get_session_key()
         except Exception:
-            logger.debug("_get_session_key() failed in live client_info resolution", exc_info=True)
+            logger.debug(
+                "_get_session_key() failed in live client_info resolution",
+                exc_info=True,
+            )
             return None
         return MCPHandler.get_stored_client_info(session_key)
 

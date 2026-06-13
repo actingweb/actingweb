@@ -284,6 +284,52 @@ class TestOAuth2SessionManager:
         assert self.manager.get_session(session_id1) is None
         assert self.manager.get_session(session_id2) is None
 
+    def test_revoke_all_tokens_does_not_crash_on_concurrent_delete(self):
+        """Regression: ``revoke_all_tokens`` deletes matching tokens while
+        iterating the bucket dict. Without snapshotting the items first, this
+        raised ``RuntimeError: dictionary changed size during iteration`` (the
+        live SPA refresh-token-reuse path hit this with a 500). Seed multiple
+        matching tokens in both buckets so a delete happens mid-iteration."""
+        from actingweb import attribute
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+        from actingweb.oauth_session import (
+            _ACCESS_TOKEN_BUCKET,
+            _REFRESH_TOKEN_BUCKET,
+        )
+
+        actor_id = "victim-actor"
+        seeded_per_bucket = 3
+        access_bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR, bucket=_ACCESS_TOKEN_BUCKET, config=self.config
+        )
+        refresh_bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR, bucket=_REFRESH_TOKEN_BUCKET, config=self.config
+        )
+        # Several tokens for the target actor (all revoked) plus one for a
+        # different actor (must survive).
+        for i in range(seeded_per_bucket):
+            access_bucket.set_attr(name=f"at{i}", data={"actor_id": actor_id})
+            refresh_bucket.set_attr(name=f"rt{i}", data={"actor_id": actor_id})
+        access_bucket.set_attr(name="keep_at", data={"actor_id": "other-actor"})
+        refresh_bucket.set_attr(name="keep_rt", data={"actor_id": "other-actor"})
+
+        revoked = self.manager.revoke_all_tokens(actor_id)
+
+        # Derived from what we seeded (access + refresh) rather than hardcoded.
+        # ``self._test_storage`` is isolated per test instance, so only the
+        # victim's seeded tokens are present.
+        assert revoked == seeded_per_bucket * 2
+        # Read the shared backing store directly (the per-instance Attributes
+        # caches above are stale after revoke's own instances deleted).
+        access_store = self._test_storage[f"{OAUTH2_SYSTEM_ACTOR}:{_ACCESS_TOKEN_BUCKET}"]
+        refresh_store = self._test_storage[f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"]
+        # The other actor's tokens are untouched.
+        assert "keep_at" in access_store
+        assert "keep_rt" in refresh_store
+        # The victim's tokens are gone.
+        assert not any(k.startswith("at") for k in access_store)
+        assert not any(k.startswith("rt") for k in refresh_store)
+
     def test_multiple_sessions_independent(self):
         """Test that multiple sessions are independent."""
         session_id1 = self.manager.store_session(

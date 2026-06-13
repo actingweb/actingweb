@@ -5,6 +5,14 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.10.2b9: June 13, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **``OAuth2SessionManager.revoke_all_tokens()`` no longer crashes on the refresh-token-reuse path**: it iterated the access- and refresh-token bucket dicts with ``for token, token_attr in <bucket>.items()`` while calling ``delete_attr`` inside the loop, raising ``RuntimeError: dictionary changed size during iteration`` whenever an actor had a matching token to revoke. Because ``revoke_all_tokens`` is invoked by the SPA refresh-token reuse-detection path, reusing a rotated refresh token returned a 500 instead of cleanly revoking the actor's tokens. Both loops now snapshot ``list(<bucket>.items())`` before deleting (matching the existing ``cleanup_expired_tokens`` pattern).
+
 v3.10.2b8: May 29, 2026
 ------------------------
 

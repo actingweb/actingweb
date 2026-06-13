@@ -620,7 +620,10 @@ class OAuth2SessionManager:
         )
         access_tokens = access_bucket.get_bucket()
         if access_tokens:
-            for token, token_attr in access_tokens.items():
+            # Snapshot with list() — delete_attr mutates the bucket dict we're
+            # iterating (it would raise "dictionary changed size during
+            # iteration"). Mirrors cleanup_expired_tokens().
+            for token, token_attr in list(access_tokens.items()):
                 if token_attr and "data" in token_attr:
                     if token_attr["data"].get("actor_id") == actor_id:
                         access_bucket.delete_attr(name=token)
@@ -634,7 +637,7 @@ class OAuth2SessionManager:
         )
         refresh_tokens = refresh_bucket.get_bucket()
         if refresh_tokens:
-            for token, token_attr in refresh_tokens.items():
+            for token, token_attr in list(refresh_tokens.items()):
                 if token_attr and "data" in token_attr:
                     if token_attr["data"].get("actor_id") == actor_id:
                         refresh_bucket.delete_attr(name=token)

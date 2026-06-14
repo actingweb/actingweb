@@ -28,12 +28,26 @@ ADDED
 - **New ``app.with_google_native(...)`` builder** for native Google sign-in via
   the JWT-bearer grant (accepts explicit ``audiences`` or derives them from the
   per-platform client IDs).
+- **Apple nonce hashing handled by the library.** Apple's native flow puts
+  ``SHA256(nonce)`` (hex) in the id_token's ``nonce`` claim while Google echoes
+  it verbatim. The Apple id_token validator now accepts either the raw nonce or
+  its SHA-256, so apps pass the **same raw nonce** to the JWT-bearer grant for
+  every provider instead of pre-hashing per provider. Google validation stays a
+  strict verbatim match.
 - **New POST ``/oauth/callback/apple`` endpoint** for Apple's
   ``response_mode=form_post`` callback, protected by a server-side single-use
   state nonce (CSRF-safe without relying on SameSite cookies).
-- **New ``apple_mobile_ticket`` grant** for the Android Apple flow: Apple's POST
-  callback is exchanged for an opaque deep-link ticket (no ActingWeb token in the
-  deep link); the app redeems the ticket at ``/oauth/spa/token``.
+- **New ``mobile_ticket`` grant** (generalized from the original Apple-only
+  ``apple_mobile_ticket``, which remains as an alias): any native-mobile provider
+  whose authorization response lands on the HTTPS callback is handed an opaque
+  single-use deep-link ticket and the code is exchanged server-side — no IdP code
+  and no ActingWeb token ever rides the deep link. Used by Apple-on-Android and
+  GitHub mobile.
+- **New ``app.with_github(...)`` builder** mirroring ``with_apple_sign_in`` /
+  ``with_google_native``: fills in GitHub's endpoints and, with
+  ``mobile_redirect_uri``, registers a ``github-mobile`` provider that uses the
+  server-side ticket flow (GitHub issues no OIDC ``id_token``, so it cannot use
+  the JWT-bearer grant).
 - **Normalized ``user_info`` shape on the ``oauth_success`` hook**
   (``display_name`` / ``given_name`` / ``family_name`` / ``email`` / ``sub``
   plus passthrough) across all providers. Apple's first-sign-in ``user`` payload

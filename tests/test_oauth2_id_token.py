@@ -126,6 +126,49 @@ class TestValidate:
         with _patch_jwks(keypair):
             assert _validator().validate(token, nonce="expected") is None
 
+    def test_hash_tolerant_accepts_sha256_claim(self, keypair) -> None:
+        # Apple convention: token nonce claim is hex SHA256(raw_nonce). A
+        # hash-tolerant validator must accept the *raw* nonce from the caller.
+        import hashlib
+
+        raw = "raw-nonce-xyz"
+        hashed = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        token = _sign(keypair, _claims(nonce=hashed))
+        v = JWKSIdTokenValidator(
+            jwks_uri=JWKS_URI,
+            expected_iss=ISS,
+            audiences=[AUD],
+            nonce_hash_tolerant=True,
+        )
+        with _patch_jwks(keypair):
+            assert v.validate(token, nonce=raw) is not None
+            # The exact (already-hashed) value still works too (back-compat).
+            assert v.validate(token, nonce=hashed) is not None
+
+    def test_hash_tolerant_still_rejects_wrong_nonce(self, keypair) -> None:
+        import hashlib
+
+        hashed = hashlib.sha256(b"raw-nonce-xyz").hexdigest()
+        token = _sign(keypair, _claims(nonce=hashed))
+        v = JWKSIdTokenValidator(
+            jwks_uri=JWKS_URI,
+            expected_iss=ISS,
+            audiences=[AUD],
+            nonce_hash_tolerant=True,
+        )
+        with _patch_jwks(keypair):
+            assert v.validate(token, nonce="attacker-nonce") is None
+
+    def test_non_tolerant_validator_rejects_hashed_claim(self, keypair) -> None:
+        # Google (default): the claim must equal the raw nonce verbatim.
+        import hashlib
+
+        raw = "raw-nonce-xyz"
+        hashed = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        token = _sign(keypair, _claims(nonce=hashed))
+        with _patch_jwks(keypair):
+            assert _validator().validate(token, nonce=raw) is None
+
     def test_kid_not_in_jwks(self, keypair) -> None:
         token = _sign(keypair, _claims(), kid="unknownkid")
         with _patch_jwks(keypair, kid=KID):

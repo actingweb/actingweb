@@ -1,7 +1,7 @@
 # Implementation Plan: Sign in with Apple + Unified Native OIDC Grant
 
 **Date:** 2026-05-29
-**Status:** Phases 1–7 Implemented; Phase 8 (GitHub mobile parity) Planned for the same 3.11.0 release
+**Status:** Implemented (Phases 1–8) for the 3.11.0 release
 **Research:** thoughts/research/2026-05-28-apple-signin-support.md
 **Branch:** feature/apple-signin-google-mobile-support
 **Target release:** actingweb 3.11.0
@@ -546,7 +546,44 @@ This phase has three threads:
 - [ ] `apple_mobile_ticket` grant + `AppleTicketStore` import still pass unchanged (back-compat)
 - [ ] Docs build with 0 warnings
 
-### Implementation Status: Planned
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- Ticket store: `AppleTicketStore` → `MobileTicketStore` (provider-agnostic);
+  `AppleTicketStore` kept as an alias. Constants gained `MOBILE_TICKET_BUCKET` /
+  `MOBILE_TICKET_TTL` (the bucket name is unchanged so in-flight tickets and
+  existing imports keep working).
+- `mobile_deep_link` is now read on the **base** `OAuth2Provider` (from
+  `mobile_deep_link`, falling back to the legacy `apple_mobile_deep_link` key), so
+  every provider exposes it; `GitHubOAuth2Provider` threads it through its config
+  dict. `is_safe_spa_redirect` allowlists both keys.
+- Generic `mobile_ticket` grant (`_handle_mobile_ticket`); `apple_mobile_ticket`
+  dispatches to it as an alias. Identity extraction is generic: id_token from the
+  token response (Apple) with a userinfo fallback (GitHub).
+- The query-mode `GET /oauth/callback` now hands any `-mobile` provider with a
+  configured deep link an opaque ticket (shared `_redirect_with_mobile_ticket`
+  helper, also used by the Apple form_post handler).
+- Fail-closed PKCE in `_handle_authorization_code`: `-mobile`/`-native` providers
+  or custom-scheme redirect URIs without a `code_verifier` → 400. Reordered so the
+  unknown-provider check precedes the PKCE check.
+- `with_github(client_id, client_secret, *, scope, redirect_uri,
+  mobile_redirect_uri)` added (web + optional `github-mobile`).
+- **Added beyond the original plan (nonce correctness):** the Apple id_token
+  validator is now **nonce-hash-tolerant** — Apple's native flow puts
+  `SHA256(nonce)` in the claim while Google echoes it verbatim, so
+  `JWKSIdTokenValidator` accepts the raw nonce *or* its hex SHA-256 (gated to
+  Apple via `nonce_hash_tolerant=True`). Apps pass one raw nonce for every
+  provider; Google stays a strict verbatim match. This removes a per-provider
+  frontend footgun surfaced during actingweb_mcp adoption research.
+- Existing `test_mobile_oauth2.py` authorization_code tests were updated to carry
+  a `code_verifier` (the new fail-closed rule); a fail-closed 400 test was added.
+- New tests: `test_oauth2_spa_mobile_ticket.py`,
+  `test_oauth2_callback_github_mobile.py`, `TestGithub` in
+  `test_actingweb_app.py`, and three nonce-tolerance tests in
+  `test_oauth2_id_token.py`.
+- Docs: generic `mobile_ticket` + mandatory-PKCE note in `spa-authentication.rst`;
+  `with_github` + GitHub-mobile note in `authentication.rst`; grant list updated
+  in `routing-overview.rst`. Sphinx build is clean (0 warnings).
 
 **Open design notes:**
 - `mobile_ticket` vs keeping per-provider grant names: chosen approach is one generic grant + `apple_mobile_ticket` alias, so the app's frontend uses a single redemption path regardless of provider.

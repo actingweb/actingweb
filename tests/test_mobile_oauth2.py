@@ -287,6 +287,7 @@ class TestAuthorizationCodeGrant:
                     "code": "test-auth-code",
                     "provider": "github-mobile",
                     "redirect_uri": "io.actingweb.memory://callback",
+                    "code_verifier": "test-pkce-verifier",
                     "token_delivery": "json",
                 },
                 "json",
@@ -322,6 +323,7 @@ class TestAuthorizationCodeGrant:
                 "code": "bad-code",
                 "provider": "github-mobile",
                 "redirect_uri": "io.actingweb.memory://callback",
+                "code_verifier": "test-pkce-verifier",
             },
             "json",
         )
@@ -346,6 +348,7 @@ class TestAuthorizationCodeGrant:
             {
                 "code": "test-code",
                 "provider": "github-mobile",
+                "code_verifier": "test-pkce-verifier",
             },
             "json",
         )
@@ -453,6 +456,7 @@ class TestAuthorizationCodeGrant:
                     "code": "test-auth-code",
                     "provider": "github-mobile",
                     "redirect_uri": "io.actingweb.memory://callback",
+                    "code_verifier": "test-pkce-verifier",
                 },
                 "cookie",
             )
@@ -524,6 +528,7 @@ class TestAuthorizationCodeGrant:
                     "code": "test-auth-code",
                     "provider": "github-mobile",
                     "redirect_uri": "io.actingweb.memory://callback",
+                    "code_verifier": "test-pkce-verifier",
                 },
                 "hybrid",
             )

@@ -87,14 +87,17 @@ class StateNonceStore:
         return payload
 
 
-class AppleTicketStore:
-    """Short-lived exchange-ticket store for the Android Apple deep-link flow.
+class MobileTicketStore:
+    """Short-lived exchange-ticket store for native-mobile deep-link flows.
 
-    Apple's ``redirect_uri`` must be HTTPS, so the Android Capacitor app cannot
-    receive Apple's POST directly. Instead the server validates Apple's POST,
-    persists the IdP ``code`` against an opaque ticket, and deep-links the app
-    with only the ticket. The app then POSTs the ticket to ``/oauth/spa/token``
-    where the server performs the JWT-client_secret exchange. No ActingWeb token
+    Some mobile providers cannot deliver the authorization response straight to
+    the app: Apple's ``redirect_uri`` must be HTTPS (Android Capacitor can't
+    receive Apple's POST directly), and GitHub mobile is routed through the HTTPS
+    callback so the authorization code never rides a hijackable custom-scheme
+    redirect. In both cases the server persists the IdP ``code`` against an opaque
+    single-use ticket and deep-links the app with only the ticket. The app then
+    POSTs the ticket to ``/oauth/spa/token`` (``mobile_ticket`` grant) where the
+    server performs the code exchange. No ActingWeb token — and no IdP code —
     ever appears in a deep link.
     """
 
@@ -112,8 +115,8 @@ class AppleTicketStore:
     ) -> str:
         from . import attribute
         from .constants import (
-            APPLE_TICKET_BUCKET,
-            APPLE_TICKET_TTL,
+            MOBILE_TICKET_BUCKET,
+            MOBILE_TICKET_TTL,
             OAUTH2_SYSTEM_ACTOR,
         )
 
@@ -128,21 +131,21 @@ class AppleTicketStore:
 
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket=APPLE_TICKET_BUCKET,
+            bucket=MOBILE_TICKET_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=ticket, data=payload, ttl_seconds=ttl or APPLE_TICKET_TTL)
+        bucket.set_attr(name=ticket, data=payload, ttl_seconds=ttl or MOBILE_TICKET_TTL)
         return ticket
 
     def consume(self, ticket: str) -> dict[str, Any] | None:
         from . import attribute
-        from .constants import APPLE_TICKET_BUCKET, OAUTH2_SYSTEM_ACTOR
+        from .constants import MOBILE_TICKET_BUCKET, OAUTH2_SYSTEM_ACTOR
 
         if not ticket:
             return None
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket=APPLE_TICKET_BUCKET,
+            bucket=MOBILE_TICKET_BUCKET,
             config=self.config,
         )
         attr = bucket.get_attr(name=ticket)
@@ -153,6 +156,11 @@ class AppleTicketStore:
         if not isinstance(payload, dict):
             return None
         return payload
+
+
+# Backward-compatible alias. The Apple-Android flow was the first consumer; the
+# store is now provider-agnostic (Apple + GitHub mobile + future providers).
+AppleTicketStore = MobileTicketStore
 
 
 def looks_like_state_nonce(state: str) -> bool:

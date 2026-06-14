@@ -12,7 +12,9 @@ audiences" model), and tolerate ``iss`` being one of several accepted values
 ``account.apple.com``).
 """
 
+import hashlib
 import logging
+import secrets
 from typing import Any
 
 import jwt
@@ -33,6 +35,7 @@ class JWKSIdTokenValidator:
         audiences: list[str],
         algorithms: list[str] | None = None,
         leeway: int = 60,
+        nonce_hash_tolerant: bool = False,
     ) -> None:
         self.jwks_uri = jwks_uri
         self.expected_iss: tuple[str, ...] = (
@@ -41,6 +44,13 @@ class JWKSIdTokenValidator:
         self.audiences = list(audiences)
         self.algorithms = algorithms or ["RS256"]
         self.leeway = leeway
+        # Apple's native Sign-in convention is for the client to put
+        # ``SHA256(raw_nonce)`` (hex) in the authorization request, so the token's
+        # ``nonce`` claim is the hash — whereas Google echoes the nonce verbatim.
+        # When True, the nonce check accepts either the raw value or its hex
+        # SHA-256, so callers can pass the *raw* nonce uniformly regardless of
+        # provider. Both forms equally prove the caller possessed the nonce.
+        self.nonce_hash_tolerant = nonce_hash_tolerant
 
     def validate(
         self, id_token: str, *, nonce: str | None = None
@@ -49,7 +59,9 @@ class JWKSIdTokenValidator:
 
         Args:
             id_token: The compact-serialized JWT.
-            nonce: If provided, the token's ``nonce`` claim must match exactly.
+            nonce: If provided, the token's ``nonce`` claim must match it. With
+                ``nonce_hash_tolerant`` (Apple), a hex ``SHA256(nonce)`` claim is
+                also accepted, so the *raw* nonce can be passed for any provider.
 
         Returns:
             The validated claims dict, or None if validation failed.
@@ -123,7 +135,12 @@ class JWKSIdTokenValidator:
 
         # Nonce check (when required by caller).
         if nonce is not None:
-            if claims.get("nonce") != nonce:
+            claim_nonce = claims.get("nonce") or ""
+            ok = secrets.compare_digest(str(claim_nonce), nonce)
+            if not ok and self.nonce_hash_tolerant:
+                hashed = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+                ok = secrets.compare_digest(str(claim_nonce), hashed)
+            if not ok:
                 logger.warning("id_token nonce mismatch")
                 return None
 

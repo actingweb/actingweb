@@ -800,6 +800,74 @@ class ActingWebApp:
         self._apply_runtime_changes_to_config()
         return self
 
+    def with_github(
+        self,
+        client_id: str,
+        client_secret: str,
+        *,
+        scope: str = "read:user user:email",
+        redirect_uri: str = "",
+        mobile_redirect_uri: str = "",
+    ) -> "ActingWebApp":
+        """Configure GitHub sign-in, with optional native-mobile support.
+
+        Ergonomic equivalent of ``with_oauth(provider="github", ...)`` that fills
+        in GitHub's authorization/token endpoints. When ``mobile_redirect_uri`` is
+        set it also registers a ``github-mobile`` provider whose OAuth
+        ``redirect_uri`` stays on the HTTPS ``/oauth/callback`` so the
+        authorization code is exchanged **server-side** and the Capacitor app only
+        ever receives an opaque single-use ticket on ``mobile_redirect_uri`` (the
+        ``mobile_ticket`` grant). The code therefore never rides a hijackable
+        custom-scheme redirect.
+
+        GitHub issues no OIDC ``id_token``; identity comes from the ``/user`` API
+        after the code exchange, so GitHub mobile uses this ticket flow rather
+        than the JWT-bearer grant used by Apple/Google native.
+
+        Args:
+            client_id: GitHub OAuth app client ID.
+            client_secret: GitHub OAuth app client secret.
+            scope: OAuth scope. Defaults to ``"read:user user:email"``.
+            redirect_uri: Override for the web ``redirect_uri`` (defaults to
+                ``/oauth/callback``).
+            mobile_redirect_uri: Custom-scheme deep link the Capacitor app
+                intercepts; when set, registers the ``github-mobile`` provider.
+        """
+        if not client_id:
+            raise ValueError("with_github: client_id is required")
+        if not client_secret:
+            raise ValueError("with_github: client_secret is required")
+
+        web_redirect = redirect_uri or f"{self.proto}{self.fqdn}/oauth/callback"
+
+        def _github_cfg(deep_link: str = "") -> dict[str, Any]:
+            cfg: dict[str, Any] = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": scope,
+                "auth_uri": "https://github.com/login/oauth/authorize",
+                "token_uri": "https://github.com/login/oauth/access_token",
+                "redirect_uri": web_redirect,
+                "response_type": "code",
+                "grant_type": "authorization_code",
+            }
+            if deep_link:
+                cfg["mobile_deep_link"] = deep_link
+            return cfg
+
+        self._oauth_configs["github"] = _github_cfg()
+
+        if mobile_redirect_uri:
+            # The OAuth redirect_uri stays HTTPS (the ticket flow); the
+            # custom-scheme deep link only carries the opaque ticket.
+            self._oauth_configs["github-mobile"] = _github_cfg(
+                deep_link=mobile_redirect_uri
+            )
+
+        self._www_auth = "oauth"
+        self._apply_runtime_changes_to_config()
+        return self
+
     def _get_service_registry(self):
         """Get or create the service registry."""
         if self._service_registry is None:

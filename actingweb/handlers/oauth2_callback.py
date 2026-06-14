@@ -88,7 +88,7 @@ def is_safe_spa_redirect(config: "config_class.Config", url: str) -> bool:
     for prov_cfg in providers.values():
         if not isinstance(prov_cfg, dict):
             continue
-        for key in ("redirect_uri", "apple_mobile_deep_link"):
+        for key in ("redirect_uri", "mobile_deep_link", "apple_mobile_deep_link"):
             origin = _origin_of(str(prov_cfg.get(key, "")))
             if origin is not None and origin == target_origin:
                 return True
@@ -152,6 +152,48 @@ class OAuth2CallbackHandler(BaseHandler):
         # first sign-in only; the Apple POST handler stashes it here so the shared
         # SPA session-creation path can merge it before firing oauth_success.
         self._pending_apple_user_json: str | None = None
+
+    def _redirect_with_mobile_ticket(self, provider: str, code: str) -> dict[str, Any]:
+        """Hand a native-mobile provider's authorization code to the app via an
+        opaque single-use ticket deep link.
+
+        The IdP ``code`` is stored server-side and the app receives only the
+        ticket, which it redeems at ``/oauth/spa/token`` (``mobile_ticket``
+        grant). Neither the code nor any ActingWeb token appears in the deep
+        link. Shared by the Apple form_post handler and the query-mode callback
+        (e.g. ``github-mobile``).
+        """
+        from urllib.parse import urlencode, urlunparse
+
+        from ..oauth_state_store import MobileTicketStore
+
+        if not code:
+            return self.error_response(400, "Missing authorization code")
+        if not self.authenticator:
+            return self.error_response(500, "OAuth2 not configured")
+        deep_link = getattr(self.authenticator.provider, "mobile_deep_link", "")
+        if not deep_link:
+            logger.error("%s provider has no mobile deep link configured", provider)
+            return self.error_response(500, "Mobile flow not configured")
+        ticket = MobileTicketStore(self.config).create(
+            code=code,
+            redirect_uri=self.authenticator.provider.redirect_uri,
+            provider=provider,
+        )
+        parsed = urlparse(deep_link)
+        deep_url = urlunparse(
+            (
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode({"ticket": ticket}),
+                parsed.fragment,
+            )
+        )
+        self.response.set_status(302, "Found")
+        self.response.set_redirect(deep_url)
+        return {"redirect_required": True, "redirect_url": deep_url}
 
     def get(self) -> dict[str, Any]:
         """
@@ -220,6 +262,18 @@ class OAuth2CallbackHandler(BaseHandler):
         logger.debug(
             f"Parsed state - redirect_url: '{redirect_url}', spa_redirect_url: '{spa_redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}', spa_mode: {spa_mode}"
         )
+
+        # Native-mobile providers that route through the HTTPS query callback
+        # (e.g. github-mobile) get only an opaque ticket on their deep link; the
+        # code is exchanged server-side via the mobile_ticket grant. Apple's
+        # form_post variant is handled by OAuth2AppleCallbackHandler instead, so
+        # it never reaches here. Detected by a configured mobile deep link.
+        if (
+            state_provider
+            and state_provider.endswith("-mobile")
+            and getattr(self.authenticator.provider, "mobile_deep_link", "")
+        ):
+            return self._redirect_with_mobile_ticket(state_provider, code)
 
         # For SPA mode, check if this is a browser navigation vs fetch request
         # Browser navigations need to redirect to SPA callback with code/state
@@ -1196,9 +1250,9 @@ class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
     """
 
     def post(self) -> dict[str, Any]:
-        from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+        from urllib.parse import parse_qs
 
-        from ..oauth_state_store import AppleTicketStore, StateNonceStore
+        from ..oauth_state_store import StateNonceStore
 
         # Parse the form-encoded body.
         body = self.request.body
@@ -1251,31 +1305,7 @@ class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
 
         # Android flow: hand the code off via an opaque ticket deep link.
         if provider == "apple-mobile" or provider.startswith("apple-mobile"):
-            if not code:
-                return self.error_response(400, "Missing authorization code")
-            deep_link = getattr(self.authenticator.provider, "mobile_deep_link", "")
-            if not deep_link:
-                logger.error("apple-mobile provider has no deep link configured")
-                return self.error_response(500, "Apple mobile flow not configured")
-            ticket = AppleTicketStore(self.config).create(
-                code=code,
-                redirect_uri=self.authenticator.provider.redirect_uri,
-                provider=provider,
-            )
-            parsed = urlparse(deep_link)
-            deep_url = urlunparse(
-                (
-                    parsed.scheme or "",
-                    parsed.netloc or "",
-                    parsed.path,
-                    parsed.params,
-                    urlencode({"ticket": ticket}),
-                    parsed.fragment,
-                )
-            )
-            self.response.set_status(302, "Found")
-            self.response.set_redirect(deep_url)
-            return {"redirect_required": True, "redirect_url": deep_url}
+            return self._redirect_with_mobile_ticket(provider, code)
 
         # Web / SPA flow: stash the first-sign-in user payload and reuse the
         # standard callback completion by replaying it through get(). We rebuild

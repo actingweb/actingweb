@@ -198,11 +198,15 @@ OAuth Provider Endpoints
   single-use state nonce. See :doc:`../guides/apple-sign-in`.
 - ``POST /oauth/spa/token`` supports these ``grant_type`` values:
 
-  - ``authorization_code`` — mobile code+PKCE exchange (existing).
+  - ``authorization_code`` — mobile code+PKCE exchange (existing). PKCE
+    (``code_verifier``) is **required** for ``-mobile``/``-native`` providers or
+    custom-scheme ``redirect_uri`` values.
   - ``refresh_token`` — refresh with rotation (existing).
   - ``urn:ietf:params:oauth:grant-type:jwt-bearer`` — native ``id_token``
     (``assertion`` + ``nonce`` + ``provider``) exchange for an ActingWeb session.
-  - ``apple_mobile_ticket`` — redeem the Android Apple deep-link ticket.
+  - ``mobile_ticket`` — redeem an opaque deep-link ticket for a server-side code
+    exchange (Apple-on-Android, GitHub mobile). ``apple_mobile_ticket`` is a
+    backward-compatible alias.
 
 Notes
 =====

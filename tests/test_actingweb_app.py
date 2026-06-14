@@ -288,6 +288,59 @@ class TestGoogleNative:
         assert app._www_auth == "oauth"
 
 
+class TestGithub:
+    """Test with_github() builder."""
+
+    def _app(self) -> ActingWebApp:
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            return ActingWebApp(
+                aw_type="urn:actingweb:test:github", fqdn="test.example.com"
+            )
+
+    def test_registers_github_web_provider(self) -> None:
+        app = self._app()
+        app.with_github("gh-id", "gh-secret")
+        assert "github" in app._oauth_configs
+        cfg = app._oauth_configs["github"]
+        assert cfg["client_id"] == "gh-id"
+        assert cfg["client_secret"] == "gh-secret"
+        assert cfg["auth_uri"] == "https://github.com/login/oauth/authorize"
+        assert cfg["redirect_uri"].endswith("/oauth/callback")
+        # No mobile variant unless requested.
+        assert "github-mobile" not in app._oauth_configs
+
+    def test_mobile_variant_uses_https_callback_and_deep_link(self) -> None:
+        app = self._app()
+        app.with_github(
+            "gh-id", "gh-secret", mobile_redirect_uri="io.example.app://callback"
+        )
+        assert "github-mobile" in app._oauth_configs
+        mobile = app._oauth_configs["github-mobile"]
+        # The OAuth redirect stays HTTPS (the ticket flow); the custom scheme is
+        # only the final deep link.
+        assert mobile["redirect_uri"].endswith("/oauth/callback")
+        assert mobile["redirect_uri"].startswith("https://")
+        assert mobile["mobile_deep_link"] == "io.example.app://callback"
+
+    def test_missing_credentials_raise(self) -> None:
+        app = self._app()
+        try:
+            app.with_github("", "secret")
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "client_id" in str(e)
+        try:
+            app.with_github("id", "")
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "client_secret" in str(e)
+
+    def test_sets_www_auth(self) -> None:
+        app = self._app()
+        app.with_github("gh-id", "gh-secret")
+        assert app._www_auth == "oauth"
+
+
 class TestFeatureToggles:
     """Test feature enable/disable."""
 

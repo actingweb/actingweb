@@ -27,6 +27,7 @@ import logging
 import secrets
 import time
 from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import urlparse
 
 from .base_handler import BaseHandler
 
@@ -596,8 +597,10 @@ class OAuth2SPAHandler(BaseHandler):
             return self._handle_authorization_code(params, token_delivery)
         elif grant_type == "urn:ietf:params:oauth:grant-type:jwt-bearer":
             return self._handle_jwt_bearer_grant(params, token_delivery)
-        elif grant_type == "apple_mobile_ticket":
-            return self._handle_apple_mobile_ticket(params, token_delivery)
+        elif grant_type in ("mobile_ticket", "apple_mobile_ticket"):
+            # apple_mobile_ticket is the original (Apple-only) name, kept as an
+            # alias for the now provider-agnostic mobile_ticket grant.
+            return self._handle_mobile_ticket(params, token_delivery)
         elif grant_type == "passphrase":
             return self._handle_passphrase_exchange(params, token_delivery)
         else:
@@ -772,14 +775,32 @@ class OAuth2SPAHandler(BaseHandler):
         if not code:
             return self._json_error(400, "Missing authorization code")
 
-        if not code_verifier:
-            logger.warning(
-                "Mobile OAuth authorization_code exchange without PKCE code_verifier. "
-                "PKCE is strongly recommended for native apps (RFC 7636)."
-            )
-
         if not _is_known_provider(provider):
             return self._json_error(400, f"Unknown OAuth provider: {provider}")
+
+        # PKCE is mandatory (fail-closed) for native authorization_code exchanges:
+        # a native/`-mobile` provider, or any custom-scheme (non-http[s])
+        # redirect_uri, where an intercepted code without a verifier is exploitable
+        # (RFC 8252). Web/SPA same-origin flows (http/https redirect) keep working
+        # with server-managed PKCE and only get a soft warning if a verifier is
+        # absent.
+        if not code_verifier:
+            scheme = urlparse(redirect_uri).scheme if redirect_uri else ""
+            is_native = (
+                provider.endswith("-mobile")
+                or provider.endswith("-native")
+                or (scheme not in ("http", "https", ""))
+            )
+            if is_native:
+                return self._json_error(
+                    400,
+                    "PKCE code_verifier required for native authorization_code "
+                    "exchange",
+                )
+            logger.warning(
+                "authorization_code exchange without PKCE code_verifier. "
+                "PKCE is strongly recommended (RFC 7636)."
+            )
 
         # Create authenticator for the specified provider
         try:
@@ -1163,22 +1184,28 @@ class OAuth2SPAHandler(BaseHandler):
             token_delivery=token_delivery,
         )
 
-    def _handle_apple_mobile_ticket(
+    def _handle_mobile_ticket(
         self, params: dict[str, Any], token_delivery: str
     ) -> dict[str, Any]:
-        """Apple Android ticket grant: redeem a deep-link ticket for a session.
+        """Mobile-ticket grant: redeem a deep-link ticket for a session.
+
+        Provider-agnostic completion of any native-mobile flow that routed its
+        authorization code through the HTTPS callback (Apple-on-Android,
+        GitHub mobile). The server exchanges the stored code and derives identity
+        the way the provider supports it — from the id_token in the token
+        response (Apple) or from the userinfo endpoint (GitHub).
 
         Request body (JSON):
-        - grant_type: "apple_mobile_ticket"
+        - grant_type: "mobile_ticket" (or the "apple_mobile_ticket" alias)
         - ticket: the opaque ticket delivered to the app's deep link
         """
         ticket = params.get("ticket", "")
         if not ticket:
             return self._json_error(400, "Missing ticket")
 
-        from ..oauth_state_store import AppleTicketStore
+        from ..oauth_state_store import MobileTicketStore
 
-        stored = AppleTicketStore(self.config).consume(ticket)
+        stored = MobileTicketStore(self.config).consume(ticket)
         if not stored:
             return self._json_error(400, "Invalid or expired ticket")
 
@@ -1195,17 +1222,23 @@ class OAuth2SPAHandler(BaseHandler):
             code, redirect_uri=redirect_uri
         )
         if not token_data or "access_token" not in token_data:
-            return self._json_error(401, "Apple token exchange failed")
+            return self._json_error(401, "Token exchange failed")
 
+        # Identity: OIDC providers (Apple) carry it in the id_token within the
+        # token response; others (GitHub) fetch it from the userinfo endpoint.
         claims = authenticator.provider.extract_user_info_from_token_response(
             token_data
         )
         if not claims:
-            return self._json_error(401, "Apple id_token validation failed")
+            claims = authenticator.validate_token_and_get_user_info(
+                token_data["access_token"]
+            )
+        if not claims:
+            return self._json_error(401, "Failed to extract user info")
 
         identifier = authenticator.get_email_from_user_info(claims)
         if not identifier:
-            return self._json_error(401, "id_token did not yield a user identifier")
+            return self._json_error(401, "Sign-in did not yield a user identifier")
 
         user_info = _normalize_user_info(provider, claims)
         return self._finalize_native_session(

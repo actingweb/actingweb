@@ -73,6 +73,13 @@ class OAuth2Provider:
         self.revocation_uri = config.get("revocation_uri", "")
         self.scope = config.get("scope", "")
         self.redirect_uri = config.get("redirect_uri", "")
+        # Custom-scheme deep link for native-mobile flows that route through the
+        # HTTPS callback and hand the app an opaque ticket (Apple-on-Android,
+        # GitHub mobile). Empty for plain web/SPA providers. Read the generic key
+        # first, falling back to the legacy Apple-specific key.
+        self.mobile_deep_link = config.get("mobile_deep_link", "") or config.get(
+            "apple_mobile_deep_link", ""
+        )
         # Optional OIDC id_token validator (set by providers like Apple, or by
         # Google native when audiences are configured). None means this provider
         # validates identity via the userinfo endpoint instead.
@@ -257,6 +264,11 @@ class GitHubOAuth2Provider(OAuth2Provider):
             "scope": "user:email",
             "redirect_uri": custom_redirect
             or f"{config.proto}{config.fqdn}/oauth/callback",
+            # Native-mobile deep link (github-mobile): the code is exchanged
+            # server-side via the mobile_ticket grant; the app only sees a ticket.
+            "mobile_deep_link": (oauth_config.get("mobile_deep_link", ""))
+            if provider_config
+            else "",
         }
         super().__init__("github", github_config)
 
@@ -344,7 +356,11 @@ class AppleOAuth2Provider(OAuth2Provider):
         self._private_key_pem = prov.get("apple_private_key_pem", "")
         # Custom-scheme deep link for the Android Capacitor flow (apple-mobile).
         # Apple's redirect_uri stays HTTPS; this is only the final deep-link.
-        self.mobile_deep_link = prov.get("apple_mobile_deep_link", "")
+        # (base __init__ also reads these keys; set explicitly because Apple's
+        # config dict above does not carry the deep-link key.)
+        self.mobile_deep_link = prov.get("mobile_deep_link", "") or prov.get(
+            "apple_mobile_deep_link", ""
+        )
 
         # Register credentials for cached client_secret minting, and wire up the
         # id_token validator (fail-closed when audiences are unset).
@@ -363,6 +379,9 @@ class AppleOAuth2Provider(OAuth2Provider):
             jwks_uri=self.JWKS_URI,
             expected_iss=self.EXPECTED_ISS,
             audiences=self.audiences or ([self.client_id] if self.client_id else []),
+            # Apple's native flow hashes the nonce (SHA256) into the token claim;
+            # accept the raw nonce or its hash so callers pass one uniform value.
+            nonce_hash_tolerant=True,
         )
 
     def is_enabled(self) -> bool:

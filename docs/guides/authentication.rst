@@ -126,12 +126,29 @@ GitHub OAuth2 Provider
 
 .. code-block:: python
 
+    # Ergonomic builder (fills in GitHub's endpoints; supports mobile):
+    app = ActingWebApp(...).with_github(
+        client_id="your_github_client_id",
+        client_secret="your_github_client_secret",
+        # Optional native-mobile support — registers a `github-mobile` provider.
+        # The OAuth redirect stays on the HTTPS /oauth/callback and the app
+        # receives only an opaque ticket on this deep link (mobile_ticket grant).
+        mobile_redirect_uri="io.example.app://callback",
+    )
+
+    # Equivalent low-level form (no mobile helper):
     app = ActingWebApp(...).with_oauth(
         provider="github",
         client_id="your_github_client_id",
         client_secret="your_github_client_secret",
         scope="read:user user:email",
     )
+
+.. note::
+
+   GitHub issues no OIDC ``id_token``, so GitHub mobile cannot use the
+   JWT-bearer grant. ``with_github(mobile_redirect_uri=...)`` wires the
+   server-side **mobile-ticket** flow instead (see :doc:`spa-authentication`).
 
 **Endpoints:**
     - Auth URI: ``https://github.com/login/oauth/authorize``

@@ -45,9 +45,7 @@ class Property(Base):
     """Property table - key-value storage per actor."""
 
     __tablename__ = "properties"
-    __table_args__ = (
-        PrimaryKeyConstraint("id", "name"),
-    )
+    __table_args__ = (PrimaryKeyConstraint("id", "name"),)
 
     id = Column(String(255), nullable=False)  # actor_id
     name = Column(String(255), nullable=False)

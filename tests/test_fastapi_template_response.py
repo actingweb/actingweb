@@ -71,9 +71,7 @@ class TestTemplateResponseRendering:
 class TestTemplateResponseWithContext:
     """Verify template context variables are correctly passed."""
 
-    def test_factory_get_includes_oauth_context(
-        self, client: TestClient
-    ) -> None:
+    def test_factory_get_includes_oauth_context(self, client: TestClient) -> None:
         """GET / with web UI should pass oauth_enabled in template context."""
         response = client.get("/")
         assert response.status_code == 200

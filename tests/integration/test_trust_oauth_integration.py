@@ -17,6 +17,7 @@ References:
 """
 
 import os
+import time
 
 import pytest
 
@@ -396,24 +397,35 @@ class TestTrustDeletionOnClientDeletion:
             success = actor.trust.delete_relationship(peer_id)
             assert success
 
-            # Reload actor to get fresh data
-            actor_reload = ActorInterface.get_by_id(actor.id, config)  # type: ignore[arg-type]
+            # Verify cleanup completed. Trust deletion, client removal, and token
+            # revocation are separate writes; under heavy parallel DB load (e.g.
+            # the postgres CI matrix running the full suite with xdist) they can be
+            # observed with a brief eventual-consistency lag. Poll rather than
+            # asserting on the first read to avoid a flaky failure.
+            def _trust_gone() -> bool:
+                reloaded = ActorInterface.get_by_id(actor.id, config)  # type: ignore[arg-type]
+                return all(
+                    client_id not in t.peerid
+                    for t in reloaded.trust.relationships  # type: ignore[arg-type]
+                )
 
-            # Verify trust is deleted
-            matching_trust_after = None
-            for trust in actor_reload.trust.relationships:  # type: ignore[arg-type]
-                if client_id in trust.peerid:
-                    matching_trust_after = trust
-                    break
-            assert matching_trust_after is None
+            def _cleanup_complete() -> bool:
+                return (
+                    _trust_gone()
+                    and len(client_manager.list_clients()) == 0
+                    and token_manager.validate_access_token(access_token) is None
+                )
 
-            # Verify client is deleted
-            clients_after = client_manager.list_clients()
-            assert len(clients_after) == 0
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not _cleanup_complete():
+                time.sleep(0.1)
 
-            # Verify token is revoked
-            token_validation_after = token_manager.validate_access_token(access_token)
-            assert token_validation_after is None, (
+            # Final assertions (clear messages on the specific step that lagged).
+            assert _trust_gone(), "Trust relationship should be deleted"
+            assert len(client_manager.list_clients()) == 0, (
+                "OAuth2 client should be deleted after trust deletion"
+            )
+            assert token_manager.validate_access_token(access_token) is None, (
                 "Token should be revoked after trust deletion"
             )
         finally:

@@ -641,6 +641,13 @@ class OAuth2EndpointsHandler(BaseHandler):
                     oauth2_server = get_actingweb_oauth2_server(self.config)
 
                     for prov_name in provider_names:
+                        # Native-only variants (mobile / native id_token flows)
+                        # are not offered in the LLM-triggered web form.
+                        if prov_name.endswith("-mobile") or prov_name.endswith(
+                            "-native"
+                        ):
+                            continue
+
                         # Each provider gets its own encrypted state with provider embedded
                         mcp_context = {
                             "client_id": form_data.get("client_id", ""),
@@ -655,24 +662,39 @@ class OAuth2EndpointsHandler(BaseHandler):
                         )
 
                         auth = create_oauth2_authenticator(self.config, prov_name)
-                        if auth.is_enabled():
-                            auth_url = auth.create_authorization_url(
-                                state=encrypted_state,
-                                trust_type=default_trust_type or "",
+                        if not auth.is_enabled():
+                            continue
+
+                        # Apple form_posts its callback; wrap the encrypted MCP
+                        # state in a server-side nonce so /oauth/callback/apple can
+                        # consume it and dispatch back to the MCP completion path.
+                        is_apple = prov_name == "apple" or prov_name.startswith(
+                            "apple-"
+                        )
+                        if is_apple:
+                            from ..oauth_state_store import StateNonceStore
+
+                            state_param = StateNonceStore(self.config).create(
+                                {"provider": prov_name, "mcp_state": encrypted_state}
                             )
-                            oauth_providers.append(
-                                {
-                                    "name": prov_name,
-                                    "display_name": get_provider_display_name(
-                                        prov_name
-                                    ),
-                                    "url": auth_url,
-                                }
-                            )
-                            oauth_enabled = True
-                            logger.debug(
-                                f"Generated {prov_name} OAuth authorization URL for MCP client"
-                            )
+                        else:
+                            state_param = encrypted_state
+
+                        auth_url = auth.create_authorization_url(
+                            state=state_param,
+                            trust_type=default_trust_type or "",
+                        )
+                        oauth_providers.append(
+                            {
+                                "name": prov_name,
+                                "display_name": get_provider_display_name(prov_name),
+                                "url": auth_url,
+                            }
+                        )
+                        oauth_enabled = True
+                        logger.debug(
+                            f"Generated {prov_name} OAuth authorization URL for MCP client"
+                        )
 
             except Exception as e:
                 logger.warning(

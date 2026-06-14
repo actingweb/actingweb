@@ -10,7 +10,7 @@ ActingWeb's authentication system provides a unified, provider-agnostic OAuth2 i
 
 **Key Features:**
 
-- **Multi-Provider Support**: Google OAuth2, GitHub OAuth2, and extensible to other providers
+- **Multi-Provider Support**: Google OAuth2, GitHub OAuth2, Sign in with Apple, and extensible to other providers (see :doc:`apple-sign-in` for Apple, including native iOS/Android and the JWT-bearer grant via ``with_apple_sign_in()`` / ``with_google_native()``)
 - **Multiple Authentication Methods**: Web sessions (cookies), Bearer tokens (API), and Basic auth (legacy)
 - **Framework Agnostic**: Consistent behavior across FastAPI and Flask integrations
 - **MCP Integration**: Full OAuth2 support for Model Context Protocol endpoints

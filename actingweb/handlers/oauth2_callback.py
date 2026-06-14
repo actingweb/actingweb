@@ -37,6 +37,70 @@ def _decode_state_with_extras(state: str) -> dict[str, Any]:
         return {}
 
 
+def is_safe_spa_redirect(config: "config_class.Config", url: str) -> bool:
+    """Return True if ``url`` is a safe target for the post-auth SPA redirect.
+
+    The SPA passes ``redirect_uri`` to ``/oauth/spa/authorize`` and the callback
+    later 302-redirects the browser there with a one-time ``?session=`` id. If
+    that target were attacker-controlled, the session id (exchangeable for tokens)
+    would leak. Allowed targets:
+
+    - Relative URLs (no scheme and no host) — same-origin by definition.
+    - The backend's own FQDN (the common same-origin SPA case).
+    - The origin of any configured OAuth ``redirect_uri`` / Apple mobile deep link
+      (covers custom mobile schemes like ``io.actingweb.app://callback``).
+    - Any origin explicitly listed in ``config.spa_redirect_origins`` (split-domain
+      SPA deployments).
+
+    Anything else is rejected.
+    """
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    # Relative URLs (no scheme, no netloc) are same-origin.
+    if not parsed.scheme and not parsed.netloc:
+        return True
+
+    # Same host as the configured backend FQDN.
+    fqdn = getattr(config, "fqdn", "") or ""
+    if fqdn and parsed.netloc == fqdn:
+        return True
+
+    target_origin = (parsed.scheme, parsed.netloc)
+
+    def _origin_of(candidate: str) -> tuple[str, str] | None:
+        if not candidate:
+            return None
+        try:
+            cp = urlparse(candidate)
+        except Exception:
+            return None
+        if not cp.scheme:
+            return None
+        return (cp.scheme, cp.netloc)
+
+    # Origins of configured OAuth redirect URIs and Apple mobile deep links.
+    providers = getattr(config, "oauth_providers", {}) or {}
+    for prov_cfg in providers.values():
+        if not isinstance(prov_cfg, dict):
+            continue
+        for key in ("redirect_uri", "apple_mobile_deep_link"):
+            origin = _origin_of(str(prov_cfg.get(key, "")))
+            if origin is not None and origin == target_origin:
+                return True
+
+    # Explicitly allowlisted SPA origins (split-domain deployments).
+    for allowed in getattr(config, "spa_redirect_origins", None) or []:
+        if _origin_of(str(allowed)) == target_origin:
+            return True
+
+    return False
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,6 +148,10 @@ class OAuth2CallbackHandler(BaseHandler):
         # Create a default authenticator; may be replaced once state is parsed
         # and the actual provider is known.
         self.authenticator = create_oauth2_authenticator(config) if config else None
+        # Apple's web flow delivers a one-time `user` JSON (name/email) on the
+        # first sign-in only; the Apple POST handler stashes it here so the shared
+        # SPA session-creation path can merge it before firing oauth_success.
+        self._pending_apple_user_json: str | None = None
 
     def get(self) -> dict[str, Any]:
         """
@@ -139,6 +207,16 @@ class OAuth2CallbackHandler(BaseHandler):
         # The legacy decode_state() doesn't parse JSON state properly
         spa_redirect_url = state_extras.get("redirect_url", "") if spa_mode else ""
 
+        # Defense-in-depth: never honor an unsafe SPA redirect target. The
+        # one-time ?session= id is appended to this URL, so an attacker-supplied
+        # origin would leak it. Fall back to the backend root if it's not allowed.
+        if spa_redirect_url and not is_safe_spa_redirect(self.config, spa_redirect_url):
+            logger.warning(
+                "Rejected unsafe SPA redirect target '%s'; falling back to root",
+                spa_redirect_url,
+            )
+            spa_redirect_url = f"{self.config.proto}{self.config.fqdn}/"
+
         logger.debug(
             f"Parsed state - redirect_url: '{redirect_url}', spa_redirect_url: '{spa_redirect_url}', actor_id: '{actor_id}', trust_type: '{trust_type}', spa_mode: {spa_mode}"
         )
@@ -183,8 +261,17 @@ class OAuth2CallbackHandler(BaseHandler):
         refresh_token = token_data.get("refresh_token")
         expires_in = token_data.get("expires_in", 3600)
 
-        # Validate token and get user info
-        user_info = self.authenticator.validate_token_and_get_user_info(access_token)
+        # Get user info. OIDC providers (Apple) carry identity in the id_token
+        # within the token response; others fetch it from the userinfo endpoint.
+        user_info = self.authenticator.provider.extract_user_info_from_token_response(
+            token_data
+        )
+        if not user_info:
+            user_info = self.authenticator.validate_token_and_get_user_info(
+                access_token
+            )
+        # Merge Apple's first-sign-in `user` payload (name/email) if present.
+        user_info = self._merge_apple_user_payload(user_info)
         if not user_info:
             logger.error("Failed to validate token or extract user info")
             return self.error_response(502, "Token validation failed")
@@ -668,35 +755,45 @@ class OAuth2CallbackHandler(BaseHandler):
         return response_data
 
     def _is_safe_redirect(self, url: str) -> bool:
+        """Check if redirect URL is safe (same origin or configured allowlist).
+
+        Delegates to :func:`is_safe_spa_redirect`.
         """
-        Check if redirect URL is safe (same domain).
+        return is_safe_spa_redirect(self.config, url)
 
-        Args:
-            url: URL to validate
+    def _merge_apple_user_payload(
+        self, user_info: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Merge Apple's first-sign-in ``user`` JSON into ``user_info``.
 
-        Returns:
-            True if URL is safe to redirect to
+        Apple returns ``{"name": {"firstName", "lastName"}, "email"}`` in the
+        form_post body only on the very first sign-in. We normalize it into
+        ``given_name`` / ``family_name`` / ``display_name`` (and ``email`` if the
+        id_token lacked one) so the ``oauth_success`` hook sees a consistent shape.
         """
-        if not url:
-            return False
-
+        payload = self._pending_apple_user_json
+        if not payload or user_info is None:
+            return user_info
         try:
-            # Parse the URL
-            parsed = urlparse(url)
+            data = json.loads(payload) if isinstance(payload, str) else payload
+        except (json.JSONDecodeError, TypeError):
+            return user_info
+        if not isinstance(data, dict):
+            return user_info
 
-            # Allow relative URLs (no scheme/netloc)
-            if not parsed.scheme and not parsed.netloc:
-                return True
-
-            # Allow same domain redirects
-            if parsed.netloc == self.config.fqdn:
-                return True
-
-            # Reject external redirects
-            return False
-
-        except Exception:
-            return False
+        name = data.get("name") if isinstance(data.get("name"), dict) else {}
+        first = (name or {}).get("firstName") or data.get("firstName") or ""
+        last = (name or {}).get("lastName") or data.get("lastName") or ""
+        if first and not user_info.get("given_name"):
+            user_info["given_name"] = first
+        if last and not user_info.get("family_name"):
+            user_info["family_name"] = last
+        if (first or last) and not user_info.get("display_name"):
+            user_info["display_name"] = f"{first} {last}".strip()
+        email = data.get("email")
+        if email and not user_info.get("email"):
+            user_info["email"] = email
+        return user_info
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create error response with template rendering for user-friendly errors."""
@@ -809,8 +906,17 @@ class OAuth2CallbackHandler(BaseHandler):
         refresh_token = token_data.get("refresh_token")
         expires_in = token_data.get("expires_in", 3600)
 
-        # Validate token and get user info
-        user_info = self.authenticator.validate_token_and_get_user_info(access_token)
+        # Get user info. OIDC providers (Apple) carry identity in the id_token
+        # within the token response; others fetch it from the userinfo endpoint.
+        user_info = self.authenticator.provider.extract_user_info_from_token_response(
+            token_data
+        )
+        if not user_info:
+            user_info = self.authenticator.validate_token_and_get_user_info(
+                access_token
+            )
+        # Merge Apple's first-sign-in `user` payload (name/email) if present.
+        user_info = self._merge_apple_user_payload(user_info)
         if not user_info:
             logger.error("SPA OAuth: Failed to validate token")
             parsed = urlparse(spa_redirect_url)
@@ -1068,3 +1174,142 @@ class OAuth2CallbackHandler(BaseHandler):
         self.response.set_status(302, "Found")
         self.response.set_redirect(spa_callback_url)
         return {"redirect_required": True, "redirect_url": spa_callback_url}
+
+
+class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
+    """Handles Apple's ``response_mode=form_post`` callback at POST /oauth/callback/apple.
+
+    Apple POSTs the authorization response as a cross-site form submission. CSRF
+    protection comes from a server-side single-use nonce (the ``state`` value is
+    an opaque nonce; the full state payload is held server-side via
+    ``StateNonceStore``). SameSite=Lax cookies are NOT relied upon for state
+    binding here precisely because they do not survive Apple's cross-site POST.
+
+    Two sub-flows, dispatched by the consumed payload's ``provider``:
+
+    - ``apple`` (web/SPA): exchange the code with Apple (ES256 client_secret),
+      validate the id_token, merge the first-sign-in ``user`` payload, and reuse
+      the standard ``get()`` completion path.
+    - ``apple-mobile`` (Android): persist the IdP ``code`` against an opaque
+      ticket and deep-link the Capacitor app with only the ticket. No ActingWeb
+      token is placed in the deep link.
+    """
+
+    def post(self) -> dict[str, Any]:
+        from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+        from ..oauth_state_store import AppleTicketStore, StateNonceStore
+
+        # Parse the form-encoded body.
+        body = self.request.body
+        if body is None:
+            body_str = ""
+        elif isinstance(body, bytes):
+            body_str = body.decode("utf-8", "ignore")
+        else:
+            body_str = str(body)
+        form = parse_qs(body_str)
+
+        def _f(key: str) -> str:
+            return form.get(key, [""])[0]
+
+        error = _f("error")
+        if error:
+            logger.warning(f"Apple callback error: {error}")
+            return self.error_response(400, f"Authentication failed: {error}")
+
+        state = _f("state")
+        if not state:
+            return self.error_response(400, "Missing state")
+
+        payload = StateNonceStore(self.config).consume(state)
+        if payload is None:
+            logger.warning("Apple callback: invalid or expired state nonce")
+            return self.error_response(400, "Invalid or expired state nonce")
+
+        provider = str(payload.get("provider", "apple"))
+        code = _f("code")
+        id_token = _f("id_token")
+        user_json = _f("user")
+
+        # MCP (LLM-triggered) Apple flow: the nonce payload carries the encrypted
+        # MCP state. Dispatch to the MCP OAuth2 server's completion path instead
+        # of the SPA path.
+        if "mcp_state" in payload:
+            return self._dispatch_apple_mcp_callback(code, payload["mcp_state"])
+
+        # Re-create the authenticator for the concrete Apple provider variant.
+        self.authenticator = create_oauth2_authenticator(self.config, provider)
+
+        logger.info(
+            "Apple callback: provider=%s has_code=%s has_id_token=%s has_user=%s",
+            provider,
+            bool(code),
+            bool(id_token),
+            bool(user_json),
+        )
+
+        # Android flow: hand the code off via an opaque ticket deep link.
+        if provider == "apple-mobile" or provider.startswith("apple-mobile"):
+            if not code:
+                return self.error_response(400, "Missing authorization code")
+            deep_link = getattr(self.authenticator.provider, "mobile_deep_link", "")
+            if not deep_link:
+                logger.error("apple-mobile provider has no deep link configured")
+                return self.error_response(500, "Apple mobile flow not configured")
+            ticket = AppleTicketStore(self.config).create(
+                code=code,
+                redirect_uri=self.authenticator.provider.redirect_uri,
+                provider=provider,
+            )
+            parsed = urlparse(deep_link)
+            deep_url = urlunparse(
+                (
+                    parsed.scheme or "",
+                    parsed.netloc or "",
+                    parsed.path,
+                    parsed.params,
+                    urlencode({"ticket": ticket}),
+                    parsed.fragment,
+                )
+            )
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(deep_url)
+            return {"redirect_required": True, "redirect_url": deep_url}
+
+        # Web / SPA flow: stash the first-sign-in user payload and reuse the
+        # standard callback completion by replaying it through get(). We rebuild
+        # the request params with the JSON state payload so decode_state and the
+        # SPA branch behave exactly as the GET callback does for Google/GitHub.
+        if not code:
+            return self.error_response(400, "Missing authorization code")
+
+        self._pending_apple_user_json = user_json or None
+        state_json = json.dumps(payload)
+        new_params = {"code": code, "state": state_json}
+        if id_token:
+            new_params["id_token"] = id_token
+        self.request.params = new_params
+        return self.get()
+
+    def _dispatch_apple_mcp_callback(self, code: str, mcp_state: str) -> dict[str, Any]:
+        """Complete an LLM-triggered (MCP) Apple flow via the MCP OAuth2 server."""
+        if not code:
+            return self.error_response(400, "Missing authorization code")
+        try:
+            from ..oauth2_server.oauth2_server import ActingWebOAuth2Server
+
+            server = ActingWebOAuth2Server(self.config)
+            result = server.handle_oauth_callback({"code": code, "state": mcp_state})
+        except Exception as e:
+            logger.error(f"Apple MCP callback dispatch failed: {e}")
+            return self.error_response(500, "Internal server error")
+
+        if result.get("action") == "redirect" and result.get("url"):
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(result["url"])
+            return {"redirect_required": True, "redirect_url": result["url"]}
+
+        error = result.get("error", "server_error")
+        description = result.get("error_description", "OAuth2 callback failed")
+        return self.error_response(400, f"{error}: {description}")

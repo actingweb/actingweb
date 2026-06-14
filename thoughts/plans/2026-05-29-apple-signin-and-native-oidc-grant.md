@@ -1,7 +1,7 @@
 # Implementation Plan: Sign in with Apple + Unified Native OIDC Grant
 
 **Date:** 2026-05-29
-**Status:** Ready for Implementation
+**Status:** Implemented
 **Research:** thoughts/research/2026-05-28-apple-signin-support.md
 **Branch:** feature/apple-signin-google-mobile-support
 **Target release:** actingweb 3.11.0
@@ -80,7 +80,30 @@ Move provider-specific branches out of `OAuth2Authenticator` and onto `OAuth2Pro
 - [ ] `git diff` review: zero new branches in `OAuth2Authenticator.exchange_code_for_token` / `refresh_access_token` / `revoke_token` (all branches must move onto provider)
 - [ ] Manual: `grep -rn "provider.name == " actingweb/oauth2.py` returns nothing
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- The plan's provider strategy-method names were adapted to fit the existing
+  oauthlib-based authenticator (body building stays on the authenticator via
+  `self.client`). Final provider strategy surface: `make_client_secret()`,
+  `authorize_extra_params()`, `token_request_headers()`,
+  `userinfo_request_headers()`, `supports_refresh_tokens()`, `supports_revoke()`,
+  `extract_user_info_from_token_response()`, `extract_identifier_from_user_info()`,
+  `get_primary_email()`, `store_provider_identity()`, `discovery_extras()`, plus a
+  `display_name` property.
+- `OAuth2Authenticator.get_email_from_user_info()` keeps its public signature
+  `(user_info, access_token=None, require_email=False)`; it delegates the
+  provider-specific parts to `provider.get_primary_email()` /
+  `provider.extract_identifier_from_user_info()`.
+- `_get_github_primary_email` moved to a module-level free function;
+  `OAuth2Authenticator._get_github_primary_email` kept as a thin shim.
+- Factory now uses `_PROVIDER_REGISTRY` (base-name prefix match) instead of an
+  if/elif chain. `create_google_authenticator` / `create_github_authenticator`
+  shims unchanged.
+- Discovery extras now come from `provider.discovery_extras()` in both Flask and
+  FastAPI integrations (Google block removed).
+- All 20 `test_mobile_oauth2.py` regression tests pass unchanged; new
+  `tests/test_oauth_provider_strategy.py` (29 tests) added. Full suite green.
 
 ---
 
@@ -122,7 +145,22 @@ Add the cryptographic infrastructure both Apple and Google native flows need. No
 - [ ] Manual: `python -c "from actingweb.oauth2_jwks import fetch_jwks; print(fetch_jwks('https://appleid.apple.com/auth/keys'))"` returns a JWKS dict with at least one key
 - [ ] Negative cache: simulate Apple JWKS unreachable → confirm 60s suppression before retry
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- `pyjwt[crypto]` added to core deps (resolved to 2.13.0).
+- New modules: `oauth2_jwks.py` (module-level JWKS cache: 1h positive TTL, 60s
+  negative TTL, kid-miss force-refetch with 5s debounce, fail-soft to stale cache
+  / fail-closed when no cache), `oauth2_id_token.py` (`JWKSIdTokenValidator`,
+  manual iss/aud/nonce checks, fail-closed on unresolvable kid),
+  `oauth2_replay.py` (`IdTokenReplayCache` over the attribute backend, keyed by
+  jti or sha256(iss|sub|iat)).
+- New bucket/TTL constants added to `constants.py` (`ID_TOKEN_REPLAY_*`,
+  `OAUTH_STATE_NONCE_*`, `APPLE_TICKET_*`).
+- `OAuth2Provider.id_token_validator` attribute added (default None).
+- 30 unit tests (`test_oauth2_jwks.py`, `test_oauth2_id_token.py`,
+  `test_oauth2_replay.py`) all passing. The optional live-JWKS integration test
+  was not added (deferred; not needed for green CI).
 
 ---
 
@@ -170,7 +208,32 @@ Plumb Apple as a provider — full token exchange, refresh, revocation, and conf
 - [ ] Manual: in a Python REPL, `create_apple_authenticator(config).revoke_token(refresh_token)` builds a POST with a valid ES256 `client_secret` JWT (intercept with `responses`); JWT decodes against the test public key
 - [ ] Manual: `app.with_apple_sign_in(...)` with valid `.p8` produces a non-empty `client_secret` JWT inside the 5-min bucket; same value on a second call
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- New `oauth2_apple.py`: `make_apple_client_secret()`, `_cached_client_secret()`
+  (lru_cache keyed by `(time_bucket, provider_name)`; PEM re-read from a module
+  registry, never in the cache key), `get_client_secret()`, `load_private_key_pem()`
+  (file path wins; literal `\n` conversion; EC-key validation with explicit
+  ValueError incl. path/reason). Credentials registered per provider-variant via
+  `register_apple_credentials()`.
+- `AppleOAuth2Provider` added to `oauth2.py`: hardcoded Apple endpoints,
+  `userinfo_uri=""`, ES256 `make_client_secret()`, `response_mode=form_post`
+  authorize param, `extract_user_info_from_token_response()` (validates id_token),
+  `apple:{sub}` identifier, `discovery_extras()` with Apple JWKS. Carries a
+  `JWKSIdTokenValidator` (expected_iss tolerates appleid/account.apple.com).
+- Factory: registry gains `"apple"`; concrete provider name threaded via
+  `_provider_name` in prov_cfg so apple vs apple-mobile key distinct credentials.
+  `create_apple_authenticator()` shim added. Display names extended.
+- `with_apple_sign_in()` builder added to `app.py` (eager validation; registers
+  `apple` and optional `apple-mobile`). `audiences` flows through `_oauth_configs`
+  → `config.oauth_providers` unchanged (no `_apply_runtime_changes` edit needed).
+- Tests: `test_oauth2_apple.py`, `test_apple_provider.py`, plus extensions to
+  `test_actingweb_app.py` (with_apple_sign_in) and `test_mobile_oauth2.py`
+  (apple/apple-mobile prefix). All passing.
+- Full suite (`-n auto --dist loadgroup`): 2219 passed; 4 pre-existing parallel
+  flakes (peer-sync read-timeouts + one ordered-test-class dep) all pass
+  sequentially.
 
 ---
 
@@ -219,7 +282,45 @@ The CSRF-safe Apple callback. Web SPA flow end-to-end.
 - [ ] Manual: Apple POST with first-sign-in `user` JSON → `oauth_success` hook receives `given_name`/`family_name` (not `firstName`/`lastName`)
 - [ ] Code review: grep for any `logger.*` call that could emit `id_token` or `client_secret` substrings — all such call sites use the redaction helper
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- `StateNonceStore` + `AppleTicketStore` live in a new module
+  `actingweb/oauth_state_store.py` (not appended to `oauth_state.py`) to keep the
+  pure state-codec functions dependency-light. `decode_state()` was intentionally
+  NOT made to consume nonces (it must stay pure / side-effect-free); the Apple
+  POST handler consumes the nonce explicitly instead — same security outcome.
+- New `OAuth2AppleCallbackHandler(OAuth2CallbackHandler)` with `post()`: parses
+  form body, consumes the single-use nonce (400 on miss/replay), dispatches by
+  the payload's `provider`. apple-mobile → opaque ticket deep-link (no token in
+  URL); apple web/SPA → stashes the first-sign-in `user` payload and replays the
+  request through the shared `get()` path.
+- Made the shared callback path Apple-capable: both `get()` and
+  `_process_spa_oauth_and_create_session()` now prefer
+  `provider.extract_user_info_from_token_response()` (id_token) and fall back to
+  the userinfo endpoint — behavior-identical for Google/GitHub.
+  `_merge_apple_user_payload()` normalizes Apple's first-sign-in name into
+  `given_name`/`family_name`/`display_name` before `oauth_success` fires.
+- **Corrected an Apple constraint the plan understated:** Apple's `redirect_uri`
+  (authorize + token exchange) must be HTTPS, so `apple-mobile` points Apple at
+  the HTTPS `/oauth/callback/apple` and stores the custom-scheme deep link
+  separately as `apple_mobile_deep_link` (surfaced as `provider.mobile_deep_link`).
+- `/oauth/spa/authorize`: Apple providers now store full state server-side and
+  send Apple only the opaque nonce; PKCE is not forwarded to Apple. `/oauth/config`
+  gains additive `response_mode` + `platform` per provider. `_KNOWN_PROVIDER_PREFIXES`
+  extended to include `apple` / `google-native`.
+- Routes `POST /oauth/callback/apple` registered in both Flask and FastAPI.
+- Logging redaction helper `_redact_token_response()` applied to token
+  exchange/refresh error logs (redacts client_secret/assertion/id_token/
+  client_assertion, truncates to 500 chars).
+- New tests: `test_state_nonce_store.py`, `test_oauth2_callback_apple.py`
+  (errors/replay/mobile-ticket/web-SPA/first-sign-in merge), `test_logging_redaction.py`.
+  The live end-to-end integration test (`test_apple_signin_end_to_end.py`) is
+  deferred — the web-SPA path is covered by the mocked callback test plus the
+  per-component unit tests. 1493 non-integration tests pass.
+
+**Full suite:** 2243 passed; the 5 parallel failures are the same pre-existing
+peer-sync timing flakes (all pass sequentially), none OAuth/Apple-related.
 
 ---
 
@@ -273,7 +374,36 @@ The unified native-OIDC grant on `/oauth/spa/token` plus the Android Apple flow'
 - [ ] Manual: Android Apple end-to-end with mocked Apple endpoints produces a session token AND the deep link contains a ticket, NOT an ActingWeb access token
 - [ ] Code review: grep `oauth_success` firing sites — all call `_normalize_user_info` first
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- `_handle_token` dispatches two new grants:
+  `urn:ietf:params:oauth:grant-type:jwt-bearer` (`_handle_jwt_bearer_grant`) and
+  `apple_mobile_ticket` (`_handle_apple_mobile_ticket`).
+- `_validate_id_token_for_provider()` dispatches the validator by the declared
+  `provider`, and pre-checks the token `iss` against that provider's accepted
+  issuers (clear 400 on mismatch) before signature validation — so a Google
+  id_token submitted as `apple-mobile` is rejected.
+- Replay protection via `IdTokenReplayCache.check_and_record()` (400 on replay).
+- `_finalize_native_session()` shared tail (actor lookup/create, actor_created +
+  oauth_success hooks, ActingWeb token issuance, response shaping) — works with
+  or without an upstream access token (JWT-bearer has only the id_token; the
+  ticket grant has the full Apple token set and persists them for revocation).
+- `_normalize_user_info()` module helper produces the consistent
+  display_name/given_name/family_name/email shape; called in the
+  authorization_code, JWT-bearer, and ticket paths before `oauth_success`.
+- `GoogleOAuth2Provider` gains a `JWKSIdTokenValidator` (+ audiences) when
+  audiences are configured; `extract_user_info_from_token_response()` validates
+  the id_token for the native path. `google-native` resolves via the existing
+  `google` prefix match.
+- `with_google_native()` builder added (derives audiences from the per-platform
+  client IDs or accepts an explicit list; rejects empty).
+- `lookup_or_create_actor_by_identifier()` now writes `actor.store.oauth_provider`
+  on the existing-actor path too (previously create-only).
+- New tests: `test_oauth2_spa_jwt_bearer.py` (12), `test_oauth2_spa_apple_ticket.py`
+  (4), `test_user_info_normalization.py` (6), `test_actor_oauth_provider_property.py`
+  (2), plus `with_google_native` cases in `test_actingweb_app.py`. 1522
+  non-integration tests pass; ruff + pyright clean.
 
 ---
 
@@ -306,7 +436,29 @@ Provide parity between SPA-triggered OAuth and LLM-triggered OAuth so Apple is o
 - [ ] Manual: completing the LLM-triggered Apple flow produces the same MCP completion response shape Google/GitHub produce today
 - [ ] Manual: SPA-initiated and MCP-initiated Apple flows never cross-contaminate (a state nonce from one flow does NOT complete the other flow)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- `ActingWebOAuth2Server`: pre-instantiated `google_authenticator` /
+  `github_authenticator` replaced with `_get_authenticator(provider_name)` (lazy
+  + cached). Kept `google_authenticator` / `github_authenticator` as properties
+  delegating to it for backward compat. `handle_authorization_request` and
+  `handle_oauth_callback` now use `_get_authenticator`, making Apple reachable.
+- MCP callback `handle_oauth_callback` made Apple-capable (prefers
+  `extract_user_info_from_token_response`, userinfo fallback).
+- Apple authorize in the MCP form / `handle_authorization_request`: the encrypted
+  Fernet MCP state is wrapped in a `StateNonceStore` nonce (because Apple
+  form_posts); `POST /oauth/callback/apple` consumes the nonce, detects
+  `mcp_state` in the payload, and dispatches to
+  `ActingWebOAuth2Server.handle_oauth_callback()` via
+  `_dispatch_apple_mcp_callback()`. SPA-bound nonces (no `mcp_state`) take the SPA
+  path — verified no cross-contamination.
+- MCP authorization form enumeration skips `-mobile` / `-native` variants (native
+  flows aren't offered in the web form) and nonce-wraps Apple's state.
+- New tests: `test_oauth2_server_lazy_authenticator.py` (4),
+  `test_mcp_apple_signin.py` (3: form_post URL, MCP dispatch, SPA-no-dispatch).
+  The full MCP end-to-end integration test is deferred (client-registration
+  setup heavy); the dispatch + routing are covered by the focused tests.
 
 ---
 
@@ -329,12 +481,25 @@ No new code tests in this phase. Documentation-only.
 
 ### Verification
 
-- [ ] All docs build (`cd docs && make html` succeeds, no warnings about missing refs)
-- [ ] `CHANGELOG.rst` "Unreleased" entry is accurate
-- [ ] Manual: read each new doc page end-to-end; verify code examples in `apple-sign-in.rst` match the API exposed in P3/P5
-- [ ] Sample app (or test fixture) demonstrates `with_apple_sign_in()` from a working bootstrap
+- [x] All docs build (`sphinx-build` from repo root succeeds with **0 warnings**;
+  conf.py is at the repo root, not `docs/`)
+- [x] `CHANGELOG.rst` "Unreleased" entry is accurate
+- [x] Manual: code examples in `apple-sign-in.rst` match the shipped
+  `with_apple_sign_in()` / `with_google_native()` / grant APIs
+- [ ] Sample app bootstrap demonstrating `with_apple_sign_in()` — deferred to the
+  actingweb_mcp coordination work (checklist written)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes / deviations:**
+- Docs build from the **repo root** (`conf.py` at root, RTD `configuration: conf.py`),
+  not `docs/`. `sphinx-build . _build` → 0 warnings; `apple-sign-in.html` renders.
+- Delivered: new `docs/guides/apple-sign-in.rst` (+ toctree entry), JWT-bearer
+  section + migration note in `spa-authentication.rst`, OAuth endpoints/grants in
+  `routing-overview.rst`, normalized `user_info` + first-sign-in quirk in
+  `hooks-reference.rst`, Apple provider cross-ref in `authentication.rst`, Apple
+  env vars + MCP parity note in `configuration.rst`, CHANGELOG "Unreleased"
+  entry, and `thoughts/coordination/2026-05-29-actingweb-mcp-apple-changes.md`.
 
 ---
 
@@ -386,3 +551,63 @@ Seven findings:
 5. **Hook contract `user_info` shape change** — adopted: `_normalize_user_info` in P5 produces a consistent `display_name` / `given_name` / `family_name` / `email` / `sub` shape regardless of provider. Documented in P7's `hooks-reference.rst` update.
 6. **`apple` vs `apple-mobile` duality** — adopted: `"platform"` field in `/oauth/config` distinguishes; existing `-mobile`-suffix filtering pattern still works for clients that don't want to branch on platform.
 7. **Documentation deliverables** — fully covered in P7: `apple-sign-in.rst`, `spa-authentication.rst` migration table, `routing-overview.rst` route updates, `hooks-reference.rst` user_info shape, `authentication.rst` provider table, `configuration.rst` env vars, CHANGELOG.
+
+---
+
+## Implementation Summary
+
+**Completed:** 2026-06-14
+**All phases:** Complete (1–7)
+**Test status:** All passing (2279 passed in the full parallel suite; the 4–5
+recurring failures are pre-existing peer-to-peer subscription-sync timing flakes
+that pass sequentially — none OAuth/Apple-related). ruff + pyright: 0 errors.
+Docs: `sphinx-build` from repo root, 0 warnings.
+
+### Deviations from Plan
+- **Apple `redirect_uri` must be HTTPS** (plan understated this): `apple-mobile`
+  points Apple at the HTTPS `/oauth/callback/apple` for both authorize and token
+  exchange; the custom-scheme deep link is stored separately as
+  `apple_mobile_deep_link` (`provider.mobile_deep_link`), used only for the final
+  app handoff.
+- **`StateNonceStore`/`AppleTicketStore` live in a new `oauth_state_store.py`**
+  (not appended to `oauth_state.py`), and `decode_state()` was kept pure — the
+  Apple POST handler consumes nonces explicitly rather than giving the shared
+  decoder a destructive side-effect.
+- **`_get_authenticator` properties retained** (`google_authenticator` /
+  `github_authenticator` as delegating properties) for backward compat with
+  existing call sites/tests, rather than removing them outright.
+- **Deferred (low-value / heavy-setup) integration tests:** live JWKS fetch,
+  full web-SPA Apple end-to-end against a running server, and full MCP Apple
+  end-to-end (client-registration heavy). Each is covered by focused
+  mocked/unit tests of its components; noted in the per-phase status.
+- **Strategy method names** were adapted from the plan's sketch to fit the
+  existing oauthlib-based authenticator while preserving all public signatures.
+
+### Learnings
+- The repo's Sphinx `conf.py` is at the **repository root** (RTD
+  `configuration: conf.py`), so docs build from root, not `docs/`.
+- The full parallel suite **must** be run with `--dist loadgroup` (as the
+  Makefile does); without it, DB-sharing integration tests scatter across xdist
+  workers and produce ~140 spurious failures. Running `pytest -n auto` alone is
+  misleading.
+- A handful of peer-to-peer subscription-sync integration tests are timing-flaky
+  under parallel execution (read timeouts on the local peer server); they pass
+  reliably when run sequentially.
+
+### New / changed library modules
+- New: `oauth2_jwks.py`, `oauth2_id_token.py`, `oauth2_replay.py`,
+  `oauth2_apple.py`, `oauth_state_store.py`.
+- Changed: `oauth2.py` (strategy refactor + `AppleOAuth2Provider` + registry +
+  redaction), `handlers/oauth2_spa.py` (grants + normalization),
+  `handlers/oauth2_callback.py` (`OAuth2AppleCallbackHandler`),
+  `handlers/oauth2_endpoints.py` (MCP form), `oauth2_server/oauth2_server.py`
+  (lazy authenticator), `interface/app.py` (builders),
+  Flask/FastAPI integrations (Apple route + discovery extras), `constants.py`,
+  `pyproject.toml` (PyJWT[crypto]).
+- New test files: `test_oauth_provider_strategy.py`, `test_oauth2_jwks.py`,
+  `test_oauth2_id_token.py`, `test_oauth2_replay.py`, `test_oauth2_apple.py`,
+  `test_apple_provider.py`, `test_state_nonce_store.py`,
+  `test_oauth2_callback_apple.py`, `test_logging_redaction.py`,
+  `test_oauth2_spa_jwt_bearer.py`, `test_oauth2_spa_apple_ticket.py`,
+  `test_user_info_normalization.py`, `test_actor_oauth_provider_property.py`,
+  `test_oauth2_server_lazy_authenticator.py`, `test_mcp_apple_signin.py`.

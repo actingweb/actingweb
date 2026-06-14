@@ -112,9 +112,25 @@ Event Details
 ``oauth_success``
     Triggered after successful OAuth2 authentication.
 
-    **Signature**: ``func(actor: ActorInterface, email: str, access_token: str, token_data: dict) -> Optional[bool]``
+    **Signature**: ``func(actor: ActorInterface, email: str, access_token: str, token_data: dict, user_info: dict) -> Optional[bool]``
 
     **Returns**: ``False`` to reject authentication, ``True`` or ``None`` to accept
+
+    **Normalized ``user_info``**: regardless of provider, ``user_info`` is
+    normalized before the hook fires so you can read one shape:
+
+    - ``display_name`` — derived, or GitHub ``name``
+    - ``given_name`` — Apple ``firstName`` / Google ``given_name``
+    - ``family_name`` — Apple ``lastName`` / Google ``family_name``
+    - ``email`` — the email claim (for Apple, merged from the first-sign-in
+      ``user`` payload when present)
+    - ``sub`` — provider subject claim (plus other provider fields passthrough)
+
+    .. note::
+
+       Apple returns the user's name **only on the very first sign-in**. Persist
+       ``given_name`` / ``family_name`` on first contact — they are not available
+       on subsequent sign-ins. See :doc:`../guides/apple-sign-in`.
 
 ``trust_initiated``
     Triggered when this actor initiates a trust request to another actor (outgoing request).

@@ -5,6 +5,75 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Sign in with Apple support** across web SPA, native iOS, Android Capacitor,
+  and the LLM-triggered (MCP) OAuth web form. New ``app.with_apple_sign_in(...)``
+  builder configures Apple as a first-class OAuth provider (Services ID + Team ID
+  + Key ID + ``.p8`` private key). Apple's ES256 ``client_secret`` JWT is minted
+  on demand and cached per 5-minute bucket; the ``id_token`` is validated against
+  Apple's JWKS (no userinfo endpoint). The ``.p8`` key is supplied via
+  ``private_key_path`` / ``APPLE_PRIVATE_KEY_PATH`` (file wins) or
+  ``private_key_pem`` / ``APPLE_PRIVATE_KEY_PEM`` and is validated eagerly at
+  config-build time.
+- **New JWT-bearer grant on ``POST /oauth/spa/token``**
+  (``grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer``, RFC 7523): native
+  apps exchange a provider ``id_token`` (``assertion``) plus ``nonce`` for an
+  ActingWeb session. The validator is dispatched by the declared ``provider`` and
+  the token ``iss`` must match it; single-use replay protection is enforced.
+- **New ``app.with_google_native(...)`` builder** for native Google sign-in via
+  the JWT-bearer grant (accepts explicit ``audiences`` or derives them from the
+  per-platform client IDs).
+- **New POST ``/oauth/callback/apple`` endpoint** for Apple's
+  ``response_mode=form_post`` callback, protected by a server-side single-use
+  state nonce (CSRF-safe without relying on SameSite cookies).
+- **New ``apple_mobile_ticket`` grant** for the Android Apple flow: Apple's POST
+  callback is exchanged for an opaque deep-link ticket (no ActingWeb token in the
+  deep link); the app redeems the ticket at ``/oauth/spa/token``.
+- **Normalized ``user_info`` shape on the ``oauth_success`` hook**
+  (``display_name`` / ``given_name`` / ``family_name`` / ``email`` / ``sub``
+  plus passthrough) across all providers. Apple's first-sign-in ``user`` payload
+  (name) is merged before the hook fires.
+- ``actor.store.oauth_provider`` is now written on **every** sign-in (create and
+  existing-actor paths), so account-deletion / revocation logic can rely on it.
+- ``/oauth/config`` provider entries gain additive ``response_mode``
+  (``form_post`` for Apple, ``query`` otherwise) and ``platform`` fields.
+
+CHANGED
+~~~~~~~
+
+- ``PyJWT[crypto]`` is now a core dependency (required for Apple's ES256
+  ``client_secret`` and RS256 ``id_token`` validation).
+- ``OAuth2Authenticator`` was refactored to a strategy pattern: provider-specific
+  behavior now lives on ``OAuth2Provider`` subclasses
+  (``GoogleOAuth2Provider`` / ``GitHubOAuth2Provider`` / ``AppleOAuth2Provider``).
+  Public method signatures and the ``actingweb.oauth2.requests`` patch point are
+  preserved — fully backward compatible.
+- The MCP OAuth2 server now resolves authenticators on demand
+  (``_get_authenticator(provider)``) instead of pre-instantiating Google/GitHub,
+  so Apple is offered in the LLM-triggered authorization web form.
+- Token-exchange, token-refresh, token-revocation, and userinfo error logs now
+  redact ``client_secret`` / ``assertion`` / ``id_token`` / ``client_assertion``
+  and truncate the response body.
+
+SECURITY
+~~~~~~~~
+
+- **SPA OAuth open-redirect / session-token leak fixed.** The ``redirect_uri``
+  passed to ``POST /oauth/spa/authorize`` (where the browser is later redirected
+  with a one-time ``?session=`` id) is now validated against an allowlist: the
+  backend's own FQDN, the origins of configured OAuth redirect URIs / Apple mobile
+  deep links, and any origins listed in the new ``Config.spa_redirect_origins``
+  (for split-domain SPA deployments). An off-origin ``redirect_uri`` is rejected
+  with ``400`` at authorize time, and the callback falls back to the backend root
+  rather than honoring an unsafe target. Previously an attacker who induced a
+  victim to start an authorize flow with an attacker-controlled ``redirect_uri``
+  could receive the victim's one-time session id and exchange it for tokens. This
+  affected all SPA providers (Google / GitHub / Apple). New
+  ``Config.spa_redirect_origins`` lets split-domain deployments allow additional
+  SPA origins.
+
 v3.10.2b9: June 13, 2026
 ------------------------
 

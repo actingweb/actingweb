@@ -41,17 +41,37 @@ class ActingWebOAuth2Server:
         self.token_manager = get_actingweb_token_manager(config)
         self.state_manager = get_oauth2_state_manager(config)
 
-        # OAuth2 authenticators for user authentication
-        self.google_authenticator = create_oauth2_authenticator(config, "google")
-        self.github_authenticator = create_oauth2_authenticator(config, "github")
+        # OAuth2 authenticators are created on demand (and cached) so that any
+        # configured provider — including Apple — is reachable without being
+        # pre-instantiated for a fixed set of providers.
+        self._authenticator_cache: dict[str, Any] = {}
 
         if (
-            not self.google_authenticator.is_enabled()
-            and not self.github_authenticator.is_enabled()
+            not self._get_authenticator("google").is_enabled()
+            and not self._get_authenticator("github").is_enabled()
+            and not self._get_authenticator("apple").is_enabled()
         ):
             logger.warning(
                 "OAuth2 not configured - MCP OAuth2 server will not work properly"
             )
+
+    def _get_authenticator(self, provider_name: str) -> Any:
+        """Lazily create and cache an OAuth2 authenticator for ``provider_name``."""
+        if provider_name not in self._authenticator_cache:
+            self._authenticator_cache[provider_name] = create_oauth2_authenticator(
+                self.config, provider_name
+            )
+        return self._authenticator_cache[provider_name]
+
+    @property
+    def google_authenticator(self) -> Any:
+        """Backward-compat accessor (kept for existing call sites/tests)."""
+        return self._get_authenticator("google")
+
+    @property
+    def github_authenticator(self) -> Any:
+        """Backward-compat accessor (kept for existing call sites/tests)."""
+        return self._get_authenticator("github")
 
     def handle_client_registration(
         self, registration_data: dict[str, Any], actor_id: str | None = None
@@ -193,9 +213,29 @@ class ActingWebOAuth2Server:
 
                 # Create OAuth2 authorization URL based on provider
                 oauth_url = None
-                if provider == "github":
+                if provider == "apple" or provider.startswith("apple-"):
+                    # Apple uses response_mode=form_post (cross-site POST). The
+                    # encrypted MCP state cannot ride in that POST safely, so we
+                    # wrap it in a server-side single-use nonce carrying the
+                    # mcp_context; /oauth/callback/apple consumes it and dispatches
+                    # back to the MCP completion path.
+                    from ..oauth_state_store import StateNonceStore
+
+                    nonce = StateNonceStore(self.config).create(
+                        {"provider": provider, "mcp_state": mcp_state}
+                    )
+                    oauth_url = self._get_authenticator(
+                        provider
+                    ).create_authorization_url(
+                        state=nonce,
+                        redirect_after_auth="",
+                        email_hint=email if email else "",
+                    )
+                elif provider == "github":
                     # GitHub OAuth flow
-                    oauth_url = self.github_authenticator.create_authorization_url(
+                    oauth_url = self._get_authenticator(
+                        "github"
+                    ).create_authorization_url(
                         state=mcp_state,
                         redirect_after_auth="",
                         email_hint=email if email else "",
@@ -287,11 +327,8 @@ class ActingWebOAuth2Server:
                 )
 
             # Select the correct authenticator based on provider in MCP state
-            provider_name = mcp_context.get("provider", "google")
-            if provider_name == "github":
-                authenticator = self.github_authenticator
-            else:
-                authenticator = self.google_authenticator
+            provider_name = mcp_context.get("provider", "google") or "google"
+            authenticator = self._get_authenticator(provider_name)
 
             # Exchange authorization code for tokens
             token_data = authenticator.exchange_code_for_token(code, "")
@@ -301,9 +338,14 @@ class ActingWebOAuth2Server:
                     f"Failed to exchange {provider_name} authorization code",
                 )
 
-            # Get user info from provider
+            # Get user info from provider. OIDC providers (Apple) carry identity
+            # in the id_token; others use the userinfo endpoint.
             access_token = token_data.get("access_token", "")
-            user_info = authenticator.validate_token_and_get_user_info(access_token)
+            user_info = authenticator.provider.extract_user_info_from_token_response(
+                token_data
+            )
+            if not user_info:
+                user_info = authenticator.validate_token_and_get_user_info(access_token)
             if not user_info:
                 return self._error_response(
                     "invalid_grant",

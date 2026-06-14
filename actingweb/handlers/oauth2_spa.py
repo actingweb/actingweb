@@ -50,7 +50,7 @@ GRACE_PERIOD_EXTENDED = 60  # Network delays or slow processing
 # Beyond GRACE_PERIOD_EXTENDED is considered potential token theft
 
 
-_KNOWN_PROVIDER_PREFIXES = ("google", "github")
+_KNOWN_PROVIDER_PREFIXES = ("google", "github", "apple", "google-native")
 
 
 def _is_known_provider(name: str) -> bool:
@@ -59,6 +59,58 @@ def _is_known_provider(name: str) -> bool:
         name == prefix or name.startswith(f"{prefix}-")
         for prefix in _KNOWN_PROVIDER_PREFIXES
     )
+
+
+def _provider_response_mode(name: str) -> str:
+    """Authorization response mode for a provider: Apple uses form_post."""
+    if name == "apple" or name.startswith("apple-"):
+        return "form_post"
+    return "query"
+
+
+def _provider_platform(name: str) -> str:
+    """Target platform hint for a provider entry (web / any).
+
+    Plain providers (``google``, ``github``, ``apple``) drive the web/SPA flow;
+    ``-mobile`` and ``-native`` variants target native apps and are usable on any
+    device. Clients can branch on this to pick the right flow per platform.
+    """
+    if name.endswith("-mobile") or name.endswith("-native"):
+        return "any"
+    return "web"
+
+
+def _normalize_user_info(provider_name: str, raw: dict[str, Any]) -> dict[str, Any]:
+    """Produce a consistent user_info shape across providers.
+
+    Maps provider-specific name fields onto a common
+    ``display_name`` / ``given_name`` / ``family_name`` / ``email`` shape so that
+    application ``oauth_success`` hooks read one shape regardless of provider:
+
+    - Apple: ``firstName`` / ``lastName`` -> ``given_name`` / ``family_name``
+    - Google: ``given_name`` / ``family_name`` pass through
+    - GitHub: ``name`` -> ``display_name``
+
+    The original keys (``sub``, ``email``, etc.) are preserved as passthrough.
+    """
+    info = dict(raw or {})
+
+    given = info.get("given_name") or info.get("firstName") or ""
+    family = info.get("family_name") or info.get("lastName") or ""
+    if given:
+        info["given_name"] = given
+    if family:
+        info["family_name"] = family
+
+    display = (
+        info.get("display_name")
+        or info.get("name")
+        or (f"{given} {family}".strip() if (given or family) else "")
+    )
+    if display:
+        info["display_name"] = display
+
+    return info
 
 
 def generate_pkce_pair() -> tuple[str, str]:
@@ -251,6 +303,8 @@ class OAuth2SPAHandler(BaseHandler):
                                 "authorization_endpoint": auth.provider.auth_uri,
                                 "token_endpoint": auth.provider.token_uri,
                                 "userinfo_endpoint": auth.provider.userinfo_uri,
+                                "response_mode": _provider_response_mode(prov_name),
+                                "platform": _provider_platform(prov_name),
                             }
                         )
                         oauth_enabled = True
@@ -267,6 +321,10 @@ class OAuth2SPAHandler(BaseHandler):
                             "authorization_endpoint": auth.provider.auth_uri,
                             "token_endpoint": auth.provider.token_uri,
                             "userinfo_endpoint": auth.provider.userinfo_uri,
+                            "response_mode": _provider_response_mode(
+                                auth.provider.name
+                            ),
+                            "platform": _provider_platform(auth.provider.name),
                         }
                     )
                     oauth_enabled = True
@@ -371,6 +429,15 @@ class OAuth2SPAHandler(BaseHandler):
         if not _is_known_provider(provider):
             return self._json_error(400, f"Unknown OAuth provider: {provider}")
 
+        # Validate the post-auth redirect target. After OAuth completes the
+        # browser is redirected here with a one-time ?session= id, so an
+        # attacker-supplied origin would leak it (open redirect / token theft).
+        if redirect_uri:
+            from .oauth2_callback import is_safe_spa_redirect
+
+            if not is_safe_spa_redirect(self.config, redirect_uri):
+                return self._json_error(400, "Invalid redirect_uri")
+
         # Get the appropriate authenticator
         try:
             from ..oauth2 import create_oauth2_authenticator
@@ -436,12 +503,28 @@ class OAuth2SPAHandler(BaseHandler):
         # Create authorization URL
         state_json = json.dumps(state_data)
 
+        # Apple uses response_mode=form_post (cross-site POST callback). A
+        # cleartext-JSON state offers no CSRF protection there, so we store the
+        # full state payload server-side and send Apple only an opaque single-use
+        # nonce. Apple also does not support PKCE — don't forward a code_challenge.
+        is_apple = provider == "apple" or provider.startswith("apple-")
+        if is_apple:
+            from ..oauth_state_store import StateNonceStore
+
+            state_for_provider = StateNonceStore(self.config).create(state_data)
+            apple_challenge = ""
+        else:
+            state_for_provider = state_json
+            apple_challenge = code_challenge or ""
+
         try:
             auth_url = authenticator.create_authorization_url(
-                state=state_json,
+                state=state_for_provider,
                 trust_type=trust_type or "",  # Convert None to "" for type safety
-                code_challenge=code_challenge or "",
-                code_challenge_method="S256" if code_challenge else "",
+                code_challenge="" if is_apple else apple_challenge,
+                code_challenge_method=""
+                if is_apple
+                else ("S256" if code_challenge else ""),
             )
         except Exception as e:
             logger.error(f"Failed to create authorization URL: {e}")
@@ -449,7 +532,7 @@ class OAuth2SPAHandler(BaseHandler):
 
         response_data: dict[str, Any] = {
             "authorization_url": auth_url,
-            "state": state_json,
+            "state": state_for_provider,
             "provider": provider,
             "token_delivery": token_delivery,
         }
@@ -511,6 +594,10 @@ class OAuth2SPAHandler(BaseHandler):
             return self._handle_refresh_token(params, token_delivery)
         elif grant_type == "authorization_code":
             return self._handle_authorization_code(params, token_delivery)
+        elif grant_type == "urn:ietf:params:oauth:grant-type:jwt-bearer":
+            return self._handle_jwt_bearer_grant(params, token_delivery)
+        elif grant_type == "apple_mobile_ticket":
+            return self._handle_apple_mobile_ticket(params, token_delivery)
         elif grant_type == "passphrase":
             return self._handle_passphrase_exchange(params, token_delivery)
         else:
@@ -728,6 +815,10 @@ class OAuth2SPAHandler(BaseHandler):
             logger.error("Failed to validate token or extract user info")
             return self._json_error(401, "Token validation failed")
 
+        # Normalize the user_info shape so the oauth_success hook sees a
+        # consistent (display_name / given_name / family_name / email) shape.
+        user_info = _normalize_user_info(provider, user_info)
+
         # Extract identifier (email or provider ID)
         require_email = bool(
             self.config and getattr(self.config, "force_email_prop_as_creator", False)
@@ -862,6 +953,272 @@ class OAuth2SPAHandler(BaseHandler):
             f"via {provider}"
         )
         return response_data
+
+    def _validate_id_token_for_provider(
+        self, provider_name: str, assertion: str, nonce: str | None
+    ) -> tuple[Any, dict[str, Any] | None, str | None]:
+        """Validate a native ``id_token`` and bind it to the declared provider.
+
+        Returns ``(authenticator, claims, error)``. Dispatch is by the declared
+        ``provider_name``, but the validator is selected from that provider and
+        the token's ``iss`` must match that provider's accepted issuers — so a
+        Google id_token submitted with ``provider=apple-mobile`` is rejected.
+        """
+        from ..oauth2 import create_oauth2_authenticator
+
+        authenticator = create_oauth2_authenticator(self.config, provider_name)
+        validator = getattr(authenticator.provider, "id_token_validator", None)
+        if validator is None:
+            return None, None, "provider does not support id_token validation"
+
+        # Pre-check issuer vs declared provider for a clear, specific error.
+        try:
+            import jwt
+
+            unverified = jwt.decode(
+                assertion, options={"verify_signature": False, "verify_aud": False}
+            )
+        except Exception:
+            return None, None, "malformed id_token"
+
+        iss = unverified.get("iss")
+        if iss not in validator.expected_iss:
+            return None, None, "id_token issuer does not match declared provider"
+
+        claims = validator.validate(assertion, nonce=nonce)
+        if not claims:
+            return None, None, "id_token validation failed"
+
+        return authenticator, claims, None
+
+    def _finalize_native_session(
+        self,
+        provider: str,
+        authenticator: Any,
+        identifier: str,
+        user_info: dict[str, Any],
+        token_data: dict[str, Any],
+        token_delivery: str,
+        *,
+        provider_access_token: str = "",
+        provider_refresh_token: str | None = None,
+        provider_expires_in: int | None = None,
+    ) -> dict[str, Any]:
+        """Shared tail for native grants: actor lookup/create, hooks, tokens.
+
+        Mirrors the authorization_code grant's completion but works without an
+        upstream access token (the JWT-bearer grant only has an id_token).
+        """
+        from .. import actor as actor_module
+
+        existing_check = actor_module.Actor(config=self.config)
+        if existing_check.get_from_creator(identifier):
+            actor_instance = existing_check
+            is_new_actor = False
+        else:
+            actor_instance = authenticator.lookup_or_create_actor_by_identifier(
+                identifier, user_info=user_info
+            )
+            is_new_actor = True
+
+        if not actor_instance:
+            logger.error(f"Failed to lookup or create actor for {identifier}")
+            return self._json_error(500, "Actor creation failed")
+
+        # Persist upstream provider tokens when we have them (apple_mobile_ticket).
+        if actor_instance.store and provider_access_token:
+            actor_instance.store.oauth_token = provider_access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + provider_expires_in)
+                if provider_expires_in
+                else None
+            )
+            if provider_refresh_token:
+                actor_instance.store.oauth_refresh_token = provider_refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+
+        if is_new_actor and self.hooks:
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
+                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for actor_created: {e}")
+
+        oauth_valid = True
+        if self.hooks:
+            try:
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
+                result = self.hooks.execute_lifecycle_hooks(
+                    "oauth_success",
+                    actor_interface,
+                    email=identifier,
+                    access_token=provider_access_token,
+                    token_data=token_data,
+                    user_info=user_info,
+                )
+                oauth_valid = bool(result) if result is not None else True
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for oauth_success: {e}")
+                oauth_valid = False
+
+        if not oauth_valid:
+            logger.warning(
+                f"OAuth success hook rejected authentication for {identifier}"
+            )
+            return self._json_error(403, "Authentication rejected")
+
+        actor_id = actor_instance.id or ""
+        spa_access_token = self._generate_actingweb_token(actor_id, identifier)
+
+        from ..oauth_session import get_oauth2_session_manager
+
+        session_manager = get_oauth2_session_manager(self.config)
+        spa_refresh_token = session_manager.create_refresh_token(actor_id, identifier)
+
+        expires_in = 3600
+        refresh_expires_in = 86400 * 14
+
+        response_data: dict[str, Any] = {
+            "success": True,
+            "actor_id": actor_id,
+            "email": identifier,
+            "expires_in": expires_in,
+            "expires_at": int(time.time()) + expires_in,
+        }
+
+        if token_delivery == "json":
+            response_data["access_token"] = spa_access_token
+            response_data["refresh_token"] = spa_refresh_token
+            response_data["token_type"] = "Bearer"
+            response_data["refresh_token_expires_in"] = refresh_expires_in
+        elif token_delivery == "cookie":
+            self._set_token_cookies(
+                spa_access_token, spa_refresh_token, expires_in, httponly=True
+            )
+            response_data["token_delivery"] = "cookie"
+        elif token_delivery == "hybrid":
+            response_data["access_token"] = spa_access_token
+            response_data["token_type"] = "Bearer"
+            self._set_refresh_token_cookie(spa_refresh_token, httponly=True)
+            response_data["token_delivery"] = "hybrid"
+
+        logger.info(f"Native OAuth session issued for {identifier} via {provider}")
+        return response_data
+
+    def _handle_jwt_bearer_grant(
+        self, params: dict[str, Any], token_delivery: str
+    ) -> dict[str, Any]:
+        """JWT-bearer grant (RFC 7523): exchange a provider id_token for a session.
+
+        Request body (JSON):
+        - grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+        - provider: declared provider (e.g. "apple-mobile", "google-native")
+        - assertion: the provider id_token (JWT)
+        - nonce: the nonce the app sent to the IdP (required)
+        """
+        provider = params.get("provider", "")
+        assertion = params.get("assertion", "")
+        nonce = params.get("nonce")
+
+        if not provider or not _is_known_provider(provider):
+            return self._json_error(400, f"Unknown OAuth provider: {provider}")
+        if not assertion:
+            return self._json_error(400, "Missing assertion (id_token)")
+        if nonce is None or nonce == "":
+            return self._json_error(400, "Missing nonce")
+
+        authenticator, claims, error = self._validate_id_token_for_provider(
+            provider, assertion, nonce
+        )
+        if error or not claims or authenticator is None:
+            return self._json_error(400, error or "id_token validation failed")
+
+        # Replay protection: an id_token may be presented only once.
+        from ..oauth2_replay import IdTokenReplayCache
+
+        if not IdTokenReplayCache(self.config).check_and_record(claims):
+            return self._json_error(400, "id_token replay rejected")
+
+        identifier = authenticator.get_email_from_user_info(claims)
+        if not identifier:
+            return self._json_error(401, "id_token did not yield a user identifier")
+
+        user_info = _normalize_user_info(provider, claims)
+        return self._finalize_native_session(
+            provider,
+            authenticator,
+            identifier,
+            user_info,
+            token_data={"id_token": assertion},
+            token_delivery=token_delivery,
+        )
+
+    def _handle_apple_mobile_ticket(
+        self, params: dict[str, Any], token_delivery: str
+    ) -> dict[str, Any]:
+        """Apple Android ticket grant: redeem a deep-link ticket for a session.
+
+        Request body (JSON):
+        - grant_type: "apple_mobile_ticket"
+        - ticket: the opaque ticket delivered to the app's deep link
+        """
+        ticket = params.get("ticket", "")
+        if not ticket:
+            return self._json_error(400, "Missing ticket")
+
+        from ..oauth_state_store import AppleTicketStore
+
+        stored = AppleTicketStore(self.config).consume(ticket)
+        if not stored:
+            return self._json_error(400, "Invalid or expired ticket")
+
+        provider = str(stored.get("provider", "apple-mobile"))
+        code = str(stored.get("code", ""))
+        redirect_uri = str(stored.get("redirect_uri", ""))
+        if not code:
+            return self._json_error(400, "Ticket missing authorization code")
+
+        from ..oauth2 import create_oauth2_authenticator
+
+        authenticator = create_oauth2_authenticator(self.config, provider)
+        token_data = authenticator.exchange_code_for_token(
+            code, redirect_uri=redirect_uri
+        )
+        if not token_data or "access_token" not in token_data:
+            return self._json_error(401, "Apple token exchange failed")
+
+        claims = authenticator.provider.extract_user_info_from_token_response(
+            token_data
+        )
+        if not claims:
+            return self._json_error(401, "Apple id_token validation failed")
+
+        identifier = authenticator.get_email_from_user_info(claims)
+        if not identifier:
+            return self._json_error(401, "id_token did not yield a user identifier")
+
+        user_info = _normalize_user_info(provider, claims)
+        return self._finalize_native_session(
+            provider,
+            authenticator,
+            identifier,
+            user_info,
+            token_data=token_data,
+            token_delivery=token_delivery,
+            provider_access_token=token_data["access_token"],
+            provider_refresh_token=token_data.get("refresh_token"),
+            provider_expires_in=token_data.get("expires_in", 3600),
+        )
 
     def _handle_passphrase_exchange(
         self, params: dict[str, Any], token_delivery: str
@@ -1031,9 +1388,7 @@ class OAuth2SPAHandler(BaseHandler):
                         if actor_id:
                             self._revoke_provider_token_for_actor(actor_id)
                 except Exception as lookup_error:
-                    logger.debug(
-                        f"Provider token lookup during revoke: {lookup_error}"
-                    )
+                    logger.debug(f"Provider token lookup during revoke: {lookup_error}")
                 session_manager.revoke_access_token(token)
 
         except Exception as e:
@@ -1086,9 +1441,7 @@ class OAuth2SPAHandler(BaseHandler):
                         if actor_id:
                             self._revoke_provider_token_for_actor(actor_id)
                 except Exception as lookup_error:
-                    logger.debug(
-                        f"Provider token lookup during logout: {lookup_error}"
-                    )
+                    logger.debug(f"Provider token lookup during logout: {lookup_error}")
 
                 # Revoke the ActingWeb session token
                 session_manager.revoke_access_token(token)

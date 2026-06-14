@@ -189,6 +189,21 @@ Configuration Examples
     # OAuth callback → /<actor_id>/app
     # You must provide /login and /<actor_id>/app routes
 
+OAuth Provider Endpoints
+========================
+
+- ``GET /oauth/callback`` — standard callback for Google/GitHub (query-mode).
+- ``POST /oauth/callback/apple`` — Sign in with Apple callback. Apple uses
+  ``response_mode=form_post`` (a cross-site POST), protected by a server-side
+  single-use state nonce. See :doc:`../guides/apple-sign-in`.
+- ``POST /oauth/spa/token`` supports these ``grant_type`` values:
+
+  - ``authorization_code`` — mobile code+PKCE exchange (existing).
+  - ``refresh_token`` — refresh with rotation (existing).
+  - ``urn:ietf:params:oauth:grant-type:jwt-bearer`` — native ``id_token``
+    (``assertion`` + ``nonce`` + ``provider``) exchange for an ActingWeb session.
+  - ``apple_mobile_ticket`` — redeem the Android Apple deep-link ticket.
+
 Notes
 =====
 

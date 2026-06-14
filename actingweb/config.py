@@ -151,6 +151,13 @@ class Config:
         # Multi-provider OAuth configuration: dict of provider_name -> config dict
         # When populated, self.oauth points to the first provider's config for backward compat.
         self.oauth_providers: dict[str, dict[str, str]] = {}
+        # Additional origins (scheme://host[:port]) the SPA post-auth browser
+        # redirect (``redirect_uri`` passed to /oauth/spa/authorize) is allowed to
+        # target, beyond the backend's own FQDN and configured OAuth redirect URIs.
+        # Set this only for split-domain deployments where the SPA is served from a
+        # different origin than the ActingWeb backend. Used to prevent open-redirect
+        # / session-token leakage via attacker-supplied redirect targets.
+        self.spa_redirect_origins: list[str] = []
         self.bot = {
             "token": "",
             "email": "",

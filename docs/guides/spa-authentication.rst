@@ -574,6 +574,53 @@ Generate PKCE client-side for full control:
        })
    });
 
+Native id_token (JWT-bearer) grant
+----------------------------------
+
+Native mobile apps that already hold a provider ``id_token`` (Apple via the iOS
+plugin, Google via the native SDK) exchange it directly for an ActingWeb session
+through the RFC 7523 JWT-bearer grant — no authorization code, no userinfo call:
+
+.. code-block:: javascript
+
+   async function nativeSignIn(provider, idToken, nonce) {
+       const response = await fetch('/oauth/spa/token', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({
+               grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+               provider: provider,        // "apple-mobile" or "google-native"
+               assertion: idToken,        // the provider id_token (JWT)
+               nonce: nonce,              // nonce the app sent to the IdP
+               token_delivery: 'json'
+           })
+       });
+       return response.json();
+   }
+
+The server selects the validator by the declared ``provider`` and rejects the
+request if the token ``iss`` does not match it; ``nonce`` is required, and each
+``id_token`` is single-use (replay-protected).
+
+The Android Sign-in-with-Apple flow instead redeems a deep-link ticket (Apple
+requires an HTTPS ``redirect_uri``, so the code is exchanged server-side):
+
+.. code-block:: javascript
+
+   // ticket arrives via the app's custom-scheme deep link
+   await fetch('/oauth/spa/token', {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ grant_type: 'apple_mobile_ticket', ticket })
+   });
+
+Configure these providers with ``app.with_apple_sign_in(...)`` and
+``app.with_google_native(...)``. See :doc:`apple-sign-in` for the full setup.
+
+**Migration note:** apps that previously implemented a custom native sign-in
+endpoint (e.g. a hand-rolled ``/api/auth/google-mobile`` verifying an id_token)
+should switch to this library-provided JWT-bearer grant.
+
 Token Refresh with Rotation
 ---------------------------
 

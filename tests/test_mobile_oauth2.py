@@ -105,6 +105,21 @@ class TestProviderNameVariants:
         auth = create_oauth2_authenticator(config, "google-tablet")
         assert auth.provider.name == "google"
 
+    def test_apple_creates_apple_provider(self) -> None:
+        from actingweb.oauth2 import AppleOAuth2Provider
+
+        config = self._make_config("apple")
+        auth = create_oauth2_authenticator(config, "apple")
+        assert isinstance(auth.provider, AppleOAuth2Provider)
+        assert auth.provider.name == "apple"
+
+    def test_apple_mobile_creates_apple_provider(self) -> None:
+        from actingweb.oauth2 import AppleOAuth2Provider
+
+        config = self._make_config("apple-mobile")
+        auth = create_oauth2_authenticator(config, "apple-mobile")
+        assert isinstance(auth.provider, AppleOAuth2Provider)
+
 
 class TestExchangeCodeRedirectUriOverride:
     """Test that exchange_code_for_token accepts redirect_uri override."""
@@ -112,9 +127,7 @@ class TestExchangeCodeRedirectUriOverride:
     def test_redirect_uri_override_used_in_token_request(self) -> None:
         config = Config(fqdn="test.example.com", database="dynamodb")
         config.oauth = {"client_id": "cid", "client_secret": "csec"}
-        authenticator = OAuth2Authenticator(
-            config, GoogleOAuth2Provider(config)
-        )
+        authenticator = OAuth2Authenticator(config, GoogleOAuth2Provider(config))
 
         with patch("actingweb.oauth2.requests.post") as mock_post:
             mock_response = MagicMock()
@@ -136,14 +149,15 @@ class TestExchangeCodeRedirectUriOverride:
             # Verify the redirect_uri was passed in the request body
             call_kwargs = mock_post.call_args
             body_str = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", "")
-            assert "io.actingweb.memory%3A%2F%2Fcallback" in body_str or "io.actingweb.memory://callback" in body_str
+            assert (
+                "io.actingweb.memory%3A%2F%2Fcallback" in body_str
+                or "io.actingweb.memory://callback" in body_str
+            )
 
     def test_default_redirect_uri_when_no_override(self) -> None:
         config = Config(fqdn="test.example.com", database="dynamodb")
         config.oauth = {"client_id": "cid", "client_secret": "csec"}
-        authenticator = OAuth2Authenticator(
-            config, GoogleOAuth2Provider(config)
-        )
+        authenticator = OAuth2Authenticator(config, GoogleOAuth2Provider(config))
 
         with patch("actingweb.oauth2.requests.post") as mock_post:
             mock_response = MagicMock()

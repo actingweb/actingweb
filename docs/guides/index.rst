@@ -14,6 +14,7 @@ Contents
 
    authentication
    oauth2-setup
+   apple-sign-in
    spa-authentication
    access-control-simple
    access-control
@@ -36,6 +37,7 @@ Authentication & Authorization
 
 - **Authentication** - Overview of ActingWeb's authentication system (basic, OAuth, OAuth2)
 - **OAuth2 Setup** - Configure OAuth2 with Google, GitHub, or custom providers
+- **Sign in with Apple** - Apple Sign-In for web SPA, native iOS, and Android Capacitor apps
 - **SPA Authentication** - Single Page Application authentication patterns, including browser redirect behavior
 - **Access Control (Simple)** - Quick guide to ActingWeb's unified access control
 - **Access Control** - Detailed guide to permissions, trust types, and access patterns

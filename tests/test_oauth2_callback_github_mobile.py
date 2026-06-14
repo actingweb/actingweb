@@ -118,3 +118,28 @@ class TestGithubMobileCallback:
         assert stored["code"] == "github-auth-code"
         assert stored["provider"] == "github-mobile"
         assert stored["redirect_uri"] == CALLBACK
+
+    def test_ticket_carries_pkce_session_id(self) -> None:
+        # Server-managed PKCE: the verifier session id must ride the ticket so the
+        # deferred server-side code exchange can supply the code_verifier.
+        config = _make_config()
+        state = json.dumps(
+            {
+                "provider": "github-mobile",
+                "spa_mode": True,
+                "pkce_session_id": "pkce-sess-123",
+            }
+        )
+        webobj = AWWebObj(
+            url=f"{CALLBACK}?code=c&state=...",
+            params={"code": "github-auth-code", "state": state},
+            body="",
+            headers={},
+            cookies={},
+        )
+        result = OAuth2CallbackHandler(webobj, config).get()
+        ticket = parse_qs(urlparse(result["redirect_url"]).query)["ticket"][0]
+
+        stored = MobileTicketStore(config).consume(ticket)
+        assert stored is not None
+        assert stored.get("extra", {}).get("pkce_session_id") == "pkce-sess-123"

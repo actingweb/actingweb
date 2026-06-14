@@ -1170,7 +1170,12 @@ class OAuth2SPAHandler(BaseHandler):
         if not IdTokenReplayCache(self.config).check_and_record(claims):
             return self._json_error(400, "id_token replay rejected")
 
-        identifier = authenticator.get_email_from_user_info(claims)
+        # Honor email-as-creator mode: reject a provider-ID-only id_token when the
+        # app requires email as the actor creator (parity with the web flow).
+        require_email = bool(getattr(self.config, "force_email_prop_as_creator", False))
+        identifier = authenticator.get_email_from_user_info(
+            claims, require_email=require_email
+        )
         if not identifier:
             return self._json_error(401, "id_token did not yield a user identifier")
 
@@ -1215,11 +1220,26 @@ class OAuth2SPAHandler(BaseHandler):
         if not code:
             return self._json_error(400, "Ticket missing authorization code")
 
+        # Recover the server-managed PKCE verifier when the authorize step sent a
+        # code_challenge (e.g. GitHub). Without it the provider rejects the
+        # deferred exchange with invalid_grant.
+        code_verifier: str | None = None
+        extra = stored.get("extra") if isinstance(stored.get("extra"), dict) else {}
+        pkce_session_id = (extra or {}).get("pkce_session_id")
+        if pkce_session_id:
+            from ..oauth_session import get_oauth2_session_manager
+
+            pkce_session = get_oauth2_session_manager(self.config).get_session(
+                str(pkce_session_id)
+            )
+            if pkce_session:
+                code_verifier = pkce_session.get("pkce_verifier")
+
         from ..oauth2 import create_oauth2_authenticator
 
         authenticator = create_oauth2_authenticator(self.config, provider)
         token_data = authenticator.exchange_code_for_token(
-            code, redirect_uri=redirect_uri
+            code, redirect_uri=redirect_uri, code_verifier=code_verifier
         )
         if not token_data or "access_token" not in token_data:
             return self._json_error(401, "Token exchange failed")
@@ -1236,7 +1256,12 @@ class OAuth2SPAHandler(BaseHandler):
         if not claims:
             return self._json_error(401, "Failed to extract user info")
 
-        identifier = authenticator.get_email_from_user_info(claims)
+        # Honor email-as-creator mode: in that configuration a provider-ID
+        # identifier (apple:sub / github:id) must not be accepted.
+        require_email = bool(getattr(self.config, "force_email_prop_as_creator", False))
+        identifier = authenticator.get_email_from_user_info(
+            claims, token_data.get("access_token", ""), require_email=require_email
+        )
         if not identifier:
             return self._json_error(401, "Sign-in did not yield a user identifier")
 

@@ -86,9 +86,16 @@ class OAuth2Provider:
         self.id_token_validator: JWKSIdTokenValidator | None = None
 
     def is_enabled(self) -> bool:
-        """Check if provider is properly configured."""
+        """Check if provider is properly configured.
+
+        A static ``client_secret`` is not required when the provider can validate
+        id_tokens itself (``id_token_validator`` set, e.g. ``google-native`` used
+        purely through the JWT-bearer grant). Such providers are still usable —
+        and must be advertised by ``/oauth/config`` — without a secret.
+        """
+        has_credential = bool(self.client_secret) or self.id_token_validator is not None
         return bool(
-            self.client_id and self.client_secret and self.auth_uri and self.token_uri
+            self.client_id and has_credential and self.auth_uri and self.token_uri
         )
 
     @property

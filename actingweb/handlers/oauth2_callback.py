@@ -153,7 +153,9 @@ class OAuth2CallbackHandler(BaseHandler):
         # SPA session-creation path can merge it before firing oauth_success.
         self._pending_apple_user_json: str | None = None
 
-    def _redirect_with_mobile_ticket(self, provider: str, code: str) -> dict[str, Any]:
+    def _redirect_with_mobile_ticket(
+        self, provider: str, code: str, pkce_session_id: str = ""
+    ) -> dict[str, Any]:
         """Hand a native-mobile provider's authorization code to the app via an
         opaque single-use ticket deep link.
 
@@ -162,6 +164,11 @@ class OAuth2CallbackHandler(BaseHandler):
         grant). Neither the code nor any ActingWeb token appears in the deep
         link. Shared by the Apple form_post handler and the query-mode callback
         (e.g. ``github-mobile``).
+
+        ``pkce_session_id`` carries the server-managed PKCE session through the
+        ticket so the deferred (server-side) code exchange can supply the stored
+        ``code_verifier`` — required when a ``code_challenge`` was sent at
+        authorize time (e.g. GitHub). Apple does not use PKCE, so it passes none.
         """
         from urllib.parse import urlencode, urlunparse
 
@@ -175,10 +182,12 @@ class OAuth2CallbackHandler(BaseHandler):
         if not deep_link:
             logger.error("%s provider has no mobile deep link configured", provider)
             return self.error_response(500, "Mobile flow not configured")
+        extra = {"pkce_session_id": pkce_session_id} if pkce_session_id else None
         ticket = MobileTicketStore(self.config).create(
             code=code,
             redirect_uri=self.authenticator.provider.redirect_uri,
             provider=provider,
+            extra=extra,
         )
         parsed = urlparse(deep_link)
         deep_url = urlunparse(
@@ -273,7 +282,11 @@ class OAuth2CallbackHandler(BaseHandler):
             and state_provider.endswith("-mobile")
             and getattr(self.authenticator.provider, "mobile_deep_link", "")
         ):
-            return self._redirect_with_mobile_ticket(state_provider, code)
+            # Carry the server-managed PKCE session so the deferred exchange can
+            # supply the stored verifier (a code_challenge was sent at authorize).
+            return self._redirect_with_mobile_ticket(
+                state_provider, code, state_extras.get("pkce_session_id", "")
+            )
 
         # For SPA mode, check if this is a browser navigation vs fetch request
         # Browser navigations need to redirect to SPA callback with code/state

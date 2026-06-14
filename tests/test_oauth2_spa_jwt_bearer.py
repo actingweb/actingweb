@@ -306,3 +306,48 @@ class TestJwtBearerRejections:
         handler = _handler(config, _jwt_bearer_body("facebook", token))
         result = handler._handle_token()
         assert result.get("status_code") == 400
+
+    def test_email_only_mode_rejects_no_email_token(self, ec_pem, rsa_key) -> None:
+        # With force_email_prop_as_creator, a native id_token without an email
+        # must NOT fall back to an apple:{sub} identifier (parity with web flow).
+        config = _make_config(ec_pem)
+        config.force_email_prop_as_creator = True
+        token = _apple_token(rsa_key, nonce="n", sub="no-email-sub", email=None)
+        handler = _handler(config, _jwt_bearer_body("apple-mobile", token, "n"))
+        with _mocked_backend(_jwks(rsa_key, APPLE_KID)):
+            result = handler._handle_token()
+        assert result.get("status_code") == 401
+
+    def test_email_only_mode_accepts_token_with_email(self, ec_pem, rsa_key) -> None:
+        config = _make_config(ec_pem)
+        config.force_email_prop_as_creator = True
+        token = _apple_token(rsa_key, nonce="n", sub="has-email-sub")
+        handler = _handler(config, _jwt_bearer_body("apple-mobile", token, "n"))
+        with _mocked_backend(_jwks(rsa_key, APPLE_KID)):
+            result = handler._handle_token()
+        assert result.get("success") is True
+
+
+class TestSecretlessNativeProviderEnabled:
+    """google-native with no client_secret must still be enabled / advertised."""
+
+    def test_google_native_enabled_without_secret(self, ec_pem) -> None:
+        from actingweb.oauth2 import create_oauth2_authenticator
+
+        config = _make_config(ec_pem)  # google-native has client_secret=""
+        auth = create_oauth2_authenticator(config, "google-native")
+        assert auth.provider.client_secret == ""
+        assert auth.provider.id_token_validator is not None
+        assert auth.is_enabled() is True
+
+    def test_plain_web_provider_still_requires_secret(self, ec_pem) -> None:
+        # A provider with no id_token validator and no secret is not enabled.
+        from actingweb.oauth2 import GoogleOAuth2Provider
+
+        config = _make_config(ec_pem)
+        provider = GoogleOAuth2Provider(
+            config,
+            provider_config={"client_id": "web-id", "client_secret": ""},
+        )
+        assert provider.id_token_validator is None
+        assert provider.is_enabled() is False

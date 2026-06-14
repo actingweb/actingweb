@@ -1,7 +1,7 @@
 # Implementation Plan: Sign in with Apple + Unified Native OIDC Grant
 
 **Date:** 2026-05-29
-**Status:** Implemented
+**Status:** Phases 1–7 Implemented; Phase 8 (GitHub mobile parity) Planned for the same 3.11.0 release
 **Research:** thoughts/research/2026-05-28-apple-signin-support.md
 **Branch:** feature/apple-signin-google-mobile-support
 **Target release:** actingweb 3.11.0
@@ -35,7 +35,7 @@ Add Sign in with Apple as a third OAuth provider alongside Google and GitHub, co
 
 - No changes to actingweb_mcp app — separate plan/PR in that repo. This plan tracks library-side only.
 - No Apple Developer Portal automation — manual setup (App ID + Services ID + `.p8`) documented as a runbook, not scripted.
-- No rename of `github-mobile` to a per-flow `redirect_uri` model. Future cleanup.
+- ~~No rename of `github-mobile` to a per-flow `redirect_uri` model. Future cleanup.~~ **Superseded:** because 3.11.0 is the first public release branded as "full mobile auth," GitHub mobile must reach parity with Apple/Google. See Phase 8 — a `with_github()` builder, mandatory fail-closed PKCE, and a generalized opaque-ticket flow now land in this release.
 - No bearer-token validation of raw Apple id_tokens via `Authorization: Bearer`. Apple id_tokens are only accepted via `/oauth/spa/token`'s new grant. `auth.py:_check_oauth2_token()` stays single-provider and userinfo-based.
 - No library-level scheduler for Apple's recommended 24h refresh-token validation. Library exposes a helper; apps schedule it themselves.
 - No library-level auto-revocation on actor deletion. Apps invoke `revoke_token()` from their own `actor_deleted` hook.
@@ -500,6 +500,58 @@ No new code tests in this phase. Documentation-only.
   `hooks-reference.rst`, Apple provider cross-ref in `authentication.rst`, Apple
   env vars + MCP parity note in `configuration.rst`, CHANGELOG "Unreleased"
   entry, and `thoughts/coordination/2026-05-29-actingweb-mcp-apple-changes.md`.
+
+---
+
+## Phase 8: GitHub mobile parity — generalized mobile-ticket flow, mandatory PKCE, with_github() builder
+
+3.11.0 is the first public release advertising full mobile auth, so GitHub mobile must be a first-class, secure, documented citizen — not the hand-wired `with_oauth(provider="github-mobile", redirect_uri="custom://...")` the consuming app uses today.
+
+**Protocol constraint:** GitHub OAuth issues no OIDC `id_token` — identity comes from the `/user` API after an `authorization_code → access_token` exchange. So GitHub *cannot* use the JWT-bearer grant; its mobile path is structurally the Apple-on-Android pattern (web flow → server-side code exchange), not the Google/Apple-iOS native-id_token pattern.
+
+This phase has three threads:
+
+1. **Generalized opaque-ticket flow** so the authorization code never reaches the device for *any* mobile provider (today only Apple-Android is protected this way; `github-mobile` ships the raw `code` in the deep link).
+2. **Mandatory fail-closed PKCE** for any native `authorization_code` exchange that still uses a custom-scheme redirect (today PKCE is optional and only warns — `oauth2_spa.py:775`).
+3. **`with_github()` builder** mirroring `with_apple_sign_in()`'s dual web/mobile registration.
+
+### Changes
+
+- `actingweb/oauth_state_store.py` — generalize `AppleTicketStore` into a provider-agnostic `MobileTicketStore` (opaque, single-use, short-TTL record `{provider, code, redirect_uri}`). Keep `AppleTicketStore` as a thin subclass/alias so existing imports and `tests/test_state_nonce_store.py` / `tests/test_oauth2_spa_apple_ticket.py` keep working.
+- Config key generalization: `apple_mobile_deep_link` → `mobile_deep_link`. The Apple provider and `is_safe_spa_redirect` read both keys (back-compat); new code writes `mobile_deep_link`.
+- `actingweb/handlers/oauth2_callback.py` (`GET /oauth/callback`, the `get()` path) — add a mobile-ticket branch mirroring the Apple form_post handler (`oauth2_callback.py:1252`): when the resolved provider is a `-mobile` variant with a configured `mobile_deep_link`, store `{provider, code, redirect_uri}` in `MobileTicketStore` and 302 to `mobile_deep_link?ticket=...` instead of completing a web session. No token or code in the redirect URL.
+- `actingweb/handlers/oauth2_callback.py` (Apple form_post handler, `:1252`) — refactor to call the shared `MobileTicketStore` (behavior-preserving).
+- `actingweb/handlers/oauth2_spa.py:1166` — generalize `_handle_apple_mobile_ticket` into `_handle_mobile_ticket`: consume the ticket, resolve the provider from the stored record, `exchange_code_for_token(code, redirect_uri=...)` server-side, then provider-appropriate identity extraction — `validate_token_and_get_user_info()` for GitHub's userinfo path, `extract_user_info_from_token_response()` for Apple's id_token path — then `_finalize_native_session(...)`.
+- `actingweb/handlers/oauth2_spa.py:585` (`_handle_token`) — add `grant_type == "mobile_ticket"` → `_handle_mobile_ticket`; keep `apple_mobile_ticket` as an alias to the same handler.
+- `actingweb/handlers/oauth2_spa.py:775` (`_handle_authorization_code`) — replace the warn-only PKCE check: when the provider is a `-mobile`/native variant **or** `redirect_uri` uses a non-`http(s)` (custom) scheme, require `code_verifier` and return `400 "PKCE code_verifier required for native authorization_code exchange"` if absent. Web/SPA same-origin server-managed-PKCE exchanges are unaffected.
+- `actingweb/handlers/oauth2_callback.py:91` (`is_safe_spa_redirect`) — also read `mobile_deep_link` (not just `apple_mobile_deep_link`) when allowlisting redirect origins, so the github-mobile deep link is an accepted target.
+- `actingweb/interface/app.py` — add `with_github(client_id, client_secret, *, scope="read:user user:email", redirect_uri="", mobile_redirect_uri="")`. Registers `github` (web) with the standard GitHub auth/token URIs (apps no longer hand-pass `auth_uri`/`token_uri`); when `mobile_redirect_uri` is set, also registers `github-mobile` with HTTPS `redirect_uri` defaulting to `/oauth/callback` and `mobile_deep_link=mobile_redirect_uri`. Mirrors `with_apple_sign_in()`. Existing `with_oauth(provider="github", ...)` stays valid.
+- `docs/guides/spa-authentication.rst` / `docs/guides/authentication.rst` — document the generic `mobile_ticket` grant and a GitHub-on-mobile runbook alongside the Apple/Google flows; state the mandatory-PKCE rule for custom-scheme exchanges.
+
+### New tests
+
+- `tests/test_oauth2_spa_mobile_ticket.py` (new) — generic `mobile_ticket` grant for `github-mobile` (server-side code exchange → userinfo → session); `apple_mobile_ticket` alias still routes to the same handler; expired/invalid/replayed ticket → 400.
+- `tests/test_oauth2_callback_github_mobile.py` (new) — `GET /oauth/callback` for a `github-mobile` provider stores a ticket and redirects to the deep link with only `?ticket=`; assert neither `code` nor any token appears in the redirect URL.
+- `tests/test_oauth2_spa.py` — PKCE fail-closed: mobile/custom-scheme `authorization_code` without `code_verifier` → 400; web same-origin exchange still succeeds.
+- `tests/test_actingweb_app.py` — `with_github()` registers `github` + `github-mobile` with correct config; the mobile entry carries `mobile_deep_link` and an HTTPS `redirect_uri`.
+- `tests/test_state_nonce_store.py` — `MobileTicketStore` round-trip + single-use; `AppleTicketStore` alias compatibility.
+
+### Verification
+
+- [ ] `make test-all-parallel` passes (existing + new tests)
+- [ ] `poetry run pyright actingweb tests` — 0 errors
+- [ ] `poetry run ruff check actingweb tests` / `ruff format` clean
+- [ ] Manual: grep that no `-mobile`/custom-scheme `authorization_code` path can proceed without a `code_verifier`
+- [ ] Manual: the `github-mobile` deep link carries only an opaque `ticket` (no `code`, no token)
+- [ ] `apple_mobile_ticket` grant + `AppleTicketStore` import still pass unchanged (back-compat)
+- [ ] Docs build with 0 warnings
+
+### Implementation Status: Planned
+
+**Open design notes:**
+- `mobile_ticket` vs keeping per-provider grant names: chosen approach is one generic grant + `apple_mobile_ticket` alias, so the app's frontend uses a single redemption path regardless of provider.
+- Whether `with_github()` should *deprecate* the raw `with_oauth(provider="github")` form: no — keep both; `with_github()` is the ergonomic path, `with_oauth` remains the escape hatch.
+- Custom-scheme direct-exchange (pattern A) stays supported but is now PKCE-gated; the generalized ticket flow (pattern B) is the documented recommendation because the code never touches the device and the client never needs the client_secret.
 
 ---
 

@@ -5,6 +5,21 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.11.0b2: June 15, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **GitHub display names now populate after sign-in.** GitHub's userinfo carries
+  the profile name in ``name`` (not ``display_name``), so the ``oauth_success``
+  hook previously found no display name and stored nothing. Both OAuth callback
+  paths — the standard redirect callback and the SPA-via-callback login — now run
+  ``user_info`` through ``oauth2_spa._normalize_user_info`` before invoking the
+  hook, matching the SPA token-exchange path. The normalizer also falls back to
+  the GitHub ``login`` (username) when a user has no profile name set, since
+  ``name`` is optional but ``login`` is always present.
+
 v3.11.0b1: June 15, 2026
 ------------------------
 

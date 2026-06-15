@@ -29,6 +29,19 @@ class TestNormalizeUserInfo:
         out = _normalize_user_info("github", {"name": "Octo Cat", "login": "octo"})
         assert out["display_name"] == "Octo Cat"
 
+    def test_github_falls_back_to_login_when_name_missing(self) -> None:
+        # GitHub's `name` is optional; `login` (username) is always present.
+        out = _normalize_user_info("github", {"name": None, "login": "octo", "email": "o@x.com"})
+        assert out["display_name"] == "octo"
+
+    def test_github_falls_back_to_login_when_name_absent(self) -> None:
+        out = _normalize_user_info("github", {"login": "octo"})
+        assert out["display_name"] == "octo"
+
+    def test_real_name_preferred_over_login(self) -> None:
+        out = _normalize_user_info("github", {"name": "Octo Cat", "login": "octo"})
+        assert out["display_name"] == "Octo Cat"
+
     def test_existing_display_name_wins(self) -> None:
         out = _normalize_user_info(
             "apple", {"display_name": "Custom", "firstName": "A", "lastName": "B"}

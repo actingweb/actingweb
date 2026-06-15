@@ -343,6 +343,15 @@ class OAuth2CallbackHandler(BaseHandler):
             logger.error("Failed to validate token or extract user info")
             return self.error_response(502, "Token validation failed")
 
+        # Normalize to a consistent (display_name / given_name / family_name /
+        # email) shape so the oauth_success hook reads ONE shape across
+        # providers. GitHub's userinfo carries `name`, not `display_name`, so
+        # without this the hook finds no display_name and stores nothing. This
+        # mirrors the SPA token-exchange path (oauth2_spa._normalize_user_info).
+        from .oauth2_spa import _normalize_user_info
+
+        user_info = _normalize_user_info(self.authenticator.provider.name, user_info)
+
         # Determine if email is required based on config
         require_email = bool(
             self.config and getattr(self.config, "force_email_prop_as_creator", False)
@@ -984,6 +993,16 @@ class OAuth2CallbackHandler(BaseHandler):
             )
         # Merge Apple's first-sign-in `user` payload (name/email) if present.
         user_info = self._merge_apple_user_payload(user_info)
+        if user_info:
+            # Normalize to a consistent (display_name / given_name / family_name
+            # / email) shape so the oauth_success hook reads ONE shape across
+            # providers. GitHub's userinfo carries `name`, not `display_name`,
+            # so without this the SPA-via-callback login stores no display name.
+            from .oauth2_spa import _normalize_user_info
+
+            user_info = _normalize_user_info(
+                self.authenticator.provider.name, user_info
+            )
         if not user_info:
             logger.error("SPA OAuth: Failed to validate token")
             parsed = urlparse(spa_redirect_url)

@@ -90,7 +90,9 @@ def _normalize_user_info(provider_name: str, raw: dict[str, Any]) -> dict[str, A
 
     - Apple: ``firstName`` / ``lastName`` -> ``given_name`` / ``family_name``
     - Google: ``given_name`` / ``family_name`` pass through
-    - GitHub: ``name`` -> ``display_name``
+    - GitHub: ``name`` -> ``display_name`` (falls back to ``login`` when the
+      user has no profile name set — GitHub's ``name`` is optional, ``login``
+      is always present)
 
     The original keys (``sub``, ``email``, etc.) are preserved as passthrough.
     """
@@ -107,6 +109,7 @@ def _normalize_user_info(provider_name: str, raw: dict[str, Any]) -> dict[str, A
         info.get("display_name")
         or info.get("name")
         or (f"{given} {family}".strip() if (given or family) else "")
+        or info.get("login")  # GitHub username — last-resort, always present
     )
     if display:
         info["display_name"] = display

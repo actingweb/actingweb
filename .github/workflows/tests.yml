@@ -101,19 +101,31 @@ jobs:
           poetry run pytest tests/ --collect-only -q
           echo "Running all tests (unit + integration) with ${{ matrix.backend }} backend..."
           echo "Note: Benchmark tests are excluded from parallel runs (run separately with 'pytest -m benchmark')"
-          # --timeout bounds any single test: a parallel-only deadlock (e.g. workers
-          # contending on a shared row) otherwise hangs an xdist worker silently and
-          # burns the whole job until the timeout-minutes wall, with no diagnostics.
-          # The thread method works inside xdist workers (signal method does not) and
-          # dumps all thread stacks on timeout, pinpointing where a hang occurs.
+          # Hang protection (a flaky worker can wedge the whole run at the suite tail):
+          #   PYTEST_WATCHDOG_SECONDS (see tests/conftest.py): the PRIMARY guard. A
+          #     C-level faulthandler timer in every process dumps all thread stacks
+          #     and hard-exits if still alive after N seconds. This is the only thing
+          #     that reliably aborts an xdist controller wedge — the controller blocks
+          #     in socket recv waiting on an unresponsive worker, so NO test is
+          #     "running" and pytest's cooperative --timeout / --session-timeout never
+          #     fire (the latter only when the event loop regains control, which the
+          #     recv-wedge prevents). N (1500s) sits above the legitimate full-run wall
+          #     and below the job's timeout-minutes.
+          #   --timeout: cooperative backstop for a single runaway test BODY (300s;
+          #     with timeout_func_only=true in pyproject it excludes the slow per-worker
+          #     session fixtures — alembic migration + uvicorn — so it can't false-kill).
+          #   --max-worker-restart=0: if a worker dies, do NOT spawn a replacement.
+          #     Restarting trips a known pytest-xdist loadgroup bug
+          #     (KeyError: <WorkerController gwN> in _assign_work_unit) that itself
+          #     hangs the controller; failing fast is strictly better here.
           poetry run pytest tests/ \
             -m "not benchmark" \
             -n 4 \
             --dist loadgroup \
-            --max-worker-restart=2 \
+            --max-worker-restart=0 \
             --reruns 2 \
             --reruns-delay 5 \
-            --timeout=120 \
+            --timeout=300 \
             --timeout-method=thread \
             -v \
             --tb=short \
@@ -123,6 +135,9 @@ jobs:
             --cov-report=html:htmlcov-${{ matrix.backend }}
         env:
           DATABASE_BACKEND: ${{ matrix.backend }}
+          # Hard hang-watchdog ceiling (seconds) — see tests/conftest.py. Above the
+          # legitimate full-run wall, below this job's timeout-minutes.
+          PYTEST_WATCHDOG_SECONDS: 1500
           # DynamoDB settings
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test

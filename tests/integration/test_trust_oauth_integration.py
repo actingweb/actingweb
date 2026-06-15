@@ -17,7 +17,6 @@ References:
 """
 
 import os
-import time
 
 import pytest
 
@@ -397,37 +396,74 @@ class TestTrustDeletionOnClientDeletion:
             success = actor.trust.delete_relationship(peer_id)
             assert success
 
-            # Verify cleanup completed. Trust deletion, client removal, and token
-            # revocation are separate writes; under heavy parallel DB load (e.g.
-            # the postgres CI matrix running the full suite with xdist) they can be
-            # observed with a brief eventual-consistency lag. Poll rather than
-            # asserting on the first read to avoid a flaky failure.
-            def _trust_gone() -> bool:
-                reloaded = ActorInterface.get_by_id(actor.id, config)  # type: ignore[arg-type]
-                return all(
-                    client_id not in t.peerid
-                    for t in reloaded.trust.relationships  # type: ignore[arg-type]
-                )
+            # Reload actor to get fresh data
+            actor_reload = ActorInterface.get_by_id(actor.id, config)  # type: ignore[arg-type]
 
-            def _cleanup_complete() -> bool:
-                return (
-                    _trust_gone()
-                    and len(client_manager.list_clients()) == 0
-                    and token_manager.validate_access_token(access_token) is None
-                )
+            # Verify trust is deleted
+            matching_trust_after = None
+            for trust in actor_reload.trust.relationships:  # type: ignore[arg-type]
+                if client_id in trust.peerid:
+                    matching_trust_after = trust
+                    break
+            assert matching_trust_after is None, "Trust relationship should be deleted"
 
-            deadline = time.time() + 5.0
-            while time.time() < deadline and not _cleanup_complete():
-                time.sleep(0.1)
-
-            # Final assertions (clear messages on the specific step that lagged).
-            assert _trust_gone(), "Trust relationship should be deleted"
+            # Verify client is deleted. Deletion must succeed even when the shared
+            # global client index is transiently unreadable under concurrent load
+            # (the trust passes the authoritative actor_id to delete_client).
             assert len(client_manager.list_clients()) == 0, (
                 "OAuth2 client should be deleted after trust deletion"
             )
-            assert token_manager.validate_access_token(access_token) is None, (
+
+            # Verify token is revoked
+            token_validation_after = token_manager.validate_access_token(access_token)
+            assert token_validation_after is None, (
                 "Token should be revoked after trust deletion"
             )
+        finally:
+            actor.delete()
+
+    def test_delete_client_succeeds_when_global_index_missing(self, aw_app):
+        """Regression: client deletion must succeed even if the shared global
+        client index entry is unreadable.
+
+        The global ``CLIENT_INDEX_BUCKET`` (under ``OAUTH2_SYSTEM_ACTOR``) is a
+        best-effort lookup optimization. Under heavy concurrent load (the postgres
+        CI matrix) its entry could be transiently unreadable at delete time, which
+        previously made ``delete_client`` bail before removing the client from the
+        actor's own bucket — orphaning it (still listable after trust deletion).
+        Because the trust passes the authoritative ``actor_id``, deletion must
+        proceed regardless. This simulates the miss by removing the index entry.
+        """
+        from actingweb import attribute
+        from actingweb.constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
+        from actingweb.oauth2_server.client_registry import get_mcp_client_registry
+
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="user-idx@example.com", config=config)
+
+        try:
+            client_manager = OAuth2ClientManager(actor.id, config)  # type: ignore[arg-type]
+            client_data = client_manager.create_client(
+                client_name="Index Client", trust_type="mcp_client"
+            )
+            client_id = client_data["client_id"]
+            assert len(client_manager.list_clients()) == 1
+
+            # Simulate the shared global index entry being unreadable.
+            global_bucket = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=CLIENT_INDEX_BUCKET,
+                config=config,
+            )
+            global_bucket.delete_attr(name=client_id)
+
+            # Delete via the registry path (as trust deletion does) with the
+            # authoritative actor_id. Must still remove the client.
+            registry = get_mcp_client_registry(config)
+            assert (
+                registry.delete_client(client_id, actor_id=actor.id) is True  # type: ignore[arg-type]
+            )
+            assert len(client_manager.list_clients()) == 0
         finally:
             actor.delete()
 

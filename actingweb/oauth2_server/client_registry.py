@@ -230,21 +230,29 @@ class MCPClientRegistry:
             True if deletion was successful, False otherwise
         """
         try:
-            # First find the client to get metadata (and actor_id if not provided)
+            # First find the client to get metadata (and actor_id if not provided).
             client_data = self._load_client(client_id)
-            if not client_data:
+
+            # Resolve the actor whose bucket holds the client. The caller-provided
+            # actor_id takes precedence — it comes from the trust relationship,
+            # which is the authoritative source for token/client storage.
+            if not actor_id and client_data:
+                actor_id = client_data.get("actor_id")
+
+            # The global client index is only a best-effort lookup optimization
+            # (see _search_client_in_actors). Under heavy concurrent access to the
+            # shared system-actor index bucket the entry may be transiently
+            # unreadable. As long as we know the authoritative actor_id we can —
+            # and must — still delete the client from that actor's bucket; bailing
+            # out here is what previously orphaned the client (it stayed listable).
+            if not actor_id:
                 logger.warning(f"Client {client_id} not found for deletion")
                 return False
-
-            # Use provided actor_id if available, otherwise fall back to client_data
-            # The provided actor_id takes precedence because it comes from the
-            # trust relationship which is the authoritative source for token storage
-            client_data_actor_id = client_data.get("actor_id")
-            if not actor_id:
-                actor_id = client_data_actor_id
-            if not actor_id:
-                logger.error(f"No actor_id found for client {client_id}")
-                return False
+            if not client_data:
+                logger.warning(
+                    f"Client {client_id} missing from global index; deleting from "
+                    f"actor {actor_id}'s bucket using the caller-provided actor_id"
+                )
 
             # Revoke all tokens for this client to terminate access immediately
             from .token_manager import get_actingweb_token_manager

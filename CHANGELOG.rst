@@ -5,11 +5,20 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.11.0b1: June 14, 2026
+v3.11.0b1: June 15, 2026
 ------------------------
+
+This release rolls up everything developed since v3.10.1 (previously published as
+the abandoned ``v3.10.2bN`` pre-release line). Because the native mobile / multi-
+provider sign-in work is too large for a patch release, it ships as the 3.11.0
+minor line instead of 3.10.2. Notes below describe the net change from v3.10.1;
+fixes to functionality introduced within this same window have been folded into
+the feature that introduced them rather than listed separately.
 
 ADDED
 ~~~~~
+
+Native mobile and multi-provider sign-in:
 
 - **Sign in with Apple support** across web SPA, native iOS, Android Capacitor,
   and the LLM-triggered (MCP) OAuth web form. New ``app.with_apple_sign_in(...)``
@@ -20,6 +29,14 @@ ADDED
   ``private_key_path`` / ``APPLE_PRIVATE_KEY_PATH`` (file wins) or
   ``private_key_pem`` / ``APPLE_PRIVATE_KEY_PEM`` and is validated eagerly at
   config-build time.
+- **Native mobile OAuth code exchange**: the ``authorization_code`` grant on
+  ``POST /oauth/spa/token`` lets native mobile apps exchange an OAuth code received
+  via deep link for ActingWeb SPA tokens (RFC 8252). ``exchange_code_for_token()``
+  accepts an optional ``redirect_uri`` override so provider classes honor custom
+  URL schemes, and the SPA authorize endpoint validates the requested provider via
+  ``_is_known_provider()``. Provider-name variants such as ``google-mobile`` /
+  ``github-mobile`` are resolved by prefix matching in
+  ``create_oauth2_authenticator``.
 - **New JWT-bearer grant on ``POST /oauth/spa/token``**
   (``grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer``, RFC 7523): native
   apps exchange a provider ``id_token`` (``assertion``) plus ``nonce`` for an
@@ -57,6 +74,59 @@ ADDED
 - ``/oauth/config`` provider entries gain additive ``response_mode``
   (``form_post`` for Apple, ``query`` otherwise) and ``platform`` fields.
 
+MCP:
+
+- **MCP protocol version negotiation**: the ``/mcp`` handler negotiates the
+  protocol version during ``initialize`` instead of hardcoding ``2024-11-05``. It
+  echoes the client's requested ``protocolVersion`` when supported, otherwise
+  returns the server's latest supported version (maintained in
+  ``actingweb/mcp/protocol.py``, currently through ``2025-11-25``). The
+  ``MCP-Protocol-Version`` request header is honored on post-initialize requests
+  (defaulting to ``2025-03-26`` when absent, ``400`` when present-but-unsupported),
+  and GET discovery reports the full supported-version set. Backward compatible:
+  ``2024-11-05``-only clients still negotiate ``2024-11-05``. The new
+  ``actingweb/mcp/protocol.py`` module exposes the version constants and
+  ``negotiate_protocol_version`` / ``is_supported_protocol_version`` /
+  ``supports_structured_content`` helpers as a single source of truth (also used
+  by the OAuth2 discovery endpoint).
+- **Structured tool output (``structuredContent``)**: ``tools/call`` results
+  populate the spec ``structuredContent`` field when the negotiated protocol
+  version supports it (>= ``2025-06-18``). A hook returning a dict with ``content``
+  plus extra top-level keys has those extras promoted into ``structuredContent``;
+  an explicit ``structuredContent`` from the hook is passed through, and a
+  hook-supplied ``_meta`` is preserved. For older negotiated versions
+  ``structuredContent`` is omitted (the payload is still carried by ``content``).
+- **MCP tool per-actor visibility**: ``@mcp_tool`` accepts a
+  ``visibility_predicate(actor) -> bool`` to omit tools from ``tools/list`` for
+  actors that should not see them (fail-closed on predicate errors). Note:
+  visibility filtering applies to ``tools/list`` only — omitted tools can still be
+  invoked by name, so call-time enforcement must be implemented separately for any
+  tool that gates privileged behavior.
+- **MCP tool per-actor descriptions**: ``@mcp_tool`` accepts a
+  ``description_predicate(actor) -> str | None`` to override the tool description
+  per actor, taking precedence over ``client_descriptions`` and the static
+  ``description``.
+- **Configurable MCP server name**: ``ActingWebApp.with_mcp(server_name="myapp")``
+  sets the name announced in the MCP ``initialize`` handshake and surfaced on
+  ``serverInfo.name`` (some clients use it as the default tool prefix,
+  ``myapp:search`` vs ``actingweb:search``).
+- **Configurable MCP server instructions**:
+  ``ActingWebApp.with_mcp(instructions="...")`` sets the server-level orientation
+  string emitted on the ``InitializeResult.instructions`` field — useful for
+  pointing new LLMs at an entry-point tool (e.g. ``how_to_use()``).
+  ``serverInfo.version`` reports the ActingWeb version.
+- **Per-MCP-session identity on ``MCPContext``**: new optional
+  ``transport_session_id`` and ``client_info`` fields expose per-session identity
+  distinct from ``peer_id`` / ``trust_relationship`` (which are per-OAuth2-
+  credential and shared across concurrent sessions on the same credential).
+  ``transport_session_id`` is taken from the spec's ``Mcp-Session-Id`` header and
+  is ``None`` when the transport supplies none (callers then rely on the client-id
+  guard alone); ``client_info`` carries the live ``clientInfo`` captured at the
+  session's ``initialize`` call. ``get_client_info_from_context()`` prefers this
+  live per-session ``client_info`` so two MCP sessions sharing one OAuth2
+  credential no longer see each other's identity. Backward compatible: both fields
+  default to ``None``.
+
 CHANGED
 ~~~~~~~
 
@@ -73,17 +143,60 @@ CHANGED
 - Token-exchange, token-refresh, token-revocation, and userinfo error logs now
   redact ``client_secret`` / ``assertion`` / ``id_token`` / ``client_assertion``
   and truncate the response body.
+- **MCP ``tools/call`` results always include ``isError``** (defaulting to
+  ``false``) per the MCP spec, where previously a hook returning
+  ``{"content": [...]}`` without ``isError`` was passed through verbatim. Clients
+  doing strict equality on the result object may observe the added field.
+- **MCP server name no longer includes ``actor_id``**: the announced server name
+  defaults to ``"actingweb"`` instead of ``"actingweb-{actor_id}"``. Each MCP
+  connection is already per-actor, so disambiguation in the name was unnecessary
+  and made client-side tool prefixes noisy.
 
 FIXED
 ~~~~~
 
+- **MCP ``tools/list`` now surfaces ``title`` and ``outputSchema``**: ``@mcp_tool``
+  has long accepted ``title`` and ``output_schema``, but the ``/mcp``
+  ``tools/list`` builder dropped both when constructing the tool definition. Hosts
+  that key on the MCP 2025-11-25 ``Tool.title`` (e.g. Claude Code's tool-permission
+  dialog) therefore saw only the internal ``name``, and clients supporting
+  structured output had no schema to validate against. ``tool_def`` now includes
+  ``title`` and ``outputSchema`` when set on the decorator.
+- **MCP ``tools/call`` formatting parity between Flask and FastAPI**: the sync
+  (``MCPHandler``) and async (``AsyncMCPHandler``) handlers now share a single
+  ``format_call_tool_result`` implementation, so both frameworks format tool-call
+  responses identically.
+- **``OAuth2SessionManager.revoke_all_tokens()`` no longer crashes on the
+  refresh-token-reuse path**: it iterated the access- and refresh-token bucket
+  dicts while calling ``delete_attr`` inside the loop, raising
+  ``RuntimeError: dictionary changed size during iteration`` whenever an actor had
+  a matching token to revoke. Because ``revoke_all_tokens`` is invoked by the SPA
+  refresh-token reuse-detection path, reusing a rotated refresh token returned a
+  500 instead of cleanly revoking the actor's tokens. Both loops now snapshot
+  ``list(<bucket>.items())`` before deleting.
 - OAuth2 client deletion (and trust deletion) no longer aborts when the
   best-effort global client index lookup misses: when the caller supplies the
   authoritative ``actor_id`` (as trust deletion does), the client is deleted from
   that actor's bucket regardless, preventing orphaned-but-listable clients.
 - A leftover debug log in the actor-by-creator lookup (``db.postgresql.actor`` and
-  ``db.dynamodb.actor``) was emitted at ``WARNING`` on every match (``    id (…)``)
-  — a hot path during OAuth sign-in. It is now ``DEBUG`` with a clearer message.
+  ``db.dynamodb.actor``) was emitted at ``WARNING`` on every match — a hot path
+  during OAuth sign-in. It is now ``DEBUG`` with a clearer message.
+
+REMOVED
+~~~~~~~
+
+- **Dropped the optional ``mcp`` (MCP Python SDK) dependency.** ActingWeb's MCP
+  support is fully hand-rolled and did not functionally depend on the SDK (the
+  SDK-backed ``ActingWebMCPServer`` was never wired to serve requests). Removing it
+  also drops ~a dozen transitive packages (the SSE/streaming + jsonschema +
+  pydantic-settings stack). The ``mcp`` install extra is removed; MCP support no
+  longer requires any extra.
+- **Removed ``actingweb.mcp.get_server_manager``, ``MCPServerManager`` and
+  ``ActingWebMCPServer``** (the vestigial SDK-backed server). The supported way to
+  configure the MCP server name and instructions is
+  ``ActingWebApp.with_mcp(server_name=..., instructions=...)``. The internal
+  ``_match_uri_template`` helper moved to ``actingweb/mcp/uri.py`` as
+  ``match_uri_template``.
 
 SECURITY
 ~~~~~~~~
@@ -101,113 +214,6 @@ SECURITY
   affected all SPA providers (Google / GitHub / Apple). New
   ``Config.spa_redirect_origins`` lets split-domain deployments allow additional
   SPA origins.
-
-v3.10.2b9: June 13, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **``OAuth2SessionManager.revoke_all_tokens()`` no longer crashes on the refresh-token-reuse path**: it iterated the access- and refresh-token bucket dicts with ``for token, token_attr in <bucket>.items()`` while calling ``delete_attr`` inside the loop, raising ``RuntimeError: dictionary changed size during iteration`` whenever an actor had a matching token to revoke. Because ``revoke_all_tokens`` is invoked by the SPA refresh-token reuse-detection path, reusing a rotated refresh token returned a 500 instead of cleanly revoking the actor's tokens. Both loops now snapshot ``list(<bucket>.items())`` before deleting (matching the existing ``cleanup_expired_tokens`` pattern).
-
-v3.10.2b8: May 29, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **``MCPContext.transport_session_id`` no longer leaks a synthetic placeholder when the ``Mcp-Session-Id`` header is absent.** ``_resolve_transport_session_id()`` previously fell back to ``_get_session_key()``'s ``<client_ip>:<hash(UA)>`` form — an internal cache key, not a real per-connection identifier — which degenerated to the string ``"unknown:0"`` on transports lacking the header, ``remote_addr`` and ``User-Agent`` (observed for Claude.ai web sessions). The method now returns ``None`` when the header is absent; callers should treat ``None`` as "this transport has no per-connection id; rely on the client-id guard alone."
-
-v3.10.2b7: May 28, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **MCP ``tools/list`` now surfaces ``title`` and ``outputSchema``**: ``@mcp_tool`` has long accepted ``title`` and ``output_schema`` parameters, but the ``/mcp`` ``tools/list`` builder dropped both fields when constructing the tool definition. Hosts that key on the MCP 2025-11-25 ``Tool.title`` (e.g. Claude Code's tool-permission dialog) therefore saw only the internal ``name``, and clients supporting structured output had no schema to validate against. ``tool_def`` now includes ``title`` and ``outputSchema`` when set on the decorator.
-- **``_get_session_key()`` now prefers the ``Mcp-Session-Id`` header**: the in-memory ``client_info`` cache key was derived from ``client_ip + hash(user_agent[:50])``, so two MCP clients sharing one OAuth2 credential through the same proxy (same IP, near-identical UA prefix) collided on the cache key. The second client's ``initialize`` then silently overwrote the first client's cached identity. ``_get_session_key()`` now uses the spec's ``Mcp-Session-Id`` header (case-insensitive, ``mcp-session:`` prefixed for namespacing) as the canonical per-connection identifier and only falls back to IP+UA when the header is absent. ``_resolve_transport_session_id()`` returns the raw header value (without the cache prefix) for surfacing on ``MCPContext.transport_session_id``.
-
-v3.10.2b6: May 28, 2026
-------------------------
-
-ADDED
-~~~~~
-
-- **Per-MCP-session identity on ``MCPContext``**: new optional ``transport_session_id`` and ``client_info`` fields expose per-session identity that is distinct from ``peer_id`` / ``trust_relationship`` (which are per-OAuth2-credential and shared across concurrent sessions on the same credential). ``transport_session_id`` prefers the ``Mcp-Session-Id`` header (per the MCP HTTP streamable transport spec) and falls back to the existing ``client_ip + UA hash`` session key. ``client_info`` carries the live ``clientInfo`` captured at the current session's ``initialize`` call. Backward compatible: both fields default to ``None``.
-
-FIXED
-~~~~~
-
-- **``get_client_info_from_context()`` no longer surfaces another session's identity** when two MCP sessions share one OAuth2 credential. Previously it read ``client_name`` from the trust relationship, which is per-credential and gets overwritten by whichever session most recently registered — so concurrent sessions on one credential would see each other's name. The runtime context now prefers the live ``MCPContext.client_info`` (captured per-session at ``initialize``) and only falls back to the trust relationship's cached fields when no live info is available.
-
-v3.10.2b5: May 27, 2026
-------------------------
-
-ADDED
-~~~~~
-
-- **MCP protocol version negotiation**: The ``/mcp`` handler now negotiates the protocol version during ``initialize`` instead of hardcoding ``2024-11-05``. It echoes the client's requested ``protocolVersion`` when supported, otherwise returns the server's latest supported version (maintained in ``actingweb/mcp/protocol.py``, currently through ``2025-11-25``). The ``MCP-Protocol-Version`` request header is honored on post-initialize requests (defaulting to ``2025-03-26`` when absent, ``400`` when present-but-unsupported), and GET discovery now reports the full supported-version set. Backward compatible: ``2024-11-05``-only clients still negotiate ``2024-11-05``.
-- **Structured tool output (``structuredContent``)**: ``tools/call`` results now populate the spec ``structuredContent`` field when the negotiated protocol version supports it (>= ``2025-06-18``). A hook returning a dict with ``content`` plus extra top-level keys has those extras promoted into ``structuredContent``; an explicit ``structuredContent`` from the hook is passed through, and a hook-supplied ``_meta`` is preserved. For older negotiated versions ``structuredContent`` is omitted (the payload is still carried by ``content``).
-- New ``actingweb/mcp/protocol.py`` module exposing the version constants and ``negotiate_protocol_version`` / ``is_supported_protocol_version`` / ``supports_structured_content`` helpers as a single source of truth (also now used by the OAuth2 discovery endpoint).
-
-CHANGED
-~~~~~~~
-
-- **``tools/call`` results always include ``isError``**: the normalized result now always carries an explicit ``isError`` (defaulting to ``false``) per the MCP spec, where previously a hook returning ``{"content": [...]}`` without ``isError`` was passed through verbatim. Clients doing strict equality on the result object may observe the added field.
-
-FIXED
-~~~~~
-
-- **MCP ``tools/call`` formatting divergence between Flask and FastAPI**: the sync (``MCPHandler``) and async (``AsyncMCPHandler``) handlers now share a single ``format_call_tool_result`` implementation, so both frameworks format tool-call responses identically.
-- **Configurable MCP ``server_name`` / ``instructions`` now reach clients**: previously the values from ``with_mcp(server_name=..., instructions=...)`` (added in v3.10.2b3/b4) flowed only into the unused SDK-backed server and never appeared in the live ``initialize`` response. ``_handle_initialize`` now sets ``serverInfo.name`` from ``mcp_server_name`` and emits ``instructions`` from ``mcp_instructions``. ``serverInfo.version`` now reports the ActingWeb version.
-
-REMOVED
-~~~~~~~
-
-- **Dropped the optional ``mcp`` (MCP Python SDK) dependency.** ActingWeb's MCP support is fully hand-rolled and did not functionally depend on the SDK (the SDK-backed ``ActingWebMCPServer`` was never wired to serve requests). Removing it also drops ~a dozen transitive packages (the SSE/streaming + jsonschema + pydantic-settings stack). The ``mcp`` install extra is removed; MCP support no longer requires any extra.
-- **Removed ``actingweb.mcp.get_server_manager``, ``MCPServerManager`` and ``ActingWebMCPServer``** (the vestigial SDK-backed server). The supported way to configure the MCP server name and instructions remains ``ActingWebApp.with_mcp(server_name=..., instructions=...)``, which now takes effect on the live endpoint. The internal ``_match_uri_template`` helper moved to ``actingweb/mcp/uri.py`` as ``match_uri_template``.
-
-v3.10.2b4: May 26, 2026
-------------------------
-
-ADDED
-~~~~~
-
-- **Configurable MCP server instructions**: ``ActingWebApp.with_mcp(instructions="...")`` sets the server-level orientation string surfaced on the MCP ``InitializeResult.instructions`` field. Clients display it to the LLM on initial connection — useful for pointing new LLMs at an entry-point tool (e.g. ``how_to_use()``). ``get_server_manager()``, ``MCPServerManager`` and ``ActingWebMCPServer`` also accept an ``instructions`` parameter for direct use. Like ``server_name``, the first ``with_mcp()`` call wins for the process-wide singleton.
-
-v3.10.2b3: May 23, 2026
-------------------------
-
-ADDED
-~~~~~
-
-- **Configurable MCP server name via the fluent API**: ``ActingWebApp.with_mcp(server_name="myapp")`` sets the name announced in the MCP initialise handshake. Some clients use this as the default tool prefix (``myapp:search`` vs ``actingweb:search``). The underlying ``get_server_manager()``, ``MCPServerManager`` and ``ActingWebMCPServer`` also accept a ``server_name`` parameter for direct use.
-- **Singleton conflict warning**: ``get_server_manager()`` now logs a warning when called with a ``server_name`` that differs from the existing singleton's name, since the late name is silently ignored.
-
-CHANGED
-~~~~~~~
-
-- **MCP server name no longer includes actor_id**: The announced MCP server name defaults to ``"actingweb"`` instead of ``"actingweb-{actor_id}"``. Each MCP connection is already per-actor, so disambiguation in the name was unnecessary and made client-side tool prefixes noisy.
-
-v3.10.2b2: May 1, 2026
------------------------
-
-ADDED
-~~~~~
-
-- **MCP tool per-actor visibility**: ``@mcp_tool`` accepts a ``visibility_predicate(actor) -> bool`` to omit tools from ``tools/list`` for actors that should not see them (fail-closed on predicate errors). Note: visibility filtering applies to ``tools/list`` only — omitted tools can still be invoked by name, so call-time enforcement must be implemented separately for any tool that gates privileged behavior.
-- **MCP tool per-actor descriptions**: ``@mcp_tool`` accepts a ``description_predicate(actor) -> str | None`` to override the tool description per actor, taking precedence over ``client_descriptions`` and the static ``description`` (useful for keeping feature-flagged terminology out of descriptions for actors without the feature)
-
-v3.10.2b1: Apr 7, 2026
------------------------
-
-ADDED
-~~~~~
-
-- **Mobile app OAuth2 support**: Implement ``authorization_code`` grant type on ``POST /oauth/spa/token`` for native mobile apps to exchange OAuth codes received via deep link for ActingWeb SPA tokens (per RFC 8252)
-- **Provider name variants**: Support ``google-mobile``, ``github-mobile`` (and other ``-suffix`` variants) in ``create_oauth2_authenticator`` via prefix matching, allowing separate mobile provider configuration
-- **``redirect_uri`` override**: ``exchange_code_for_token()`` accepts an optional ``redirect_uri`` parameter; provider classes respect ``redirect_uri`` from explicit ``provider_config`` for custom URL schemes
-- **Provider validation**: Add ``_is_known_provider()`` validation in SPA authorize endpoint to reject unknown provider names
 
 v3.10.1: Apr 2, 2026
 ---------------------

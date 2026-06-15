@@ -1,13 +1,15 @@
-"""Regression test: the SPA-via-callback web login normalizes provider user_info
-before firing the oauth_success hook.
+"""Regression test: OAuth2CallbackHandler normalizes provider user_info before
+firing the oauth_success hook, on BOTH code paths.
 
-OAuth2CallbackHandler builds user_info and fires oauth_success in two places —
-the plain web path (``get``) and the spa_mode browser-redirect path
-(``_process_spa_oauth_and_create_session``). A GitHub web login uses
-``spa_mode: true`` and so hits the SECOND path. GitHub's userinfo carries
-``name``, not ``display_name``; without normalization there the hook found no
-display_name and the GitHub display name was silently dropped. This pins the
-normalization on that path so it can't regress.
+``OAuth2CallbackHandler.get`` builds user_info and fires oauth_success in two
+places:
+
+- the plain web login path (``get`` itself), and
+- the spa_mode browser-redirect path (``_process_spa_oauth_and_create_session``).
+
+GitHub's userinfo carries ``name``, not ``display_name``; without normalization
+the hook found no display_name and the GitHub display name was silently dropped.
+These tests pin the normalization on both paths so neither can regress.
 """
 
 import json
@@ -31,8 +33,7 @@ def _config() -> MagicMock:
 
 
 def _webobj(state: str, code: str = "gh-code") -> AWWebObj:
-    # No Accept: application/json header → browser-navigation branch, which runs
-    # _process_spa_oauth_and_create_session (the path under test).
+    # No Accept: application/json header → browser-navigation branch.
     return AWWebObj(
         url=f"{CALLBACK}?code={code}&state=...",
         params={"code": code, "state": state},
@@ -54,17 +55,13 @@ def _mock_authenticator(raw_user_info: dict) -> MagicMock:
     auth.get_email_from_user_info.return_value = "greger@example.com"
     actor = MagicMock()
     actor.id = "actor-gh-1"
+    actor.creator = "greger@example.com"
     actor.store = MagicMock()
     auth.lookup_or_create_actor_by_identifier.return_value = actor
     return auth
 
 
-def _run(raw_user_info: dict) -> dict:
-    config = _config()
-    state = json.dumps(
-        {"provider": "github", "spa_mode": True, "redirect_url": SPA_REDIRECT}
-    )
-
+def _capture_hooks() -> tuple[MagicMock, dict]:
     captured: dict = {}
     hooks = MagicMock()
 
@@ -74,6 +71,16 @@ def _run(raw_user_info: dict) -> dict:
         return True
 
     hooks.execute_lifecycle_hooks.side_effect = _exec
+    return hooks, captured
+
+
+def _run_spa(raw_user_info: dict) -> dict:
+    """Drive the SPA browser-redirect path (_process_spa_oauth_and_create_session)."""
+    config = _config()
+    state = json.dumps(
+        {"provider": "github", "spa_mode": True, "redirect_url": SPA_REDIRECT}
+    )
+    hooks, captured = _capture_hooks()
 
     session_mgr = MagicMock()
     session_mgr.get_session.return_value = None
@@ -100,16 +107,60 @@ def _run(raw_user_info: dict) -> dict:
     return captured
 
 
+def _run_web(raw_user_info: dict) -> dict:
+    """Drive the plain web-login path (get() itself, no spa_mode)."""
+    config = _config()
+    state = json.dumps({"provider": "github"})  # no spa_mode → plain web path
+    hooks, captured = _capture_hooks()
+
+    auth = _mock_authenticator(raw_user_info)
+
+    # The plain path does an existence check via actingweb.actor.Actor before
+    # lookup/create; return a truthy existing actor so is_new_actor is False.
+    existing_actor = MagicMock()
+    existing_actor.get_from_creator.return_value = True
+
+    with (
+        patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator",
+            return_value=auth,
+        ),
+        patch("actingweb.actor.Actor", return_value=existing_actor),
+        patch(
+            "actingweb.interface.actor_interface.ActorInterface",
+            return_value=MagicMock(),
+        ),
+    ):
+        OAuth2CallbackHandler(_webobj(state), config, hooks=hooks).get()
+
+    return captured
+
+
 class TestGithubSpaCallbackNormalization:
     def test_github_name_becomes_display_name_in_hook(self):
-        captured = _run(
+        captured = _run_spa(
             {"name": "Greger Wedel", "login": "gregertw", "email": "greger@example.com"}
         )
         assert captured.get("user_info") is not None, "oauth_success was not fired"
         assert captured["user_info"]["display_name"] == "Greger Wedel"
 
     def test_github_login_used_when_name_missing(self):
-        captured = _run(
+        captured = _run_spa(
+            {"name": None, "login": "gregertw", "email": "greger@example.com"}
+        )
+        assert captured["user_info"]["display_name"] == "gregertw"
+
+
+class TestGithubWebCallbackNormalization:
+    def test_github_name_becomes_display_name_in_hook(self):
+        captured = _run_web(
+            {"name": "Greger Wedel", "login": "gregertw", "email": "greger@example.com"}
+        )
+        assert captured.get("user_info") is not None, "oauth_success was not fired"
+        assert captured["user_info"]["display_name"] == "Greger Wedel"
+
+    def test_github_login_used_when_name_missing(self):
+        captured = _run_web(
             {"name": None, "login": "gregertw", "email": "greger@example.com"}
         )
         assert captured["user_info"]["display_name"] == "gregertw"

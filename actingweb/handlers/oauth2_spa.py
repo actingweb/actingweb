@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
 from .base_handler import BaseHandler
+from .oauth2_utils import normalize_user_info
 
 if TYPE_CHECKING:
     from .. import aw_web_request
@@ -79,42 +80,6 @@ def _provider_platform(name: str) -> str:
     if name.endswith("-mobile") or name.endswith("-native"):
         return "any"
     return "web"
-
-
-def _normalize_user_info(provider_name: str, raw: dict[str, Any]) -> dict[str, Any]:
-    """Produce a consistent user_info shape across providers.
-
-    Maps provider-specific name fields onto a common
-    ``display_name`` / ``given_name`` / ``family_name`` / ``email`` shape so that
-    application ``oauth_success`` hooks read one shape regardless of provider:
-
-    - Apple: ``firstName`` / ``lastName`` -> ``given_name`` / ``family_name``
-    - Google: ``given_name`` / ``family_name`` pass through
-    - GitHub: ``name`` -> ``display_name`` (falls back to ``login`` when the
-      user has no profile name set — GitHub's ``name`` is optional, ``login``
-      is always present)
-
-    The original keys (``sub``, ``email``, etc.) are preserved as passthrough.
-    """
-    info = dict(raw or {})
-
-    given = info.get("given_name") or info.get("firstName") or ""
-    family = info.get("family_name") or info.get("lastName") or ""
-    if given:
-        info["given_name"] = given
-    if family:
-        info["family_name"] = family
-
-    display = (
-        info.get("display_name")
-        or info.get("name")
-        or (f"{given} {family}".strip() if (given or family) else "")
-        or info.get("login")  # GitHub username — last-resort, always present
-    )
-    if display:
-        info["display_name"] = display
-
-    return info
 
 
 def generate_pkce_pair() -> tuple[str, str]:
@@ -841,7 +806,7 @@ class OAuth2SPAHandler(BaseHandler):
 
         # Normalize the user_info shape so the oauth_success hook sees a
         # consistent (display_name / given_name / family_name / email) shape.
-        user_info = _normalize_user_info(provider, user_info)
+        user_info = normalize_user_info(provider, user_info)
 
         # Extract identifier (email or provider ID)
         require_email = bool(
@@ -1182,7 +1147,7 @@ class OAuth2SPAHandler(BaseHandler):
         if not identifier:
             return self._json_error(401, "id_token did not yield a user identifier")
 
-        user_info = _normalize_user_info(provider, claims)
+        user_info = normalize_user_info(provider, claims)
         return self._finalize_native_session(
             provider,
             authenticator,
@@ -1268,7 +1233,7 @@ class OAuth2SPAHandler(BaseHandler):
         if not identifier:
             return self._json_error(401, "Sign-in did not yield a user identifier")
 
-        user_info = _normalize_user_info(provider, claims)
+        user_info = normalize_user_info(provider, claims)
         return self._finalize_native_session(
             provider,
             authenticator,

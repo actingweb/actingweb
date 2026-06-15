@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
 from .base_handler import BaseHandler
+from .oauth2_utils import normalize_user_info
 
 if TYPE_CHECKING:
     from .. import aw_web_request
@@ -347,10 +348,8 @@ class OAuth2CallbackHandler(BaseHandler):
         # email) shape so the oauth_success hook reads ONE shape across
         # providers. GitHub's userinfo carries `name`, not `display_name`, so
         # without this the hook finds no display_name and stores nothing. This
-        # mirrors the SPA token-exchange path (oauth2_spa._normalize_user_info).
-        from .oauth2_spa import _normalize_user_info
-
-        user_info = _normalize_user_info(self.authenticator.provider.name, user_info)
+        # mirrors the SPA token-exchange path.
+        user_info = normalize_user_info(self.authenticator.provider.name, user_info)
 
         # Determine if email is required based on config
         require_email = bool(
@@ -993,16 +992,6 @@ class OAuth2CallbackHandler(BaseHandler):
             )
         # Merge Apple's first-sign-in `user` payload (name/email) if present.
         user_info = self._merge_apple_user_payload(user_info)
-        if user_info:
-            # Normalize to a consistent (display_name / given_name / family_name
-            # / email) shape so the oauth_success hook reads ONE shape across
-            # providers. GitHub's userinfo carries `name`, not `display_name`,
-            # so without this the SPA-via-callback login stores no display name.
-            from .oauth2_spa import _normalize_user_info
-
-            user_info = _normalize_user_info(
-                self.authenticator.provider.name, user_info
-            )
         if not user_info:
             logger.error("SPA OAuth: Failed to validate token")
             parsed = urlparse(spa_redirect_url)
@@ -1023,6 +1012,13 @@ class OAuth2CallbackHandler(BaseHandler):
             self.response.set_status(302, "Found")
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
+
+        # Normalize to a consistent (display_name / given_name / family_name /
+        # email) shape so the oauth_success hook reads ONE shape across
+        # providers. GitHub's userinfo carries `name`, not `display_name`, so
+        # without this the SPA-via-callback login stores no display name. This
+        # mirrors the SPA token-exchange path.
+        user_info = normalize_user_info(self.authenticator.provider.name, user_info)
 
         # Determine if email is required based on config
         require_email = bool(

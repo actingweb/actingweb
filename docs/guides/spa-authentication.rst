@@ -574,6 +574,75 @@ Generate PKCE client-side for full control:
        })
    });
 
+Native id_token (JWT-bearer) grant
+----------------------------------
+
+Native mobile apps that already hold a provider ``id_token`` (Apple via the iOS
+plugin, Google via the native SDK) exchange it directly for an ActingWeb session
+through the RFC 7523 JWT-bearer grant — no authorization code, no userinfo call:
+
+.. code-block:: javascript
+
+   async function nativeSignIn(provider, idToken, nonce) {
+       const response = await fetch('/oauth/spa/token', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({
+               grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+               provider: provider,        // "apple-mobile" or "google-native"
+               assertion: idToken,        // the provider id_token (JWT)
+               nonce: nonce,              // nonce the app sent to the IdP
+               token_delivery: 'json'
+           })
+       });
+       return response.json();
+   }
+
+The server selects the validator by the declared ``provider`` and rejects the
+request if the token ``iss`` does not match it; ``nonce`` is required, and each
+``id_token`` is single-use (replay-protected).
+
+Mobile-ticket grant (server-side code exchange)
+-----------------------------------------------
+
+Providers that do **not** hand the app a usable ``id_token`` — Sign-in-with-Apple
+on Android (Apple requires an HTTPS ``redirect_uri``) and GitHub (no OIDC
+``id_token`` at all) — route their authorization response through the HTTPS
+``/oauth/callback``. The server stores the authorization code and deep-links the
+app with only an **opaque single-use ticket**; the code is exchanged
+server-side. Neither the code nor any ActingWeb token ever rides the deep link:
+
+.. code-block:: javascript
+
+   // ticket arrives via the app's custom-scheme deep link
+   await fetch('/oauth/spa/token', {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ grant_type: 'mobile_ticket', ticket })
+   });
+
+The grant is provider-agnostic: the server derives identity the way each
+provider supports it (Apple's ``id_token`` in the token response, GitHub's
+userinfo endpoint). ``apple_mobile_ticket`` remains accepted as an alias for the
+original Apple-only name.
+
+Configure these providers with ``app.with_apple_sign_in(...)``,
+``app.with_google_native(...)`` and ``app.with_github(..., mobile_redirect_uri=...)``.
+See :doc:`apple-sign-in` for the full Apple setup.
+
+.. note::
+
+   **PKCE is mandatory for native authorization_code exchanges.** If an app uses
+   the plain ``authorization_code`` grant (below) with a ``-mobile``/``-native``
+   provider or a custom-scheme ``redirect_uri``, it **must** include a
+   ``code_verifier`` (RFC 8252) or the request is rejected with ``400``. The
+   ticket flow above is preferred precisely because the code never reaches the
+   device. Web/SPA same-origin exchanges (server-managed PKCE) are unaffected.
+
+**Migration note:** apps that previously implemented a custom native sign-in
+endpoint (e.g. a hand-rolled ``/api/auth/google-mobile`` verifying an id_token)
+should switch to this library-provided JWT-bearer grant.
+
 Token Refresh with Rotation
 ---------------------------
 

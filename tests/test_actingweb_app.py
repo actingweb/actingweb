@@ -92,6 +92,255 @@ class TestOAuthConfiguration:
         assert result is app
 
 
+class TestAppleSignIn:
+    """Test with_apple_sign_in() builder."""
+
+    @staticmethod
+    def _ec_pem() -> str:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        key = ec.generate_private_key(ec.SECP256R1())
+        return key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode("utf-8")
+
+    def _app(self) -> ActingWebApp:
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            return ActingWebApp(
+                aw_type="urn:actingweb:test:apple", fqdn="test.example.com"
+            )
+
+    def test_registers_apple_provider(self) -> None:
+        app = self._app()
+        app.with_apple_sign_in(
+            client_id="com.example.web",
+            audiences=["com.example.web", "com.example.app"],
+            team_id="TEAM123456",
+            key_id="KEY1234567",
+            private_key_pem=self._ec_pem(),
+        )
+        assert "apple" in app._oauth_configs
+        cfg = app._oauth_configs["apple"]
+        assert cfg["client_id"] == "com.example.web"
+        assert cfg["apple_team_id"] == "TEAM123456"
+        assert cfg["apple_key_id"] == "KEY1234567"
+        assert cfg["audiences"] == ["com.example.web", "com.example.app"]
+        assert "PRIVATE KEY" in cfg["apple_private_key_pem"]
+        assert cfg["redirect_uri"].endswith("/oauth/callback/apple")
+
+    def test_registers_mobile_variant(self) -> None:
+        app = self._app()
+        app.with_apple_sign_in(
+            client_id="com.example.web",
+            audiences=["com.example.web"],
+            team_id="TEAM123456",
+            key_id="KEY1234567",
+            private_key_pem=self._ec_pem(),
+            mobile_redirect_uri="io.example.app://callback",
+        )
+        assert "apple-mobile" in app._oauth_configs
+        # Apple's redirect_uri stays HTTPS (authorize + token exchange); the
+        # custom scheme is stored as the deep-link for the final app handoff.
+        assert app._oauth_configs["apple-mobile"]["redirect_uri"].endswith(
+            "/oauth/callback/apple"
+        )
+        assert (
+            app._oauth_configs["apple-mobile"]["apple_mobile_deep_link"]
+            == "io.example.app://callback"
+        )
+
+    def test_sets_www_auth(self) -> None:
+        app = self._app()
+        app.with_apple_sign_in(
+            client_id="com.example.web",
+            audiences=["com.example.web"],
+            team_id="TEAM123456",
+            key_id="KEY1234567",
+            private_key_pem=self._ec_pem(),
+        )
+        assert app._www_auth == "oauth"
+
+    def test_missing_client_id_raises(self) -> None:
+        app = self._app()
+        try:
+            app.with_apple_sign_in(
+                client_id="",
+                audiences=["x"],
+                team_id="T",
+                key_id="K",
+                private_key_pem=self._ec_pem(),
+            )
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "client_id" in str(e)
+
+    def test_missing_team_id_raises(self) -> None:
+        app = self._app()
+        try:
+            app.with_apple_sign_in(
+                client_id="c",
+                audiences=["x"],
+                team_id="",
+                key_id="K",
+                private_key_pem=self._ec_pem(),
+            )
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "team_id" in str(e)
+
+    def test_empty_audiences_raises(self) -> None:
+        app = self._app()
+        try:
+            app.with_apple_sign_in(
+                client_id="c",
+                audiences=[],
+                team_id="T",
+                key_id="K",
+                private_key_pem=self._ec_pem(),
+            )
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "audiences" in str(e)
+
+    def test_invalid_key_raises_with_reason(self) -> None:
+        app = self._app()
+        try:
+            app.with_apple_sign_in(
+                client_id="c",
+                audiences=["x"],
+                team_id="T",
+                key_id="K",
+                private_key_pem="-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----",
+            )
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "valid PEM" in str(e)
+
+    def test_missing_key_file_raises_with_path(self) -> None:
+        app = self._app()
+        try:
+            app.with_apple_sign_in(
+                client_id="c",
+                audiences=["x"],
+                team_id="T",
+                key_id="K",
+                private_key_path="/no/such/AuthKey.p8",
+            )
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "/no/such/AuthKey.p8" in str(e)
+
+
+class TestGoogleNative:
+    """Test with_google_native() builder."""
+
+    def _app(self) -> ActingWebApp:
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            return ActingWebApp(
+                aw_type="urn:actingweb:test:gnative", fqdn="test.example.com"
+            )
+
+    def test_registers_provider_with_explicit_audiences(self) -> None:
+        app = self._app()
+        app.with_google_native(
+            client_id="web.apps.googleusercontent.com",
+            audiences=[
+                "web.apps.googleusercontent.com",
+                "ios.apps.googleusercontent.com",
+            ],
+        )
+        assert "google-native" in app._oauth_configs
+        cfg = app._oauth_configs["google-native"]
+        assert "web.apps.googleusercontent.com" in cfg["audiences"]
+        assert "ios.apps.googleusercontent.com" in cfg["audiences"]
+
+    def test_audiences_derived_from_client_ids(self) -> None:
+        app = self._app()
+        app.with_google_native(
+            client_id="primary",
+            web_client_id="web",
+            ios_client_id="ios",
+            android_client_id="android",
+            android_server_client_id="android-server",
+        )
+        auds = app._oauth_configs["google-native"]["audiences"]
+        assert set(auds) == {"primary", "web", "ios", "android", "android-server"}
+
+    def test_no_duplicate_audiences(self) -> None:
+        app = self._app()
+        app.with_google_native(client_id="same", web_client_id="same")
+        assert app._oauth_configs["google-native"]["audiences"] == ["same"]
+
+    def test_missing_client_id_raises(self) -> None:
+        app = self._app()
+        try:
+            app.with_google_native(client_id="")
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "client_id" in str(e)
+
+    def test_sets_www_auth(self) -> None:
+        app = self._app()
+        app.with_google_native(client_id="primary")
+        assert app._www_auth == "oauth"
+
+
+class TestGithub:
+    """Test with_github() builder."""
+
+    def _app(self) -> ActingWebApp:
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            return ActingWebApp(
+                aw_type="urn:actingweb:test:github", fqdn="test.example.com"
+            )
+
+    def test_registers_github_web_provider(self) -> None:
+        app = self._app()
+        app.with_github("gh-id", "gh-secret")
+        assert "github" in app._oauth_configs
+        cfg = app._oauth_configs["github"]
+        assert cfg["client_id"] == "gh-id"
+        assert cfg["client_secret"] == "gh-secret"
+        assert cfg["auth_uri"] == "https://github.com/login/oauth/authorize"
+        assert cfg["redirect_uri"].endswith("/oauth/callback")
+        # No mobile variant unless requested.
+        assert "github-mobile" not in app._oauth_configs
+
+    def test_mobile_variant_uses_https_callback_and_deep_link(self) -> None:
+        app = self._app()
+        app.with_github(
+            "gh-id", "gh-secret", mobile_redirect_uri="io.example.app://callback"
+        )
+        assert "github-mobile" in app._oauth_configs
+        mobile = app._oauth_configs["github-mobile"]
+        # The OAuth redirect stays HTTPS (the ticket flow); the custom scheme is
+        # only the final deep link.
+        assert mobile["redirect_uri"].endswith("/oauth/callback")
+        assert mobile["redirect_uri"].startswith("https://")
+        assert mobile["mobile_deep_link"] == "io.example.app://callback"
+
+    def test_missing_credentials_raise(self) -> None:
+        app = self._app()
+        try:
+            app.with_github("", "secret")
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "client_id" in str(e)
+        try:
+            app.with_github("id", "")
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "client_secret" in str(e)
+
+    def test_sets_www_auth(self) -> None:
+        app = self._app()
+        app.with_github("gh-id", "gh-secret")
+        assert app._www_auth == "oauth"
+
+
 class TestFeatureToggles:
     """Test feature enable/disable."""
 

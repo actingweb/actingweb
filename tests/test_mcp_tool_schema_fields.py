@@ -22,9 +22,12 @@ class FakeActor:
 
 
 def _list_tools(handler: MCPHandler, actor: FakeActor) -> list:
-    with patch.object(
-        MCPHandler, "authenticate_and_get_actor_cached", return_value=actor
-    ), patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc:
+    with (
+        patch.object(
+            MCPHandler, "authenticate_and_get_actor_cached", return_value=actor
+        ),
+        patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
+    ):
         mock_mcp_context = Mock()
         mock_mcp_context.peer_id = None
         mock_rc.return_value.get_mcp_context.return_value = mock_mcp_context

@@ -566,3 +566,146 @@ class TestPassphraseExchange:
         assert expected_response["token_type"] == "Bearer"
         assert expected_response["expires_in"] == 3600
         assert expected_response["refresh_token_expires_in"] == 86400 * 14
+
+
+class TestSpaRedirectSafety:
+    """Open-redirect / session-leak protection for the SPA post-auth redirect.
+
+    ``/oauth/spa/authorize`` accepts a client-supplied ``redirect_uri`` that the
+    callback later 302-redirects the browser to with a one-time ``?session=`` id.
+    An attacker-supplied origin must be rejected so the session id (exchangeable
+    for tokens) cannot leak.
+    """
+
+    @pytest.fixture
+    def mock_config(self):
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth = {"client_id": "id", "client_secret": "secret"}
+        config.oauth2_provider = "google"
+        config.oauth_providers = {}
+        config.spa_redirect_origins = []
+        config.new_token = MagicMock(return_value="test-access-token")
+        return config
+
+    @pytest.fixture
+    def mock_webobj(self):
+        webobj = MagicMock()
+        webobj.request = MagicMock()
+        webobj.request.body = None
+        webobj.request.headers = {"Accept": "application/json"}
+        webobj.request.cookies = {}
+        webobj.request.get = MagicMock(return_value="")
+        webobj.response = MagicMock()
+        webobj.response.headers = {}
+        webobj.response._cookies = []
+        return webobj
+
+    @pytest.fixture
+    def cfg(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            fqdn="test.example.com",
+            proto="https://",
+            oauth_providers={
+                "google": {"redirect_uri": "https://test.example.com/oauth/callback"},
+                "google-mobile": {"redirect_uri": "io.actingweb.app://callback"},
+                "apple-mobile": {
+                    "redirect_uri": "https://test.example.com/oauth/callback/apple",
+                    "apple_mobile_deep_link": "io.actingweb.app://apple",
+                },
+            },
+            spa_redirect_origins=["https://spa.example.com"],
+        )
+
+    def test_relative_url_is_safe(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        assert is_safe_spa_redirect(cfg, "/abc123/app") is True
+
+    def test_same_origin_is_safe(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        assert is_safe_spa_redirect(cfg, "https://test.example.com/callback") is True
+
+    def test_external_origin_is_rejected(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        assert is_safe_spa_redirect(cfg, "https://evil.example/callback") is False
+
+    def test_configured_mobile_scheme_is_safe(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        # Origin matches a configured provider redirect_uri (custom mobile scheme).
+        assert is_safe_spa_redirect(cfg, "io.actingweb.app://callback?code=1") is True
+
+    def test_configured_apple_deep_link_is_safe(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        assert is_safe_spa_redirect(cfg, "io.actingweb.app://apple?x=1") is True
+
+    def test_allowlisted_origin_is_safe(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        assert is_safe_spa_redirect(cfg, "https://spa.example.com/auth/cb") is True
+
+    def test_lookalike_host_is_rejected(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        # Suffix-append on an allowlisted origin must NOT match.
+        assert is_safe_spa_redirect(cfg, "https://spa.example.com.evil.com/cb") is False
+
+    def test_protocol_relative_url_is_rejected(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        # //evil.example/x — no scheme but a foreign host; classic open-redirect.
+        assert is_safe_spa_redirect(cfg, "//evil.example/steal") is False
+
+    def test_userinfo_host_confusion_is_rejected(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        assert (
+            is_safe_spa_redirect(cfg, "https://test.example.com@evil.example/") is False
+        )
+
+    def test_empty_url_is_rejected(self, cfg):
+        from actingweb.handlers.oauth2_callback import is_safe_spa_redirect
+
+        assert is_safe_spa_redirect(cfg, "") is False
+
+    def test_authorize_rejects_external_redirect_uri(self, mock_config, mock_webobj):
+        """/oauth/spa/authorize returns 400 for an off-origin redirect_uri."""
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        mock_config.oauth_providers = {}
+        mock_config.spa_redirect_origins = []
+        mock_webobj.request.body = json.dumps(
+            {"provider": "google", "redirect_uri": "https://evil.example/callback"}
+        )
+
+        handler = OAuth2SPAHandler(mock_webobj, mock_config)
+        result = handler._handle_authorize()
+
+        assert result.get("error") is True
+        assert result["message"] == "Invalid redirect_uri"
+
+    def test_authorize_allows_same_origin_redirect_uri(self, mock_config, mock_webobj):
+        """A same-origin redirect_uri is not rejected by the redirect check."""
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        mock_config.oauth_providers = {}
+        mock_config.spa_redirect_origins = []
+        mock_webobj.request.body = json.dumps(
+            {
+                "provider": "google",
+                "redirect_uri": "https://test.example.com/callback",
+            }
+        )
+
+        handler = OAuth2SPAHandler(mock_webobj, mock_config)
+        result = handler._handle_authorize()
+
+        # May still error on OAuth-not-enabled, but NOT on the redirect check.
+        assert result.get("message") != "Invalid redirect_uri"

@@ -65,9 +65,12 @@ class TestVisibilityPredicateFiltering(unittest.TestCase):
         self.handler = MCPHandler()
 
     def _list_tool_names(self) -> set[str]:
-        with patch.object(
-            MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
-        ), patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc:
+        with (
+            patch.object(
+                MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
+            ),
+            patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
+        ):
             mock_mcp_context = Mock()
             mock_mcp_context.peer_id = None
             mock_rc.return_value.get_mcp_context.return_value = mock_mcp_context
@@ -149,9 +152,12 @@ class TestDescriptionPredicate(unittest.TestCase):
         self.handler = MCPHandler()
 
     def _list_tools(self) -> list:
-        with patch.object(
-            MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
-        ), patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc:
+        with (
+            patch.object(
+                MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
+            ),
+            patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
+        ):
             mock_mcp_context = Mock()
             mock_mcp_context.peer_id = None
             mock_rc.return_value.get_mcp_context.return_value = mock_mcp_context
@@ -215,10 +221,14 @@ class TestDescriptionPredicate(unittest.TestCase):
         hooks.register_action_hook("t", hook)
         self.handler.hooks = hooks
         # Even with a matching client_type, the predicate should win.
-        with patch.object(
-            MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
-        ), patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc, patch.object(
-            self.handler, "_get_client_type", return_value="claude", create=True
+        with (
+            patch.object(
+                MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
+            ),
+            patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
+            patch.object(
+                self.handler, "_get_client_type", return_value="claude", create=True
+            ),
         ):
             mock_mcp_context = Mock()
             mock_mcp_context.peer_id = None

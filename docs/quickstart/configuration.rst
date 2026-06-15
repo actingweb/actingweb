@@ -100,6 +100,24 @@ Multi-provider example:
 
 When multiple providers are configured, ``config.oauth_providers`` contains per-provider credential dicts. ``config.oauth`` still points to the first provider for backward compatibility.
 
+Sign in with Apple
+~~~~~~~~~~~~~~~~~~~
+
+Apple is configured with ``with_apple_sign_in(...)`` (Services ID, Team ID, Key
+ID and a ``.p8`` key) and native Google with ``with_google_native(...)``. The
+Apple ``.p8`` key is supplied via either environment variable (file path wins):
+
+.. code-block:: bash
+
+    export APPLE_PRIVATE_KEY_PATH=/etc/secrets/AuthKey_KEY1234567.p8
+    # or, inline PEM (literal \n sequences are converted to newlines)
+    export APPLE_PRIVATE_KEY_PEM="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+
+The key is validated eagerly at config-build time. See :doc:`../guides/apple-sign-in`
+for the full runbook (Apple Developer Portal setup, audiences, the JWT-bearer
+grant, the Android deep-link flow, and ``actor_deleted`` revocation). Apple is
+also offered in the LLM-triggered (MCP) OAuth web form.
+
 Actors Registry
 ---------------
 

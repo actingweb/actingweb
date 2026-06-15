@@ -664,6 +664,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
             self.logger.debug("Using standard Google OAuth2 callback handler")
             return await self._handle_google_oauth_callback(request)
 
+        # Apple Sign in callback (response_mode=form_post -> cross-site POST)
+        @self.fastapi_app.post("/oauth/callback/apple")
+        async def oauth_apple_callback_handler(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            return await self._handle_apple_oauth_callback(request)
+
         # OAuth2 email input - handles email collection when OAuth provider doesn't provide one
         @self.fastapi_app.get("/oauth/email")
         async def oauth_email_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
@@ -1595,9 +1600,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 context=webobj.response.template_values,
             )
         elif self.templates:
-            return self.templates.TemplateResponse(
-                request, "aw-root-factory.html"
-            )
+            return self.templates.TemplateResponse(request, "aw-root-factory.html")
         else:
             # Fallback for when templates are not available
             return Response(
@@ -1777,6 +1780,52 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 webobj.response.headers["Content-Type"] = "application/json"
 
         # Handle OAuth2 errors with template rendering for better UX
+        elif (
+            isinstance(result, dict)
+            and result.get("error")
+            and webobj.response.status_code >= 400
+        ):
+            if self.templates and webobj.response.template_values:
+                return self.templates.TemplateResponse(
+                    request,
+                    "aw-root-failed.html",
+                    context=webobj.response.template_values,
+                )
+
+        return self._create_fastapi_response(webobj, request)
+
+    async def _handle_apple_oauth_callback(self, request: Request) -> Response:
+        """Handle Apple's form_post callback (POST /oauth/callback/apple).
+
+        State binding/CSRF protection is via a server-side single-use nonce
+        (see OAuth2AppleCallbackHandler / StateNonceStore); SameSite=Lax cookies
+        are intentionally not relied upon here because they do not survive the
+        cross-site POST Apple performs.
+        """
+        req_data = await self._normalize_request(request)
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_callback import OAuth2AppleCallbackHandler
+
+        handler = OAuth2AppleCallbackHandler(
+            webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
+        )
+
+        result = await self._run_in_executor_with_context(handler.post)
+
+        if isinstance(result, dict) and result.get("redirect_required"):
+            redirect_url = result.get("redirect_url")
+            if redirect_url:
+                webobj.response.set_redirect(redirect_url)
+            else:
+                webobj.response.body = json.dumps(result).encode("utf-8")
+                webobj.response.headers["Content-Type"] = "application/json"
         elif (
             isinstance(result, dict)
             and result.get("error")
@@ -2578,14 +2627,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     "client_secret_basic",
                 ],
             }
-            if provider.name == "google":
-                result["jwks_uri"] = "https://www.googleapis.com/oauth2/v3/certs"
-                result["id_token_signing_alg_values_supported"] = ["RS256"]
-                result["code_challenge_methods_supported"] = ["S256"]
-                result["grant_types_supported"] = [
-                    "authorization_code",
-                    "refresh_token",
-                ]
+            # Provider-specific discovery extras (e.g. Google/Apple JWKS URI)
+            result.update(provider.discovery_extras())
             return result
         except Exception:
             return {"error": "OAuth provider not configured"}

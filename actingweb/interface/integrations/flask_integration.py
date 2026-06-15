@@ -140,6 +140,11 @@ class FlaskIntegration(BaseActingWebIntegration):
             # Default to Google OAuth2 callback for ActingWeb
             return self._handle_oauth2_callback()
 
+        # Apple Sign in callback (response_mode=form_post -> cross-site POST)
+        @self.flask_app.route("/oauth/callback/apple", methods=["POST"])
+        def app_oauth2_apple_callback() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_apple_oauth2_callback()
+
         # OAuth2 email input - handles email collection when OAuth provider doesn't provide one
         @self.flask_app.route("/oauth/email", methods=["GET", "POST"])
         def app_oauth2_email() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
@@ -920,6 +925,46 @@ class FlaskIntegration(BaseActingWebIntegration):
 
         return self._create_flask_response(webobj)
 
+    def _handle_apple_oauth2_callback(self) -> Response | WerkzeugResponse | str:
+        """Handle Apple's form_post callback (POST /oauth/callback/apple).
+
+        CSRF protection is via a server-side single-use nonce; SameSite=Lax
+        cookies are not relied upon because they do not survive Apple's
+        cross-site POST.
+        """
+        req_data = self._normalize_request()
+        webobj = AWWebObj(
+            url=req_data["url"],
+            params=req_data["values"],
+            body=req_data["data"],
+            headers=req_data["headers"],
+            cookies=req_data["cookies"],
+        )
+
+        from ...handlers.oauth2_callback import OAuth2AppleCallbackHandler
+
+        handler = OAuth2AppleCallbackHandler(
+            webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
+        )
+        result = handler.post()
+
+        if (
+            isinstance(result, dict)
+            and result.get("error")
+            and webobj.response.status_code >= 400
+        ):
+            if webobj.response.template_values:
+                try:
+                    return Response(
+                        render_template(
+                            "aw-root-failed.html", **webobj.response.template_values
+                        )
+                    )
+                except Exception:
+                    pass  # Fall back to default response
+
+        return self._create_flask_response(webobj)
+
     def _handle_oauth2_email(self) -> Response | WerkzeugResponse | str:
         """Handle OAuth2 email input requests."""
         req_data = self._normalize_request()
@@ -1673,15 +1718,8 @@ class FlaskIntegration(BaseActingWebIntegration):
                     "client_secret_basic",
                 ],
             }
-            # Google-specific extras
-            if provider.name == "google":
-                result["jwks_uri"] = "https://www.googleapis.com/oauth2/v3/certs"
-                result["id_token_signing_alg_values_supported"] = ["RS256"]
-                result["code_challenge_methods_supported"] = ["S256"]
-                result["grant_types_supported"] = [
-                    "authorization_code",
-                    "refresh_token",
-                ]
+            # Provider-specific discovery extras (e.g. Google/Apple JWKS URI)
+            result.update(provider.discovery_extras())
             return result
         except Exception:
             return {"error": "OAuth provider not configured"}

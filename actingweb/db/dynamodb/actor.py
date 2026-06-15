@@ -85,7 +85,7 @@ class DbActor:
         self.handle = Actor.creator_index.query(creator)
         ret = []
         for c in self.handle:
-            logger.warning("    id (" + c.id + ")")
+            logger.debug("get_by_creator matched actor id=" + c.id)
             ret.append(self.get(actor_id=c.id))
         return ret
 

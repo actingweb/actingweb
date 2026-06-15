@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,12 +23,41 @@ from . import actor as actor_module
 from . import config as config_class
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 from .interface.actor_interface import ActorInterface
+from .oauth2_id_token import JWKSIdTokenValidator
 
 logger = logging.getLogger(__name__)
 
 # Simple cache for invalid tokens to avoid repeat network requests
 _invalid_token_cache: dict[str, float] = {}
 _INVALID_TOKEN_CACHE_TTL = 300  # 5 minutes
+
+# Sensitive fields that must never be written to logs, even inside an error body.
+_REDACT_FIELDS = ("client_assertion", "assertion", "id_token", "client_secret")
+
+
+def _redact_token_response(text: str, *, limit: int = 500) -> str:
+    """Redact sensitive fields and truncate an OAuth error body for logging.
+
+    Token-exchange error bodies can echo back the request (including the Apple
+    ES256 ``client_secret`` JWT or a submitted ``assertion``/``id_token``). We
+    redact those before logging and cap the length to avoid leaking secrets.
+    """
+    if not text:
+        return ""
+    redacted = text[:limit]
+    for field in _REDACT_FIELDS:
+        # Match JSON ("field":"...") and form (field=...) shapes, value redacted.
+        redacted = re.sub(
+            rf'("{field}"\s*:\s*")[^"]*(")',
+            r"\1<redacted>\2",
+            redacted,
+        )
+        redacted = re.sub(
+            rf"({field}=)[^&\s]*",
+            r"\1<redacted>",
+            redacted,
+        )
+    return redacted
 
 
 class OAuth2Provider:
@@ -43,12 +73,103 @@ class OAuth2Provider:
         self.revocation_uri = config.get("revocation_uri", "")
         self.scope = config.get("scope", "")
         self.redirect_uri = config.get("redirect_uri", "")
+        # Custom-scheme deep link for native-mobile flows that route through the
+        # HTTPS callback and hand the app an opaque ticket (Apple-on-Android,
+        # GitHub mobile). Empty for plain web/SPA providers. Read the generic key
+        # first, falling back to the legacy Apple-specific key.
+        self.mobile_deep_link = config.get("mobile_deep_link", "") or config.get(
+            "apple_mobile_deep_link", ""
+        )
+        # Optional OIDC id_token validator (set by providers like Apple, or by
+        # Google native when audiences are configured). None means this provider
+        # validates identity via the userinfo endpoint instead.
+        self.id_token_validator: JWKSIdTokenValidator | None = None
 
     def is_enabled(self) -> bool:
-        """Check if provider is properly configured."""
+        """Check if provider is properly configured.
+
+        A static ``client_secret`` is not required when the provider can validate
+        id_tokens itself (``id_token_validator`` set, e.g. ``google-native`` used
+        purely through the JWT-bearer grant). Such providers are still usable —
+        and must be advertised by ``/oauth/config`` — without a secret.
+        """
+        has_credential = bool(self.client_secret) or self.id_token_validator is not None
         return bool(
-            self.client_id and self.client_secret and self.auth_uri and self.token_uri
+            self.client_id and has_credential and self.auth_uri and self.token_uri
         )
+
+    @property
+    def display_name(self) -> str:
+        """Human-friendly display name for this provider."""
+        return get_provider_display_name(self.name)
+
+    # ----- Strategy methods (overridden by provider subclasses) -----
+    #
+    # These carry all provider-specific behavior so that ``OAuth2Authenticator``
+    # stays a thin orchestrator with no ``provider.name == "..."`` branches.
+
+    def make_client_secret(self, time_bucket: int | None = None) -> str:
+        """Return the client_secret value for token/refresh/revoke requests.
+
+        Default: the static configured secret. Providers like Apple override
+        this to mint a freshly-signed ES256 JWT.
+        """
+        return self.client_secret
+
+    def authorize_extra_params(self, email_hint: str = "") -> dict[str, str]:
+        """Provider-specific extra query parameters for the authorize URL."""
+        return {}
+
+    def token_request_headers(self) -> dict[str, str]:
+        """Headers for token-exchange / refresh requests."""
+        return {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        }
+
+    def userinfo_request_headers(self, access_token: str) -> dict[str, str]:
+        """Headers for the userinfo request."""
+        return {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        }
+
+    def supports_refresh_tokens(self) -> bool:
+        """Whether this provider issues usable refresh tokens."""
+        return True
+
+    def supports_revoke(self) -> bool:
+        """Whether this provider supports token revocation."""
+        return bool(self.revocation_uri)
+
+    def extract_user_info_from_token_response(
+        self, token_response: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Extract user info directly from the token response (e.g. an OIDC
+        ``id_token``). Default ``None`` means "use the userinfo endpoint".
+        """
+        return None
+
+    def extract_identifier_from_user_info(
+        self, user_info: dict[str, Any]
+    ) -> str | None:
+        """Provider-specific stable identifier used when no email is available."""
+        username = user_info.get("preferred_username", "")
+        if username:
+            return f"{self.name}:{username}".lower()
+        return None
+
+    def get_primary_email(self, access_token: str) -> str | None:
+        """Provider-specific email fallback (e.g. GitHub's ``/user/emails``)."""
+        return None
+
+    def store_provider_identity(self, store: Any, identifier: str) -> None:
+        """Persist provider-specific identity fields on ``actor.store``."""
+        return None
+
+    def discovery_extras(self) -> dict[str, Any]:
+        """Provider-specific additions to OIDC discovery metadata."""
+        return {}
 
 
 class GoogleOAuth2Provider(OAuth2Provider):
@@ -76,6 +197,60 @@ class GoogleOAuth2Provider(OAuth2Provider):
         }
         super().__init__("google", google_config)
 
+        # Native sign-in (google-native) validates the id_token directly against
+        # Google's JWKS when acceptable audiences are configured.
+        self.audiences: list[str] = list(
+            (provider_config or {}).get("audiences", []) or []
+        )
+        if self.audiences:
+            self.id_token_validator = JWKSIdTokenValidator(
+                jwks_uri="https://www.googleapis.com/oauth2/v3/certs",
+                expected_iss=(
+                    "accounts.google.com",
+                    "https://accounts.google.com",
+                ),
+                audiences=self.audiences,
+            )
+
+    GOOGLE_JWKS_URI = "https://www.googleapis.com/oauth2/v3/certs"
+    GOOGLE_EXPECTED_ISS = ("accounts.google.com", "https://accounts.google.com")
+
+    def authorize_extra_params(self, email_hint: str = "") -> dict[str, str]:
+        if email_hint:
+            return {"login_hint": email_hint}
+        return {}
+
+    def extract_user_info_from_token_response(
+        self, token_response: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        # Only used for the native id_token path; the web flow has no id_token
+        # validator and falls back to the userinfo endpoint.
+        id_token = token_response.get("id_token")
+        if not id_token or not self.id_token_validator:
+            return None
+        return self.id_token_validator.validate(id_token)
+
+    def extract_identifier_from_user_info(
+        self, user_info: dict[str, Any]
+    ) -> str | None:
+        # Google 'sub' claim is a stable unique identifier (never changes).
+        sub = user_info.get("sub")
+        if sub:
+            return f"google:{sub}"
+        return super().extract_identifier_from_user_info(user_info)
+
+    def store_provider_identity(self, store: Any, identifier: str) -> None:
+        if identifier.startswith("google:"):
+            store.oauth_sub = identifier.split(":", 1)[1]
+
+    def discovery_extras(self) -> dict[str, Any]:
+        return {
+            "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+            "id_token_signing_alg_values_supported": ["RS256"],
+            "code_challenge_methods_supported": ["S256"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+        }
+
 
 class GitHubOAuth2Provider(OAuth2Provider):
     """GitHub OAuth2 provider with specific configuration."""
@@ -96,8 +271,178 @@ class GitHubOAuth2Provider(OAuth2Provider):
             "scope": "user:email",
             "redirect_uri": custom_redirect
             or f"{config.proto}{config.fqdn}/oauth/callback",
+            # Native-mobile deep link (github-mobile): the code is exchanged
+            # server-side via the mobile_ticket grant; the app only sees a ticket.
+            "mobile_deep_link": (oauth_config.get("mobile_deep_link", ""))
+            if provider_config
+            else "",
         }
         super().__init__("github", github_config)
+
+    def token_request_headers(self) -> dict[str, str]:
+        headers = super().token_request_headers()
+        headers["User-Agent"] = "ActingWeb-OAuth2-Client"
+        return headers
+
+    def userinfo_request_headers(self, access_token: str) -> dict[str, str]:
+        headers = super().userinfo_request_headers(access_token)
+        headers["User-Agent"] = "ActingWeb-OAuth2-Client"
+        return headers
+
+    def supports_refresh_tokens(self) -> bool:
+        return False
+
+    def supports_revoke(self) -> bool:
+        return False
+
+    def extract_identifier_from_user_info(
+        self, user_info: dict[str, Any]
+    ) -> str | None:
+        # GitHub user ID is most stable (doesn't change even if username changes).
+        user_id = user_info.get("id")
+        if user_id:
+            return f"github:{user_id}"
+        # Fallback to username (can change but better than nothing).
+        login = user_info.get("login")
+        if login:
+            logger.warning(
+                f"Using GitHub username '{login}' as identifier - this may change"
+            )
+            return f"github:{login}".lower()
+        return super().extract_identifier_from_user_info(user_info)
+
+    def store_provider_identity(self, store: Any, identifier: str) -> None:
+        if identifier.startswith("github:"):
+            store.oauth_github_id = identifier.split(":", 1)[1]
+
+    def get_primary_email(self, access_token: str) -> str | None:
+        return _get_github_primary_email(access_token)
+
+
+class AppleOAuth2Provider(OAuth2Provider):
+    """Sign in with Apple provider.
+
+    Differs from generic OAuth2 in three ways handled here:
+      - ``client_secret`` is a freshly-signed ES256 JWT (not a static string).
+      - There is no userinfo endpoint; identity comes from the ``id_token``.
+      - id_tokens are validated against Apple's JWKS (RS256).
+    """
+
+    AUTH_URI = "https://appleid.apple.com/auth/authorize"
+    TOKEN_URI = "https://appleid.apple.com/auth/token"
+    REVOCATION_URI = "https://appleid.apple.com/auth/revoke"
+    JWKS_URI = "https://appleid.apple.com/auth/keys"
+    EXPECTED_ISS = ("https://appleid.apple.com", "https://account.apple.com")
+
+    def __init__(
+        self,
+        config: config_class.Config,
+        provider_config: dict[str, Any] | None = None,
+    ):
+        prov = provider_config or {}
+        custom_redirect = prov.get("redirect_uri", "")
+        apple_config = {
+            "client_id": prov.get("client_id", ""),
+            "client_secret": "",  # minted on demand as an ES256 JWT
+            "auth_uri": self.AUTH_URI,
+            "token_uri": self.TOKEN_URI,
+            "userinfo_uri": "",  # Apple has no userinfo endpoint
+            "revocation_uri": self.REVOCATION_URI,
+            "scope": prov.get("scope", "openid name email"),
+            "redirect_uri": custom_redirect
+            or f"{config.proto}{config.fqdn}/oauth/callback/apple",
+        }
+        # Provider name is "apple" for the web flow; mobile variants register
+        # their own entry via the factory's prefix matching but reuse this class.
+        super().__init__("apple", apple_config)
+
+        self._provider_name = prov.get("_provider_name", "apple")
+        self.team_id = prov.get("apple_team_id", "")
+        self.key_id = prov.get("apple_key_id", "")
+        self.audiences: list[str] = list(prov.get("audiences", []) or [])
+        self._private_key_pem = prov.get("apple_private_key_pem", "")
+        # Custom-scheme deep link for the Android Capacitor flow (apple-mobile).
+        # Apple's redirect_uri stays HTTPS; this is only the final deep-link.
+        # (base __init__ also reads these keys; set explicitly because Apple's
+        # config dict above does not carry the deep-link key.)
+        self.mobile_deep_link = prov.get("mobile_deep_link", "") or prov.get(
+            "apple_mobile_deep_link", ""
+        )
+
+        # Register credentials for cached client_secret minting, and wire up the
+        # id_token validator (fail-closed when audiences are unset).
+        if self.team_id and self.key_id and self.client_id and self._private_key_pem:
+            from . import oauth2_apple
+
+            oauth2_apple.register_apple_credentials(
+                self._provider_name,
+                team_id=self.team_id,
+                key_id=self.key_id,
+                client_id=self.client_id,
+                private_key_pem=self._private_key_pem,
+            )
+
+        self.id_token_validator = JWKSIdTokenValidator(
+            jwks_uri=self.JWKS_URI,
+            expected_iss=self.EXPECTED_ISS,
+            audiences=self.audiences or ([self.client_id] if self.client_id else []),
+            # Apple's native flow hashes the nonce (SHA256) into the token claim;
+            # accept the raw nonce or its hash so callers pass one uniform value.
+            nonce_hash_tolerant=True,
+        )
+
+    def is_enabled(self) -> bool:
+        # Apple has no static client_secret; "enabled" means we can mint one.
+        return bool(
+            self.client_id
+            and self.team_id
+            and self.key_id
+            and self._private_key_pem
+            and self.auth_uri
+            and self.token_uri
+        )
+
+    def make_client_secret(self, time_bucket: int | None = None) -> str:
+        from . import oauth2_apple
+
+        return oauth2_apple.get_client_secret(self._provider_name)
+
+    def authorize_extra_params(self, email_hint: str = "") -> dict[str, str]:
+        # Apple requires form_post when name/email scopes are requested.
+        return {"response_mode": "form_post"}
+
+    def supports_refresh_tokens(self) -> bool:
+        return True
+
+    def supports_revoke(self) -> bool:
+        return True
+
+    def extract_user_info_from_token_response(
+        self, token_response: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        id_token = token_response.get("id_token")
+        if not id_token or not self.id_token_validator:
+            return None
+        return self.id_token_validator.validate(id_token)
+
+    def extract_identifier_from_user_info(
+        self, user_info: dict[str, Any]
+    ) -> str | None:
+        sub = user_info.get("sub")
+        if sub:
+            return f"apple:{sub}"
+        return super().extract_identifier_from_user_info(user_info)
+
+    def store_provider_identity(self, store: Any, identifier: str) -> None:
+        if identifier.startswith("apple:"):
+            store.oauth_sub = identifier.split(":", 1)[1]
+
+    def discovery_extras(self) -> dict[str, Any]:
+        return {
+            "jwks_uri": self.JWKS_URI,
+            "id_token_signing_alg_values_supported": ["RS256"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+        }
 
 
 class OAuth2Authenticator:
@@ -189,9 +534,8 @@ class OAuth2Authenticator:
             "prompt": "consent",  # Force consent to get refresh token
         }
 
-        # Add email hint for Google OAuth2
-        if email_hint and self.provider.name == "google":
-            extra_params["login_hint"] = email_hint
+        # Add provider-specific authorize params (e.g. Google's login_hint)
+        extra_params.update(self.provider.authorize_extra_params(email_hint))
 
         # Add PKCE parameters if provided (for SPA OAuth flows)
         if code_challenge and code_challenge_method:
@@ -265,21 +609,14 @@ class OAuth2Authenticator:
             "code": code,
             "redirect_uri": redirect_uri or self.provider.redirect_uri,
             "client_id": self.provider.client_id,
-            "client_secret": self.provider.client_secret,
+            "client_secret": self.provider.make_client_secret(),
         }
         if code_verifier:
             prepare_kwargs["code_verifier"] = code_verifier
 
         token_request_body = self.client.prepare_request_body(**prepare_kwargs)
 
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        }
-
-        # GitHub requires User-Agent header
-        if self.provider.name == "github":
-            headers["User-Agent"] = "ActingWeb-OAuth2-Client"
+        headers = self.provider.token_request_headers()
 
         try:
             # Use requests library with better timeout and connection handling
@@ -292,7 +629,9 @@ class OAuth2Authenticator:
 
             if response.status_code != 200:
                 logger.error(
-                    f"OAuth2 token exchange failed: {response.status_code} {response.text}"
+                    "OAuth2 token exchange failed: %s %s",
+                    response.status_code,
+                    _redact_token_response(response.text),
                 )
                 return None
 
@@ -324,18 +663,16 @@ class OAuth2Authenticator:
         refresh_request_body = self.client.prepare_refresh_body(
             refresh_token=refresh_token,
             client_id=self.provider.client_id,
-            client_secret=self.provider.client_secret,
+            client_secret=self.provider.make_client_secret(),
         )
 
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        }
+        headers = self.provider.token_request_headers()
 
-        # GitHub doesn't typically support refresh tokens
-        if self.provider.name == "github":
+        # Some providers (e.g. GitHub) don't support refresh tokens
+        if not self.provider.supports_refresh_tokens():
             logger.warning(
-                "GitHub doesn't support refresh tokens - user will need to re-authenticate"
+                f"Provider '{self.provider.name}' doesn't support refresh tokens "
+                "- user will need to re-authenticate"
             )
             return None
 
@@ -350,7 +687,9 @@ class OAuth2Authenticator:
 
             if response.status_code != 200:
                 logger.error(
-                    f"OAuth2 token refresh failed: {response.status_code} {response.text}"
+                    "OAuth2 token refresh failed: %s %s",
+                    response.status_code,
+                    _redact_token_response(response.text),
                 )
                 return None
 
@@ -391,14 +730,7 @@ class OAuth2Authenticator:
                 )
                 return None
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-        }
-
-        # GitHub API requires User-Agent header
-        if self.provider.name == "github":
-            headers["User-Agent"] = "ActingWeb-OAuth2-Client"
+        headers = self.provider.userinfo_request_headers(access_token)
 
         try:
             # Use requests library with better timeout handling
@@ -410,7 +742,8 @@ class OAuth2Authenticator:
 
             if response.status_code != 200:
                 logger.debug(
-                    f"OAuth2 userinfo request failed: {response.status_code} {response.text}"
+                    f"OAuth2 userinfo request failed: {response.status_code} "
+                    f"{_redact_token_response(response.text)}"
                 )
                 # Cache this invalid token to avoid future network requests
                 _invalid_token_cache[token_hash] = current_time
@@ -454,14 +787,7 @@ class OAuth2Authenticator:
                 )
                 return None
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-        }
-
-        # GitHub API requires User-Agent header
-        if self.provider.name == "github":
-            headers["User-Agent"] = "ActingWeb-OAuth2-Client"
+        headers = self.provider.userinfo_request_headers(access_token)
 
         try:
             import httpx
@@ -476,7 +802,8 @@ class OAuth2Authenticator:
 
             if response.status_code != 200:
                 logger.debug(
-                    f"OAuth2 userinfo request failed (async): {response.status_code} {response.text}"
+                    f"OAuth2 userinfo request failed (async): {response.status_code} "
+                    f"{_redact_token_response(response.text)}"
                 )
                 # Cache this invalid token to avoid future network requests
                 _invalid_token_cache[token_hash] = current_time
@@ -525,9 +852,9 @@ class OAuth2Authenticator:
 
         # If email is required (force_email_prop_as_creator=True), try harder
         if require_email:
-            if self.provider.name == "github" and access_token:
-                # Try to fetch verified emails from GitHub API
-                email = self._get_github_primary_email(access_token)
+            if access_token:
+                # Try a provider-specific email fallback (e.g. GitHub emails API)
+                email = self.provider.get_primary_email(access_token)
                 if email:
                     return email.lower()
 
@@ -540,30 +867,9 @@ class OAuth2Authenticator:
             f"Email not available, using provider-specific identifier for {self.provider.name}"
         )
 
-        if self.provider.name == "google":
-            # Google 'sub' claim is stable unique identifier (never changes)
-            sub = user_info.get("sub")
-            if sub:
-                return f"google:{sub}"
-
-        if self.provider.name == "github":
-            # GitHub user ID is most stable (doesn't change even if username changes)
-            user_id = user_info.get("id")
-            if user_id:
-                return f"github:{user_id}"
-
-            # Fallback to username (can change but better than nothing)
-            login = user_info.get("login")
-            if login:
-                logger.warning(
-                    f"Using GitHub username '{login}' as identifier - this may change"
-                )
-                return f"github:{login}".lower()
-
-        # Fallback for other providers
-        username = user_info.get("preferred_username", "")
-        if username:
-            return f"{self.provider.name}:{username}".lower()
+        identifier = self.provider.extract_identifier_from_user_info(user_info)
+        if identifier:
+            return identifier
 
         # No identifier available
         logger.error(
@@ -572,52 +878,11 @@ class OAuth2Authenticator:
         return None
 
     def _get_github_primary_email(self, access_token: str) -> str | None:
-        """Get primary email from GitHub's emails API."""
-        if not access_token:
-            return None
+        """Get primary email from GitHub's emails API.
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-            "User-Agent": "ActingWeb-OAuth2-Client",
-        }
-
-        try:
-            # Use requests library with better timeout handling
-            response = requests.get(
-                url="https://api.github.com/user/emails",
-                headers=headers,
-                timeout=(5, 10),  # (connect timeout, read timeout)
-            )
-
-            if response.status_code != 200:
-                logger.warning(
-                    f"GitHub emails API request failed: {response.status_code}"
-                )
-                return None
-
-            emails = response.json()
-
-            # Find the primary email (must also be verified to prevent
-            # account-linking attacks via unverified primary emails).
-            for email_info in emails:
-                if email_info.get("primary", False) and email_info.get(
-                    "verified", False
-                ):
-                    email = email_info.get("email")
-                    return str(email) if email else None
-
-            # If no verified primary email found, use the first verified email
-            for email_info in emails:
-                if email_info.get("verified", False):
-                    email = email_info.get("email")
-                    return str(email) if email else None
-
-            return None
-
-        except Exception as e:
-            logger.warning(f"Failed to get GitHub primary email: {e}")
-            return None
+        Backward-compat shim delegating to the module-level helper.
+        """
+        return _get_github_primary_email(access_token)
 
     def get_github_verified_emails(self, access_token: str) -> list[str] | None:
         """
@@ -706,6 +971,10 @@ class OAuth2Authenticator:
             existing_actor = actor_module.Actor(config=self.config)
             if existing_actor.get_from_creator(identifier):
                 logger.info(f"Found existing actor for identifier: {identifier}")
+                # Record the most recent provider on every sign-in (not only on
+                # create) so revocation logic can rely on it.
+                if existing_actor.store:
+                    existing_actor.store.oauth_provider = self.provider.name
                 return existing_actor
 
             # Create new actor with identifier as creator
@@ -738,14 +1007,9 @@ class OAuth2Authenticator:
                             )
 
                         # Store provider-specific ID for reference
-                        if identifier.startswith("google:"):
-                            actor_interface.core_actor.store.oauth_sub = (
-                                identifier.split(":", 1)[1]
-                            )
-                        elif identifier.startswith("github:"):
-                            actor_interface.core_actor.store.oauth_github_id = (
-                                identifier.split(":", 1)[1]
-                            )
+                        self.provider.store_provider_identity(
+                            actor_interface.core_actor.store, identifier
+                        )
                     elif "@" in identifier:
                         # Identifier is an email - store it in email property too
                         actor_interface.core_actor.store.email = identifier
@@ -867,9 +1131,11 @@ class OAuth2Authenticator:
 
             data = {"token": token, "client_id": self.provider.client_id}
 
-            # Add client secret if available (for confidential clients)
-            if hasattr(self.provider, "client_secret") and self.provider.client_secret:
-                data["client_secret"] = self.provider.client_secret
+            # Add client secret if available (for confidential clients).
+            # Providers like Apple mint a fresh ES256 JWT here.
+            client_secret = self.provider.make_client_secret()
+            if client_secret:
+                data["client_secret"] = client_secret
 
             # Make revocation request
             response = requests.post(
@@ -882,7 +1148,8 @@ class OAuth2Authenticator:
                 return True
             else:
                 logger.warning(
-                    f"Token revocation failed with status {response.status_code}: {response.text}"
+                    f"Token revocation failed with status {response.status_code}: "
+                    f"{_redact_token_response(response.text)}"
                 )
                 return False
 
@@ -892,6 +1159,55 @@ class OAuth2Authenticator:
 
 
 # Factory functions for backward compatibility and convenience
+
+
+def _get_github_primary_email(access_token: str) -> str | None:
+    """Get primary verified email from GitHub's emails API.
+
+    Lives at module level so it can be reused by ``GitHubOAuth2Provider``
+    without holding authenticator state.
+    """
+    if not access_token:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "User-Agent": "ActingWeb-OAuth2-Client",
+    }
+
+    try:
+        # Use requests library with better timeout handling
+        response = requests.get(
+            url="https://api.github.com/user/emails",
+            headers=headers,
+            timeout=(5, 10),  # (connect timeout, read timeout)
+        )
+
+        if response.status_code != 200:
+            logger.warning(f"GitHub emails API request failed: {response.status_code}")
+            return None
+
+        emails = response.json()
+
+        # Find the primary email (must also be verified to prevent
+        # account-linking attacks via unverified primary emails).
+        for email_info in emails:
+            if email_info.get("primary", False) and email_info.get("verified", False):
+                email = email_info.get("email")
+                return str(email) if email else None
+
+        # If no verified primary email found, use the first verified email
+        for email_info in emails:
+            if email_info.get("verified", False):
+                email = email_info.get("email")
+                return str(email) if email else None
+
+        return None
+
+    except Exception as e:
+        logger.warning(f"Failed to get GitHub primary email: {e}")
+        return None
 
 
 def _get_provider_config(
@@ -907,7 +1223,22 @@ def _get_provider_config(
 
 
 # Display-name mapping for known OAuth providers.
-_PROVIDER_DISPLAY_NAMES: dict[str, str] = {"github": "GitHub", "google": "Google"}
+_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "github": "GitHub",
+    "google": "Google",
+    "apple": "Apple",
+    "apple-mobile": "Apple",
+}
+
+# Registry of provider classes, keyed by the base provider name (the part
+# before any ``-`` suffix). Variants like ``google-mobile`` / ``github-mobile`` /
+# ``apple-mobile`` / ``google-native`` resolve to the same class via prefix
+# matching in the factory.
+_PROVIDER_REGISTRY: dict[str, Callable[..., OAuth2Provider]] = {
+    "google": GoogleOAuth2Provider,
+    "github": GitHubOAuth2Provider,
+    "apple": AppleOAuth2Provider,
+}
 
 
 def get_provider_display_name(name: str) -> str:
@@ -934,20 +1265,16 @@ def create_oauth2_authenticator(
 
     prov_cfg = _get_provider_config(config, provider_name)
 
-    # Built-in provider support (prefix match for variants like google-mobile, github-mobile)
-    if provider_name == "google" or provider_name.startswith("google-"):
-        return OAuth2Authenticator(
-            config, GoogleOAuth2Provider(config, provider_config=prov_cfg)
-        )
-    elif provider_name == "github" or provider_name.startswith("github-"):
-        return OAuth2Authenticator(
-            config, GitHubOAuth2Provider(config, provider_config=prov_cfg)
-        )
-    else:
-        # Default to Google if provider not recognized
-        return OAuth2Authenticator(
-            config, GoogleOAuth2Provider(config, provider_config=prov_cfg)
-        )
+    # Built-in provider support (prefix match for variants like google-mobile,
+    # github-mobile, google-native, apple-mobile). Default to Google if the
+    # provider name is not recognized.
+    base_name = provider_name.split("-", 1)[0]
+    provider_cls = _PROVIDER_REGISTRY.get(base_name, GoogleOAuth2Provider)
+    # Thread the concrete provider name through so providers like Apple can key
+    # their per-variant credential registry (apple vs apple-mobile).
+    if prov_cfg is not None:
+        prov_cfg = {**prov_cfg, "_provider_name": provider_name}
+    return OAuth2Authenticator(config, provider_cls(config, provider_config=prov_cfg))
 
 
 def create_google_authenticator(config: config_class.Config) -> OAuth2Authenticator:
@@ -980,6 +1307,19 @@ def create_github_authenticator(config: config_class.Config) -> OAuth2Authentica
     return OAuth2Authenticator(
         config, GitHubOAuth2Provider(config, provider_config=prov_cfg)
     )
+
+
+def create_apple_authenticator(config: config_class.Config) -> OAuth2Authenticator:
+    """
+    Factory function to create a Sign in with Apple OAuth2 authenticator.
+
+    Args:
+        config: ActingWeb configuration
+
+    Returns:
+        OAuth2Authenticator configured for Apple
+    """
+    return create_oauth2_authenticator(config, "apple")
 
 
 def create_generic_authenticator(

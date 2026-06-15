@@ -637,6 +637,237 @@ class ActingWebApp:
         self._get_service_registry().register_box(client_id, client_secret)
         return self
 
+    def with_apple_sign_in(
+        self,
+        client_id: str,
+        *,
+        audiences: list[str],
+        team_id: str,
+        key_id: str,
+        private_key_path: str | None = None,
+        private_key_pem: str | None = None,
+        scope: str = "openid name email",
+        web_redirect_uri: str = "",
+        mobile_redirect_uri: str = "",
+    ) -> "ActingWebApp":
+        """Configure Sign in with Apple as an OAuth login provider.
+
+        Apple differs from Google/GitHub: the ``client_secret`` is a freshly
+        signed ES256 JWT (Team ID + Key ID + ``.p8``), there is no userinfo
+        endpoint (identity comes from the ``id_token``), and the callback is a
+        ``POST`` (``response_mode=form_post``).
+
+        Args:
+            client_id: The Apple Services ID (web/Android) used as ``client_id``.
+            audiences: Acceptable ``aud`` values for id_token validation —
+                typically the Services ID plus the iOS Bundle ID. Must be
+                non-empty.
+            team_id: Apple Developer Team ID (the JWT ``iss``).
+            key_id: Key ID of the Sign in with Apple ``.p8`` key.
+            private_key_path: Path to the ``.p8`` file. Takes precedence over
+                ``private_key_pem`` and over the ``APPLE_PRIVATE_KEY_PATH`` env
+                var.
+            private_key_pem: PEM string of the ``.p8`` key (falls back to the
+                ``APPLE_PRIVATE_KEY_PEM`` env var).
+            scope: OAuth scope. Defaults to ``"openid name email"``.
+            web_redirect_uri: Override for the web/SPA Apple ``redirect_uri``
+                (must be HTTPS; defaults to ``/oauth/callback/apple``).
+            mobile_redirect_uri: If set, also registers an ``apple-mobile``
+                provider whose deep-link redirect the Capacitor app intercepts.
+
+        Raises:
+            ValueError: If required fields are missing or the ``.p8`` key cannot
+                be loaded/parsed (validated eagerly here, not at first request).
+        """
+        from ..oauth2_apple import load_private_key_pem
+
+        if not client_id:
+            raise ValueError("with_apple_sign_in: client_id (Services ID) is required")
+        if not team_id:
+            raise ValueError("with_apple_sign_in: team_id is required")
+        if not key_id:
+            raise ValueError("with_apple_sign_in: key_id is required")
+        if not audiences:
+            raise ValueError(
+                "with_apple_sign_in: audiences must be a non-empty list "
+                "(e.g. [services_id, bundle_id])"
+            )
+
+        # Resolve and validate the .p8 key eagerly.
+        resolve_cfg: dict[str, Any] = {}
+        if private_key_path:
+            resolve_cfg["apple_private_key_path"] = private_key_path
+        if private_key_pem:
+            resolve_cfg["apple_private_key_pem"] = private_key_pem
+        pem = load_private_key_pem(resolve_cfg)
+
+        def _apple_cfg(redirect_uri: str, deep_link: str = "") -> dict[str, Any]:
+            cfg: dict[str, Any] = {
+                "client_id": client_id,
+                "client_secret": "",
+                "scope": scope,
+                "redirect_uri": redirect_uri,
+                "apple_team_id": team_id,
+                "apple_key_id": key_id,
+                "apple_private_key_pem": pem,
+                "audiences": list(audiences),
+            }
+            if deep_link:
+                cfg["apple_mobile_deep_link"] = deep_link
+            return cfg
+
+        web_redirect = (
+            web_redirect_uri or f"{self.proto}{self.fqdn}/oauth/callback/apple"
+        )
+        self._oauth_configs["apple"] = _apple_cfg(web_redirect)
+
+        if mobile_redirect_uri:
+            # Apple requires an HTTPS redirect_uri for both authorize and the
+            # token exchange, so apple-mobile also points Apple at the HTTPS
+            # callback. The custom-scheme `mobile_redirect_uri` is only the final
+            # deep link the Capacitor app intercepts (carrying an opaque ticket,
+            # never an ActingWeb token).
+            self._oauth_configs["apple-mobile"] = _apple_cfg(
+                web_redirect, deep_link=mobile_redirect_uri
+            )
+
+        self._www_auth = "oauth"
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_google_native(
+        self,
+        client_id: str,
+        *,
+        audiences: list[str] | None = None,
+        web_client_id: str | None = None,
+        ios_client_id: str | None = None,
+        android_client_id: str | None = None,
+        android_server_client_id: str | None = None,
+        client_secret: str = "",
+        scope: str = "openid profile email",
+        redirect_uri: str = "",
+    ) -> "ActingWebApp":
+        """Configure Google native sign-in via the JWT-bearer grant.
+
+        Native iOS/Android Google sign-in yields an ``id_token`` the app submits
+        to ``POST /oauth/spa/token`` with the ``jwt-bearer`` grant. The library
+        validates it against Google's JWKS, accepting any of the configured
+        audiences (the per-platform client IDs).
+
+        Args:
+            client_id: Primary client ID (also added to ``audiences``).
+            audiences: Explicit acceptable ``aud`` values. If omitted, built from
+                ``client_id`` plus the four ``*_client_id`` kwargs.
+            web_client_id / ios_client_id / android_client_id /
+                android_server_client_id: Optional per-platform client IDs folded
+                into ``audiences``.
+            client_secret: Optional; only needed if this provider also performs a
+                code exchange (not required for the pure JWT-bearer path).
+            scope: OAuth scope.
+            redirect_uri: Optional redirect override.
+
+        Raises:
+            ValueError: If no audiences can be derived.
+        """
+        if not client_id:
+            raise ValueError("with_google_native: client_id is required")
+
+        derived = list(audiences) if audiences else []
+        for cid in (
+            client_id,
+            web_client_id,
+            ios_client_id,
+            android_client_id,
+            android_server_client_id,
+        ):
+            if cid and cid not in derived:
+                derived.append(cid)
+
+        if not derived:
+            raise ValueError(
+                "with_google_native: at least one audience / client ID is required"
+            )
+
+        self._oauth_configs["google-native"] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": scope,
+            "redirect_uri": redirect_uri,
+            "audiences": derived,
+        }
+        self._www_auth = "oauth"
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_github(
+        self,
+        client_id: str,
+        client_secret: str,
+        *,
+        scope: str = "read:user user:email",
+        redirect_uri: str = "",
+        mobile_redirect_uri: str = "",
+    ) -> "ActingWebApp":
+        """Configure GitHub sign-in, with optional native-mobile support.
+
+        Ergonomic equivalent of ``with_oauth(provider="github", ...)`` that fills
+        in GitHub's authorization/token endpoints. When ``mobile_redirect_uri`` is
+        set it also registers a ``github-mobile`` provider whose OAuth
+        ``redirect_uri`` stays on the HTTPS ``/oauth/callback`` so the
+        authorization code is exchanged **server-side** and the Capacitor app only
+        ever receives an opaque single-use ticket on ``mobile_redirect_uri`` (the
+        ``mobile_ticket`` grant). The code therefore never rides a hijackable
+        custom-scheme redirect.
+
+        GitHub issues no OIDC ``id_token``; identity comes from the ``/user`` API
+        after the code exchange, so GitHub mobile uses this ticket flow rather
+        than the JWT-bearer grant used by Apple/Google native.
+
+        Args:
+            client_id: GitHub OAuth app client ID.
+            client_secret: GitHub OAuth app client secret.
+            scope: OAuth scope. Defaults to ``"read:user user:email"``.
+            redirect_uri: Override for the web ``redirect_uri`` (defaults to
+                ``/oauth/callback``).
+            mobile_redirect_uri: Custom-scheme deep link the Capacitor app
+                intercepts; when set, registers the ``github-mobile`` provider.
+        """
+        if not client_id:
+            raise ValueError("with_github: client_id is required")
+        if not client_secret:
+            raise ValueError("with_github: client_secret is required")
+
+        web_redirect = redirect_uri or f"{self.proto}{self.fqdn}/oauth/callback"
+
+        def _github_cfg(deep_link: str = "") -> dict[str, Any]:
+            cfg: dict[str, Any] = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": scope,
+                "auth_uri": "https://github.com/login/oauth/authorize",
+                "token_uri": "https://github.com/login/oauth/access_token",
+                "redirect_uri": web_redirect,
+                "response_type": "code",
+                "grant_type": "authorization_code",
+            }
+            if deep_link:
+                cfg["mobile_deep_link"] = deep_link
+            return cfg
+
+        self._oauth_configs["github"] = _github_cfg()
+
+        if mobile_redirect_uri:
+            # The OAuth redirect_uri stays HTTPS (the ticket flow); the
+            # custom-scheme deep link only carries the opaque ticket.
+            self._oauth_configs["github-mobile"] = _github_cfg(
+                deep_link=mobile_redirect_uri
+            )
+
+        self._www_auth = "oauth"
+        self._apply_runtime_changes_to_config()
+        return self
+
     def _get_service_registry(self):
         """Get or create the service registry."""
         if self._service_registry is None:

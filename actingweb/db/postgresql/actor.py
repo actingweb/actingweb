@@ -93,7 +93,7 @@ class DbActor:
 
                     ret = []
                     for row in rows:
-                        logger.warning(f"    id ({row[0]})")
+                        logger.debug(f"get_by_creator matched actor id={row[0]}")
                         actor_dict = {
                             "id": row[0],
                             "creator": row[1],

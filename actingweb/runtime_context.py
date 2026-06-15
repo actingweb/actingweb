@@ -336,7 +336,11 @@ def get_client_info_from_context(actor: Any) -> dict[str, str] | None:
     # see each other's identity.
     mcp_context = runtime_context.get_mcp_context()
     if mcp_context:
-        live = mcp_context.client_info if isinstance(mcp_context.client_info, dict) else None
+        live = (
+            mcp_context.client_info
+            if isinstance(mcp_context.client_info, dict)
+            else None
+        )
         if live and live.get("name"):
             # MCP ``clientInfo`` carries only name/version per spec;
             # ``platform`` is an ActingWeb enrichment on the trust rel,

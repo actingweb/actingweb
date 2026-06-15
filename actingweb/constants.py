@@ -126,6 +126,21 @@ OAUTH_SESSION_BUCKET = (
     "_oauth_sessions"  # Temporary OAuth sessions for postponed actor creation
 )
 
+# id_token replay protection (native OIDC / JWT-bearer grant)
+ID_TOKEN_REPLAY_BUCKET = "_id_token_replay"  # Seen id_token jti/sub+iat markers
+
+# Server-side OAuth state nonce store (Apple form_post CSRF protection)
+OAUTH_STATE_NONCE_BUCKET = "_oauth_state_nonces"  # nonce -> full state payload
+
+# Mobile exchange-ticket store (deep-link delivery, no code/token in URL).
+# Used by any native-mobile provider whose authorization response lands on the
+# HTTPS callback and must be handed to the app indirectly: Apple-on-Android
+# (form_post) and GitHub mobile (query callback) both redeem these tickets.
+MOBILE_TICKET_BUCKET = "_apple_exchange_tickets"  # ticket -> IdP code + redirect_uri
+# Backward-compatible alias (the bucket name is unchanged so in-flight tickets
+# and existing imports keep working).
+APPLE_TICKET_BUCKET = MOBILE_TICKET_BUCKET
+
 # OAuth2 token storage (per-trust)
 OAUTH_TOKENS_PREFIX = (
     "oauth_tokens:"  # Used with actor.store[OAUTH_TOKENS_PREFIX + peer_id]
@@ -167,6 +182,17 @@ MCP_REFRESH_TOKEN_TTL = 2592000  # 30 days
 # Index entry TTLs (slightly longer than the data they reference)
 # This ensures indexes aren't deleted before the data they point to
 INDEX_TTL_BUFFER = 7200  # 2 hours extra buffer for indexes
+
+# id_token replay window TTL (native OIDC grant). Should be >= max id_token
+# lifetime so a token cannot be replayed within its own validity window.
+ID_TOKEN_REPLAY_TTL = 900  # 15 minutes
+
+# Server-side state nonce TTL (Apple form_post round-trip)
+OAUTH_STATE_NONCE_TTL = 600  # 10 minutes
+
+# Mobile exchange-ticket TTL (deep-link → /oauth/spa/token round-trip)
+MOBILE_TICKET_TTL = 300  # 5 minutes
+APPLE_TICKET_TTL = MOBILE_TICKET_TTL  # backward-compatible alias
 
 # Clock skew buffer for TTL calculations
 # DynamoDB TTL can be delayed up to 48 hours, but items may appear

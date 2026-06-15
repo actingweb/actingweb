@@ -300,10 +300,14 @@ class TestOAuth2SessionManager:
         actor_id = "victim-actor"
         seeded_per_bucket = 3
         access_bucket = attribute.Attributes(
-            actor_id=OAUTH2_SYSTEM_ACTOR, bucket=_ACCESS_TOKEN_BUCKET, config=self.config
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_ACCESS_TOKEN_BUCKET,
+            config=self.config,
         )
         refresh_bucket = attribute.Attributes(
-            actor_id=OAUTH2_SYSTEM_ACTOR, bucket=_REFRESH_TOKEN_BUCKET, config=self.config
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=_REFRESH_TOKEN_BUCKET,
+            config=self.config,
         )
         # Several tokens for the target actor (all revoked) plus one for a
         # different actor (must survive).
@@ -321,8 +325,12 @@ class TestOAuth2SessionManager:
         assert revoked == seeded_per_bucket * 2
         # Read the shared backing store directly (the per-instance Attributes
         # caches above are stale after revoke's own instances deleted).
-        access_store = self._test_storage[f"{OAUTH2_SYSTEM_ACTOR}:{_ACCESS_TOKEN_BUCKET}"]
-        refresh_store = self._test_storage[f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"]
+        access_store = self._test_storage[
+            f"{OAUTH2_SYSTEM_ACTOR}:{_ACCESS_TOKEN_BUCKET}"
+        ]
+        refresh_store = self._test_storage[
+            f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+        ]
         # The other actor's tokens are untouched.
         assert "keep_at" in access_store
         assert "keep_rt" in refresh_store

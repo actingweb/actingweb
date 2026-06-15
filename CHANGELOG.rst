@@ -74,6 +74,17 @@ CHANGED
   redact ``client_secret`` / ``assertion`` / ``id_token`` / ``client_assertion``
   and truncate the response body.
 
+FIXED
+~~~~~
+
+- OAuth2 client deletion (and trust deletion) no longer aborts when the
+  best-effort global client index lookup misses: when the caller supplies the
+  authoritative ``actor_id`` (as trust deletion does), the client is deleted from
+  that actor's bucket regardless, preventing orphaned-but-listable clients.
+- A leftover debug log in the actor-by-creator lookup (``db.postgresql.actor`` and
+  ``db.dynamodb.actor``) was emitted at ``WARNING`` on every match (``    id (…)``)
+  — a hot path during OAuth sign-in. It is now ``DEBUG`` with a clearer message.
+
 SECURITY
 ~~~~~~~~
 

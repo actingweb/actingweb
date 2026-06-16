@@ -5,6 +5,24 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.11.0b3: June 16, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **Cancelled SPA consent no longer renders a backend error page.** When a user
+  cancels (or the provider otherwise rejects) consent during an SPA login, the
+  provider redirects back with ``error=access_denied`` and no authorization code.
+  The OAuth callback previously returned a backend error response, which renders
+  ``aw-root-failed.html`` (a 500 in apps that don't ship that template) — the
+  wrong surface for a single-page app. The callback now detects ``spa_mode`` from
+  the signed ``state`` and bounces the error back to the SPA's callback URL as
+  ``error`` / ``error_description`` query params, so the app can show a friendly
+  message and a "Try again" button. The SPA redirect target is validated with
+  ``is_safe_spa_redirect`` and falls back to the configured root when missing or
+  untrusted.
+
 v3.11.0b2: June 15, 2026
 ------------------------
 

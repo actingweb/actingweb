@@ -221,13 +221,29 @@ class OAuth2CallbackHandler(BaseHandler):
             logger.error("OAuth2 not configured")
             return self.error_response(500, "OAuth2 not configured")
 
-        # Check for error parameter
+        # Check for error parameter (the provider rejected the request — most
+        # commonly the user cancelled consent → ``error=access_denied``).
         error = self.request.get("error")
         if error:
             error_description = self.request.get("error_description")
             if not error_description:
                 error_description = ""
             logger.warning(f"OAuth2 error: {error} - {error_description}")
+            # SPA browser navigations must bounce the error back to the app's
+            # callback so it can show a friendly message and a "Try again"
+            # button. Returning a backend error page here renders
+            # ``aw-root-failed.html`` — a 500 in apps that don't ship that
+            # template — and is the wrong surface for a single-page app anyway.
+            state_extras = _decode_state_with_extras(self.request.get("state") or "")
+            if self.config and state_extras.get("spa_mode"):
+                spa_redirect_url = state_extras.get("redirect_url", "")
+                if not spa_redirect_url or not is_safe_spa_redirect(
+                    self.config, spa_redirect_url
+                ):
+                    spa_redirect_url = f"{self.config.proto}{self.config.fqdn}/"
+                return self._redirect_to_spa_with_error(
+                    spa_redirect_url, error, error_description
+                )
             return self.error_response(400, f"Authentication failed: {error}")
 
         # Get authorization code
@@ -882,6 +898,34 @@ class OAuth2CallbackHandler(BaseHandler):
             }
 
         return {"error": True, "status_code": status_code, "message": message}
+
+    def _redirect_to_spa_with_error(
+        self, spa_redirect_url: str, error: str, error_description: str
+    ) -> dict[str, Any]:
+        """Bounce a provider error back to the SPA callback with the error
+        params, so the app surfaces it (the SPA's callback route reads
+        ``error`` / ``error_description``) instead of the backend rendering an
+        error template. Used for the cancelled-consent case where there is no
+        code to exchange."""
+        from urllib.parse import urlencode, urlparse, urlunparse
+
+        parsed = urlparse(spa_redirect_url)
+        params = {"error": error}
+        if error_description:
+            params["error_description"] = error_description
+        url = urlunparse(
+            (
+                parsed.scheme or "",
+                parsed.netloc or "",
+                parsed.path,
+                parsed.params,
+                urlencode(params),
+                parsed.fragment,
+            )
+        )
+        self.response.set_status(302, "Found")
+        self.response.set_redirect(url)
+        return {"redirect_required": True, "redirect_url": url}
 
     def _process_spa_oauth_and_create_session(
         self,

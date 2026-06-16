@@ -234,6 +234,14 @@ class OAuth2CallbackHandler(BaseHandler):
             # button. Returning a backend error page here renders
             # ``aw-root-failed.html`` — a 500 in apps that don't ship that
             # template — and is the wrong surface for a single-page app anyway.
+            #
+            # The CSRF token in ``state`` is intentionally NOT validated here:
+            # there is no code to exchange and no session to create on the error
+            # path, so a forged ``spa_mode`` state cannot do anything beyond
+            # producing a redirect. The redirect target is independently
+            # constrained by ``is_safe_spa_redirect`` (with a benign fallback to
+            # the configured root), so an attacker cannot turn this into an open
+            # redirect.
             state_extras = _decode_state_with_extras(self.request.get("state") or "")
             if self.config and state_extras.get("spa_mode"):
                 spa_redirect_url = state_extras.get("redirect_url", "")
@@ -906,11 +914,16 @@ class OAuth2CallbackHandler(BaseHandler):
         params, so the app surfaces it (the SPA's callback route reads
         ``error`` / ``error_description``) instead of the backend rendering an
         error template. Used for the cancelled-consent case where there is no
-        code to exchange."""
-        from urllib.parse import urlencode, urlparse, urlunparse
+        code to exchange.
+
+        Any query params already present on ``spa_redirect_url`` (e.g. routing
+        or correlation params the SPA passed to ``/oauth/spa/authorize``) are
+        preserved; the ``error`` / ``error_description`` params are merged in."""
+        from urllib.parse import parse_qsl, urlencode, urlunparse
 
         parsed = urlparse(spa_redirect_url)
-        params = {"error": error}
+        params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        params["error"] = error
         if error_description:
             params["error_description"] = error_description
         url = urlunparse(
@@ -1340,15 +1353,32 @@ class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
             return form.get(key, [""])[0]
 
         error = _f("error")
+        error_description = _f("error_description")
+        state = _f("state")
+
+        # Resolve the server-side state payload up front. On the error path this
+        # lets us peek ``spa_mode`` so an SPA cancellation (Apple posts
+        # ``error`` with ``response_mode=form_post``) bounces back to the app's
+        # callback instead of rendering a backend error page — mirroring the GET
+        # callback used by Google/GitHub.
+        payload = StateNonceStore(self.config).consume(state) if state else None
+
         if error:
             logger.warning(f"Apple callback error: {error}")
+            if self.config and payload and payload.get("spa_mode"):
+                spa_redirect_url = str(payload.get("redirect_url", ""))
+                if not spa_redirect_url or not is_safe_spa_redirect(
+                    self.config, spa_redirect_url
+                ):
+                    spa_redirect_url = f"{self.config.proto}{self.config.fqdn}/"
+                return self._redirect_to_spa_with_error(
+                    spa_redirect_url, error, error_description
+                )
             return self.error_response(400, f"Authentication failed: {error}")
 
-        state = _f("state")
         if not state:
             return self.error_response(400, "Missing state")
 
-        payload = StateNonceStore(self.config).consume(state)
         if payload is None:
             logger.warning("Apple callback: invalid or expired state nonce")
             return self.error_response(400, "Invalid or expired state nonce")

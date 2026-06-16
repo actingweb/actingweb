@@ -17,11 +17,13 @@ FIXED
   The OAuth callback previously returned a backend error response, which renders
   ``aw-root-failed.html`` (a 500 in apps that don't ship that template) — the
   wrong surface for a single-page app. The callback now detects ``spa_mode`` from
-  the signed ``state`` and bounces the error back to the SPA's callback URL as
+  the OAuth ``state`` and bounces the error back to the SPA's callback URL as
   ``error`` / ``error_description`` query params, so the app can show a friendly
   message and a "Try again" button. The SPA redirect target is validated with
   ``is_safe_spa_redirect`` and falls back to the configured root when missing or
-  untrusted.
+  untrusted; existing query params on the callback URL are preserved. Apple's
+  ``response_mode=form_post`` callback (``POST /oauth/callback/apple``) gets the
+  same treatment, peeking ``spa_mode`` from the consumed server-side state nonce.
 
 v3.11.0b2: June 15, 2026
 ------------------------

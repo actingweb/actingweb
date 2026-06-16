@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.11.0b1"
+version = "3.11.0b2"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@greger.io>"]
 maintainers = ["Greger Wedel <support@greger.io>"]
@@ -171,6 +171,11 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+# pytest-timeout: measure only the test body, NOT fixture setup/teardown. The
+# integration suite's per-worker session fixtures (alembic migration subprocess +
+# uvicorn startup) take ~2 min and are charged to whichever test triggers them;
+# without this, --timeout would kill that test (and its xdist worker) spuriously.
+timeout_func_only = true
 addopts = [
     "--cov=actingweb",
     "--cov-report=term-missing",

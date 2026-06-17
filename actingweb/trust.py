@@ -104,9 +104,14 @@ class Trust:
         result = self.handle.delete()
 
         # If this was an OAuth2 client trust, delete the client registration
-        # (which also revokes tokens). Safe to recurse now: the trust record is
-        # already gone, so the cleanup cascade terminates immediately.
-        if oauth2_client_id and self.config:
+        # (which also revokes tokens). Only do this when the record was actually
+        # removed (result is True): the cleanup cascade re-reads the actor's trust
+        # relationships from the DB, not from the cleared in-memory self.trust, so
+        # if the physical delete failed the record is still live and the cascade
+        # would re-enter Trust.delete() and recurse without bound. Skipping
+        # cleanup on a failed delete keeps the recursion break sound and avoids
+        # revoking a client whose trust relationship still exists.
+        if result and oauth2_client_id and self.config:
             try:
                 # Pass the trust's actor_id to ensure tokens are revoked in the
                 # correct actor (the client registry lookup might otherwise

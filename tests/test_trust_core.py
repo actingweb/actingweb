@@ -276,6 +276,15 @@ class TestTrustCRUD:
         """
         call_order: list[str] = []
 
+        def record(label: str, retval: bool = True):
+            """Side effect that records call order and returns retval."""
+
+            def _side_effect(*_args, **_kwargs):
+                call_order.append(label)
+                return retval
+
+            return _side_effect
+
         mock_config = Mock()
         mock_db_trust = Mock()
         mock_trust_data = {
@@ -283,9 +292,7 @@ class TestTrustCRUD:
             "relationship": "friend",
         }
         mock_db_trust.get.return_value = mock_trust_data
-        mock_db_trust.delete.side_effect = lambda *a, **k: (
-            call_order.append("record_delete") or True
-        )
+        mock_db_trust.delete.side_effect = record("record_delete")
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
         trust = Trust(
@@ -298,9 +305,7 @@ class TestTrustCRUD:
             "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
         ) as mock_get_registry:
             mock_registry = Mock()
-            mock_registry.delete_client.side_effect = lambda *a, **k: (
-                call_order.append("client_delete") or True
-            )
+            mock_registry.delete_client.side_effect = record("client_delete")
             mock_get_registry.return_value = mock_registry
 
             result = trust.delete()
@@ -312,6 +317,44 @@ class TestTrustCRUD:
         mock_registry.delete_client.assert_called_once_with(
             "mcp_client_abc123", actor_id="test_actor"
         )
+
+    def test_trust_delete_skips_client_cleanup_when_record_delete_fails(self):
+        """Regression: OAuth2 client cleanup must NOT run if the record delete fails.
+
+        The cleanup cascade re-reads trust relationships from the DB, so if the
+        physical delete returned False (record still live) running delete_client()
+        would re-enter Trust.delete() and recurse without bound. Cleanup is
+        therefore guarded on a successful delete.
+        """
+        mock_config = Mock()
+        mock_db_trust = Mock()
+        mock_trust_data = {
+            "peerid": "oauth2_client:user@example.com:mcp_client_abc123",
+            "relationship": "friend",
+        }
+        mock_db_trust.get.return_value = mock_trust_data
+        # Physical delete fails (record NOT removed)
+        mock_db_trust.delete.return_value = False
+        mock_config.DbTrust.DbTrust.return_value = mock_db_trust
+
+        trust = Trust(
+            actor_id="test_actor",
+            peerid="oauth2_client:user@example.com:mcp_client_abc123",
+            config=mock_config,
+        )
+
+        with patch(
+            "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
+        ) as mock_get_registry:
+            mock_registry = Mock()
+            mock_get_registry.return_value = mock_registry
+
+            result = trust.delete()
+
+        assert result is False
+        # Cleanup must be skipped — otherwise the cascade re-enters Trust.delete().
+        mock_get_registry.assert_not_called()
+        mock_registry.delete_client.assert_not_called()
 
 
 class TestTrustsCollection:

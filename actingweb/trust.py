@@ -83,29 +83,51 @@ class Trust:
         if not self.trust:
             self.get()
 
-        # If this is an OAuth2 client trust, delete the client (which also revokes tokens)
+        # Determine whether OAuth2 client cleanup is needed *before* dropping the
+        # local trust data, since both checks read from self.trust.
+        oauth2_client_id: str | None = None
         if self.config and self._is_oauth2_client_trust():
-            client_id = self._extract_client_id_from_peerid()
-            if client_id:
-                try:
-                    # Delete the client registration and revoke tokens
-                    # Pass the trust's actor_id to ensure tokens are revoked in the correct actor
-                    # (the client registry lookup might return a different actor_id)
-                    from .oauth2_server.client_registry import get_mcp_client_registry
+            oauth2_client_id = self._extract_client_id_from_peerid()
 
-                    registry = get_mcp_client_registry(self.config)
-                    registry.delete_client(client_id, actor_id=self.actor_id)
-                    logger.info(
-                        f"Deleted OAuth2 client {client_id} as part of trust deletion"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Error deleting OAuth2 client during trust deletion: {e}"
-                    )
-                    # Continue with trust deletion even if client deletion fails
-
+        # Delete the trust record FIRST, then perform OAuth2 client cleanup.
+        #
+        # Ordering is critical to avoid unbounded recursion. delete_client()
+        # cascades into client_registry._delete_client_trust_relationship(),
+        # which re-enumerates this actor's trust relationships and calls
+        # delete_relationship() -> delete_reciprocal_trust() -> Trust.delete()
+        # again. If the trust record still existed at that point, the cascade
+        # would re-discover this very relationship and recurse without bound:
+        # a single actor delete self-deadlocks the DB connection pool and
+        # eventually raises "maximum recursion depth exceeded". Removing the
+        # record up front means the cascade finds nothing to delete and stops.
         self.trust = {}
-        return self.handle.delete()
+        result = self.handle.delete()
+
+        # If this was an OAuth2 client trust, delete the client registration
+        # (which also revokes tokens). Only do this when the record was actually
+        # removed (result is True): the cleanup cascade re-reads the actor's trust
+        # relationships from the DB, not from the cleared in-memory self.trust, so
+        # if the physical delete failed the record is still live and the cascade
+        # would re-enter Trust.delete() and recurse without bound. Skipping
+        # cleanup on a failed delete keeps the recursion break sound and avoids
+        # revoking a client whose trust relationship still exists.
+        if result and oauth2_client_id and self.config:
+            try:
+                # Pass the trust's actor_id to ensure tokens are revoked in the
+                # correct actor (the client registry lookup might otherwise
+                # resolve a different actor_id).
+                from .oauth2_server.client_registry import get_mcp_client_registry
+
+                registry = get_mcp_client_registry(self.config)
+                registry.delete_client(oauth2_client_id, actor_id=self.actor_id)
+                logger.info(
+                    f"Deleted OAuth2 client {oauth2_client_id} as part of trust deletion"
+                )
+            except Exception as e:
+                logger.error(f"Error deleting OAuth2 client during trust deletion: {e}")
+                # Continue even if client deletion fails
+
+        return result
 
     def _is_oauth2_client_trust(self) -> bool:
         """Check if this trust relationship is for an OAuth2 client."""

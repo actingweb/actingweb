@@ -626,6 +626,23 @@ provider supports it (Apple's ``id_token`` in the token response, GitHub's
 userinfo endpoint). ``apple_mobile_ticket`` remains accepted as an alias for the
 original Apple-only name.
 
+**Ticket security guarantees (downstreams may rely on these):**
+
+- **Single-use:** the first successful redemption atomically consumes the
+  ticket. Any later redemption of the same ticket fails with ``400``
+  (``invalid_grant``) and issues no tokens. A relaunch that re-delivers the same
+  deep-link URL (e.g. ``App.getLaunchUrl()`` after a force-quit) therefore
+  cannot mint a second session.
+- **Atomic / race-free:** consumption is gated on an atomic conditional delete,
+  so two concurrent ``/oauth/spa/token`` calls with the same ticket result in
+  **at most one** success — a replay race cannot mint two sessions.
+- **Short TTL:** an unredeemed ticket expires server-side after 300 seconds (5
+  minutes), so a leaked or stale ticket cannot be redeemed later.
+
+A client-side de-dupe guard (in-memory plus a persisted "last handled ticket"
+marker) is still worthwhile to avoid a needless rejected round-trip, but the
+single-use property is enforced server-side and does not depend on it.
+
 Configure these providers with ``app.with_apple_sign_in(...)``,
 ``app.with_google_native(...)`` and ``app.with_github(..., mobile_redirect_uri=...)``.
 See :doc:`apple-sign-in` for the full Apple setup.

@@ -151,8 +151,13 @@ class MobileTicketStore:
         attr = bucket.get_attr(name=ticket)
         if not attr or "data" not in attr:
             return None
-        bucket.delete_attr(name=ticket)
         payload = attr["data"]
+        # Single-use, race-free consume: only the caller that atomically
+        # removes the ticket may redeem it. Two concurrent redemptions of the
+        # same ticket race on this delete; exactly one wins and the losers get
+        # None (and a 400 upstream), so one sign-in can never mint two sessions.
+        if not bucket.delete_attr_conditional(name=ticket):
+            return None
         if not isinstance(payload, dict):
             return None
         return payload

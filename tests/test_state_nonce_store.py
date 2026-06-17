@@ -42,6 +42,13 @@ def _make_config() -> Config:
                 return True
             return False
 
+        def delete_attr_conditional(self, actor_id, bucket, name):  # type: ignore
+            key = f"{actor_id}:{bucket}"
+            if key in self.storage and name in self.storage[key]:
+                del self.storage[key][name]
+                return True
+            return False
+
         def delete_bucket(self, actor_id, bucket):  # type: ignore
             return self.storage.pop(f"{actor_id}:{bucket}", None) is not None
 

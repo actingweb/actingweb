@@ -748,6 +748,34 @@ class DbAttributeProtocol(Protocol):
         ...
 
     @staticmethod
+    def delete_attr_conditional(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+    ) -> bool:
+        """
+        Atomically delete a single attribute, reporting whether THIS call
+        removed an existing item.
+
+        Unlike ``delete_attr`` (which reports only that the delete statement
+        ran), this returns True only when the row actually existed and was
+        removed by this call. Concurrent callers racing to delete the same
+        attribute therefore see exactly one True; all others get False. This
+        is the primitive behind single-use / atomic-consume semantics such as
+        mobile-ticket redemption.
+
+        Args:
+            actor_id: The actor ID
+            bucket: Bucket name
+            name: Attribute name
+
+        Returns:
+            True if this call removed an existing item, False otherwise
+            (item absent, already consumed by a concurrent caller, or error)
+        """
+        ...
+
+    @staticmethod
     def conditional_update_attr(
         actor_id: str | None = None,
         bucket: str | None = None,

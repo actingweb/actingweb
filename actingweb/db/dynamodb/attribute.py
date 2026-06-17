@@ -144,6 +144,37 @@ class DbAttribute:
         return self.set_attr(actor_id=actor_id, bucket=bucket, name=name, data=None)
 
     @staticmethod
+    def delete_attr_conditional(actor_id=None, bucket=None, name=None):
+        """Atomically delete an attribute, returning True only if THIS call
+        removed an existing item.
+
+        The DeleteItem carries a ``attribute_exists(id)`` condition, so when
+        two callers race on the same attribute exactly one delete succeeds and
+        the other fails its condition check (item already gone). Backs
+        single-use/atomic-consume semantics (e.g. mobile-ticket redemption).
+
+        Args:
+            actor_id: The actor ID
+            bucket: The bucket name
+            name: The attribute name
+
+        Returns:
+            True if this call removed an existing item, False otherwise
+        """
+        if not actor_id or not bucket or not name:
+            return False
+        try:
+            item = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
+        except Exception:  # PynamoDB DoesNotExist exception
+            return False
+        try:
+            # Condition fails (raises) if a concurrent caller already deleted it.
+            item.delete(condition=Attribute.id.exists())
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
     def conditional_update_attr(
         actor_id=None,
         bucket=None,

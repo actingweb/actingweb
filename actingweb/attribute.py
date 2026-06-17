@@ -187,6 +187,25 @@ class Attributes:
             )
         return False
 
+    def delete_attr_conditional(self, name: str | None = None) -> bool:
+        """Atomically delete a single attribute, returning True only if this
+        call removed an existing value.
+
+        This is the race-free counterpart to :meth:`delete_attr`: concurrent
+        callers racing on the same attribute see exactly one True. Use it to
+        enforce single-use consume semantics (e.g. mobile-ticket redemption),
+        where the caller that wins the delete is the only one allowed to act on
+        the value.
+        """
+        if not name or not self.dbprop:
+            return False
+        success = self.dbprop.delete_attr_conditional(
+            actor_id=self.actor_id, bucket=self.bucket, name=name
+        )
+        if success and self.data and name in self.data:
+            del self.data[name]
+        return success
+
     def delete_bucket(self) -> bool:
         """Deletes the attribute bucket in the database"""
         if not self.dbprop:

@@ -264,6 +264,55 @@ class TestTrustCRUD:
             # OAuth2 client should be deleted
             mock_registry.delete_client.assert_called_once()
 
+    def test_trust_delete_oauth2_client_deletes_record_before_client(self):
+        """Regression: the trust record must be deleted BEFORE delete_client().
+
+        delete_client() cascades back into Trust.delete() via
+        _delete_client_trust_relationship(). If the trust record is not removed
+        first, that cascade re-discovers this same relationship and recurses
+        without bound (the actor-delete self-deadlock / "maximum recursion depth
+        exceeded" bug). Asserting the call order guards the recursion-breaking
+        invariant.
+        """
+        call_order: list[str] = []
+
+        mock_config = Mock()
+        mock_db_trust = Mock()
+        mock_trust_data = {
+            "peerid": "oauth2_client:user@example.com:mcp_client_abc123",
+            "relationship": "friend",
+        }
+        mock_db_trust.get.return_value = mock_trust_data
+        mock_db_trust.delete.side_effect = lambda *a, **k: (
+            call_order.append("record_delete") or True
+        )
+        mock_config.DbTrust.DbTrust.return_value = mock_db_trust
+
+        trust = Trust(
+            actor_id="test_actor",
+            peerid="oauth2_client:user@example.com:mcp_client_abc123",
+            config=mock_config,
+        )
+
+        with patch(
+            "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
+        ) as mock_get_registry:
+            mock_registry = Mock()
+            mock_registry.delete_client.side_effect = lambda *a, **k: (
+                call_order.append("client_delete") or True
+            )
+            mock_get_registry.return_value = mock_registry
+
+            result = trust.delete()
+
+        assert result is True
+        # The local trust record must be removed before the client cleanup that
+        # cascades back into trust deletion.
+        assert call_order == ["record_delete", "client_delete"]
+        mock_registry.delete_client.assert_called_once_with(
+            "mcp_client_abc123", actor_id="test_actor"
+        )
+
 
 class TestTrustsCollection:
     """Test Trusts collection class."""

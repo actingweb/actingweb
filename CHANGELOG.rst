@@ -5,6 +5,30 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.11.0b4: June 17, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **Actor/trust deletion no longer recurses infinitely and exhausts the DB
+  connection pool.** Deleting an actor (or any OAuth2-client trust) triggered an
+  unbounded recursion: ``Trust.delete()`` called ``client_registry.delete_client()``
+  *before* removing the trust record, and ``delete_client()`` cascades back into
+  ``_delete_client_trust_relationship() -> delete_relationship() ->
+  delete_reciprocal_trust() -> Trust.delete()``. Because the trust record still
+  existed, each cascade re-discovered the same relationship and recursed until it
+  raised ``maximum recursion depth exceeded``. On the PostgreSQL backend each
+  recursion level checked out a pooled connection that was never returned, so a
+  single delete could self-deadlock the pool (``min=2, max=10``) and every
+  subsequent DB operation blocked for the full acquire timeout. The implicit
+  terminator (an early ``return False`` in ``delete_client`` when the client was
+  already gone from the global index) was removed in 3.11.0b1 (#105) to fix
+  orphaned clients, which exposed the latent cycle. ``Trust.delete()`` now deletes
+  the local trust record **first** and performs OAuth2 client cleanup afterwards,
+  so the cascade finds nothing to delete and terminates. Regression test added in
+  ``tests/test_trust_core.py``.
+
 v3.11.0b3: June 16, 2026
 ------------------------
 

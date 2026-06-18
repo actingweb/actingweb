@@ -8,6 +8,7 @@ kept as an alias; the Apple path is covered by ``test_oauth2_spa_apple_ticket``.
 """
 
 import json
+import threading
 from unittest.mock import MagicMock, patch
 
 from actingweb.aw_web_request import AWWebObj
@@ -40,6 +41,9 @@ def _make_config() -> Config:
     config.oauth = {}
 
     storage: dict = {}
+    # Guards delete_attr_conditional so the mock faithfully models the real
+    # backends' atomic single-winner delete under concurrent redemption.
+    consume_lock = threading.Lock()
 
     class MockDbAttribute:
         def __init__(self):  # type: ignore
@@ -63,6 +67,14 @@ def _make_config() -> Config:
                 del self.storage[key][name]
                 return True
             return False
+
+        def delete_attr_conditional(self, actor_id, bucket, name):  # type: ignore
+            key = f"{actor_id}:{bucket}"
+            with consume_lock:
+                if key in self.storage and name in self.storage[key]:
+                    del self.storage[key][name]
+                    return True
+                return False
 
         def delete_bucket(self, actor_id, bucket):  # type: ignore
             return self.storage.pop(f"{actor_id}:{bucket}", None) is not None
@@ -156,6 +168,46 @@ class TestMobileTicketGrant:
         second = _run(config, {"grant_type": "mobile_ticket", "ticket": ticket})
         assert first.get("success") is True
         assert second.get("status_code") == 400
+
+    def test_concurrent_consume_single_winner(self) -> None:
+        # A single ticket consumed by many simultaneous redemptions must be
+        # handed to exactly one caller (atomic single-use consume). A naive
+        # read-then-delete would let several callers all observe the ticket
+        # before any delete lands and each mint a session from one sign-in.
+        config = _make_config()
+        ticket = _ticket(config)
+        store = MobileTicketStore(config)
+        results: list = []
+        barrier = threading.Barrier(8)
+
+        def worker() -> None:
+            barrier.wait()  # release all redemptions at once
+            results.append(store.consume(ticket))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        winners = [r for r in results if r is not None]
+        assert len(winners) == 1
+        assert winners[0]["code"] == "github-auth-code"
+        assert results.count(None) == 7
+
+    def test_expired_ticket_rejected(self) -> None:
+        # A ticket past its redemption window must be refused even though the
+        # stored row still exists (the DB TTL purges it only later, with a
+        # clock-skew buffer). A negative TTL stamps it already-expired.
+        config = _make_config()
+        expired = MobileTicketStore(config).create(
+            code="github-auth-code",
+            redirect_uri=CALLBACK,
+            provider="github-mobile",
+            ttl=-1,
+        )
+        result = _run(config, {"grant_type": "mobile_ticket", "ticket": expired})
+        assert result.get("status_code") == 400
 
     def test_unknown_ticket_rejected(self) -> None:
         config = _make_config()

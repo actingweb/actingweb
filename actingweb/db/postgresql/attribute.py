@@ -240,6 +240,53 @@ class DbAttribute:
         return self.set_attr(actor_id=actor_id, bucket=bucket, name=name, data=None)
 
     @staticmethod
+    def delete_attr_conditional(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+    ) -> bool:
+        """
+        Atomically delete an attribute, returning True only if THIS call
+        removed an existing row.
+
+        A single ``DELETE`` statement takes a row lock: when two transactions
+        race on the same attribute, one deletes the row (rowcount 1) and the
+        other, after the first commits, finds nothing to delete (rowcount 0).
+        Exactly one caller sees True. Backs single-use/atomic-consume
+        semantics (e.g. mobile-ticket redemption).
+
+        Args:
+            actor_id: The actor ID
+            bucket: The bucket name
+            name: The attribute name
+
+        Returns:
+            True if this call removed an existing row, False otherwise
+        """
+        if not actor_id or not bucket or not name:
+            return False
+
+        bucket_name = bucket + ":" + name
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM attributes
+                        WHERE id = %s AND bucket_name = %s
+                        """,
+                        (actor_id, bucket_name),
+                    )
+                    rows_deleted = cur.rowcount
+                conn.commit()
+            return rows_deleted == 1
+        except Exception as e:
+            logger.error(
+                f"Error conditionally deleting attribute {actor_id}/{bucket}/{name}: {e}"
+            )
+            return False
+
+    @staticmethod
     def conditional_update_attr(
         actor_id: str | None = None,
         bucket: str | None = None,

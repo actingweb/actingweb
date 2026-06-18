@@ -17,6 +17,7 @@ payload and reject forged or replayed POSTs.
 from __future__ import annotations
 
 import secrets
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -120,11 +121,17 @@ class MobileTicketStore:
             OAUTH2_SYSTEM_ACTOR,
         )
 
+        effective_ttl = ttl or MOBILE_TICKET_TTL
         ticket = secrets.token_urlsafe(32)
         payload: dict[str, Any] = {
             "code": code,
             "redirect_uri": redirect_uri,
             "provider": provider,
+            # Redemption-time expiry, enforced in consume(). The DB-level TTL
+            # carries a large clock-skew buffer and is only a cleanup backstop,
+            # so the row can outlive the intended window; this stamp keeps the
+            # short single-use guarantee true regardless of when cleanup runs.
+            "expires_at": int(time.time()) + effective_ttl,
         }
         if extra:
             payload["extra"] = extra
@@ -134,7 +141,7 @@ class MobileTicketStore:
             bucket=MOBILE_TICKET_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=ticket, data=payload, ttl_seconds=ttl or MOBILE_TICKET_TTL)
+        bucket.set_attr(name=ticket, data=payload, ttl_seconds=effective_ttl)
         return ticket
 
     def consume(self, ticket: str) -> dict[str, Any] | None:
@@ -152,13 +159,21 @@ class MobileTicketStore:
         if not attr or "data" not in attr:
             return None
         payload = attr["data"]
+        if not isinstance(payload, dict):
+            return None
+        # Enforce the short redemption window at consume time. The DB TTL only
+        # removes the row eventually (and with a clock-skew buffer), so a row
+        # that outlived its window must still be rejected here. Burn the ticket
+        # so an expired one can't be retried.
+        expires_at = payload.get("expires_at")
+        if isinstance(expires_at, (int, float)) and time.time() > expires_at:
+            bucket.delete_attr_conditional(name=ticket)
+            return None
         # Single-use, race-free consume: only the caller that atomically
         # removes the ticket may redeem it. Two concurrent redemptions of the
         # same ticket race on this delete; exactly one wins and the losers get
         # None (and a 400 upstream), so one sign-in can never mint two sessions.
         if not bucket.delete_attr_conditional(name=ticket):
-            return None
-        if not isinstance(payload, dict):
             return None
         return payload
 

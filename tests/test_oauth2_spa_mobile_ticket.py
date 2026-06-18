@@ -195,6 +195,20 @@ class TestMobileTicketGrant:
         assert winners[0]["code"] == "github-auth-code"
         assert results.count(None) == 7
 
+    def test_expired_ticket_rejected(self) -> None:
+        # A ticket past its redemption window must be refused even though the
+        # stored row still exists (the DB TTL purges it only later, with a
+        # clock-skew buffer). A negative TTL stamps it already-expired.
+        config = _make_config()
+        expired = MobileTicketStore(config).create(
+            code="github-auth-code",
+            redirect_uri=CALLBACK,
+            provider="github-mobile",
+            ttl=-1,
+        )
+        result = _run(config, {"grant_type": "mobile_ticket", "ticket": expired})
+        assert result.get("status_code") == 400
+
     def test_unknown_ticket_rejected(self) -> None:
         config = _make_config()
         result = _run(config, {"grant_type": "mobile_ticket", "ticket": "nope"})

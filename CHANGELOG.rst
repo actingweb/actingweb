@@ -23,9 +23,12 @@ FIXED
   (PostgreSQL ``DELETE`` checking ``rowcount``; DynamoDB ``DeleteItem`` with an
   ``attribute_exists`` condition) that reports success to exactly one caller.
   Only that caller redeems the ticket; concurrent losers receive a 400 and no
-  tokens. The ticket's single-use deletion and short TTL (300 s) were already
-  enforced for *sequential* replays; this closes the *concurrent* replay
-  window. Concurrency regression test added in
+  tokens. The ticket's single-use deletion was already enforced for *sequential*
+  replays; this closes the *concurrent* replay window. The 300 s TTL is now also
+  enforced at redemption: ``consume()`` stamps an ``expires_at`` on the ticket
+  and refuses an out-of-window ticket even though the stored row outlives it
+  (the database TTL adds a clock-skew buffer and only purges the row later, as a
+  cleanup backstop). Concurrency and expiry regression tests added in
   ``tests/test_oauth2_spa_mobile_ticket.py``.
 
 v3.11.0b4: June 17, 2026

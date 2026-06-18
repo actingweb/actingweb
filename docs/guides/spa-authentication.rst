@@ -636,8 +636,12 @@ original Apple-only name.
 - **Atomic / race-free:** consumption is gated on an atomic conditional delete,
   so two concurrent ``/oauth/spa/token`` calls with the same ticket result in
   **at most one** success — a replay race cannot mint two sessions.
-- **Short TTL:** an unredeemed ticket expires server-side after 300 seconds (5
-  minutes), so a leaked or stale ticket cannot be redeemed later.
+- **Short TTL:** redemption is rejected once the ticket is older than 300
+  seconds (5 minutes), enforced at consume time, so a leaked or stale ticket
+  cannot be redeemed later. (The stored row is purged separately by the
+  database TTL — which carries a clock-skew buffer and is only a cleanup
+  backstop — but an out-of-window ticket is refused regardless of when that
+  purge runs.)
 
 A client-side de-dupe guard (in-memory plus a persisted "last handled ticket"
 marker) is still worthwhile to avoid a needless rejected round-trip, but the

@@ -25,7 +25,9 @@ FIXED
   revocation is reserved for an explicit account-disconnect / delete flow.
   (Renamed the internal helper ``_revoke_provider_token_for_actor`` →
   ``_clear_provider_token_for_actor`` in both ``oauth2_endpoints`` and
-  ``oauth2_spa``.)
+  ``oauth2_spa``.) The local clear now nulls every credential field written on
+  login — ``oauth_token``, ``oauth_token_expiry`` and ``oauth_token_timestamp``
+  — leaving only ``oauth_provider`` (identity metadata, not a credential).
 
 v3.11.0b5: June 17, 2026
 ------------------------

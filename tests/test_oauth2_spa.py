@@ -746,10 +746,28 @@ class TestLogoutDoesNotRevokeProviderGrant:
         store = MagicMock()
         store.oauth_token = "apple-refresh-token"
         store.oauth_token_expiry = 9999999999
+        store.oauth_token_timestamp = "1700000000"
         actor = MagicMock()
         actor.id = "actor-1"
         actor.store = store
         return actor
+
+    @staticmethod
+    def _spa_handler(mock_webobj, mock_config):
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        return OAuth2SPAHandler(mock_webobj, mock_config)
+
+    @staticmethod
+    def _endpoints_handler(mock_webobj, mock_config):
+        from unittest.mock import patch
+
+        with patch(
+            "actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server"
+        ):
+            from actingweb.handlers.oauth2_endpoints import OAuth2EndpointsHandler
+
+            return OAuth2EndpointsHandler(mock_webobj, mock_config)
 
     def test_spa_logout_clears_token_without_calling_provider_revoke(
         self, mock_config, mock_webobj
@@ -768,6 +786,7 @@ class TestLogoutDoesNotRevokeProviderGrant:
         # Token cleared locally so the backend can't use it any more...
         assert fake_actor.store.oauth_token is None
         assert fake_actor.store.oauth_token_expiry is None
+        assert fake_actor.store.oauth_token_timestamp is None
         # ...but the IdP revocation endpoint was never reached.
         mk_auth.assert_not_called()
 
@@ -791,4 +810,38 @@ class TestLogoutDoesNotRevokeProviderGrant:
 
         assert fake_actor.store.oauth_token is None
         assert fake_actor.store.oauth_token_expiry is None
+        assert fake_actor.store.oauth_token_timestamp is None
+        mk_auth.assert_not_called()
+
+    def test_clear_is_noop_when_token_already_none(self, mock_config, mock_webobj):
+        """Calling the helper with no stored token is a safe no-op: it must not
+        raise and must not reach the IdP."""
+        from unittest.mock import patch
+
+        fake_actor = self._fake_actor()
+        fake_actor.store.oauth_token = None
+        handler = self._spa_handler(mock_webobj, mock_config)
+        with patch("actingweb.actor.Actor", return_value=fake_actor), patch(
+            "actingweb.oauth2.create_oauth2_authenticator"
+        ) as mk_auth:
+            handler._clear_provider_token_for_actor("actor-1")
+
+        assert fake_actor.store.oauth_token is None
+        mk_auth.assert_not_called()
+
+    def test_clear_handles_missing_actor(self, mock_config, mock_webobj):
+        """The early-return guard (no actor.id / no store) must not raise or
+        touch the IdP when the actor cannot be loaded."""
+        from unittest.mock import patch
+
+        missing_actor = MagicMock()
+        missing_actor.id = None
+        missing_actor.store = None
+        handler = self._spa_handler(mock_webobj, mock_config)
+        with patch("actingweb.actor.Actor", return_value=missing_actor), patch(
+            "actingweb.oauth2.create_oauth2_authenticator"
+        ) as mk_auth:
+            # Must not raise.
+            handler._clear_provider_token_for_actor("does-not-exist")
+
         mk_auth.assert_not_called()

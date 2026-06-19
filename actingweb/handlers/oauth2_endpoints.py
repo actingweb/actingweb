@@ -1005,11 +1005,17 @@ class OAuth2EndpointsHandler(BaseHandler):
                 return
 
             if actor.store.oauth_token:
+                # Clear all credential fields written on login (oauth_session.py).
+                # oauth_provider is left intact: it is identity metadata, not a
+                # credential, and a subsequent login may branch on it.
                 actor.store.oauth_token = None
                 actor.store.oauth_token_expiry = None
+                actor.store.oauth_token_timestamp = None
                 logger.info(
                     f"Cleared stored provider token for actor {actor_id} on logout"
                 )
+            else:
+                logger.debug(f"No provider token to clear for actor {actor_id}")
         except Exception as e:
             logger.debug(f"Clearing provider token for actor {actor_id}: {e}")
 

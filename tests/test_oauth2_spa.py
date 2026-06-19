@@ -709,3 +709,86 @@ class TestSpaRedirectSafety:
 
         # May still error on OAuth-not-enabled, but NOT on the redirect check.
         assert result.get("message") != "Invalid redirect_uri"
+
+
+class TestLogoutDoesNotRevokeProviderGrant:
+    """Logout (and session-token revoke) must clear the stored provider token
+    locally but must NOT call the identity provider's revocation endpoint.
+
+    Regression: ``_revoke_provider_token_for_actor`` used to POST to the
+    provider's ``/auth/revoke`` on logout. For Apple that emails the user
+    ("… has revoked access to sign in with your Apple account") and severs the
+    Sign in with Apple grant (next login re-consents, refresh token dies).
+    Logout is not an account disconnect, so the IdP must not be touched.
+    """
+
+    @pytest.fixture
+    def mock_config(self):
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth = {"client_id": "x", "client_secret": "y"}
+        config.oauth2_provider = "apple"
+        return config
+
+    @pytest.fixture
+    def mock_webobj(self):
+        webobj = MagicMock()
+        webobj.request = MagicMock()
+        webobj.request.headers = {"Accept": "application/json"}
+        webobj.request.cookies = {}
+        webobj.response = MagicMock()
+        webobj.response.headers = {}
+        return webobj
+
+    @staticmethod
+    def _fake_actor():
+        store = MagicMock()
+        store.oauth_token = "apple-refresh-token"
+        store.oauth_token_expiry = 9999999999
+        actor = MagicMock()
+        actor.id = "actor-1"
+        actor.store = store
+        return actor
+
+    def test_spa_logout_clears_token_without_calling_provider_revoke(
+        self, mock_config, mock_webobj
+    ):
+        from unittest.mock import patch
+
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        fake_actor = self._fake_actor()
+        handler = OAuth2SPAHandler(mock_webobj, mock_config)
+        with patch("actingweb.actor.Actor", return_value=fake_actor), patch(
+            "actingweb.oauth2.create_oauth2_authenticator"
+        ) as mk_auth:
+            handler._clear_provider_token_for_actor("actor-1")
+
+        # Token cleared locally so the backend can't use it any more...
+        assert fake_actor.store.oauth_token is None
+        assert fake_actor.store.oauth_token_expiry is None
+        # ...but the IdP revocation endpoint was never reached.
+        mk_auth.assert_not_called()
+
+    def test_endpoints_logout_clears_token_without_calling_provider_revoke(
+        self, mock_config, mock_webobj
+    ):
+        from unittest.mock import patch
+
+        with patch(
+            "actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server"
+        ):
+            from actingweb.handlers.oauth2_endpoints import OAuth2EndpointsHandler
+
+            handler = OAuth2EndpointsHandler(mock_webobj, mock_config)
+
+        fake_actor = self._fake_actor()
+        with patch("actingweb.actor.Actor", return_value=fake_actor), patch(
+            "actingweb.oauth2.create_oauth2_authenticator"
+        ) as mk_auth:
+            handler._clear_provider_token_for_actor("actor-1")
+
+        assert fake_actor.store.oauth_token is None
+        assert fake_actor.store.oauth_token_expiry is None
+        mk_auth.assert_not_called()

@@ -5,6 +5,28 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.11.0b6: June 19, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **Logout no longer revokes the upstream identity-provider grant.** On
+  ``/oauth/logout`` (and the ``/oauth/spa/*`` session-token revoke), the
+  handler called the identity provider's token-revocation endpoint for any
+  provider that advertises a ``revocation_uri``. That was acceptable for
+  Google but wrong for **Apple**: hitting ``https://appleid.apple.com/auth/revoke``
+  emails the user ("… has revoked access to sign in with your Apple account")
+  and severs the Sign in with Apple grant entirely — the next login re-prompts
+  for name/email consent and the stored refresh token is invalidated. Logout is
+  a session action, not an account disconnect. The handler now clears the
+  stored provider token locally (so the backend can no longer call provider
+  APIs on the user's behalf) without contacting the provider. Provider-side
+  revocation is reserved for an explicit account-disconnect / delete flow.
+  (Renamed the internal helper ``_revoke_provider_token_for_actor`` →
+  ``_clear_provider_token_for_actor`` in both ``oauth2_endpoints`` and
+  ``oauth2_spa``.)
+
 v3.11.0b5: June 17, 2026
 ------------------------
 

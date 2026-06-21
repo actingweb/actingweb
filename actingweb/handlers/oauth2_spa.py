@@ -29,6 +29,7 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
+from ..constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
 from .base_handler import BaseHandler
 from .oauth2_utils import normalize_user_info
 
@@ -49,7 +50,9 @@ PKCE_VERIFIER_CHARSET = (
 # These handle concurrent refresh token requests from SPAs
 GRACE_PERIOD_IMMEDIATE = 10  # Normal concurrent requests (common in SPAs)
 GRACE_PERIOD_EXTENDED = 60  # Network delays or slow processing
-# Beyond GRACE_PERIOD_EXTENDED is considered potential token theft
+# Reuse within (GRACE_PERIOD_EXTENDED, SPA_REFRESH_TOKEN_REUSE_WINDOW] is treated
+# as potential theft (chain revoked); beyond that horizon a reused token is
+# treated as expired (the row is only still present because the purge lagged).
 
 
 _KNOWN_PROVIDER_PREFIXES = ("google", "github", "apple", "google-native")
@@ -666,15 +669,31 @@ class OAuth2SPAHandler(BaseHandler):
                     f"(delayed or dropped-rotation request) - issuing new tokens with rotation"
                 )
                 # Fall through to full rotation below.
+            elif time_since_use > SPA_REFRESH_TOKEN_REUSE_WINDOW:
+                # Past the reuse-detection horizon. On rotation the consumed
+                # token's storage TTL was shortened to this window, so it should
+                # already be purged; we only still see it because the purge is
+                # throttled (PostgreSQL) or eventually-consistent (DynamoDB TTL
+                # can lag). Beyond the horizon we no longer assert theft — a
+                # long-backgrounded client replaying a stale token must not be
+                # able to revoke the family that has long since rotated past it.
+                # Treat it as an expired token and reject WITHOUT revoking the
+                # chain, identical to a token that was physically purged.
+                logger.info(
+                    f"Refresh token reuse {time_since_use}s after first use for "
+                    f"actor {actor_id} - past the reuse-detection window, "
+                    f"treating as expired (no revocation)"
+                )
+                return self._json_error(401, "Invalid or expired refresh_token")
             else:
-                # Token reuse after extended grace period - potential theft.
-                # Scope the response to the offending refresh-token family
-                # (RFC 6819 token-family revocation) instead of nuking every
-                # token for the actor: revoking only this chain locks out the
-                # affected device/lineage while the actor's other devices —
-                # which have their own chain_id — keep working. Legacy tokens
-                # minted before chain_id existed fall back to revoking just the
-                # presented token, which still avoids the mass-logout.
+                # Token reuse within the detection window (after the grace
+                # period) - potential theft. Scope the response to the offending
+                # refresh-token family (RFC 6819 token-family revocation) instead
+                # of nuking every token for the actor: revoking only this chain
+                # locks out the affected device/lineage while the actor's other
+                # devices — which have their own chain_id — keep working. Legacy
+                # tokens minted before chain_id existed fall back to revoking just
+                # the presented token, which still avoids the mass-logout.
                 chain_id = token_data.get("chain_id")
                 if chain_id:
                     revoked = session_manager.revoke_token_chain(actor_id, chain_id)

@@ -173,19 +173,11 @@ OAUTH_SESSION_TTL = 600  # 10 minutes
 # SPA token TTLs
 SPA_ACCESS_TOKEN_TTL = 3600  # 1 hour
 SPA_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks (1,209,600 seconds)
-# Once a refresh token is rotated (marked used) its only remaining purpose is
-# reuse/theft detection. It does not need to live for the full refresh TTL: the
-# legitimate chain rotates frequently, so a genuine replay is detected within a
-# near-term window. Retaining used tokens for the full 2 weeks let them pile up
-# without bound in the (single, shared) token bucket. After this window a used
-# token is purged, and a later replay reads as an expired token (rejected)
-# rather than triggering chain revocation — an acceptable, bounded detection
-# horizon that keeps steady-state token volume ~7x smaller.
+# Retention for a *used* refresh token: only needs to outlast realistic replay
+# for theft detection, not the full refresh TTL. Bounds used-token accumulation
+# and is the horizon past which a reuse is treated as expired, not theft.
 SPA_REFRESH_TOKEN_REUSE_WINDOW = 86400 * 2  # 2 days
-# How often (at most) a single process runs the opportunistic expired-token
-# purge driven from the token endpoint. Keeps cleanup self-contained (no cron
-# required) while bounding the cost to roughly one cheap indexed DELETE per
-# interval per worker.
+# Max frequency of the opportunistic expired-token purge, per process.
 SPA_TOKEN_PURGE_INTERVAL = 3600  # 1 hour
 
 # MCP token TTLs

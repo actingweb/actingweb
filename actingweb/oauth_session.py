@@ -33,7 +33,10 @@ _REFRESH_TOKEN_BUCKET = "spa_refresh_tokens"
 
 # Process-local throttle for the opportunistic expired-token purge. A fresh
 # process (e.g. a serverless cold start) starts at 0.0 and purges on its first
-# eligible call — the desired self-healing behaviour. See
+# eligible call — the desired self-healing behaviour. The throttle is per
+# process, so an N-worker deployment runs the purge up to N times per interval
+# (not once globally); the DELETE is cheap and idempotent, so this is fine —
+# operators just see up to N purge log lines per interval. See
 # OAuth2SessionManager.maybe_purge_expired_tokens().
 _last_purge_attempt: float = 0.0
 
@@ -587,7 +590,11 @@ class OAuth2SessionManager:
             # write loses a race the token simply keeps its original TTL (prior
             # behaviour). The compare-and-swap is the atomic gate — this rewrite
             # is the winner re-stamping its own row, so it cannot grant rotation
-            # to a second caller.
+            # to a second caller. (If a concurrent revoke_token_chain deletes
+            # this row between the CAS and this write, set_attr re-creates it with
+            # used=True and a short TTL; that re-created row can never be rotated
+            # — it is already used — so there is no security impact, and it is
+            # reaped on the next purge cycle.)
             from .constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
 
             try:
@@ -729,6 +736,14 @@ class OAuth2SessionManager:
         if not chain_id:
             return 0
 
+        # NOTE: this scans both token buckets (all actors' tokens share the
+        # OAUTH2_SYSTEM_ACTOR partition) and filters by chain_id in Python — i.e.
+        # O(all live tokens) at revocation time. It is correct and acceptable
+        # because (a) revocation is rare (a theft event) and (b) the shortened
+        # used-token TTL keeps the bucket bounded. If the shared partition ever
+        # grows large enough for this to matter, the optimization path is a
+        # secondary index on chain_id (or per-actor token sharding) so the family
+        # can be fetched directly rather than scanned.
         revoked = 0
         for bucket_name in (_REFRESH_TOKEN_BUCKET, _ACCESS_TOKEN_BUCKET):
             bucket = attribute.Attributes(
@@ -819,10 +834,12 @@ class OAuth2SessionManager:
           (which must be enabled on the attributes table); returns 0 here rather
           than running a full-table Scan.
 
-        Intended to be invoked periodically by the application (e.g. a scheduled
-        job / cron / Lambda), the same way the MCP OAuth2 server schedules its
-        token cleanup. Combined with the shortened reuse-window TTL applied when
-        a refresh token is rotated, this keeps the shared token bucket bounded.
+        This runs automatically — :meth:`maybe_purge_expired_tokens` calls it
+        opportunistically from the token endpoint (throttled per process), so no
+        external scheduler is required. It is also safe to invoke directly from a
+        scheduled job (cron / Lambda) if a deterministic cadence is preferred.
+        Combined with the shortened reuse-window TTL applied when a refresh token
+        is rotated, this keeps the shared token bucket bounded.
 
         Returns:
             Number of token rows deleted (0 on DynamoDB, where native TTL applies)

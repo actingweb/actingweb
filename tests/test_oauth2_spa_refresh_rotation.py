@@ -17,7 +17,10 @@ from unittest.mock import MagicMock
 
 from actingweb.aw_web_request import AWWebObj
 from actingweb.config import Config
-from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+from actingweb.constants import (
+    OAUTH2_SYSTEM_ACTOR,
+    SPA_REFRESH_TOKEN_REUSE_WINDOW,
+)
 from actingweb.handlers.oauth2_spa import (
     GRACE_PERIOD_EXTENDED,
     OAuth2SPAHandler,
@@ -170,3 +173,66 @@ def test_reuse_beyond_grace_window_revokes_only_the_chain():
         (v.get("data") or {}).get("chain_id") == sibling_chain
         for v in refresh_store.values()
     )
+
+
+def test_reuse_past_reuse_window_is_expired_not_theft():
+    """A reuse beyond SPA_REFRESH_TOKEN_REUSE_WINDOW (the row only lingers because
+    the purge lagged) is rejected as expired and must NOT revoke the chain — a
+    long-backgrounded client replaying a stale token can't invalidate the family
+    that has long since rotated past it."""
+    config, storage = _make_config()
+    actor_id = "stale-actor"
+
+    token, chain_id = _seed_used_token(
+        config, storage, actor_id, used_seconds_ago=SPA_REFRESH_TOKEN_REUSE_WINDOW + 100
+    )
+    # A live token in the same chain (the family rotated forward) must survive.
+    mgr = get_oauth2_session_manager(config)
+    live = mgr.create_refresh_token(actor_id, "user@example.com", chain_id=chain_id)
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    assert result.get("error") is True
+    assert result.get("status_code") == 401
+    assert "expired" in result.get("message", "").lower()
+    # The chain was NOT revoked: the live token still validates.
+    assert mgr.validate_refresh_token(live) is not None
+
+
+def test_legacy_chainless_reuse_revokes_only_the_presented_token():
+    """A pre-existing refresh token with no chain_id (minted before chains
+    existed), reused within the theft window, falls back to revoking just that
+    token — not a chain scan — and still returns 401."""
+    config, storage = _make_config()
+    actor_id = "legacy-actor"
+    key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+
+    # Seed a used, chain-less token directly (create_refresh_token always assigns
+    # a chain_id, so we craft the legacy shape by hand).
+    token = "legacy-refresh-token"
+    other = "legacy-other-token"
+    storage.setdefault(key, {})[token] = {
+        "data": {
+            "actor_id": actor_id,
+            "identifier": "user@example.com",
+            "created_at": int(time.time()) - 1000,
+            "expires_at": int(time.time()) + 100000,
+            "used": True,
+            "used_at": int(time.time()) - (GRACE_PERIOD_EXTENDED + 30),
+            # no chain_id
+        }
+    }
+    # An unrelated token that must survive (proves we didn't revoke broadly).
+    storage[key][other] = {
+        "data": {"actor_id": actor_id, "identifier": "user@example.com"}
+    }
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    assert result.get("error") is True
+    assert result.get("status_code") == 401
+    # Only the presented legacy token was revoked.
+    assert token not in storage.get(key, {})
+    assert other in storage.get(key, {})

@@ -1026,11 +1026,15 @@ For production, configure specific allowed origins:
 
    app = (
        ActingWebApp(...)
-       .with_spa_cors_origins([
+       .with_spa_cors_origins(
            'https://myapp.example.com',
-           'https://staging.myapp.example.com'
-       ])
+           'https://staging.myapp.example.com',
+       )
    )
+
+The default is ``"*"`` (echo the request origin — allow all), which is fine for
+development; restrict it in production. Calling with no arguments resets to
+allow-all.
 
 Redirect Origin Allowlist
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

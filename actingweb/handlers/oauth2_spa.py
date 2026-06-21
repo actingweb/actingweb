@@ -148,8 +148,9 @@ class OAuth2SPAHandler(BaseHandler):
     def _set_cors_headers(self) -> None:
         """Set CORS headers for SPA access."""
         if self.response:
-            # Allow configurable origins, default to *
-            allowed_origins = getattr(self.config, "spa_cors_origins", ["*"])
+            # Allow configurable origins, default to * (an empty/unset list is
+            # treated as "*" so the fallback ``allowed_origins[0]`` below is safe).
+            allowed_origins = getattr(self.config, "spa_cors_origins", ["*"]) or ["*"]
             origin = (
                 self.request.headers.get("Origin", "*") if self.request.headers else "*"
             )

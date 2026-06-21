@@ -436,6 +436,55 @@ class TestSpaRedirectOrigins:
 
         assert config.spa_redirect_origins == []
 
+
+class TestSpaCorsOrigins:
+    """Test with_spa_cors_origins() builder."""
+
+    def test_returns_self_and_stores_origins(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            result = app.with_spa_cors_origins(
+                "https://app.example.com", "https://staging.example.com"
+            )
+
+        assert result is app
+        assert app._spa_cors_origins == [
+            "https://app.example.com",
+            "https://staging.example.com",
+        ]
+
+    def test_default_is_allow_all(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            config = app.get_config()
+
+        assert config.spa_cors_origins == ["*"]
+
+    def test_propagates_to_config_on_construction(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            app.with_spa_cors_origins("https://app.example.com")
+            config = app.get_config()
+
+        assert config.spa_cors_origins == ["https://app.example.com"]
+
+    def test_propagates_to_existing_config(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            config = app.get_config()
+            app.with_spa_cors_origins("https://app.example.com")
+
+        assert config.spa_cors_origins == ["https://app.example.com"]
+
+    def test_empty_call_resets_to_allow_all(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            app.with_spa_cors_origins("https://app.example.com")
+            app.with_spa_cors_origins()
+            config = app.get_config()
+
+        assert config.spa_cors_origins == ["*"]
+
     def test_with_mcp_disable(self):
         """Test with_mcp disables MCP."""
         with patch.object(ActingWebApp, "_initialize_permission_system"):

@@ -100,6 +100,12 @@ ADDED
   (previously only settable via ``Config.spa_redirect_origins``). Feeds the
   ``/oauth/spa/authorize`` redirect_uri allowlist.
 
+- **``ActingWebApp.with_spa_cors_origins(*origins)`` builder** — restrict the CORS
+  ``Access-Control-Allow-Origin`` for the SPA OAuth endpoints (default ``"*"``).
+  Previously documented but never actually implemented; ``spa_cors_origins`` is
+  now a first-class ``Config`` attribute, and the CORS handler treats an empty
+  list as ``"*"`` (removing a latent ``IndexError``).
+
 v3.11.0b6: June 19, 2026
 ------------------------
 

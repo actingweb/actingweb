@@ -93,6 +93,9 @@ class ActingWebApp:
         # Additional allowed SPA redirect origins (split-domain deployments)
         self._spa_redirect_origins: list[str] = []
 
+        # Allowed CORS origins for the SPA OAuth endpoints (default: allow all)
+        self._spa_cors_origins: list[str] = ["*"]
+
         # Hook registry
         self.hooks = HookRegistry()
 
@@ -208,6 +211,9 @@ class ActingWebApp:
         # Additional allowed SPA redirect origins
         if hasattr(self, "_spa_redirect_origins"):
             self._config.spa_redirect_origins = list(self._spa_redirect_origins)
+        # Allowed CORS origins for the SPA OAuth endpoints
+        if hasattr(self, "_spa_cors_origins"):
+            self._config.spa_cors_origins = list(self._spa_cors_origins)
         # Update supported options based on enabled features
         self._config.update_supported_options()
         # Keep service registry reference in sync
@@ -307,6 +313,39 @@ class ActingWebApp:
             )
         """
         self._spa_redirect_origins = list(origins)
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_spa_cors_origins(self, *origins: str) -> "ActingWebApp":
+        """Restrict the CORS origins allowed on the SPA OAuth endpoints.
+
+        Controls ``Access-Control-Allow-Origin`` for the ``/oauth/spa/*``
+        endpoints. The default is ``"*"`` (echo the request origin — allow all),
+        which is convenient for development but should be tightened in production
+        to the specific origins that serve your SPA. Calling with no arguments
+        resets to allow-all.
+
+        Origins are scheme + host (+ optional port), e.g.
+        ``https://app.example.com``.
+
+        Args:
+            *origins: One or more allowed CORS origins. No arguments restores the
+                allow-all (``"*"``) default.
+
+        Returns:
+            Self for method chaining
+
+        Example::
+
+            app = (
+                ActingWebApp(...)
+                .with_spa_cors_origins(
+                    "https://app.example.com",
+                    "https://staging.app.example.com",
+                )
+            )
+        """
+        self._spa_cors_origins = list(origins) if origins else ["*"]
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1183,6 +1222,8 @@ class ActingWebApp:
                 self._config.oauth2_provider = next(iter(named))
             # Additional allowed SPA redirect origins (split-domain deployments)
             self._config.spa_redirect_origins = list(self._spa_redirect_origins)
+            # Allowed CORS origins for the SPA OAuth endpoints
+            self._config.spa_cors_origins = list(self._spa_cors_origins)
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them
             self._config._hooks = self.hooks

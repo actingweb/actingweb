@@ -12,6 +12,7 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   v3.11
    v3.10
    v3.7
    v3.1
@@ -19,6 +20,13 @@ Contents
 
 Version Migrations
 ==================
+
+**v3.11 Migration**
+   Guide for upgrading to ActingWeb 3.11, covering the one new PostgreSQL
+   migration (chain_id index), DynamoDB TTL for token cleanup, SPA/mobile
+   refresh-token rotation hardening, the SPA OAuth redirect_uri allowlist, the
+   removal of the optional MCP SDK objects, and the new Apple/GitHub/Google-native
+   sign-in providers.
 
 **v3.10 Migration**
    Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager, and peer capabilities.

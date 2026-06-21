@@ -771,4 +771,30 @@ PostgreSQL Schema
    );
    CREATE INDEX idx_trusts_secret ON trusts(secret);
 
+**attributes table** (internal bucketed key-value storage — tokens, sessions,
+caches, application attributes):
+
+.. code-block:: sql
+
+   CREATE TABLE attributes (
+       id VARCHAR(255),            -- actor_id (tokens live under a system actor)
+       bucket_name VARCHAR(255),   -- "bucket:name" composite
+       bucket VARCHAR(255),
+       name VARCHAR(255),
+       data JSONB,
+       timestamp TIMESTAMP,
+       ttl_timestamp BIGINT,       -- expiry epoch (only set on temporary data)
+       PRIMARY KEY (id, bucket_name)
+   );
+   -- Partial index for the expired-token purge (DELETE ... WHERE ttl_timestamp < now)
+   CREATE INDEX idx_attributes_ttl ON attributes (ttl_timestamp)
+       WHERE ttl_timestamp IS NOT NULL;
+   -- Partial expression index for O(chain) refresh-token family revocation
+   -- (DELETE ... WHERE data->>'chain_id' = ?). Added in migration d4e5f6a7b8c9.
+   CREATE INDEX idx_attributes_chain_id ON attributes ((data ->> 'chain_id'))
+       WHERE (data ->> 'chain_id') IS NOT NULL;
+
+These indexes are created by ``alembic upgrade head`` — you do not create them
+by hand. They are listed here for reference only.
+
 See ``actingweb/db/postgresql/schema.py`` for complete schema definitions.

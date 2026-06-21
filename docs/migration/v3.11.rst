@@ -107,9 +107,12 @@ authorize requests from that origin will be rejected:
 
 .. code-block:: python
 
-   # On your Config instance (default is an empty list):
-   config.spa_redirect_origins = ["https://app.example.com"]
+   app = (
+       ActingWebApp(...)
+       .with_spa_redirect_origins("https://app.example.com")
+   )
 
+(Equivalently, set ``config.spa_redirect_origins`` directly on the Config.)
 Same-origin SPAs and standard redirect flows need no change.
 
 Behavioral Changes to Verify

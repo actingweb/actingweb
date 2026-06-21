@@ -1032,6 +1032,26 @@ For production, configure specific allowed origins:
        ])
    )
 
+Redirect Origin Allowlist
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``redirect_uri`` passed to ``POST /oauth/spa/authorize`` is validated against
+an allowlist (the backend FQDN plus the origins of configured OAuth redirect URIs
+and Apple mobile deep links). An off-origin ``redirect_uri`` is rejected with
+``400``, closing an open-redirect / one-time-session-id leak. **Same-origin SPAs
+need no configuration.** If your SPA is served from a different origin than the
+backend, allow it explicitly:
+
+.. code-block:: python
+
+   app = (
+       ActingWebApp(...)
+       .with_spa_redirect_origins('https://app.example.com')
+   )
+
+Each origin is scheme + host (+ optional port). Calling the builder with no
+arguments clears the list. (Equivalent to setting ``Config.spa_redirect_origins``.)
+
 HTTPS Required
 ~~~~~~~~~~~~~~
 

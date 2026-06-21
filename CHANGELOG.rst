@@ -95,6 +95,11 @@ ADDED
   attribute is the documented optimization path for very large DynamoDB
   deployments.
 
+- **``ActingWebApp.with_spa_redirect_origins(*origins)`` builder** — a fluent
+  way to allow additional SPA redirect origins for split-domain deployments
+  (previously only settable via ``Config.spa_redirect_origins``). Feeds the
+  ``/oauth/spa/authorize`` redirect_uri allowlist.
+
 v3.11.0b6: June 19, 2026
 ------------------------
 

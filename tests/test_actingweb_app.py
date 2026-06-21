@@ -436,6 +436,28 @@ class TestSpaRedirectOrigins:
 
         assert config.spa_redirect_origins == []
 
+    def test_schemeless_origin_warns(self, caplog):
+        import logging
+
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            with caplog.at_level(logging.WARNING):
+                app.with_spa_redirect_origins("app.example.com")
+
+        # Still stored verbatim (no mutation), but a warning was emitted.
+        assert app._spa_redirect_origins == ["app.example.com"]
+        assert any("without a scheme" in r.message for r in caplog.records)
+
+    def test_scheme_origin_does_not_warn(self, caplog):
+        import logging
+
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            with caplog.at_level(logging.WARNING):
+                app.with_spa_redirect_origins("https://app.example.com")
+
+        assert not any("without a scheme" in r.message for r in caplog.records)
+
 
 class TestSpaCorsOrigins:
     """Test with_spa_cors_origins() builder."""

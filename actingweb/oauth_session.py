@@ -724,7 +724,10 @@ class OAuth2SessionManager:
         access-token TTL.
 
         Args:
-            actor_id: The actor ID the chain belongs to
+            actor_id: The logical (user) actor the chain belongs to. Used only
+                for the log line — the delete itself is scoped by ``chain_id``
+                under the shared ``OAUTH2_SYSTEM_ACTOR`` token partition, not by
+                this actor.
             chain_id: The refresh-token family identifier to revoke
 
         Returns:
@@ -741,7 +744,9 @@ class OAuth2SessionManager:
         # ``idx_attributes_chain_id`` expression index (O(chain), not a scan of
         # the shared token partition); DynamoDB by a bounded scan of the two
         # token buckets (no JSON-field GSI — acceptable for a rare theft event,
-        # and bounded by the shortened used-token TTL).
+        # and bounded by the shortened used-token TTL). The partition key is the
+        # system actor (all SPA tokens live there); ``actor_id`` above is only
+        # for log context.
         db = get_attribute(self.config)
         revoked = db.delete_by_chain(
             OAUTH2_SYSTEM_ACTOR,

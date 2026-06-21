@@ -284,6 +284,26 @@ class ActingWebApp:
         self._apply_runtime_changes_to_config()
         return self
 
+    @staticmethod
+    def _warn_on_schemeless_origins(origins: tuple[str, ...], builder: str) -> None:
+        """Warn about origins missing a scheme.
+
+        SPA origins are matched by scheme+host; an entry without a scheme (e.g.
+        ``"app.example.com"`` instead of ``"https://app.example.com"``) is
+        silently ignored by the allowlist / never matches the request Origin. Warn
+        so the misconfiguration is visible instead of a silent no-op.
+        """
+        bad = [o for o in origins if o and o != "*" and "://" not in o]
+        if bad:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "%s(): ignoring origin(s) without a scheme %s — "
+                "use a full origin like 'https://app.example.com'",
+                builder,
+                bad,
+            )
+
     def with_spa_redirect_origins(self, *origins: str) -> "ActingWebApp":
         """Allow additional SPA redirect origins (split-domain deployments).
 
@@ -312,6 +332,7 @@ class ActingWebApp:
                 .with_spa_redirect_origins("https://app.example.com")
             )
         """
+        self._warn_on_schemeless_origins(origins, "with_spa_redirect_origins")
         self._spa_redirect_origins = list(origins)
         self._apply_runtime_changes_to_config()
         return self
@@ -345,6 +366,7 @@ class ActingWebApp:
                 )
             )
         """
+        self._warn_on_schemeless_origins(origins, "with_spa_cors_origins")
         self._spa_cors_origins = list(origins) if origins else ["*"]
         self._apply_runtime_changes_to_config()
         return self

@@ -15,22 +15,50 @@ management with both **DynamoDB** and **PostgreSQL** backends.
 .. note::
 
    ActingWeb is designed for serverless and containerized deployments where many
-   instances may scale concurrently. **Never add cleanup logic to your serving path**
-   as this impacts cold start time and request latency.
+   instances may scale concurrently. Do **not** put *heavy* cleanup (full-bucket
+   scans, multi-table sweeps) on your serving path, as that impacts cold start
+   time and request latency.
+
+.. note::
+
+   **SPA/mobile session tokens are cleaned up automatically — no configuration
+   required on PostgreSQL.** As of the token-rotation hardening, the
+   ``/oauth/spa/token`` endpoint runs a self-contained, *throttled* purge
+   (``OAuth2SessionManager.maybe_purge_expired_tokens()`` — at most once per hour
+   per process, a single indexed ``DELETE``). This is a deliberate exception to
+   the rule above: it is cheap and bounded, not a full scan. The scheduled
+   cleanup described below therefore covers the **other** temporary data —
+   OAuth login sessions, MCP tokens, and orphaned index entries — and remains the
+   recommended approach for those. On DynamoDB, native TTL handles all of it
+   (including SPA tokens) once enabled.
 
 Backend Selection
 -----------------
 
 Choose the appropriate section based on your database backend:
 
-- **DynamoDB**: Use DynamoDB's built-in TTL feature (zero-overhead, automatic)
-- **PostgreSQL**: Use pg_cron or scheduled cleanup scripts
+- **DynamoDB**: Use DynamoDB's built-in TTL feature (zero-overhead, automatic) —
+  required for all temporary data, including SPA tokens
+- **PostgreSQL**: SPA session tokens are purged automatically by the library;
+  use pg_cron or scheduled cleanup scripts for the remaining temporary data
+  (OAuth sessions, MCP tokens, orphaned index entries)
 
 DynamoDB TTL Configuration
 --------------------------
 
 ActingWeb stores a ``ttl_timestamp`` field on temporary data. You must enable
 DynamoDB TTL on your attributes table for automatic cleanup.
+
+.. important::
+
+   The ``attributes`` table also holds **permanent** data (internal store,
+   cached values, application attributes), but enabling TTL on it is safe.
+   DynamoDB TTL deletes an item *only* when its ``ttl_timestamp`` is present and
+   in the past. ActingWeb sets ``ttl_timestamp`` **only** on data that is meant
+   to expire — SPA access/refresh tokens, OAuth login sessions, mobile exchange
+   tickets, state nonces, and index entries (4-5 internal write paths). All
+   permanent writes use ``set_attr`` with no TTL, so they have no
+   ``ttl_timestamp`` and DynamoDB TTL never touches them.
 
 Why TTL?
 ~~~~~~~~
@@ -39,6 +67,7 @@ Why TTL?
 - DynamoDB handles deletion automatically in the background
 - No impact on cold start time or request latency
 - Works reliably at any scale
+- Only items with an explicit ``ttl_timestamp`` are ever deleted
 
 Enabling TTL
 ~~~~~~~~~~~~
@@ -174,8 +203,11 @@ Cleanup Handler Example
         session_mgr = OAuth2SessionManager(config)
         results["oauth_sessions"] = session_mgr.clear_expired_sessions()
 
-        # Clean up SPA tokens
-        results["spa_tokens"] = session_mgr.cleanup_expired_tokens()
+        # Clean up SPA tokens. The library already purges these opportunistically
+        # from the token endpoint, so this is optional / belt-and-suspenders.
+        # purge_expired_tokens() is the efficient indexed delete (PostgreSQL);
+        # on DynamoDB native TTL does the work and this returns 0.
+        results["spa_tokens"] = session_mgr.purge_expired_tokens()
 
         # Clean up MCP tokens and indexes
         token_mgr = ActingWebTokenManager(config)
@@ -346,8 +378,20 @@ PostgreSQL Cleanup Configuration
 ---------------------------------
 
 PostgreSQL doesn't have automatic TTL deletion like DynamoDB, but ActingWeb stores
-a ``ttl_timestamp`` field that you can use for scheduled cleanup. There are three
-approaches: pg_cron extension, external cron job, or scheduled Lambda/Cloud Function.
+a ``ttl_timestamp`` field (indexed by ``idx_attributes_ttl``) that is used for
+cleanup.
+
+.. note::
+
+   **SPA/mobile session tokens require no setup here** — the library purges them
+   itself from the ``/oauth/spa/token`` endpoint (see the Overview note). The
+   options below remain worthwhile for the *other* temporary data (OAuth login
+   sessions, MCP tokens, orphaned index entries), or if you simply prefer a
+   deterministic, centrally-scheduled sweep of all expired rows. The same
+   indexed ``DELETE`` the library runs can be scheduled here too.
+
+There are three approaches: pg_cron extension, external cron job, or scheduled
+Lambda/Cloud Function.
 
 Option 1: pg_cron Extension (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -600,8 +644,11 @@ For cleanup that requires application logic (OAuth sessions, MCP tokens):
         session_mgr = OAuth2SessionManager(config)
         results["oauth_sessions"] = session_mgr.clear_expired_sessions()
 
-        # Clean up SPA tokens
-        results["spa_tokens"] = session_mgr.cleanup_expired_tokens()
+        # Clean up SPA tokens. The library already purges these opportunistically
+        # from the token endpoint, so this is optional / belt-and-suspenders.
+        # purge_expired_tokens() is the efficient indexed delete (PostgreSQL);
+        # on DynamoDB native TTL does the work and this returns 0.
+        results["spa_tokens"] = session_mgr.purge_expired_tokens()
 
         # Clean up MCP tokens
         token_mgr = ActingWebTokenManager(config)
@@ -631,9 +678,12 @@ The following table shows TTL values for different data types:
    * - SPA access tokens
      - 1 hour
      - Web app authentication
-   * - SPA refresh tokens
+   * - SPA refresh tokens (unused)
      - 2 weeks
      - Web app token refresh
+   * - SPA refresh tokens (used)
+     - 2 days
+     - Shortened on rotation to the reuse-detection window
    * - MCP auth codes
      - 10 minutes
      - OAuth2 authorization flow
@@ -656,7 +706,9 @@ These values are defined in ``actingweb/constants.py``:
 
     # SPA token TTLs
     SPA_ACCESS_TOKEN_TTL = 3600  # 1 hour
-    SPA_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks
+    SPA_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks (unused refresh token)
+    SPA_REFRESH_TOKEN_REUSE_WINDOW = 86400 * 2  # 2 days (retention after rotation)
+    SPA_TOKEN_PURGE_INTERVAL = 3600  # opportunistic purge throttle (per process)
 
     # MCP token TTLs
     MCP_AUTH_CODE_TTL = 600  # 10 minutes

@@ -816,6 +816,51 @@ class DbAttributeProtocol(Protocol):
         """
         ...
 
+    @staticmethod
+    def delete_expired(
+        now_epoch: int | None = None, buckets: list[str] | None = None
+    ) -> int:
+        """
+        Delete attributes whose ``ttl_timestamp`` is in the past.
+
+        A set-based purge of TTL-expired rows, used for bounded cleanup of
+        token-like buckets without scanning every row. Backends that expire rows
+        natively (e.g. DynamoDB TTL) may treat this as a no-op and return 0.
+
+        Args:
+            now_epoch: Cutoff Unix timestamp; rows with ``ttl_timestamp`` below
+                it are deleted. Defaults to the current time.
+            buckets: Optional list of bucket names to restrict the purge to. When
+                omitted, all expired rows are eligible.
+
+        Returns:
+            Number of rows deleted (0 when the backend relies on native TTL).
+        """
+        ...
+
+    @staticmethod
+    def delete_by_chain(
+        actor_id: str | None = None,
+        buckets: list[str] | None = None,
+        chain_id: str | None = None,
+    ) -> int:
+        """
+        Delete attributes whose stored ``data['chain_id']`` matches ``chain_id``.
+
+        Backs refresh-token family (chain) revocation. PostgreSQL uses an
+        expression index for an O(chain) delete; DynamoDB scans the given buckets
+        and filters in memory (bounded by token TTL).
+
+        Args:
+            actor_id: Storage partition id the tokens live under.
+            buckets: Bucket names to search.
+            chain_id: The chain/family identifier to delete.
+
+        Returns:
+            Number of rows deleted.
+        """
+        ...
+
 
 @runtime_checkable
 class DbAttributeBucketListProtocol(Protocol):

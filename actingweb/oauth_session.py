@@ -31,6 +31,15 @@ _SESSION_TTL = 600
 _ACCESS_TOKEN_BUCKET = "spa_access_tokens"
 _REFRESH_TOKEN_BUCKET = "spa_refresh_tokens"
 
+# Process-local throttle for the opportunistic expired-token purge. A fresh
+# process (e.g. a serverless cold start) starts at 0.0 and purges on its first
+# eligible call — the desired self-healing behaviour. The throttle is per
+# process, so an N-worker deployment runs the purge up to N times per interval
+# (not once globally); the DELETE is cheap and idempotent, so this is fine —
+# operators just see up to N purge log lines per interval. See
+# OAuth2SessionManager.maybe_purge_expired_tokens().
+_last_purge_attempt: float = 0.0
+
 
 class OAuth2SessionManager:
     """
@@ -275,7 +284,12 @@ class OAuth2SessionManager:
     # ========================================================================
 
     def store_access_token(
-        self, token: str, actor_id: str, identifier: str, ttl: int | None = None
+        self,
+        token: str,
+        actor_id: str,
+        identifier: str,
+        ttl: int | None = None,
+        chain_id: str | None = None,
     ) -> None:
         """
         Store an access token for SPA use.
@@ -285,6 +299,12 @@ class OAuth2SessionManager:
             actor_id: Associated actor ID
             identifier: User identifier (email or provider ID)
             ttl: Time to live in seconds (default: 1 hour)
+            chain_id: Refresh-token family this access token was minted from (set
+                on rotation). When the family is revoked on reuse detection,
+                access tokens carrying the same ``chain_id`` are revoked with it,
+                so a stolen access token cannot outlive the theft response by up
+                to its full TTL. None for tokens not tied to a rotation chain
+                (e.g. the initial login token), which simply self-expire.
         """
         from . import attribute
         from .constants import OAUTH2_SYSTEM_ACTOR, SPA_ACCESS_TOKEN_TTL
@@ -296,6 +316,7 @@ class OAuth2SessionManager:
             "identifier": identifier,
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + effective_ttl,
+            "chain_id": chain_id,
         }
 
         bucket = attribute.Attributes(
@@ -376,7 +397,11 @@ class OAuth2SessionManager:
             return False
 
     def create_refresh_token(
-        self, actor_id: str, identifier: str | None = None, ttl: int | None = None
+        self,
+        actor_id: str,
+        identifier: str | None = None,
+        ttl: int | None = None,
+        chain_id: str | None = None,
     ) -> str:
         """
         Create a new refresh token for an actor.
@@ -385,6 +410,13 @@ class OAuth2SessionManager:
             actor_id: The actor ID
             identifier: User identifier (email or provider ID)
             ttl: Time to live in seconds (default: 2 weeks)
+            chain_id: Refresh-token lineage/family identifier. When a token is
+                created by rotating an existing one, pass the parent token's
+                ``chain_id`` so the whole family can be revoked together if reuse
+                is later detected (RFC 6819 token-family revocation). When None
+                (initial login), a fresh chain is started so each device/session
+                gets its own independent lineage and a theft response on one
+                device never logs out the others.
 
         Returns:
             The new refresh token
@@ -401,6 +433,7 @@ class OAuth2SessionManager:
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + effective_ttl,
             "used": False,
+            "chain_id": chain_id or secrets.token_urlsafe(16),
         }
 
         bucket = attribute.Attributes(
@@ -549,6 +582,29 @@ class OAuth2SessionManager:
 
         if success:
             logger.debug("Atomically marked refresh token as used")
+            # Now that the token is consumed it only needs to survive long
+            # enough for reuse/theft detection. Shrink its storage TTL from the
+            # full refresh TTL to the (much shorter) reuse window so it is purged
+            # promptly instead of lingering for two weeks. Best-effort: the
+            # conditional update above already secured rotation; if this second
+            # write loses a race the token simply keeps its original TTL (prior
+            # behaviour). The compare-and-swap is the atomic gate — this rewrite
+            # is the winner re-stamping its own row, so it cannot grant rotation
+            # to a second caller. (If a concurrent revoke_token_chain deletes
+            # this row between the CAS and this write, set_attr re-creates it with
+            # used=True and a short TTL; that re-created row can never be rotated
+            # — it is already used — so there is no security impact, and it is
+            # reaped on the next purge cycle.)
+            from .constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
+
+            try:
+                bucket.set_attr(
+                    name=token,
+                    data=new_data,
+                    ttl_seconds=SPA_REFRESH_TOKEN_REUSE_WINDOW,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"Could not shorten used refresh token TTL: {e}")
             return (True, new_data)
         else:
             # Another request beat us to it - token is now used
@@ -649,6 +705,63 @@ class OAuth2SessionManager:
 
         return revoked
 
+    def revoke_token_chain(self, actor_id: str, chain_id: str) -> int:
+        """
+        Revoke a single refresh-token family/lineage (security measure).
+
+        Called when refresh-token reuse is detected on a rotating chain. Unlike
+        :meth:`revoke_all_tokens`, this scopes the theft response to the affected
+        lineage only: every refresh token sharing ``chain_id`` is deleted (the
+        legitimate holder and the attacker both rotate from the same family, so
+        both lose the chain and must re-authenticate), while the actor's *other*
+        devices/sessions — which have their own ``chain_id`` — keep working.
+
+        Access tokens minted from this chain (tagged with the same ``chain_id``
+        at rotation) are revoked too, so a stolen access token cannot keep
+        working for up to its full TTL after the theft response. Access tokens
+        with no ``chain_id`` (e.g. the initial login token) are left to
+        self-expire — they carry no linkage to scope on, and live at most one
+        access-token TTL.
+
+        Args:
+            actor_id: The logical (user) actor the chain belongs to. Used only
+                for the log line — the delete itself is scoped by ``chain_id``
+                under the shared ``OAUTH2_SYSTEM_ACTOR`` token partition, not by
+                this actor.
+            chain_id: The refresh-token family identifier to revoke
+
+        Returns:
+            Number of tokens revoked (refresh + access)
+        """
+        from .constants import OAUTH2_SYSTEM_ACTOR
+        from .db import get_attribute
+
+        if not chain_id:
+            return 0
+
+        # Delete every token (refresh + access) carrying this chain_id. The
+        # backend does it in one shot scoped to the chain: PostgreSQL via the
+        # ``idx_attributes_chain_id`` expression index (O(chain), not a scan of
+        # the shared token partition); DynamoDB by a bounded scan of the two
+        # token buckets (no JSON-field GSI — acceptable for a rare theft event,
+        # and bounded by the shortened used-token TTL). The partition key is the
+        # system actor (all SPA tokens live there); ``actor_id`` above is only
+        # for log context.
+        db = get_attribute(self.config)
+        revoked = db.delete_by_chain(
+            OAUTH2_SYSTEM_ACTOR,
+            [_REFRESH_TOKEN_BUCKET, _ACCESS_TOKEN_BUCKET],
+            chain_id,
+        )
+
+        if revoked:
+            logger.warning(
+                f"Revoked {revoked} token(s) in chain {chain_id[:8]}... "
+                f"for actor {actor_id}"
+            )
+
+        return revoked
+
     def cleanup_expired_tokens(self) -> int:
         """
         Clean up expired access and refresh tokens.
@@ -694,6 +807,72 @@ class OAuth2SessionManager:
             logger.debug(f"Cleaned up {cleaned} expired tokens")
 
         return cleaned
+
+    def purge_expired_tokens(self) -> int:
+        """
+        Efficiently delete TTL-expired SPA access and refresh tokens.
+
+        Unlike :meth:`cleanup_expired_tokens` — which loads both token buckets in
+        full and deletes item by item — this issues a single set-based delete per
+        backend, scoped to the two SPA token buckets and driven by the stored
+        ``ttl_timestamp``:
+
+        - **PostgreSQL**: one indexed ``DELETE`` using the ``idx_attributes_ttl``
+          partial index. O(expired rows), not O(all tokens).
+        - **DynamoDB**: relies on the table's native TTL on ``ttl_timestamp``
+          (which must be enabled on the attributes table); returns 0 here rather
+          than running a full-table Scan.
+
+        This runs automatically — :meth:`maybe_purge_expired_tokens` calls it
+        opportunistically from the token endpoint (throttled per process), so no
+        external scheduler is required. It is also safe to invoke directly from a
+        scheduled job (cron / Lambda) if a deterministic cadence is preferred.
+        Combined with the shortened reuse-window TTL applied when a refresh token
+        is rotated, this keeps the shared token bucket bounded.
+
+        Returns:
+            Number of token rows deleted (0 on DynamoDB, where native TTL applies)
+        """
+        from .db import get_attribute
+
+        db = get_attribute(self.config)
+        try:
+            return db.delete_expired(
+                buckets=[_ACCESS_TOKEN_BUCKET, _REFRESH_TOKEN_BUCKET]
+            )
+        except Exception as e:
+            logger.warning(f"purge_expired_tokens failed: {e}")
+            return 0
+
+    def maybe_purge_expired_tokens(self) -> int:
+        """
+        Run :meth:`purge_expired_tokens` at most once per
+        ``SPA_TOKEN_PURGE_INTERVAL`` per process.
+
+        This is what makes expired-token cleanup self-contained: the token
+        endpoint calls it on every request as a heartbeat, and a process-local
+        throttle keeps the actual (cheap, indexed) delete to roughly once per
+        interval per worker. The library therefore bounds token-table growth on
+        its own — applications are not required to schedule a cron/Lambda.
+
+        Concurrency is intentionally lock-free: if two threads in the same
+        process race past the throttle, both run the delete, which is idempotent
+        and cheap (it only removes already-expired rows). On DynamoDB the
+        underlying purge is a no-op (native TTL handles expiry).
+
+        Returns:
+            Number of rows deleted (0 when throttled or on DynamoDB).
+        """
+        global _last_purge_attempt
+        from .constants import SPA_TOKEN_PURGE_INTERVAL
+
+        now = time.time()
+        if now - _last_purge_attempt < SPA_TOKEN_PURGE_INTERVAL:
+            return 0
+        # Claim the slot before doing the work so concurrent callers in this
+        # process skip rather than pile on.
+        _last_purge_attempt = now
+        return self.purge_expired_tokens()
 
 
 def get_oauth2_session_manager(config: "config_class.Config") -> OAuth2SessionManager:

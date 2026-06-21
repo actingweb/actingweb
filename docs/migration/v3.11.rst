@@ -1,0 +1,177 @@
+===========================
+Migrating to ActingWeb 3.11
+===========================
+
+Overview
+========
+
+ActingWeb 3.11 focuses on **authentication breadth and SPA/mobile session
+hardening**: Sign in with Apple, GitHub and native Google sign-in, native mobile
+OAuth code/ticket exchange, and a substantial hardening of the SPA refresh-token
+rotation flow. It also tightens an SPA OAuth open-redirect, and removes the
+vestigial optional MCP Python SDK.
+
+Most of 3.11 is additive and backward compatible. This guide lists the few items
+that need action when upgrading from 3.10.
+
+Who Needs to Migrate?
+=====================
+
+- **Everyone on PostgreSQL**: run one new Alembic migration (below).
+- **Everyone on DynamoDB**: confirm native TTL is enabled on the attributes
+  table (needed for the new token cleanup to actually reclaim space).
+- **Apps using the (undocumented) MCP SDK server objects**: a small code change.
+- **Split-domain SPA deployments**: set ``spa_redirect_origins`` (security fix).
+- **SPA/mobile app developers**: review the refresh-token client contract.
+
+If you only use the core actor/property/trust APIs and the default web/SPA login,
+the schema migration (PostgreSQL) or TTL check (DynamoDB) is all you need.
+
+Required: Database
+==================
+
+PostgreSQL — run the migration
+------------------------------
+
+3.11 adds **one** schema migration, ``d4e5f6a7b8c9`` — a partial expression index
+``idx_attributes_chain_id`` on ``attributes (data ->> 'chain_id')`` that makes
+refresh-token family revocation O(chain) instead of a scan of the shared token
+partition.
+
+.. code-block:: bash
+
+   cd actingweb/db/postgresql/
+   alembic upgrade head
+
+This is the only new migration since 3.10; the index is created concurrently-safe
+via ``CREATE INDEX IF NOT EXISTS`` and is partial (only token rows carry a
+``chain_id``), so it stays small.
+
+DynamoDB — confirm native TTL
+-----------------------------
+
+3.11 bounds SPA token growth: a *used* refresh token's TTL is shortened to a
+2-day reuse-detection window, and expired tokens are purged. On DynamoDB the
+purge relies on the table's **native TTL**, which must be enabled on the
+``attributes`` table's ``ttl_timestamp`` attribute. If it is not enabled, expired
+tokens are never reclaimed.
+
+.. code-block:: bash
+
+   aws dynamodb update-time-to-live \
+       --table-name <PREFIX>_attributes \
+       --time-to-live-specification "Enabled=true, AttributeName=ttl_timestamp"
+
+This only deletes items that *carry* a ``ttl_timestamp`` (tokens, sessions,
+tickets, nonces); permanent attributes are never affected. See
+:doc:`../guides/database-maintenance` and
+:doc:`../reference/database-backends` ("Expired Token Cleanup (TTL)") for the
+full explanation. On PostgreSQL no scheduler is required — the library purges
+expired tokens opportunistically from the token endpoint.
+
+Breaking Changes
+================
+
+MCP SDK server objects removed
+------------------------------
+
+The optional ``mcp`` (MCP Python SDK) install extra is removed, along with the
+vestigial SDK-backed objects that were never wired to serve requests:
+
+- ``actingweb.mcp.get_server_manager``
+- ``actingweb.mcp.MCPServerManager``
+- ``actingweb.mcp.ActingWebMCPServer``
+
+ActingWeb's MCP support is hand-rolled and does not need the SDK. Configure the
+server name and instructions via the builder instead:
+
+.. code-block:: python
+
+   app.with_mcp(enable=True, server_name="myapp", instructions="...")
+
+The internal ``_match_uri_template`` helper moved to
+``actingweb/mcp/uri.py`` as ``match_uri_template``. Drop the ``mcp`` extra from
+your install (``pip install actingweb`` no longer needs it for MCP).
+
+SPA OAuth redirect_uri allowlist (security)
+-------------------------------------------
+
+The ``redirect_uri`` passed to ``POST /oauth/spa/authorize`` is now validated
+against an allowlist (the backend FQDN, configured OAuth redirect / Apple deep-link
+origins). An off-origin ``redirect_uri`` is rejected with ``400``. This closes an
+open-redirect / one-time-session-id leak affecting all SPA providers.
+
+**Action — split-domain SPA deployments only:** if your SPA is served from an
+origin different from the backend FQDN, list the allowed SPA origins, otherwise
+authorize requests from that origin will be rejected:
+
+.. code-block:: python
+
+   app = (
+       ActingWebApp(...)
+       .with_spa_redirect_origins("https://app.example.com")
+   )
+
+(Equivalently, set ``config.spa_redirect_origins`` directly on the Config.)
+Same-origin SPAs and standard redirect flows need no change.
+
+Behavioral Changes to Verify
+============================
+
+- **MCP server name no longer includes ``actor_id``.** It now defaults to
+  ``"actingweb"`` (was ``"actingweb-{actor_id}"``). Each MCP connection is already
+  per-actor. Clients keyed on the old name or relying on actor-specific tool
+  prefixes should be re-checked. Override with ``with_mcp(server_name=...)``.
+- **MCP ``tools/call`` results always include ``isError``** (default ``false``)
+  per spec. Clients doing strict-equality comparison on the result object will see
+  the added field.
+- **Logout no longer revokes the upstream identity-provider grant.** ``/oauth/logout``
+  (and the SPA session-token revoke) now clears the stored provider token *locally*
+  instead of calling the provider's revocation endpoint. This is correct for
+  Apple (the old behavior emailed the user and severed Sign in with Apple).
+  Provider-side revocation is now reserved for an explicit account-disconnect flow.
+- **SPA/mobile refresh-token rotation hardening.** Reuse detection is now scoped to
+  the offending token *family* (``chain_id``), not all of an actor's tokens, and a
+  reuse within the ~60s grace window returns a full rotation so a client that
+  dropped a rotation recovers. Client guidance: **single-flight** your refresh
+  calls (never issue two concurrent ``/oauth/spa/token`` refreshes), persist the
+  rotated refresh token before the next call, and treat a ``401`` as
+  "session expired" by routing to the login screen — never leaving a blank page.
+  See :doc:`../guides/spa-authentication`.
+
+Dependencies
+============
+
+- ``PyJWT[crypto]`` is now a **core** dependency (required for Apple's ES256
+  ``client_secret`` and RS256 ``id_token`` validation). It installs automatically;
+  vendored / hash-locked environments should add it to their lockfile.
+- The ``mcp`` install extra is removed (see above), dropping ~a dozen transitive
+  packages.
+
+New Optional Features (no action required)
+==========================================
+
+Adopt these only if you want them; none change existing behavior:
+
+- **Sign in with Apple** — ``app.with_apple_sign_in(...)`` (web SPA, native iOS,
+  Android, and MCP web form). New env: ``APPLE_TEAM_ID``, ``APPLE_KEY_ID``,
+  ``APPLE_CLIENT_ID`` and ``APPLE_PRIVATE_KEY_PATH`` / ``APPLE_PRIVATE_KEY_PEM``.
+  See :doc:`../guides/apple-sign-in`.
+- **GitHub sign-in** — ``app.with_github(...)``.
+- **Native Google sign-in** — ``app.with_google_native(...)``.
+- **Native mobile OAuth** — ``authorization_code``, ``jwt-bearer`` and
+  ``mobile_ticket`` grants on ``POST /oauth/spa/token``.
+- **MCP enhancements** — protocol version negotiation, ``structuredContent`` tool
+  output, per-actor tool visibility/descriptions, and
+  ``with_mcp(server_name=..., instructions=...)``.
+
+Backward Compatibility
+======================
+
+Apart from the items above, 3.11 is backward compatible: the
+``OAuth2Authenticator`` refactor to a provider-strategy pattern preserves public
+method signatures and the ``actingweb.oauth2.requests`` patch point, and the new
+auth providers and MCP options are opt-in. Existing actors, tokens, properties,
+and trust relationships are unaffected — refresh tokens minted before the upgrade
+simply gain a ``chain_id`` on their next rotation (and legacy chain-less tokens
+fall back to single-token revocation on reuse).

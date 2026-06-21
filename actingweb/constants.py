@@ -173,6 +173,12 @@ OAUTH_SESSION_TTL = 600  # 10 minutes
 # SPA token TTLs
 SPA_ACCESS_TOKEN_TTL = 3600  # 1 hour
 SPA_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks (1,209,600 seconds)
+# Retention for a *used* refresh token: only needs to outlast realistic replay
+# for theft detection, not the full refresh TTL. Bounds used-token accumulation
+# and is the horizon past which a reuse is treated as expired, not theft.
+SPA_REFRESH_TOKEN_REUSE_WINDOW = 86400 * 2  # 2 days
+# Max frequency of the opportunistic expired-token purge, per process.
+SPA_TOKEN_PURGE_INTERVAL = 3600  # 1 hour
 
 # MCP token TTLs
 MCP_AUTH_CODE_TTL = 600  # 10 minutes
@@ -204,6 +210,10 @@ def _validate_ttl_constants() -> None:
     """Validate TTL constant relationships at import time."""
     assert SPA_REFRESH_TOKEN_TTL > SPA_ACCESS_TOKEN_TTL, (
         "SPA refresh TTL must exceed access TTL"
+    )
+    assert SPA_ACCESS_TOKEN_TTL < SPA_REFRESH_TOKEN_REUSE_WINDOW < SPA_REFRESH_TOKEN_TTL, (
+        "SPA reuse window must outlast a concurrent access token yet stay well "
+        "under the full refresh TTL"
     )
     assert MCP_REFRESH_TOKEN_TTL > MCP_ACCESS_TOKEN_TTL, (
         "MCP refresh TTL must exceed access TTL"

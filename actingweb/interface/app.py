@@ -90,6 +90,12 @@ class ActingWebApp:
         # Peer permissions caching configuration
         self._peer_permissions_caching: bool = False
 
+        # Additional allowed SPA redirect origins (split-domain deployments)
+        self._spa_redirect_origins: list[str] = []
+
+        # Allowed CORS origins for the SPA OAuth endpoints (default: allow all)
+        self._spa_cors_origins: list[str] = ["*"]
+
         # Hook registry
         self.hooks = HookRegistry()
 
@@ -202,6 +208,12 @@ class ActingWebApp:
         # Notify peer on change configuration
         if hasattr(self, "_notify_peer_on_change"):
             self._config.notify_peer_on_change = self._notify_peer_on_change
+        # Additional allowed SPA redirect origins
+        if hasattr(self, "_spa_redirect_origins"):
+            self._config.spa_redirect_origins = list(self._spa_redirect_origins)
+        # Allowed CORS origins for the SPA OAuth endpoints
+        if hasattr(self, "_spa_cors_origins"):
+            self._config.spa_cors_origins = list(self._spa_cors_origins)
         # Update supported options based on enabled features
         self._config.update_supported_options()
         # Keep service registry reference in sync
@@ -269,6 +281,93 @@ class ActingWebApp:
     def with_devtest(self, enable: bool = True) -> "ActingWebApp":
         """Enable or disable development/testing endpoints."""
         self._enable_devtest = enable
+        self._apply_runtime_changes_to_config()
+        return self
+
+    @staticmethod
+    def _warn_on_schemeless_origins(origins: tuple[str, ...], builder: str) -> None:
+        """Warn about origins missing a scheme.
+
+        SPA origins are matched by scheme+host; an entry without a scheme (e.g.
+        ``"app.example.com"`` instead of ``"https://app.example.com"``) is
+        silently ignored by the allowlist / never matches the request Origin. Warn
+        so the misconfiguration is visible instead of a silent no-op.
+        """
+        bad = [o for o in origins if o and o != "*" and "://" not in o]
+        if bad:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "%s(): ignoring origin(s) without a scheme %s — "
+                "use a full origin like 'https://app.example.com'",
+                builder,
+                bad,
+            )
+
+    def with_spa_redirect_origins(self, *origins: str) -> "ActingWebApp":
+        """Allow additional SPA redirect origins (split-domain deployments).
+
+        The ``redirect_uri`` passed to ``POST /oauth/spa/authorize`` is validated
+        against an allowlist — the backend's own FQDN plus the origins of
+        configured OAuth redirect URIs / Apple mobile deep links. An off-origin
+        ``redirect_uri`` is rejected with ``400`` (closing an open-redirect /
+        one-time-session-id leak). Use this when your SPA is served from a
+        different origin than the backend FQDN so its authorize requests are
+        accepted.
+
+        Origins must be scheme + host (+ optional port), e.g.
+        ``https://app.example.com``. Same-origin SPAs need no configuration.
+
+        Args:
+            *origins: One or more allowed SPA origins. Calling with no arguments
+                clears any previously configured origins.
+
+        Returns:
+            Self for method chaining
+
+        Example::
+
+            app = (
+                ActingWebApp(...)
+                .with_spa_redirect_origins("https://app.example.com")
+            )
+        """
+        self._warn_on_schemeless_origins(origins, "with_spa_redirect_origins")
+        self._spa_redirect_origins = list(origins)
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_spa_cors_origins(self, *origins: str) -> "ActingWebApp":
+        """Restrict the CORS origins allowed on the SPA OAuth endpoints.
+
+        Controls ``Access-Control-Allow-Origin`` for the ``/oauth/spa/*``
+        endpoints. The default is ``"*"`` (echo the request origin — allow all),
+        which is convenient for development but should be tightened in production
+        to the specific origins that serve your SPA. Calling with no arguments
+        resets to allow-all.
+
+        Origins are scheme + host (+ optional port), e.g.
+        ``https://app.example.com``.
+
+        Args:
+            *origins: One or more allowed CORS origins. No arguments restores the
+                allow-all (``"*"``) default.
+
+        Returns:
+            Self for method chaining
+
+        Example::
+
+            app = (
+                ActingWebApp(...)
+                .with_spa_cors_origins(
+                    "https://app.example.com",
+                    "https://staging.app.example.com",
+                )
+            )
+        """
+        self._warn_on_schemeless_origins(origins, "with_spa_cors_origins")
+        self._spa_cors_origins = list(origins) if origins else ["*"]
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1143,6 +1242,10 @@ class ActingWebApp:
             if named:
                 self._config.oauth_providers = named
                 self._config.oauth2_provider = next(iter(named))
+            # Additional allowed SPA redirect origins (split-domain deployments)
+            self._config.spa_redirect_origins = list(self._spa_redirect_origins)
+            # Allowed CORS origins for the SPA OAuth endpoints
+            self._config.spa_cors_origins = list(self._spa_cors_origins)
             self._attach_service_registry_to_config()
             # Attach hooks to config so OAuth2 and other modules can access them
             self._config._hooks = self.hooks

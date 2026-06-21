@@ -5,6 +5,107 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.11.0b7: June 21, 2026
+------------------------
+
+FIXED
+~~~~~
+
+- **Refresh-token reuse detection now revokes only the offending token family,
+  not every token for the actor.** When a rotating SPA refresh token was
+  presented again beyond the extended grace window (``> 60s``), the
+  ``/oauth/spa/token`` handler treated it as theft and called
+  ``revoke_all_tokens(actor_id)`` — invalidating *all* of the actor's access and
+  refresh tokens. A single stale token from one device (e.g. an iPad/Capacitor
+  app backgrounded for 30+ minutes, or a second app instance of the same actor)
+  therefore logged the user out everywhere, and clients that did not degrade the
+  resulting ``401`` to a login screen went blank ("white screen"). Refresh
+  tokens now carry a ``chain_id`` identifying their rotation *family*: rotation
+  propagates the parent's ``chain_id`` while each fresh login starts a new chain,
+  and reuse-after-grace now calls the new
+  ``OAuth2SessionManager.revoke_token_chain(actor_id, chain_id)`` to revoke only
+  that lineage (RFC 6819 token-family revocation). The actor's other
+  devices/sessions — which have their own ``chain_id`` — keep working. Legacy
+  refresh tokens minted before ``chain_id`` existed fall back to revoking only
+  the presented token, which still avoids the mass logout. The ``401`` body
+  changed from "all tokens revoked" to "session revoked for security".
+
+- **The refresh-token grace window now issues a full rotation instead of an
+  access-token-only response, fixing a delayed-lockout trap.** On
+  ``/oauth/spa/token``, reuse of an already-used refresh token within the
+  extended grace window (10–60s) previously returned a new access token but **no
+  new refresh token**. A client only reaches that path when its *stored* refresh
+  token is the already-used one (it dropped a prior rotation — e.g. a mobile
+  WebView suspended before persisting the rotated token). With no replacement
+  issued, it kept the used token and, one access-token lifetime (~1h) later,
+  presented it again past the grace window — a **guaranteed theft lockout**. The
+  whole grace window now issues a full rotation (new access + new refresh token
+  in the same ``chain_id``), so such a client recovers instead of being locked
+  out. The bounded security trade-off (a token reuser inside the grace window
+  now also receives a refresh token, not only a short-lived access token) is
+  caught by the chain-scoped reuse detection above: any later reuse across the
+  divergent branches revokes the whole family.
+
+- **Reuse-detection revocation now also revokes the chain's access tokens.** SPA
+  access tokens minted on refresh-token rotation are tagged with their
+  refresh-token family (``chain_id``), and ``revoke_token_chain`` now revokes
+  those access tokens alongside the refresh tokens. Previously a stolen access
+  token kept working until its full TTL (up to 1 hour) even after the theft
+  response. The initial login access token carries no ``chain_id`` and continues
+  to self-expire (≤ 1 hour), unchanged.
+
+ADDED
+~~~~~
+
+- **Bounded retention for used SPA refresh tokens + an efficient expiry purge.**
+  Two changes keep the (single, shared) SPA token bucket from growing without
+  bound — previously a used refresh token was retained for the full two-week TTL
+  and nothing ever deleted it (``cleanup_expired_tokens`` was never invoked, and
+  PostgreSQL has no native TTL):
+
+  - On rotation, a consumed refresh token's storage TTL is shortened from two
+    weeks to a bounded reuse-detection window
+    (``SPA_REFRESH_TOKEN_REUSE_WINDOW``, default 2 days). After the window a used
+    token is purged and a later replay reads as an expired token (rejected)
+    rather than triggering chain revocation — an acceptable, bounded detection
+    horizon that shrinks steady-state token volume ~7×.
+  - Self-contained purge — **no cron/Lambda required**. The
+    ``/oauth/spa/token`` endpoint opportunistically calls the new
+    ``OAuth2SessionManager.maybe_purge_expired_tokens()``, which runs at most
+    once per ``SPA_TOKEN_PURGE_INTERVAL`` (1 hour) per process via a
+    process-local throttle, so token-table growth is bounded by the library
+    itself. The underlying ``OAuth2SessionManager.purge_expired_tokens()`` /
+    backend ``DbAttribute.delete_expired(now_epoch=None, buckets=None)`` issues a
+    single set-based ``DELETE`` on PostgreSQL backed by the existing
+    ``idx_attributes_ttl`` partial index (O(expired rows), not O(all tokens)).
+    On **DynamoDB** the purge is a no-op: cleanup relies on the table's native
+    TTL on ``ttl_timestamp``, which must be enabled once per environment (see
+    ``docs/reference/database-backends.rst`` → "Expired Token Cleanup (TTL)").
+
+- **Indexed refresh-token family revocation (PostgreSQL).** ``revoke_token_chain``
+  previously loaded both shared token buckets and filtered by ``chain_id`` in
+  Python — O(all live tokens) at revocation time. It now delegates to a new
+  backend ``DbAttribute.delete_by_chain(actor_id, buckets, chain_id)``. On
+  PostgreSQL this is a single ``DELETE`` backed by a new partial expression index
+  ``idx_attributes_chain_id`` on ``(data ->> 'chain_id')`` — O(chain), a handful
+  of rows regardless of how large the shared token partition grows (**requires the
+  new Alembic migration ``d4e5f6a7b8c9``; run** ``alembic upgrade head``). On
+  DynamoDB it remains a bounded scan of the two token buckets (no GSI on the
+  JSON-embedded ``chain_id``); a GSI on a promoted top-level ``chain_id``
+  attribute is the documented optimization path for very large DynamoDB
+  deployments.
+
+- **``ActingWebApp.with_spa_redirect_origins(*origins)`` builder** — a fluent
+  way to allow additional SPA redirect origins for split-domain deployments
+  (previously only settable via ``Config.spa_redirect_origins``). Feeds the
+  ``/oauth/spa/authorize`` redirect_uri allowlist.
+
+- **``ActingWebApp.with_spa_cors_origins(*origins)`` builder** — restrict the CORS
+  ``Access-Control-Allow-Origin`` for the SPA OAuth endpoints (default ``"*"``).
+  Previously documented but never actually implemented; ``spa_cors_origins`` is
+  now a first-class ``Config`` attribute, and the CORS handler treats an empty
+  list as ``"*"`` (removing a latent ``IndexError``).
+
 v3.11.0b6: June 19, 2026
 ------------------------
 

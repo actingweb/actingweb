@@ -386,6 +386,127 @@ class TestFeatureToggles:
 
         assert app._enable_mcp is True
 
+
+class TestSpaRedirectOrigins:
+    """Test with_spa_redirect_origins() builder."""
+
+    def test_returns_self_and_stores_origins(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            result = app.with_spa_redirect_origins(
+                "https://app.example.com", "https://admin.example.com"
+            )
+
+        assert result is app
+        assert app._spa_redirect_origins == [
+            "https://app.example.com",
+            "https://admin.example.com",
+        ]
+
+    def test_default_is_empty(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            config = app.get_config()
+
+        assert config.spa_redirect_origins == []
+
+    def test_propagates_to_config_on_construction(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            app.with_spa_redirect_origins("https://app.example.com")
+            config = app.get_config()
+
+        assert config.spa_redirect_origins == ["https://app.example.com"]
+
+    def test_propagates_to_existing_config(self):
+        """Calling the builder after get_config() updates the live Config."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            config = app.get_config()
+            app.with_spa_redirect_origins("https://app.example.com")
+
+        assert config.spa_redirect_origins == ["https://app.example.com"]
+
+    def test_empty_call_clears_origins(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            app.with_spa_redirect_origins("https://app.example.com")
+            app.with_spa_redirect_origins()
+            config = app.get_config()
+
+        assert config.spa_redirect_origins == []
+
+    def test_schemeless_origin_warns(self, caplog):
+        import logging
+
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            with caplog.at_level(logging.WARNING):
+                app.with_spa_redirect_origins("app.example.com")
+
+        # Still stored verbatim (no mutation), but a warning was emitted.
+        assert app._spa_redirect_origins == ["app.example.com"]
+        assert any("without a scheme" in r.message for r in caplog.records)
+
+    def test_scheme_origin_does_not_warn(self, caplog):
+        import logging
+
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:spa")
+            with caplog.at_level(logging.WARNING):
+                app.with_spa_redirect_origins("https://app.example.com")
+
+        assert not any("without a scheme" in r.message for r in caplog.records)
+
+
+class TestSpaCorsOrigins:
+    """Test with_spa_cors_origins() builder."""
+
+    def test_returns_self_and_stores_origins(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            result = app.with_spa_cors_origins(
+                "https://app.example.com", "https://staging.example.com"
+            )
+
+        assert result is app
+        assert app._spa_cors_origins == [
+            "https://app.example.com",
+            "https://staging.example.com",
+        ]
+
+    def test_default_is_allow_all(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            config = app.get_config()
+
+        assert config.spa_cors_origins == ["*"]
+
+    def test_propagates_to_config_on_construction(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            app.with_spa_cors_origins("https://app.example.com")
+            config = app.get_config()
+
+        assert config.spa_cors_origins == ["https://app.example.com"]
+
+    def test_propagates_to_existing_config(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            config = app.get_config()
+            app.with_spa_cors_origins("https://app.example.com")
+
+        assert config.spa_cors_origins == ["https://app.example.com"]
+
+    def test_empty_call_resets_to_allow_all(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:cors")
+            app.with_spa_cors_origins("https://app.example.com")
+            app.with_spa_cors_origins()
+            config = app.get_config()
+
+        assert config.spa_cors_origins == ["*"]
+
     def test_with_mcp_disable(self):
         """Test with_mcp disables MCP."""
         with patch.object(ActingWebApp, "_initialize_permission_system"):

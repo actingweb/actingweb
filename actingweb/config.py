@@ -158,6 +158,11 @@ class Config:
         # different origin than the ActingWeb backend. Used to prevent open-redirect
         # / session-token leakage via attacker-supplied redirect targets.
         self.spa_redirect_origins: list[str] = []
+        # Allowed CORS origins for the SPA OAuth endpoints
+        # (Access-Control-Allow-Origin). Default ["*"] echoes the request origin
+        # (allow all); set specific origins to restrict cross-origin access in
+        # production. An empty list is treated as ["*"] by the handler.
+        self.spa_cors_origins: list[str] = ["*"]
         self.bot = {
             "token": "",
             "email": "",

@@ -82,6 +82,19 @@ ADDED
     TTL on ``ttl_timestamp``, which must be enabled once per environment (see
     ``docs/reference/database-backends.rst`` → "Expired Token Cleanup (TTL)").
 
+- **Indexed refresh-token family revocation (PostgreSQL).** ``revoke_token_chain``
+  previously loaded both shared token buckets and filtered by ``chain_id`` in
+  Python — O(all live tokens) at revocation time. It now delegates to a new
+  backend ``DbAttribute.delete_by_chain(actor_id, buckets, chain_id)``. On
+  PostgreSQL this is a single ``DELETE`` backed by a new partial expression index
+  ``idx_attributes_chain_id`` on ``(data ->> 'chain_id')`` — O(chain), a handful
+  of rows regardless of how large the shared token partition grows (**requires the
+  new Alembic migration ``d4e5f6a7b8c9``; run** ``alembic upgrade head``). On
+  DynamoDB it remains a bounded scan of the two token buckets (no GSI on the
+  JSON-embedded ``chain_id``); a GSI on a promoted top-level ``chain_id``
+  attribute is the documented optimization path for very large DynamoDB
+  deployments.
+
 v3.11.0b6: June 19, 2026
 ------------------------
 

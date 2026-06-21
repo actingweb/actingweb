@@ -428,6 +428,47 @@ class DbAttribute:
             logger.error(f"Error purging expired attributes: {e}")
             return 0
 
+    @staticmethod
+    def delete_by_chain(
+        actor_id: str | None = None,
+        buckets: list[str] | None = None,
+        chain_id: str | None = None,
+    ) -> int:
+        """
+        Delete attributes whose stored ``data->>'chain_id'`` matches ``chain_id``.
+
+        Backs refresh-token family (chain) revocation. A single set-based DELETE
+        backed by the partial expression index ``idx_attributes_chain_id`` on
+        ``(data ->> 'chain_id')`` — so cost scales with the number of rows in the
+        chain (a handful), not the whole shared token partition.
+
+        Args:
+            actor_id: Storage partition id (the system actor the tokens live under).
+            buckets: Bucket whitelist (the SPA access + refresh token buckets).
+            chain_id: The refresh-token family identifier to delete.
+
+        Returns:
+            Number of rows deleted.
+        """
+        if not actor_id or not chain_id or not buckets:
+            return 0
+
+        sql = (
+            "DELETE FROM attributes "
+            "WHERE id = %s AND bucket = ANY(%s) AND data->>'chain_id' = %s"
+        )
+        params: list[Any] = [actor_id, list(buckets), chain_id]
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    deleted = cur.rowcount
+                conn.commit()
+            return deleted if deleted and deleted > 0 else 0
+        except Exception as e:
+            logger.error(f"Error deleting token chain: {e}")
+            return 0
+
 
 class DbAttributeBucketList:
     """

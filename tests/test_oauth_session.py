@@ -109,6 +109,19 @@ class TestOAuth2SessionManager:
                             deleted += 1
                 return deleted
 
+            def delete_by_chain(self, actor_id=None, buckets=None, chain_id=None):  # type: ignore
+                if not actor_id or not chain_id or not buckets:
+                    return 0
+                deleted = 0
+                for bucket in buckets:
+                    items = self.storage.get(f"{actor_id}:{bucket}", {})
+                    for name, rec in list(items.items()):
+                        data = rec.get("data") or {}
+                        if isinstance(data, dict) and data.get("chain_id") == chain_id:
+                            del items[name]
+                            deleted += 1
+                return deleted
+
         # Set up the mock DbAttribute
         mock_db_module = Mock()
         mock_db_module.DbAttribute = MockDbAttribute

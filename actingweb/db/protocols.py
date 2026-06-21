@@ -838,6 +838,29 @@ class DbAttributeProtocol(Protocol):
         """
         ...
 
+    @staticmethod
+    def delete_by_chain(
+        actor_id: str | None = None,
+        buckets: list[str] | None = None,
+        chain_id: str | None = None,
+    ) -> int:
+        """
+        Delete attributes whose stored ``data['chain_id']`` matches ``chain_id``.
+
+        Backs refresh-token family (chain) revocation. PostgreSQL uses an
+        expression index for an O(chain) delete; DynamoDB scans the given buckets
+        and filters in memory (bounded by token TTL).
+
+        Args:
+            actor_id: Storage partition id the tokens live under.
+            buckets: Bucket names to search.
+            chain_id: The chain/family identifier to delete.
+
+        Returns:
+            Number of rows deleted.
+        """
+        ...
+
 
 @runtime_checkable
 class DbAttributeBucketListProtocol(Protocol):

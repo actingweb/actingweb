@@ -730,40 +730,24 @@ class OAuth2SessionManager:
         Returns:
             Number of tokens revoked (refresh + access)
         """
-        from . import attribute
         from .constants import OAUTH2_SYSTEM_ACTOR
+        from .db import get_attribute
 
         if not chain_id:
             return 0
 
-        # NOTE: this scans both token buckets (all actors' tokens share the
-        # OAUTH2_SYSTEM_ACTOR partition) and filters by chain_id in Python — i.e.
-        # O(all live tokens) at revocation time. It is correct and acceptable
-        # because (a) revocation is rare (a theft event) and (b) the shortened
-        # used-token TTL keeps the bucket bounded. If the shared partition ever
-        # grows large enough for this to matter, the optimization path is a
-        # secondary index on chain_id (or per-actor token sharding) so the family
-        # can be fetched directly rather than scanned.
-        revoked = 0
-        for bucket_name in (_REFRESH_TOKEN_BUCKET, _ACCESS_TOKEN_BUCKET):
-            bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=bucket_name,
-                config=self.config,
-            )
-            tokens = bucket.get_bucket()
-            if not tokens:
-                continue
-            # Snapshot with list() — delete_attr mutates the dict we iterate.
-            for token, token_attr in list(tokens.items()):
-                if token_attr and "data" in token_attr:
-                    data = token_attr["data"]
-                    if (
-                        data.get("actor_id") == actor_id
-                        and data.get("chain_id") == chain_id
-                    ):
-                        bucket.delete_attr(name=token)
-                        revoked += 1
+        # Delete every token (refresh + access) carrying this chain_id. The
+        # backend does it in one shot scoped to the chain: PostgreSQL via the
+        # ``idx_attributes_chain_id`` expression index (O(chain), not a scan of
+        # the shared token partition); DynamoDB by a bounded scan of the two
+        # token buckets (no JSON-field GSI — acceptable for a rare theft event,
+        # and bounded by the shortened used-token TTL).
+        db = get_attribute(self.config)
+        revoked = db.delete_by_chain(
+            OAUTH2_SYSTEM_ACTOR,
+            [_REFRESH_TOKEN_BUCKET, _ACCESS_TOKEN_BUCKET],
+            chain_id,
+        )
 
         if revoked:
             logger.warning(

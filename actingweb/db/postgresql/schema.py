@@ -23,6 +23,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
@@ -171,6 +172,14 @@ class Attribute(Base):
             "idx_attributes_ttl",
             "ttl_timestamp",
             postgresql_where="ttl_timestamp IS NOT NULL",
+        ),
+        # Expression index for refresh-token family (chain) revocation:
+        # DELETE ... WHERE data->>'chain_id' = ?. Partial — only token rows carry
+        # a chain_id — so it stays tiny relative to the table.
+        Index(
+            "idx_attributes_chain_id",
+            text("(data ->> 'chain_id')"),
+            postgresql_where=text("(data ->> 'chain_id') IS NOT NULL"),
         ),
     )
 

@@ -288,6 +288,48 @@ class DbAttribute:
         """
         return 0
 
+    @staticmethod
+    def delete_by_chain(actor_id=None, buckets=None, chain_id=None):  # type: ignore[misc]
+        """Delete attributes whose stored ``data['chain_id']`` matches chain_id.
+
+        Backs refresh-token family (chain) revocation. DynamoDB has no secondary
+        index on the JSON-embedded ``chain_id``, so this queries the (shared)
+        token buckets and filters in memory. The cost is bounded by the shortened
+        used-token TTL that keeps the buckets small; for very large deployments
+        the optimization path is a GSI on a promoted top-level ``chain_id``
+        attribute. Revocation is rare (a theft event), so the scan is acceptable.
+
+        Args:
+            actor_id: Storage partition id (the system actor the tokens live under).
+            buckets: Bucket whitelist (the SPA access + refresh token buckets).
+            chain_id: The refresh-token family identifier to delete.
+
+        Returns:
+            Number of items deleted.
+        """
+        if not actor_id or not chain_id or not buckets:
+            return 0
+        deleted = 0
+        for bucket in buckets:
+            try:
+                query = Attribute.query(
+                    actor_id,
+                    Attribute.bucket_name.startswith(bucket),
+                    consistent_read=True,
+                )
+            except Exception:  # PynamoDB DoesNotExist exception
+                continue
+            for t in list(query):
+                data = t.data
+                if (
+                    t.bucket == bucket
+                    and isinstance(data, dict)
+                    and data.get("chain_id") == chain_id
+                ):
+                    t.delete()
+                    deleted += 1
+        return deleted
+
     def __init__(self):
         if not Attribute.exists():
             try:

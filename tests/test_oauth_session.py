@@ -74,6 +74,41 @@ class TestOAuth2SessionManager:
                     return True
                 return False
 
+            def conditional_update_attr(  # type: ignore
+                self, actor_id, bucket, name, old_data, new_data, timestamp=None
+            ):
+                key = f"{actor_id}:{bucket}"
+                current = self.storage.get(key, {}).get(name)
+                if current is None or current.get("data") != old_data:
+                    return False
+                current["data"] = new_data
+                current["timestamp"] = timestamp
+                return True
+
+            def delete_expired(self, now_epoch=None, buckets=None):  # type: ignore
+                import time as _time
+
+                if now_epoch is None:
+                    now_epoch = int(_time.time())
+                deleted = 0
+                for key, items in list(self.storage.items()):
+                    bucket_part = key.split(":", 1)[1] if ":" in key else ""
+                    if buckets and bucket_part not in buckets:
+                        continue
+                    for name, rec in list(items.items()):
+                        ttl_seconds = rec.get("ttl_seconds")
+                        if ttl_seconds is None:
+                            continue
+                        # Mirror the backends: an explicit ttl is stored as an
+                        # absolute ttl_timestamp = written_at + ttl. The mock has
+                        # no written_at, so treat any record whose stored
+                        # ttl_seconds marks it expired relative to now. Tests set
+                        # ttl_seconds to a negative sentinel to force expiry.
+                        if ttl_seconds < 0:
+                            del items[name]
+                            deleted += 1
+                return deleted
+
         # Set up the mock DbAttribute
         mock_db_module = Mock()
         mock_db_module.DbAttribute = MockDbAttribute
@@ -337,6 +372,186 @@ class TestOAuth2SessionManager:
         # The victim's tokens are gone.
         assert not any(k.startswith("at") for k in access_store)
         assert not any(k.startswith("rt") for k in refresh_store)
+
+    def test_create_refresh_token_stamps_chain_id(self):
+        """A fresh login token starts its own chain; a rotated token can inherit
+        the parent's chain_id so the family can be revoked together."""
+        root = self.manager.create_refresh_token("actor-1", "user@example.com")
+        root_data = self.manager.validate_refresh_token(root)
+        assert root_data is not None
+        chain_id = root_data["chain_id"]
+        assert chain_id  # non-empty
+
+        # Rotation inherits the chain.
+        rotated = self.manager.create_refresh_token(
+            "actor-1", "user@example.com", chain_id=chain_id
+        )
+        rotated_data = self.manager.validate_refresh_token(rotated)
+        assert rotated_data is not None
+        assert rotated_data["chain_id"] == chain_id
+
+        # A separate login starts a new chain.
+        other = self.manager.create_refresh_token("actor-1", "user@example.com")
+        other_data = self.manager.validate_refresh_token(other)
+        assert other_data is not None
+        assert other_data["chain_id"] != chain_id
+
+    def test_revoke_token_chain_scopes_to_family(self):
+        """``revoke_token_chain`` deletes only the refresh tokens in the given
+        family, leaving the actor's other chains (other devices/sessions) and
+        access tokens intact — the surgical replacement for the mass-logout that
+        produced the SPA white-screen."""
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+        from actingweb.oauth_session import (
+            _ACCESS_TOKEN_BUCKET,
+            _REFRESH_TOKEN_BUCKET,
+        )
+
+        actor_id = "multi-device-actor"
+
+        # Chain A: a root token rotated once (two tokens, same family).
+        a_root = self.manager.create_refresh_token(actor_id, "u@example.com")
+        a_chain = self.manager.validate_refresh_token(a_root)["chain_id"]  # type: ignore[index]
+        self.manager.create_refresh_token(actor_id, "u@example.com", chain_id=a_chain)
+
+        # Chain B: the actor's other device — must survive.
+        b_root = self.manager.create_refresh_token(actor_id, "u@example.com")
+        b_chain = self.manager.validate_refresh_token(b_root)["chain_id"]  # type: ignore[index]
+
+        # An access token for the actor — must survive (self-expires).
+        self.manager.store_access_token("acc-1", actor_id, "u@example.com")
+
+        revoked = self.manager.revoke_token_chain(actor_id, a_chain)
+        assert revoked == 2  # only chain A's two refresh tokens
+
+        refresh_store = self._test_storage[
+            f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+        ]
+        access_store = self._test_storage[
+            f"{OAUTH2_SYSTEM_ACTOR}:{_ACCESS_TOKEN_BUCKET}"
+        ]
+        # Chain A gone, chain B intact, access token intact.
+        assert not any(
+            (v.get("data") or {}).get("chain_id") == a_chain
+            for v in refresh_store.values()
+        )
+        assert any(
+            (v.get("data") or {}).get("chain_id") == b_chain
+            for v in refresh_store.values()
+        )
+        assert "acc-1" in access_store
+
+    def test_revoke_token_chain_also_revokes_chain_tagged_access_tokens(self):
+        """Access tokens minted from the chain (tagged with its chain_id) are
+        revoked with the family; untagged or other-chain access tokens survive."""
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+        from actingweb.oauth_session import _ACCESS_TOKEN_BUCKET
+
+        actor_id = "actor-at"
+        rt = self.manager.create_refresh_token(actor_id, "u@example.com")
+        chain_id = self.manager.validate_refresh_token(rt)["chain_id"]  # type: ignore[index]
+
+        self.manager.store_access_token(
+            "at-in-chain", actor_id, "u@example.com", chain_id=chain_id
+        )
+        self.manager.store_access_token(
+            "at-other-chain", actor_id, "u@example.com", chain_id="different"
+        )
+        self.manager.store_access_token("at-untagged", actor_id, "u@example.com")
+
+        revoked = self.manager.revoke_token_chain(actor_id, chain_id)
+        # 1 refresh token + 1 chain-tagged access token.
+        assert revoked == 2
+
+        access_store = self._test_storage[
+            f"{OAUTH2_SYSTEM_ACTOR}:{_ACCESS_TOKEN_BUCKET}"
+        ]
+        assert "at-in-chain" not in access_store
+        assert "at-other-chain" in access_store
+        assert "at-untagged" in access_store
+
+    def test_marking_token_used_shortens_ttl(self):
+        """Rotating (marking used) a refresh token shrinks its storage TTL from
+        the full refresh TTL to the bounded reuse window, so used tokens are
+        purged promptly instead of lingering for two weeks."""
+        from actingweb.constants import (
+            OAUTH2_SYSTEM_ACTOR,
+            SPA_REFRESH_TOKEN_REUSE_WINDOW,
+            SPA_REFRESH_TOKEN_TTL,
+        )
+        from actingweb.oauth_session import _REFRESH_TOKEN_BUCKET
+
+        token = self.manager.create_refresh_token("actor-ttl", "u@example.com")
+        key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+        # Created with the full refresh TTL.
+        assert self._test_storage[key][token]["ttl_seconds"] == SPA_REFRESH_TOKEN_TTL
+
+        marked, _ = self.manager.try_mark_refresh_token_used(token)
+        assert marked is True
+        # After rotation the used token is retained only for the reuse window.
+        assert (
+            self._test_storage[key][token]["ttl_seconds"]
+            == SPA_REFRESH_TOKEN_REUSE_WINDOW
+        )
+
+    def test_purge_expired_tokens_delegates_to_backend(self):
+        """``purge_expired_tokens`` issues a backend-level expired-row delete,
+        scoped to the SPA token buckets."""
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+        from actingweb.oauth_session import (
+            _ACCESS_TOKEN_BUCKET,
+            _REFRESH_TOKEN_BUCKET,
+        )
+
+        refresh_key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+        access_key = f"{OAUTH2_SYSTEM_ACTOR}:{_ACCESS_TOKEN_BUCKET}"
+        # Negative ttl_seconds is the mock's "already expired" sentinel.
+        self._test_storage.setdefault(refresh_key, {})["expired-rt"] = {
+            "data": {"actor_id": "a"},
+            "ttl_seconds": -1,
+        }
+        self._test_storage[refresh_key]["fresh-rt"] = {
+            "data": {"actor_id": "a"},
+            "ttl_seconds": 1000,
+        }
+        self._test_storage.setdefault(access_key, {})["expired-at"] = {
+            "data": {"actor_id": "a"},
+            "ttl_seconds": -1,
+        }
+
+        deleted = self.manager.purge_expired_tokens()
+        assert deleted == 2
+        assert "expired-rt" not in self._test_storage[refresh_key]
+        assert "fresh-rt" in self._test_storage[refresh_key]
+        assert "expired-at" not in self._test_storage[access_key]
+
+    def test_maybe_purge_is_throttled_per_process(self):
+        """``maybe_purge_expired_tokens`` purges once then is throttled until the
+        interval elapses, so the token endpoint can call it on every request."""
+        import actingweb.oauth_session as oauth_session_mod
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+        from actingweb.oauth_session import _REFRESH_TOKEN_BUCKET
+
+        # Reset the process-local throttle so this test is deterministic.
+        oauth_session_mod._last_purge_attempt = 0.0
+
+        refresh_key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+        self._test_storage.setdefault(refresh_key, {})["expired-rt"] = {
+            "data": {"actor_id": "a"},
+            "ttl_seconds": -1,
+        }
+
+        # First call runs the purge.
+        assert self.manager.maybe_purge_expired_tokens() == 1
+        assert "expired-rt" not in self._test_storage[refresh_key]
+
+        # Second call within the interval is throttled (no work).
+        self._test_storage[refresh_key]["expired-rt-2"] = {
+            "data": {"actor_id": "a"},
+            "ttl_seconds": -1,
+        }
+        assert self.manager.maybe_purge_expired_tokens() == 0
+        assert "expired-rt-2" in self._test_storage[refresh_key]
 
     def test_multiple_sessions_independent(self):
         """Test that multiple sessions are independent."""

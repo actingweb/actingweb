@@ -560,19 +560,35 @@ class OAuth2SPAHandler(BaseHandler):
             )
 
         if grant_type == "refresh_token":
-            return self._handle_refresh_token(params, token_delivery)
+            result = self._handle_refresh_token(params, token_delivery)
         elif grant_type == "authorization_code":
-            return self._handle_authorization_code(params, token_delivery)
+            result = self._handle_authorization_code(params, token_delivery)
         elif grant_type == "urn:ietf:params:oauth:grant-type:jwt-bearer":
-            return self._handle_jwt_bearer_grant(params, token_delivery)
+            result = self._handle_jwt_bearer_grant(params, token_delivery)
         elif grant_type in ("mobile_ticket", "apple_mobile_ticket"):
             # apple_mobile_ticket is the original (Apple-only) name, kept as an
             # alias for the now provider-agnostic mobile_ticket grant.
-            return self._handle_mobile_ticket(params, token_delivery)
+            result = self._handle_mobile_ticket(params, token_delivery)
         elif grant_type == "passphrase":
-            return self._handle_passphrase_exchange(params, token_delivery)
+            result = self._handle_passphrase_exchange(params, token_delivery)
         else:
             return self._json_error(400, f"Unsupported grant_type: {grant_type}")
+
+        # Opportunistic, self-contained cleanup of expired SPA tokens. The token
+        # endpoint is the natural heartbeat for this, and the underlying call is
+        # throttled to at most once per interval per process — so the library
+        # bounds token-table growth on its own, without requiring the
+        # application to schedule a cron/Lambda. Best-effort: never let cleanup
+        # affect the token response. (On DynamoDB this is a no-op; native TTL on
+        # the attributes table handles expiry — see deployment docs.)
+        try:
+            from ..oauth_session import get_oauth2_session_manager
+
+            get_oauth2_session_manager(self.config).maybe_purge_expired_tokens()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Opportunistic token purge skipped: {e}")
+
+        return result
 
     def _handle_refresh_token(
         self, params: dict[str, Any], token_delivery: str
@@ -613,79 +629,82 @@ class OAuth2SPAHandler(BaseHandler):
         if not actor_id:
             return self._json_error(401, "Invalid refresh token data")
 
-        # If token was already used, check grace period with three tiers
+        # If token was already used, apply a grace window before treating the
+        # reuse as theft:
+        #   0 - GRACE_PERIOD_EXTENDED: benign reuse -> FULL rotation (same chain)
+        #   > GRACE_PERIOD_EXTENDED:   potential theft -> revoke the chain
+        #
+        # Within the grace window the reuse is either a genuine concurrent /
+        # duplicate request, or a client that dropped its previous rotation
+        # (e.g. an iPad/Capacitor app suspended before it persisted the rotated
+        # token). Either way we issue a full rotation in the same chain so the
+        # client gets a fresh, usable refresh token and recovers.
+        #
+        # Earlier revisions issued an access-token-only response in the 10-60s
+        # tier (no new refresh token). That stranded exactly the client this
+        # window is meant to help: a client whose *stored* refresh token is the
+        # reused one kept that already-used token and, one access-token lifetime
+        # later, presented it again past the grace window -> a guaranteed theft
+        # lockout. Rotating here lets it heal instead. The marginal security
+        # cost (a token reuser in the grace window now also receives a refresh
+        # token, not just a 1h access token) is bounded by chain-scoped theft
+        # detection: any later reuse across the divergent branches revokes the
+        # whole family.
         if not success:
             used_at = token_data.get("used_at", 0)
             time_since_use = int(time.time()) - used_at
 
-            # Three-tier grace period strategy:
-            # 0-GRACE_PERIOD_IMMEDIATE: Immediate concurrent requests - full token rotation
-            # GRACE_PERIOD_IMMEDIATE-GRACE_PERIOD_EXTENDED: Delayed concurrent requests - only new access token (no refresh rotation)
-            # >GRACE_PERIOD_EXTENDED: Potential token theft - revoke all tokens
-
             if time_since_use <= GRACE_PERIOD_IMMEDIATE:
-                # Within short grace period - full token rotation
-                # This handles rapid concurrent requests (normal case)
                 logger.debug(
                     f"Refresh token reuse within {time_since_use}s for actor {actor_id} "
                     f"(concurrent request) - issuing new tokens with rotation"
                 )
+                # Fall through to full rotation below.
             elif time_since_use <= GRACE_PERIOD_EXTENDED:
-                # Within extended grace period - only issue access token
-                # This handles edge cases with network delays or slow processing
                 logger.info(
                     f"Refresh token reuse after {time_since_use}s for actor {actor_id} "
-                    f"(delayed concurrent request) - issuing new access token only"
+                    f"(delayed or dropped-rotation request) - issuing new tokens with rotation"
                 )
-                # Issue new access token but DON'T rotate refresh token
-                new_access_token = self._generate_actingweb_token(
-                    actor_id, identifier or ""
-                )
-
-                expires_in = 3600  # 1 hour for access token
-
-                response_data: dict[str, Any] = {
-                    "success": True,
-                    "actor_id": actor_id,
-                    "email": identifier,
-                    "expires_in": expires_in,
-                    "expires_at": int(time.time()) + expires_in,
-                }
-
-                if token_delivery == "json":
-                    response_data["access_token"] = new_access_token
-                    response_data["token_type"] = "Bearer"
-                    # Note: No refresh_token in response for delayed concurrent requests
-                elif token_delivery == "cookie":
-                    self._set_token_cookies(
-                        new_access_token, None, expires_in, httponly=True
-                    )
-                    response_data["token_delivery"] = "cookie"
-                elif token_delivery == "hybrid":
-                    response_data["access_token"] = new_access_token
-                    response_data["token_type"] = "Bearer"
-                    response_data["token_delivery"] = "hybrid"
-                    # Note: No refresh token cookie update
-
-                logger.debug(
-                    f"Issued access token for delayed concurrent request (actor {actor_id})"
-                )
-                return response_data
+                # Fall through to full rotation below.
             else:
-                # Token reuse after extended grace period - potential theft
-                logger.warning(
-                    f"Refresh token reuse detected for actor {actor_id} "
-                    f"({time_since_use}s after first use) - potential token theft, revoking all tokens"
-                )
-                # Revoke all tokens for this actor
-                session_manager.revoke_all_tokens(actor_id)
+                # Token reuse after extended grace period - potential theft.
+                # Scope the response to the offending refresh-token family
+                # (RFC 6819 token-family revocation) instead of nuking every
+                # token for the actor: revoking only this chain locks out the
+                # affected device/lineage while the actor's other devices —
+                # which have their own chain_id — keep working. Legacy tokens
+                # minted before chain_id existed fall back to revoking just the
+                # presented token, which still avoids the mass-logout.
+                chain_id = token_data.get("chain_id")
+                if chain_id:
+                    revoked = session_manager.revoke_token_chain(actor_id, chain_id)
+                    logger.warning(
+                        f"Refresh token reuse detected for actor {actor_id} "
+                        f"({time_since_use}s after first use) - potential token theft, "
+                        f"revoked {revoked} token(s) in chain {chain_id[:8]}..."
+                    )
+                else:
+                    session_manager.revoke_refresh_token(refresh_token)
+                    logger.warning(
+                        f"Refresh token reuse detected for actor {actor_id} "
+                        f"({time_since_use}s after first use) - potential token theft, "
+                        f"revoked the reused (legacy, chain-less) token"
+                    )
                 return self._json_error(
-                    401, "Refresh token already used - all tokens revoked for security"
+                    401, "Refresh token already used - session revoked for security"
                 )
 
-        # Generate new tokens (rotation)
-        new_access_token = self._generate_actingweb_token(actor_id, identifier or "")
-        new_refresh_token = session_manager.create_refresh_token(actor_id, identifier)
+        # Generate new tokens (rotation). Propagate the consumed token's chain_id
+        # so the rotated tokens stay in the same family; if reuse is later
+        # detected anywhere in this lineage, only this family is revoked — and
+        # the access token is tagged with the chain so it is revoked too.
+        chain_id = token_data.get("chain_id")
+        new_access_token = self._generate_actingweb_token(
+            actor_id, identifier or "", chain_id=chain_id
+        )
+        new_refresh_token = session_manager.create_refresh_token(
+            actor_id, identifier, chain_id=chain_id
+        )
 
         expires_in = 3600  # 1 hour for access token
         refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
@@ -1561,8 +1580,16 @@ class OAuth2SPAHandler(BaseHandler):
                 "message": "Session validation failed",
             }
 
-    def _generate_actingweb_token(self, actor_id: str, identifier: str) -> str:
-        """Generate an ActingWeb access token for an actor."""
+    def _generate_actingweb_token(
+        self, actor_id: str, identifier: str, chain_id: str | None = None
+    ) -> str:
+        """Generate an ActingWeb access token for an actor.
+
+        When ``chain_id`` is provided (the refresh-token family this access token
+        is being minted alongside, on rotation), the access token is tagged with
+        it so that revoking the family on reuse detection also revokes this
+        access token instead of letting it live out its full TTL.
+        """
         # Use the config's token generation
         token = self.config.new_token()
 
@@ -1571,7 +1598,9 @@ class OAuth2SPAHandler(BaseHandler):
             from ..oauth_session import get_oauth2_session_manager
 
             session_manager = get_oauth2_session_manager(self.config)
-            session_manager.store_access_token(token, actor_id, identifier)
+            session_manager.store_access_token(
+                token, actor_id, identifier, chain_id=chain_id
+            )
         except Exception as e:
             logger.warning(f"Failed to store access token: {e}")
 

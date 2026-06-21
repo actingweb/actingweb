@@ -671,7 +671,14 @@ ActingWeb implements refresh token rotation for enhanced security:
 
 - Each refresh token can only be used once
 - Token exchange returns both new access AND refresh tokens
-- Reusing an old refresh token revokes all tokens (theft detection)
+- Reusing an old refresh token (beyond the concurrency grace window) is treated
+  as theft and revokes that token's **rotation family** — the lineage descending
+  from a single login — *not* every token the actor owns. The actor's other
+  devices/sessions, which have their own families, keep working. Access tokens
+  minted within the revoked family are revoked with it.
+- Within the grace window a reuse is treated as a benign concurrent/dropped
+  rotation and still returns a fresh refresh token, so a client that lost a
+  prior rotation recovers instead of being locked out.
 
 .. code-block:: javascript
 
@@ -1372,21 +1379,27 @@ This error indicates refresh token reuse detection. There are two common causes:
 1. **Concurrent refresh requests** - Multiple requests attempting to use the same refresh token
 2. **Token theft** - A legitimate security concern that triggers token revocation
 
-**Server-Side Protection (v3.8.2+)**
+**Server-Side Protection**
 
-ActingWeb v3.8.2+ handles concurrent refresh requests gracefully using atomic compare-and-swap
+ActingWeb handles concurrent refresh requests gracefully using atomic compare-and-swap
 operations. When multiple requests attempt to use the same refresh token simultaneously:
 
 - Only the first request succeeds in marking the token as used
-- Subsequent requests within the 2-second grace period receive new tokens without error
-- Requests outside the grace period trigger theft detection and revoke all tokens
+- Subsequent requests **within the grace window** (up to ~60 seconds) receive a
+  full rotation — new access *and* refresh tokens — without error. This also
+  covers a client that dropped a prior rotation (e.g. a mobile WebView suspended
+  before it persisted the rotated token): it recovers instead of being locked out.
+- A reuse **outside the grace window** is treated as theft and revokes the
+  offending token's rotation family (the lineage from one login), returning
+  ``401``. Other devices/sessions, which have their own families, are unaffected.
 
 This means the server automatically handles most race conditions without client-side coordination.
 
-**Client-Side Best Practice (Optional)**
+**Client-Side Best Practice (recommended)**
 
-While server-side protection prevents false positives, serializing refresh calls is still
-recommended for efficiency to avoid unnecessary retry logic:
+Serializing refresh calls (single-flight) is strongly recommended so a client never
+issues two concurrent refreshes that fork its own rotation lineage, and so a 401
+degrades to a login screen rather than a blank page:
 
 .. code-block:: javascript
 
@@ -1406,10 +1419,16 @@ recommended for efficiency to avoid unnecessary retry logic:
 
 **When Tokens Are Revoked**
 
-If you see this error AND all tokens are revoked (401 on subsequent requests), it indicates:
+If you see this error AND the session is revoked (401 on subsequent requests), it indicates:
 
-- Genuine token theft detected (reuse > 2 seconds apart)
-- User must re-authenticate for security
+- A reused refresh token was presented well after it was first used (beyond the
+  grace window) — genuine theft, or a client that forked its own rotation lineage
+  by issuing concurrent/uncoordinated refreshes (see the single-flight best
+  practice above)
+- Only the affected rotation family is revoked; the user re-authenticates that
+  session. Other devices/sessions continue working.
+- Treat the 401 as "session expired": route to the login screen. Do not leave the
+  app on a blank page.
 
 "CORS error"
 ~~~~~~~~~~~~

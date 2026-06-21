@@ -52,8 +52,8 @@ Quick Comparison
      - Point-in-time recovery built-in
      - pg_dump or continuous archiving
    * - **TTL/Cleanup**
-     - Built-in automatic TTL deletion
-     - pg_cron or scheduled jobs
+     - Built-in automatic TTL deletion (enable TTL on ``attributes.ttl_timestamp``)
+     - Self-contained opportunistic purge (no cron required)
    * - **Connection Pooling**
      - Not applicable (HTTP API)
      - Built-in (psycopg3 ConnectionPool)
@@ -118,7 +118,9 @@ When to Use PostgreSQL
 2. **Database management**: Need to manage backups, updates, monitoring
 3. **Connection limits**: Connection pooling required for high concurrency
 4. **Migration setup**: Must run Alembic migrations before first use
-5. **TTL cleanup**: Must configure pg_cron or scheduled jobs (not automatic)
+5. **TTL cleanup**: Handled by the library's self-contained opportunistic purge
+   (see `Expired Token Cleanup (TTL)`_); no pg_cron required for ActingWeb's own
+   token tables
 
 **Example Use Cases:**
 
@@ -227,6 +229,60 @@ Example: 1 million requests/day
 - Highly variable traffic (benefit from on-demand)
 - Global replication requirements
 - Zero-ops preference (worth the premium)
+
+Expired Token Cleanup (TTL)
+---------------------------
+
+ActingWeb's SPA/mobile session tokens (the ``/oauth/spa/token`` flow) are stored
+in the ``attributes`` table with a ``ttl_timestamp``. Access tokens are
+short-lived (1 hour); refresh tokens rotate, and a *used* refresh token's TTL is
+shortened to a bounded reuse-detection window (``SPA_REFRESH_TOKEN_REUSE_WINDOW``,
+2 days) so consumed tokens do not accumulate. Expired rows still need to be
+deleted from storage. How that happens depends on the backend:
+
+**PostgreSQL — automatic, no configuration required.**
+The library purges expired token rows itself. The ``/oauth/spa/token`` endpoint
+opportunistically calls ``OAuth2SessionManager.maybe_purge_expired_tokens()``,
+which runs at most once per ``SPA_TOKEN_PURGE_INTERVAL`` (1 hour) per process and
+issues a single set-based ``DELETE`` backed by the ``idx_attributes_ttl`` partial
+index (cost scales with the number of expired rows, not table size). No pg_cron
+or scheduled job is needed for ActingWeb's own token tables. Applications may
+still call ``purge_expired_tokens()`` directly from a scheduled job if they want
+a deterministic cadence.
+
+**DynamoDB — enable native TTL on the table (one-time setup).**
+DynamoDB deletes expired items automatically, but **TTL must be enabled on the
+attributes table**, pointed at the ``ttl_timestamp`` attribute. The library does
+not (and cannot reliably) enable this for you, and a full-table ``Scan`` to purge
+is deliberately avoided, so without this step expired tokens are never removed.
+
+.. important::
+
+   Enabling TTL on the shared ``attributes`` table is **safe** even though that
+   table also holds permanent data (internal store, cached values, application
+   attributes). DynamoDB TTL deletes an item *only* when its ``ttl_timestamp``
+   attribute is present and in the past. ActingWeb writes ``ttl_timestamp`` only
+   for temporary data that is *meant* to expire — SPA access/refresh tokens,
+   OAuth login sessions, mobile exchange tickets, state nonces, and index
+   entries. Every permanent write goes through ``set_attr`` with no ``ttl``, so
+   those items have **no** ``ttl_timestamp`` and are never eligible for TTL
+   deletion. (If your own code calls ``set_attr(..., ttl_seconds=...)`` it is
+   likewise opting that item into expiry — don't pass a TTL for data you want to
+   keep.)
+
+Enable it once per environment:
+
+.. code-block:: bash
+
+   aws dynamodb update-time-to-live \
+       --table-name <PREFIX>_attributes \
+       --time-to-live-specification "Enabled=true, AttributeName=ttl_timestamp"
+
+The table name is ``<AWS_DB_PREFIX>_attributes`` (default prefix
+``demo_actingweb``). TTL deletion is asynchronous (AWS removes items within ~48h
+of expiry), which is fine for token cleanup. The ``ttl_timestamp`` is written
+with a clock-skew buffer so items are never deleted before they are logically
+expired.
 
 Migration Between Backends
 ---------------------------

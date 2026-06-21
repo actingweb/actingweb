@@ -268,6 +268,26 @@ class DbAttribute:
             t.delete()
         return True
 
+    @staticmethod
+    def delete_expired(now_epoch=None, buckets=None):  # type: ignore[misc]
+        """Purge TTL-expired attributes.
+
+        DynamoDB deletes expired items automatically when TTL is enabled on the
+        ``ttl_timestamp`` attribute of the table (recommended; the field is
+        written with a clock-skew buffer for exactly this purpose). A
+        backend-driven purge here would require a full-table ``Scan``, which is
+        intentionally avoided, so this relies on native TTL and reports 0
+        deletions. Ensure DynamoDB TTL is enabled on the attributes table.
+
+        Args:
+            now_epoch: Ignored (native TTL uses the stored ttl_timestamp).
+            buckets: Ignored.
+
+        Returns:
+            0 — deletion is handled asynchronously by DynamoDB TTL.
+        """
+        return 0
+
     def __init__(self):
         if not Attribute.exists():
             try:

@@ -173,6 +173,20 @@ OAUTH_SESSION_TTL = 600  # 10 minutes
 # SPA token TTLs
 SPA_ACCESS_TOKEN_TTL = 3600  # 1 hour
 SPA_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks (1,209,600 seconds)
+# Once a refresh token is rotated (marked used) its only remaining purpose is
+# reuse/theft detection. It does not need to live for the full refresh TTL: the
+# legitimate chain rotates frequently, so a genuine replay is detected within a
+# near-term window. Retaining used tokens for the full 2 weeks let them pile up
+# without bound in the (single, shared) token bucket. After this window a used
+# token is purged, and a later replay reads as an expired token (rejected)
+# rather than triggering chain revocation — an acceptable, bounded detection
+# horizon that keeps steady-state token volume ~7x smaller.
+SPA_REFRESH_TOKEN_REUSE_WINDOW = 86400 * 2  # 2 days
+# How often (at most) a single process runs the opportunistic expired-token
+# purge driven from the token endpoint. Keeps cleanup self-contained (no cron
+# required) while bounding the cost to roughly one cheap indexed DELETE per
+# interval per worker.
+SPA_TOKEN_PURGE_INTERVAL = 3600  # 1 hour
 
 # MCP token TTLs
 MCP_AUTH_CODE_TTL = 600  # 10 minutes
@@ -204,6 +218,10 @@ def _validate_ttl_constants() -> None:
     """Validate TTL constant relationships at import time."""
     assert SPA_REFRESH_TOKEN_TTL > SPA_ACCESS_TOKEN_TTL, (
         "SPA refresh TTL must exceed access TTL"
+    )
+    assert SPA_ACCESS_TOKEN_TTL < SPA_REFRESH_TOKEN_REUSE_WINDOW < SPA_REFRESH_TOKEN_TTL, (
+        "SPA reuse window must outlast a concurrent access token yet stay well "
+        "under the full refresh TTL"
     )
     assert MCP_REFRESH_TOKEN_TTL > MCP_ACCESS_TOKEN_TTL, (
         "MCP refresh TTL must exceed access TTL"

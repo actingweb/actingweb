@@ -386,6 +386,48 @@ class DbAttribute:
             logger.error(f"Error deleting bucket {actor_id}/{bucket}: {e}")
             return False
 
+    @staticmethod
+    def delete_expired(
+        now_epoch: int | None = None, buckets: list[str] | None = None
+    ) -> int:
+        """
+        Delete attributes whose ttl_timestamp is in the past.
+
+        Issues a single set-based DELETE backed by the partial index
+        ``idx_attributes_ttl`` (``ttl_timestamp WHERE ttl_timestamp IS NOT
+        NULL``), so cost scales with the number of expired rows rather than the
+        whole table. Optionally restricted to specific buckets.
+
+        Args:
+            now_epoch: Cutoff Unix timestamp (defaults to now).
+            buckets: Optional bucket whitelist to scope the purge.
+
+        Returns:
+            Number of rows deleted.
+        """
+        if now_epoch is None:
+            now_epoch = int(time.time())
+
+        sql = (
+            "DELETE FROM attributes "
+            "WHERE ttl_timestamp IS NOT NULL AND ttl_timestamp < %s"
+        )
+        params: list[Any] = [now_epoch]
+        if buckets:
+            sql += " AND bucket = ANY(%s)"
+            params.append(list(buckets))
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    deleted = cur.rowcount
+                conn.commit()
+            return deleted if deleted and deleted > 0 else 0
+        except Exception as e:
+            logger.error(f"Error purging expired attributes: {e}")
+            return 0
+
 
 class DbAttributeBucketList:
     """

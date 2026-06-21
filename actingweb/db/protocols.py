@@ -816,6 +816,28 @@ class DbAttributeProtocol(Protocol):
         """
         ...
 
+    @staticmethod
+    def delete_expired(
+        now_epoch: int | None = None, buckets: list[str] | None = None
+    ) -> int:
+        """
+        Delete attributes whose ``ttl_timestamp`` is in the past.
+
+        A set-based purge of TTL-expired rows, used for bounded cleanup of
+        token-like buckets without scanning every row. Backends that expire rows
+        natively (e.g. DynamoDB TTL) may treat this as a no-op and return 0.
+
+        Args:
+            now_epoch: Cutoff Unix timestamp; rows with ``ttl_timestamp`` below
+                it are deleted. Defaults to the current time.
+            buckets: Optional list of bucket names to restrict the purge to. When
+                omitted, all expired rows are eligible.
+
+        Returns:
+            Number of rows deleted (0 when the backend relies on native TTL).
+        """
+        ...
+
 
 @runtime_checkable
 class DbAttributeBucketListProtocol(Protocol):

@@ -211,7 +211,9 @@ def _validate_ttl_constants() -> None:
     assert SPA_REFRESH_TOKEN_TTL > SPA_ACCESS_TOKEN_TTL, (
         "SPA refresh TTL must exceed access TTL"
     )
-    assert SPA_ACCESS_TOKEN_TTL < SPA_REFRESH_TOKEN_REUSE_WINDOW < SPA_REFRESH_TOKEN_TTL, (
+    assert (
+        SPA_ACCESS_TOKEN_TTL < SPA_REFRESH_TOKEN_REUSE_WINDOW < SPA_REFRESH_TOKEN_TTL
+    ), (
         "SPA reuse window must outlast a concurrent access token yet stay well "
         "under the full refresh TTL"
     )

@@ -240,6 +240,8 @@ The ``@mcp_tool`` decorator supports client-specific filtering and descriptions:
 
 - ``allowed_clients``: List of client types that can access this tool. If None, tool is available to all clients. Supported types: ``"chatgpt"``, ``"claude"``, ``"cursor"``, ``"mcp_inspector"``, ``"universal"``
 - ``client_descriptions``: Dict mapping client types to specific descriptions for safety and clarity
+- ``visibility_predicate``: Callable ``(actor) -> bool``; return ``False`` to omit the tool from ``tools/list`` for that actor (fail-closed on errors). Note that omitted tools can still be called via ``tools/call``, so gated tools must also enforce access control inside the hook. See :doc:`mcp-applications`.
+- ``description_predicate``: Callable ``(actor) -> str | None`` that overrides the tool description per actor; takes precedence over ``client_descriptions`` and the static ``description``. See :doc:`mcp-applications`.
 
 Runtime Context
 ---------------
@@ -280,6 +282,8 @@ Context Types
            mcp_context = runtime_context.get_mcp_context()
            trust_relationship = mcp_context.trust_relationship
            # Access client_name, client_version, etc.
+           session_id = mcp_context.transport_session_id  # per-connection id
+           live_client = mcp_context.client_info           # live clientInfo dict
 
        elif runtime_context.get_request_type() == "oauth2":
            oauth2_context = runtime_context.get_oauth2_context()
@@ -290,6 +294,21 @@ Context Types
            # Access session_id, user_agent, ip_address
 
 The runtime context is request-scoped and automatically managed by the framework.
+
+``MCPContext`` also exposes two per-session fields:
+
+- ``transport_session_id``: the value of the spec ``Mcp-Session-Id`` header,
+  identifying a single MCP connection. It is ``None`` when the transport
+  supplies no session id.
+- ``client_info``: the live ``clientInfo`` dict captured at that session's
+  ``initialize`` call, distinct from the trust relationship's cached
+  ``client_name``.
+
+``get_client_info_from_context()`` prefers the live per-session ``client_info``
+over the trust relationship's cached client name. Because the trust record is
+per-OAuth2-credential and is overwritten whenever a new session registers, this
+means two MCP sessions sharing a single OAuth2 credential no longer see each
+other's identity.
 
 Permissions
 -----------

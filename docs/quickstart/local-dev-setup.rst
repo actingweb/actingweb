@@ -24,8 +24,8 @@ Install
    # FastAPI integration + PostgreSQL
    pip install 'actingweb[fastapi,postgresql]'
 
-   # MCP-enabled (FastAPI + MCP + database)
-   pip install 'actingweb[fastapi,mcp,postgresql]'  # or dynamodb
+   # MCP-enabled (FastAPI + database); MCP support needs no extra
+   pip install 'actingweb[fastapi,postgresql]'  # or dynamodb
 
    # All extras (both backends, all integrations)
    pip install 'actingweb[all]'

@@ -828,6 +828,17 @@ Logout
        window.location.href = result.redirect_url;
    }
 
+.. note::
+
+   **Logout is a session action, not an account disconnect.** ``/oauth/logout``
+   revokes the ActingWeb session token and clears the stored identity-provider
+   token *locally* (so the backend can no longer call provider APIs on the user's
+   behalf). It does **not** call the provider's token-revocation endpoint. This is
+   deliberate: revoking the upstream grant for Sign in with Apple emails the user
+   and severs the grant, forcing a fresh consent prompt on the next login.
+   Provider-side revocation is reserved for an explicit account-disconnect / delete
+   flow. (Changed in 3.11.0.)
+
 Token Revocation
 ~~~~~~~~~~~~~~~~
 

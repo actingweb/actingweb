@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.11.0b7"
+version = "3.11.0"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@greger.io>"]
 maintainers = ["Greger Wedel <support@greger.io>"]
@@ -27,12 +27,12 @@ packages = [{ include = "actingweb" }]
 python = "^3.11"
 pynamodb = "^6.0"
 boto3 = ">=1.26"
-requests = ">=2.20"
+requests = ">=2.32.4"
 httpx = "^0.28"
 typing-extensions = ">=4.0"
-oauthlib = ">=3.2"
-cryptography = ">=43.0"
-pyjwt = { version = "^2.9", extras = ["crypto"] }
+oauthlib = ">=3.2.2"
+cryptography = ">=48.0.1"
+pyjwt = { version = "^2.13", extras = ["crypto"] }
 # PostgreSQL backend (optional)
 psycopg = { version = "^3.1", extras = ["binary", "pool"], optional = true }
 sqlalchemy = { version = "^2.0", optional = true }
@@ -41,7 +41,7 @@ alembic = { version = "^1.13", optional = true }
 flask = { version = ">=3.0", optional = true }
 werkzeug = { version = ">=3.0", optional = true }
 jinja2 = { version = ">=3.0", optional = true }
-fastapi = { version = ">=0.100", optional = true }
+fastapi = { version = ">=0.112", optional = true }
 pydantic = { version = "^2.0", optional = true }
 uvicorn = { version = ">=0.20", optional = true }
 

@@ -301,6 +301,110 @@ The ``@mcp_tool`` decorator supports additional parameters for enhanced function
     def search(actor, action_name, params):
         pass
 
+Per-Actor Tool Visibility and Descriptions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two ``@mcp_tool`` parameters accept callables that receive the resolved
+``ActorInterface`` for the current request, so a single tool definition can
+present differently per actor:
+
+.. code-block:: python
+
+    def _has_beta(actor) -> bool:
+        return bool(actor.properties.get("beta_enabled"))
+
+    @app.action_hook("beta_export")
+    @mcp_tool(
+        description="Export your data",
+        visibility_predicate=lambda actor: _has_beta(actor),
+        description_predicate=lambda actor: (
+            "Export your data (beta bulk export enabled)" if _has_beta(actor) else None
+        ),
+    )
+    def beta_export(actor, action_name, params):
+        if not _has_beta(actor):
+            return {"content": [{"type": "text", "text": "Not available"}], "isError": True}
+        return {"content": [{"type": "text", "text": "exported"}]}
+
+- ``visibility_predicate(actor) -> bool``: return ``False`` to omit the tool
+  from ``tools/list`` for actors that should not see it. If the predicate
+  raises, the tool is treated as not visible (fail-closed).
+
+- ``description_predicate(actor) -> str | None``: return a per-actor
+  description string, or ``None`` to fall back to the default. It takes
+  precedence over ``client_descriptions`` and the static ``description``. If
+  the predicate raises, ActingWeb falls back to the default description. This
+  is useful for feature-flagged tools whose description should mention a
+  feature only to actors who have it enabled, avoiding information leakage.
+
+.. warning::
+
+   ``visibility_predicate`` filters ``tools/list`` **only**. A tool omitted
+   from the listing can still be invoked by name via ``tools/call``. Any tool
+   that gates privileged behavior **must** also enforce access control at call
+   time inside the hook (as ``beta_export`` does above) — do not rely on
+   visibility filtering for authorization.
+
+Structured Tool Output
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the negotiated MCP protocol version is ``2025-06-18`` or newer, tool
+results can carry a machine-readable ``structuredContent`` field alongside the
+human-readable ``content``. ActingWeb normalizes a tool hook's return value as
+follows:
+
+- A dict containing ``content`` is treated as MCP-formatted. ``content`` and
+  ``isError`` are forwarded, and a hook-supplied ``_meta`` is preserved.
+- On a version that supports structured output, an explicit
+  ``structuredContent`` key is passed through unchanged; otherwise any *extra*
+  top-level keys (anything besides ``content``, ``isError``, ``_meta`` and
+  ``structuredContent``) are promoted into ``structuredContent``.
+- On older negotiated versions ``structuredContent`` is omitted entirely (the
+  payload is already carried by ``content``).
+
+.. code-block:: python
+
+    @app.action_hook("search")
+    @mcp_tool(
+        description="Search your notes",
+        output_schema={
+            "type": "object",
+            "properties": {"results": {"type": "array"}, "count": {"type": "integer"}},
+        },
+    )
+    def search(actor, action_name, params):
+        results = [...]
+        return {
+            "content": [{"type": "text", "text": f"Found {len(results)} results"}],
+            # Promoted into structuredContent on >= 2025-06-18:
+            "results": results,
+            "count": len(results),
+        }
+
+The ``title`` and ``output_schema`` set on ``@mcp_tool`` also surface in the
+``tools/list`` response as the ``title`` and ``outputSchema`` fields.
+
+Protocol Version Negotiation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``/mcp`` handler negotiates ``protocolVersion`` during ``initialize``. It
+echoes the client's requested version when it is supported, otherwise it
+returns the server's latest supported version (currently through
+``2025-11-25``). The negotiable revisions and version constants live in
+``actingweb/mcp/protocol.py``.
+
+On requests after ``initialize``, the handler honors the
+``MCP-Protocol-Version`` request header:
+
+- Header absent: assume ``2025-03-26`` (the value the HTTP transport spec
+  mandates as the default).
+- Header present but unsupported: respond with HTTP 400.
+- Header present and supported: use that version for version-gated response
+  fields such as ``structuredContent``.
+
+Negotiation is backward compatible with clients that speak only
+``2024-11-05``.
+
 MCP Prompts Implementation
 --------------------------
 

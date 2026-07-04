@@ -1247,6 +1247,11 @@ MCP Capability
   prefix (``emm:search`` vs ``actingweb:search``). Defaults to ``"actingweb"``.
   The first call sets the process-wide name; later changes won't rename
   already-created per-actor servers.
+- Set a server-level orientation string with
+  ``with_mcp(instructions="Start with the how_to_use() tool")``. It is emitted
+  on the MCP ``InitializeResult.instructions`` field and shown to the LLM on
+  initial connection — useful for pointing a new client at an entry-point tool.
+  Like ``server_name``, the first call wins for the process-wide singleton.
 
 Notes
 -----

@@ -13,10 +13,10 @@ Requirements
 .. code-block:: bash
 
    # pip
-   pip install 'actingweb[fastapi,mcp]'
+   pip install 'actingweb[fastapi]'
 
    # or with Poetry
-   poetry add actingweb -E fastapi -E mcp
+   poetry add actingweb -E fastapi
 
 Minimal App
 -----------

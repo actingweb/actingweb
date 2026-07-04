@@ -5,228 +5,24 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.11.0b7: June 21, 2026
-------------------------
+v3.11.0: July 4, 2026
+---------------------
 
-FIXED
-~~~~~
+3.11.0 rolls up everything developed since v3.10.1 (previously published as the
+``v3.10.2bN`` and ``v3.11.0bN`` pre-release lines). The theme is **authentication
+breadth and SPA/mobile session hardening**: Sign in with Apple, GitHub and native
+Google sign-in, native-mobile OAuth code/ticket exchange, a substantial hardening
+of the SPA refresh-token rotation flow, and a round of MCP protocol improvements.
+It also removes the vestigial optional MCP Python SDK dependency.
 
-- **Refresh-token reuse detection now revokes only the offending token family,
-  not every token for the actor.** When a rotating SPA refresh token was
-  presented again beyond the extended grace window (``> 60s``), the
-  ``/oauth/spa/token`` handler treated it as theft and called
-  ``revoke_all_tokens(actor_id)`` — invalidating *all* of the actor's access and
-  refresh tokens. A single stale token from one device (e.g. an iPad/Capacitor
-  app backgrounded for 30+ minutes, or a second app instance of the same actor)
-  therefore logged the user out everywhere, and clients that did not degrade the
-  resulting ``401`` to a login screen went blank ("white screen"). Refresh
-  tokens now carry a ``chain_id`` identifying their rotation *family*: rotation
-  propagates the parent's ``chain_id`` while each fresh login starts a new chain,
-  and reuse-after-grace now calls the new
-  ``OAuth2SessionManager.revoke_token_chain(actor_id, chain_id)`` to revoke only
-  that lineage (RFC 6819 token-family revocation). The actor's other
-  devices/sessions — which have their own ``chain_id`` — keep working. Legacy
-  refresh tokens minted before ``chain_id`` existed fall back to revoking only
-  the presented token, which still avoids the mass logout. The ``401`` body
-  changed from "all tokens revoked" to "session revoked for security".
-
-- **The refresh-token grace window now issues a full rotation instead of an
-  access-token-only response, fixing a delayed-lockout trap.** On
-  ``/oauth/spa/token``, reuse of an already-used refresh token within the
-  extended grace window (10–60s) previously returned a new access token but **no
-  new refresh token**. A client only reaches that path when its *stored* refresh
-  token is the already-used one (it dropped a prior rotation — e.g. a mobile
-  WebView suspended before persisting the rotated token). With no replacement
-  issued, it kept the used token and, one access-token lifetime (~1h) later,
-  presented it again past the grace window — a **guaranteed theft lockout**. The
-  whole grace window now issues a full rotation (new access + new refresh token
-  in the same ``chain_id``), so such a client recovers instead of being locked
-  out. The bounded security trade-off (a token reuser inside the grace window
-  now also receives a refresh token, not only a short-lived access token) is
-  caught by the chain-scoped reuse detection above: any later reuse across the
-  divergent branches revokes the whole family.
-
-- **Reuse-detection revocation now also revokes the chain's access tokens.** SPA
-  access tokens minted on refresh-token rotation are tagged with their
-  refresh-token family (``chain_id``), and ``revoke_token_chain`` now revokes
-  those access tokens alongside the refresh tokens. Previously a stolen access
-  token kept working until its full TTL (up to 1 hour) even after the theft
-  response. The initial login access token carries no ``chain_id`` and continues
-  to self-expire (≤ 1 hour), unchanged.
-
-ADDED
-~~~~~
-
-- **Bounded retention for used SPA refresh tokens + an efficient expiry purge.**
-  Two changes keep the (single, shared) SPA token bucket from growing without
-  bound — previously a used refresh token was retained for the full two-week TTL
-  and nothing ever deleted it (``cleanup_expired_tokens`` was never invoked, and
-  PostgreSQL has no native TTL):
-
-  - On rotation, a consumed refresh token's storage TTL is shortened from two
-    weeks to a bounded reuse-detection window
-    (``SPA_REFRESH_TOKEN_REUSE_WINDOW``, default 2 days). After the window a used
-    token is purged and a later replay reads as an expired token (rejected)
-    rather than triggering chain revocation — an acceptable, bounded detection
-    horizon that shrinks steady-state token volume ~7×.
-  - Self-contained purge — **no cron/Lambda required**. The
-    ``/oauth/spa/token`` endpoint opportunistically calls the new
-    ``OAuth2SessionManager.maybe_purge_expired_tokens()``, which runs at most
-    once per ``SPA_TOKEN_PURGE_INTERVAL`` (1 hour) per process via a
-    process-local throttle, so token-table growth is bounded by the library
-    itself. The underlying ``OAuth2SessionManager.purge_expired_tokens()`` /
-    backend ``DbAttribute.delete_expired(now_epoch=None, buckets=None)`` issues a
-    single set-based ``DELETE`` on PostgreSQL backed by the existing
-    ``idx_attributes_ttl`` partial index (O(expired rows), not O(all tokens)).
-    On **DynamoDB** the purge is a no-op: cleanup relies on the table's native
-    TTL on ``ttl_timestamp``, which must be enabled once per environment (see
-    ``docs/reference/database-backends.rst`` → "Expired Token Cleanup (TTL)").
-
-- **Indexed refresh-token family revocation (PostgreSQL).** ``revoke_token_chain``
-  previously loaded both shared token buckets and filtered by ``chain_id`` in
-  Python — O(all live tokens) at revocation time. It now delegates to a new
-  backend ``DbAttribute.delete_by_chain(actor_id, buckets, chain_id)``. On
-  PostgreSQL this is a single ``DELETE`` backed by a new partial expression index
-  ``idx_attributes_chain_id`` on ``(data ->> 'chain_id')`` — O(chain), a handful
-  of rows regardless of how large the shared token partition grows (**requires the
-  new Alembic migration ``d4e5f6a7b8c9``; run** ``alembic upgrade head``). On
-  DynamoDB it remains a bounded scan of the two token buckets (no GSI on the
-  JSON-embedded ``chain_id``); a GSI on a promoted top-level ``chain_id``
-  attribute is the documented optimization path for very large DynamoDB
-  deployments.
-
-- **``ActingWebApp.with_spa_redirect_origins(*origins)`` builder** — a fluent
-  way to allow additional SPA redirect origins for split-domain deployments
-  (previously only settable via ``Config.spa_redirect_origins``). Feeds the
-  ``/oauth/spa/authorize`` redirect_uri allowlist.
-
-- **``ActingWebApp.with_spa_cors_origins(*origins)`` builder** — restrict the CORS
-  ``Access-Control-Allow-Origin`` for the SPA OAuth endpoints (default ``"*"``).
-  Previously documented but never actually implemented; ``spa_cors_origins`` is
-  now a first-class ``Config`` attribute, and the CORS handler treats an empty
-  list as ``"*"`` (removing a latent ``IndexError``).
-
-v3.11.0b6: June 19, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **Logout no longer revokes the upstream identity-provider grant.** On
-  ``/oauth/logout`` (and the ``/oauth/spa/*`` session-token revoke), the
-  handler called the identity provider's token-revocation endpoint for any
-  provider that advertises a ``revocation_uri``. That was acceptable for
-  Google but wrong for **Apple**: hitting ``https://appleid.apple.com/auth/revoke``
-  emails the user ("… has revoked access to sign in with your Apple account")
-  and severs the Sign in with Apple grant entirely — the next login re-prompts
-  for name/email consent and the stored refresh token is invalidated. Logout is
-  a session action, not an account disconnect. The handler now clears the
-  stored provider token locally (so the backend can no longer call provider
-  APIs on the user's behalf) without contacting the provider. Provider-side
-  revocation is reserved for an explicit account-disconnect / delete flow.
-  (Renamed the internal helper ``_revoke_provider_token_for_actor`` →
-  ``_clear_provider_token_for_actor`` in both ``oauth2_endpoints`` and
-  ``oauth2_spa``.) The local clear now nulls every credential field written on
-  login — ``oauth_token``, ``oauth_token_expiry`` and ``oauth_token_timestamp``
-  — leaving only ``oauth_provider`` (identity metadata, not a credential).
-
-v3.11.0b5: June 17, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **Native ``mobile_ticket`` redemption is now race-free single-use.** The
-  deep-link ticket that completes the mobile sign-in flow
-  (``grant_type=mobile_ticket`` on ``/oauth/spa/token``) was consumed with a
-  non-atomic read-then-delete: ``MobileTicketStore.consume()`` fetched the
-  ticket, then issued an *unconditional* delete whose result it ignored. Two
-  simultaneous redemptions of the same ticket could therefore both read it
-  before either delete landed and each mint an independent session/token set
-  from a single user authentication. Consumption is now gated on an atomic
-  conditional delete — a new ``delete_attr_conditional`` attribute primitive
-  (PostgreSQL ``DELETE`` checking ``rowcount``; DynamoDB ``DeleteItem`` with an
-  ``attribute_exists`` condition) that reports success to exactly one caller.
-  Only that caller redeems the ticket; concurrent losers receive a 400 and no
-  tokens. The ticket's single-use deletion was already enforced for *sequential*
-  replays; this closes the *concurrent* replay window. The 300 s TTL is now also
-  enforced at redemption: ``consume()`` stamps an ``expires_at`` on the ticket
-  and refuses an out-of-window ticket even though the stored row outlives it
-  (the database TTL adds a clock-skew buffer and only purges the row later, as a
-  cleanup backstop). Concurrency and expiry regression tests added in
-  ``tests/test_oauth2_spa_mobile_ticket.py``.
-
-v3.11.0b4: June 17, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **Actor/trust deletion no longer recurses infinitely and exhausts the DB
-  connection pool.** Deleting an actor (or any OAuth2-client trust) triggered an
-  unbounded recursion: ``Trust.delete()`` called ``client_registry.delete_client()``
-  *before* removing the trust record, and ``delete_client()`` cascades back into
-  ``_delete_client_trust_relationship() -> delete_relationship() ->
-  delete_reciprocal_trust() -> Trust.delete()``. Because the trust record still
-  existed, each cascade re-discovered the same relationship and recursed until it
-  raised ``maximum recursion depth exceeded``. On the PostgreSQL backend each
-  recursion level checked out a pooled connection that was never returned, so a
-  single delete could self-deadlock the pool (``min=2, max=10``) and every
-  subsequent DB operation blocked for the full acquire timeout. The implicit
-  terminator (an early ``return False`` in ``delete_client`` when the client was
-  already gone from the global index) was removed in 3.11.0b1 (#105) to fix
-  orphaned clients, which exposed the latent cycle. ``Trust.delete()`` now deletes
-  the local trust record **first** and performs OAuth2 client cleanup afterwards,
-  so the cascade finds nothing to delete and terminates. Regression test added in
-  ``tests/test_trust_core.py``.
-
-v3.11.0b3: June 16, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **Cancelled SPA consent no longer renders a backend error page.** When a user
-  cancels (or the provider otherwise rejects) consent during an SPA login, the
-  provider redirects back with ``error=access_denied`` and no authorization code.
-  The OAuth callback previously returned a backend error response, which renders
-  ``aw-root-failed.html`` (a 500 in apps that don't ship that template) — the
-  wrong surface for a single-page app. The callback now detects ``spa_mode`` from
-  the OAuth ``state`` and bounces the error back to the SPA's callback URL as
-  ``error`` / ``error_description`` query params, so the app can show a friendly
-  message and a "Try again" button. The SPA redirect target is validated with
-  ``is_safe_spa_redirect`` and falls back to the configured root when missing or
-  untrusted; existing query params on the callback URL are preserved. Apple's
-  ``response_mode=form_post`` callback (``POST /oauth/callback/apple``) gets the
-  same treatment, peeking ``spa_mode`` from the consumed server-side state nonce.
-
-v3.11.0b2: June 15, 2026
-------------------------
-
-FIXED
-~~~~~
-
-- **GitHub display names now populate after sign-in.** GitHub's userinfo carries
-  the profile name in ``name`` (not ``display_name``), so the ``oauth_success``
-  hook previously found no display name and stored nothing. Both OAuth callback
-  paths — the standard web-login redirect callback and the SPA-via-callback login
-  — now run ``user_info`` through the shared ``normalize_user_info`` helper before
-  invoking the hook, matching the SPA token-exchange path. The normalizer falls
-  back to the GitHub ``login`` (username) when a user has no profile name set
-  (``name`` is optional but ``login`` is always present); this fallback is gated
-  to GitHub so other providers' ``login`` fields are not mistaken for a display
-  name. The helper moved to ``actingweb/handlers/oauth2_utils.py`` so both handler
-  modules can share it without a circular import.
-
-v3.11.0b1: June 15, 2026
-------------------------
-
-This release rolls up everything developed since v3.10.1 (previously published as
-the abandoned ``v3.10.2bN`` pre-release line). Because the native mobile / multi-
-provider sign-in work is too large for a patch release, it ships as the 3.11.0
-minor line instead of 3.10.2. Notes below describe the net change from v3.10.1;
-fixes to functionality introduced within this same window have been folded into
-the feature that introduced them rather than listed separately.
+Almost all of 3.11.0 is additive and backward compatible. The items that need
+action when upgrading from 3.10 are collected in
+``docs/migration/v3.11.rst`` — in short: PostgreSQL users run one new Alembic
+migration; DynamoDB users confirm native TTL is enabled; split-domain SPA
+deployments set ``spa_redirect_origins``; SPA/mobile clients review the
+refresh-token contract. The notes below describe the **net change from v3.10.1**;
+fixes to functionality introduced within this same pre-release window are folded
+into the feature that introduced them rather than listed separately.
 
 ADDED
 ~~~~~
@@ -241,7 +37,15 @@ Native mobile and multi-provider sign-in:
   Apple's JWKS (no userinfo endpoint). The ``.p8`` key is supplied via
   ``private_key_path`` / ``APPLE_PRIVATE_KEY_PATH`` (file wins) or
   ``private_key_pem`` / ``APPLE_PRIVATE_KEY_PEM`` and is validated eagerly at
-  config-build time.
+  config-build time. See ``docs/guides/apple-sign-in.rst``.
+- **New ``app.with_github(...)`` builder** mirroring ``with_apple_sign_in`` /
+  ``with_google_native``: fills in GitHub's endpoints and, with
+  ``mobile_redirect_uri``, registers a ``github-mobile`` provider that uses the
+  server-side ticket flow (GitHub issues no OIDC ``id_token``, so it cannot use
+  the JWT-bearer grant).
+- **New ``app.with_google_native(...)`` builder** for native Google sign-in via
+  the JWT-bearer grant (accepts explicit ``audiences`` or derives them from the
+  per-platform client IDs).
 - **Native mobile OAuth code exchange**: the ``authorization_code`` grant on
   ``POST /oauth/spa/token`` lets native mobile apps exchange an OAuth code received
   via deep link for ActingWeb SPA tokens (RFC 8252). ``exchange_code_for_token()``
@@ -255,37 +59,76 @@ Native mobile and multi-provider sign-in:
   apps exchange a provider ``id_token`` (``assertion``) plus ``nonce`` for an
   ActingWeb session. The validator is dispatched by the declared ``provider`` and
   the token ``iss`` must match it; single-use replay protection is enforced.
-- **New ``app.with_google_native(...)`` builder** for native Google sign-in via
-  the JWT-bearer grant (accepts explicit ``audiences`` or derives them from the
-  per-platform client IDs).
-- **Apple nonce hashing handled by the library.** Apple's native flow puts
-  ``SHA256(nonce)`` (hex) in the id_token's ``nonce`` claim while Google echoes
-  it verbatim. The Apple id_token validator now accepts either the raw nonce or
-  its SHA-256, so apps pass the **same raw nonce** to the JWT-bearer grant for
-  every provider instead of pre-hashing per provider. Google validation stays a
-  strict verbatim match.
-- **New POST ``/oauth/callback/apple`` endpoint** for Apple's
-  ``response_mode=form_post`` callback, protected by a server-side single-use
-  state nonce (CSRF-safe without relying on SameSite cookies).
 - **New ``mobile_ticket`` grant** (generalized from the original Apple-only
   ``apple_mobile_ticket``, which remains as an alias): any native-mobile provider
   whose authorization response lands on the HTTPS callback is handed an opaque
   single-use deep-link ticket and the code is exchanged server-side — no IdP code
   and no ActingWeb token ever rides the deep link. Used by Apple-on-Android and
-  GitHub mobile.
-- **New ``app.with_github(...)`` builder** mirroring ``with_apple_sign_in`` /
-  ``with_google_native``: fills in GitHub's endpoints and, with
-  ``mobile_redirect_uri``, registers a ``github-mobile`` provider that uses the
-  server-side ticket flow (GitHub issues no OIDC ``id_token``, so it cannot use
-  the JWT-bearer grant).
+  GitHub mobile. Redemption is atomic and race-free single-use (a conditional
+  delete reports success to exactly one caller, closing the concurrent-replay
+  window), and the 300 s TTL is enforced at redemption.
+- **Apple nonce hashing handled by the library.** Apple's native flow puts
+  ``SHA256(nonce)`` (hex) in the id_token's ``nonce`` claim while Google echoes
+  it verbatim. The Apple id_token validator accepts either the raw nonce or its
+  SHA-256, so apps pass the **same raw nonce** to the JWT-bearer grant for every
+  provider instead of pre-hashing per provider. Google validation stays a strict
+  verbatim match.
+- **New POST ``/oauth/callback/apple`` endpoint** for Apple's
+  ``response_mode=form_post`` callback, protected by a server-side single-use
+  state nonce (CSRF-safe without relying on SameSite cookies).
 - **Normalized ``user_info`` shape on the ``oauth_success`` hook**
   (``display_name`` / ``given_name`` / ``family_name`` / ``email`` / ``sub``
   plus passthrough) across all providers. Apple's first-sign-in ``user`` payload
-  (name) is merged before the hook fires.
+  (name) is merged before the hook fires. GitHub carries the profile name in
+  ``name`` (falling back to ``login`` when unset), normalized consistently across
+  the web-login, SPA-via-callback and token-exchange paths.
 - ``actor.store.oauth_provider`` is now written on **every** sign-in (create and
   existing-actor paths), so account-deletion / revocation logic can rely on it.
 - ``/oauth/config`` provider entries gain additive ``response_mode``
   (``form_post`` for Apple, ``query`` otherwise) and ``platform`` fields.
+
+SPA session hardening:
+
+- **``ActingWebApp.with_spa_redirect_origins(*origins)`` builder** — a fluent
+  way to allow additional SPA redirect origins for split-domain deployments
+  (previously only settable via ``Config.spa_redirect_origins``). Feeds the
+  ``/oauth/spa/authorize`` redirect_uri allowlist.
+- **``ActingWebApp.with_spa_cors_origins(*origins)`` builder** — restrict the CORS
+  ``Access-Control-Allow-Origin`` for the SPA OAuth endpoints (default ``"*"``).
+  ``spa_cors_origins`` is now a first-class ``Config`` attribute, and the CORS
+  handler treats an empty list as ``"*"``.
+- **Bounded retention for used SPA refresh tokens + an efficient expiry purge.**
+  Two changes keep the (single, shared) SPA token bucket from growing without
+  bound — previously a used refresh token was retained for the full two-week TTL
+  and nothing ever deleted it:
+
+  - On rotation, a consumed refresh token's storage TTL is shortened from two
+    weeks to a bounded reuse-detection window
+    (``SPA_REFRESH_TOKEN_REUSE_WINDOW``, default 2 days). After the window a used
+    token is purged and a later replay reads as an expired token (rejected)
+    rather than triggering chain revocation — an acceptable, bounded detection
+    horizon that shrinks steady-state token volume ~7×.
+  - Self-contained purge — **no cron/Lambda required**. The
+    ``/oauth/spa/token`` endpoint opportunistically calls the new
+    ``OAuth2SessionManager.maybe_purge_expired_tokens()``, which runs at most
+    once per ``SPA_TOKEN_PURGE_INTERVAL`` (1 hour) per process via a
+    process-local throttle. The underlying ``purge_expired_tokens()`` /
+    backend ``DbAttribute.delete_expired(now_epoch=None, buckets=None)`` issues a
+    single set-based ``DELETE`` on PostgreSQL backed by the existing
+    ``idx_attributes_ttl`` partial index (O(expired rows), not O(all tokens)).
+    On **DynamoDB** the purge is a no-op: cleanup relies on the table's native
+    TTL on ``ttl_timestamp``, which must be enabled once per environment (see
+    ``docs/reference/database-backends.rst`` → "Expired Token Cleanup (TTL)").
+- **Indexed refresh-token family revocation (PostgreSQL).**
+  ``revoke_token_chain`` delegates to a new backend
+  ``DbAttribute.delete_by_chain(actor_id, buckets, chain_id)``. On PostgreSQL
+  this is a single ``DELETE`` backed by a new partial expression index
+  ``idx_attributes_chain_id`` on ``(data ->> 'chain_id')`` — O(chain) regardless
+  of how large the shared token partition grows (**requires the new Alembic
+  migration ``d4e5f6a7b8c9``; run** ``alembic upgrade head``). On DynamoDB it
+  remains a bounded scan of the two token buckets (no GSI on the JSON-embedded
+  ``chain_id``); a GSI on a promoted top-level ``chain_id`` attribute is the
+  documented optimization path for very large DynamoDB deployments.
 
 MCP:
 
@@ -333,23 +176,39 @@ MCP:
   distinct from ``peer_id`` / ``trust_relationship`` (which are per-OAuth2-
   credential and shared across concurrent sessions on the same credential).
   ``transport_session_id`` is taken from the spec's ``Mcp-Session-Id`` header and
-  is ``None`` when the transport supplies none (callers then rely on the client-id
-  guard alone); ``client_info`` carries the live ``clientInfo`` captured at the
-  session's ``initialize`` call. ``get_client_info_from_context()`` prefers this
-  live per-session ``client_info`` so two MCP sessions sharing one OAuth2
-  credential no longer see each other's identity. Backward compatible: both fields
-  default to ``None``.
+  is ``None`` when the transport supplies none; ``client_info`` carries the live
+  ``clientInfo`` captured at the session's ``initialize`` call.
+  ``get_client_info_from_context()`` prefers this live per-session ``client_info``
+  so two MCP sessions sharing one OAuth2 credential no longer see each other's
+  identity. Backward compatible: both fields default to ``None``.
 
 CHANGED
 ~~~~~~~
 
 - ``PyJWT[crypto]`` is now a core dependency (required for Apple's ES256
   ``client_secret`` and RS256 ``id_token`` validation).
+- **FastAPI minimum raised to ``>=0.112``** (the ``fastapi`` extra). The FastAPI
+  integration uses the Starlette 1.0 request-first ``TemplateResponse`` signature
+  (adopted in 3.10.1), which requires Starlette ``>=1.0`` / FastAPI ``>=0.112``;
+  the dependency floor now matches, so ``actingweb[fastapi]`` can no longer resolve
+  an incompatible older FastAPI/Starlette that raised ``unhashable type: 'dict'``.
 - ``OAuth2Authenticator`` was refactored to a strategy pattern: provider-specific
   behavior now lives on ``OAuth2Provider`` subclasses
   (``GoogleOAuth2Provider`` / ``GitHubOAuth2Provider`` / ``AppleOAuth2Provider``).
   Public method signatures and the ``actingweb.oauth2.requests`` patch point are
   preserved — fully backward compatible.
+- **Logout no longer revokes the upstream identity-provider grant.** On
+  ``/oauth/logout`` (and the ``/oauth/spa/*`` session-token revoke), the handler
+  now clears the stored provider token **locally** (nulling ``oauth_token``,
+  ``oauth_token_expiry`` and ``oauth_token_timestamp``, leaving only the
+  ``oauth_provider`` identity metadata) instead of calling the provider's
+  token-revocation endpoint. The old behavior (added in 3.10.0) was acceptable for
+  Google but wrong for **Apple**: hitting Apple's revocation endpoint emails the
+  user and severs the Sign in with Apple grant entirely, re-prompting for consent
+  on the next login. Logout is a session action, not an account disconnect;
+  provider-side revocation is now reserved for an explicit account-disconnect /
+  delete flow. This supersedes the 3.10.0 "OAuth provider token revoked on logout"
+  behavior.
 - The MCP OAuth2 server now resolves authenticators on demand
   (``_get_authenticator(provider)``) instead of pre-instantiating Google/GitHub,
   so Apple is offered in the LLM-triggered authorization web form.
@@ -368,6 +227,48 @@ CHANGED
 FIXED
 ~~~~~
 
+- **SPA/mobile refresh-token reuse detection now revokes only the offending token
+  family, not every token for the actor.** Refresh tokens carry a ``chain_id``
+  identifying their rotation *family*: rotation propagates the parent's
+  ``chain_id`` while each fresh login starts a new chain, and reuse-after-grace
+  now calls ``OAuth2SessionManager.revoke_token_chain(actor_id, chain_id)`` to
+  revoke only that lineage (RFC 6819 token-family revocation), including the
+  chain's access tokens. Previously reuse called ``revoke_all_tokens(actor_id)``,
+  so a single stale token from one device logged the user out everywhere (and
+  clients that did not degrade the resulting ``401`` to a login screen went blank).
+  The actor's other devices/sessions keep working. Legacy refresh tokens minted
+  before ``chain_id`` existed fall back to revoking only the presented token.
+- **The refresh-token grace window now issues a full rotation instead of an
+  access-token-only response, fixing a delayed-lockout trap.** Reuse of an
+  already-used refresh token within the extended grace window now issues a full
+  rotation (new access + new refresh token in the same ``chain_id``), so a client
+  that dropped a prior rotation (e.g. a mobile WebView suspended before persisting
+  the rotated token) recovers instead of being locked out one access-token
+  lifetime later. Any later reuse across the divergent branches is caught by the
+  chain-scoped reuse detection above.
+- **``OAuth2SessionManager.revoke_all_tokens()`` no longer crashes** with
+  ``RuntimeError: dictionary changed size during iteration`` when an actor has a
+  matching token to revoke: both loops now snapshot ``list(<bucket>.items())``
+  before deleting.
+- **Cancelled SPA consent no longer renders a backend error page.** When a user
+  cancels consent during an SPA login, the provider redirects back with
+  ``error=access_denied`` and no authorization code. The OAuth callback now detects
+  ``spa_mode`` from the OAuth ``state`` and bounces the error back to the SPA's
+  callback URL as ``error`` / ``error_description`` query params (validated with
+  ``is_safe_spa_redirect``, falling back to the configured root), so the app can
+  show a friendly message instead of ``aw-root-failed.html`` / a 500. Apple's
+  ``response_mode=form_post`` callback gets the same treatment.
+- **Actor/trust deletion no longer recurses infinitely and exhausts the DB
+  connection pool.** ``Trust.delete()`` now deletes the local trust record
+  **first** and performs OAuth2 client cleanup afterwards, so the delete-client
+  cascade (``delete_client -> delete_relationship -> delete_reciprocal_trust ->
+  Trust.delete``) finds nothing to re-discover and terminates. Previously the
+  cascade recursed until ``maximum recursion depth exceeded``, and on PostgreSQL
+  each recursion level leaked a pooled connection, self-deadlocking the pool.
+- **OAuth2 client deletion (and trust deletion) no longer aborts** when the
+  best-effort global client index lookup misses: when the caller supplies the
+  authoritative ``actor_id`` (as trust deletion does), the client is deleted from
+  that actor's bucket regardless, preventing orphaned-but-listable clients.
 - **MCP ``tools/list`` now surfaces ``title`` and ``outputSchema``**: ``@mcp_tool``
   has long accepted ``title`` and ``output_schema``, but the ``/mcp``
   ``tools/list`` builder dropped both when constructing the tool definition. Hosts
@@ -379,21 +280,9 @@ FIXED
   (``MCPHandler``) and async (``AsyncMCPHandler``) handlers now share a single
   ``format_call_tool_result`` implementation, so both frameworks format tool-call
   responses identically.
-- **``OAuth2SessionManager.revoke_all_tokens()`` no longer crashes on the
-  refresh-token-reuse path**: it iterated the access- and refresh-token bucket
-  dicts while calling ``delete_attr`` inside the loop, raising
-  ``RuntimeError: dictionary changed size during iteration`` whenever an actor had
-  a matching token to revoke. Because ``revoke_all_tokens`` is invoked by the SPA
-  refresh-token reuse-detection path, reusing a rotated refresh token returned a
-  500 instead of cleanly revoking the actor's tokens. Both loops now snapshot
-  ``list(<bucket>.items())`` before deleting.
-- OAuth2 client deletion (and trust deletion) no longer aborts when the
-  best-effort global client index lookup misses: when the caller supplies the
-  authoritative ``actor_id`` (as trust deletion does), the client is deleted from
-  that actor's bucket regardless, preventing orphaned-but-listable clients.
 - A leftover debug log in the actor-by-creator lookup (``db.postgresql.actor`` and
-  ``db.dynamodb.actor``) was emitted at ``WARNING`` on every match — a hot path
-  during OAuth sign-in. It is now ``DEBUG`` with a clearer message.
+  ``db.dynamodb.actor``) that was emitted at ``WARNING`` on every match — a hot path
+  during OAuth sign-in — is now ``DEBUG`` with a clearer message.
 
 REMOVED
 ~~~~~~~
@@ -424,9 +313,17 @@ SECURITY
   rather than honoring an unsafe target. Previously an attacker who induced a
   victim to start an authorize flow with an attacker-controlled ``redirect_uri``
   could receive the victim's one-time session id and exchange it for tokens. This
-  affected all SPA providers (Google / GitHub / Apple). New
-  ``Config.spa_redirect_origins`` lets split-domain deployments allow additional
-  SPA origins.
+  affected all SPA providers (Google / GitHub / Apple).
+
+- **Raised the minimum versions of security-sensitive dependencies past known
+  vulnerable releases.** ``PyJWT >= 2.13`` (was ``^2.9``) clears CVE-2026-48523 —
+  an algorithm-allowlist bypass in the ``PyJWKClient`` / JWKS decode path, which
+  is exactly the flow the new native ``id_token`` validation (Apple / Google)
+  relies on. ``cryptography >= 48.0.1`` (was ``>= 43.0``), ``requests >= 2.32.4``
+  (was ``>= 2.20``; clears the proxy-``Authorization`` and ``.netrc`` credential
+  leaks and the ``verify=False`` persistence bug), and ``oauthlib >= 3.2.2``
+  (was ``>= 3.2``; clears the ``redirect_uri`` DoS CVE-2022-36087). These are
+  lower-bound raises only — they do not cap any dependency's upper version.
 
 v3.10.1: Apr 2, 2026
 ---------------------

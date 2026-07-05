@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Properties - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <div class="aw-nav">
+    <a href="{{ actor_www|default('') }}">&larr; Dashboard</a>
+  </div>
+  <h1>Properties</h1>
+
+  {% if properties %}
+    <div class="aw-table-wrap">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Value</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for name, value in properties.items() %}
+          {% set is_read_only = name in read_only_properties %}
+          {% set is_list = name in list_properties %}
+          <tr>
+            <td>
+              <a href="{{ actor_www|default('') }}/properties/{{ name }}">{{ name }}</a>
+              {% if is_read_only %}<span class="aw-badge">read-only</span>{% endif %}
+              {% if is_list %}<span class="aw-badge">list</span>{% endif %}
+            </td>
+            <td><code>{{ value|default('') }}</code></td>
+            <td>
+              {% if not is_read_only %}
+                <form class="aw-inline" method="get" action="{{ actor_www|default('') }}/properties/{{ name }}"
+                      onsubmit="return confirm('Delete property {{ name }}?');">
+                  <input type="hidden" name="_method" value="DELETE">
+                  <button type="submit" class="aw-btn aw-btn-danger">Delete</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  {% else %}
+    <p class="aw-muted">No properties yet.</p>
+  {% endif %}
+
+  <h2>Add property</h2>
+  <form method="post" action="{{ actor_www|default('') }}/properties">
+    <input type="hidden" name="property_type" value="simple">
+    <label for="property_name">Name</label>
+    <input type="text" id="property_name" name="property_name" required>
+    <label for="property_value">Value</label>
+    <input type="text" id="property_value" name="property_value" required>
+    <p></p>
+    <input type="submit" value="Save property">
+  </form>
+</div>
+{% endblock %}

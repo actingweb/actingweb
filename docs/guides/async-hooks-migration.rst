@@ -201,43 +201,46 @@ Example 3: Peer Communication with AwProxy
 
 **Before (Synchronous)**::
 
-   from actingweb.interface import AwProxy
+   from actingweb.aw_proxy import AwProxy
 
    @app.action_hook("notify_peers")
    def notify(actor, action_name, data):
-       proxy = AwProxy(config)
+       peers = actor.trust.relationships
 
-       for peer in actor.trust.get_peers():
+       for peer in peers:
+           proxy = AwProxy(
+               peer_target={"id": actor.id, "peerid": peer.peerid},
+               config=actor.config,
+           )
            # Blocks on each request
-           proxy.send_message(
-               peer_url=peer.url,
-               message=data["message"],
-               secret=peer.secret
+           proxy.create_resource(
+               path="callbacks/notification",
+               params={"message": data["message"]},
            )
 
-       return {"notified": len(actor.trust.get_peers())}
+       return {"notified": len(peers)}
 
 **After (Asynchronous)**::
 
-   from actingweb.interface import AwProxy
+   from actingweb.aw_proxy import AwProxy
    import asyncio
 
    @app.action_hook("notify_peers")
    async def notify(actor, action_name, data):
-       proxy = AwProxy(config)
-       peers = actor.trust.get_peers()
+       peers = actor.trust.relationships
 
-       # Send all messages concurrently
-       tasks = [
-           proxy.send_message_async(
-               peer_url=peer.url,
-               message=data["message"],
-               secret=peer.secret
+       async def notify_peer(peer):
+           proxy = AwProxy(
+               peer_target={"id": actor.id, "peerid": peer.peerid},
+               config=actor.config,
            )
-           for peer in peers
-       ]
+           return await proxy.create_resource_async(
+               path="callbacks/notification",
+               data={"message": data["message"]},
+           )
 
-       results = await asyncio.gather(*tasks)
+       # Send all notifications concurrently
+       results = await asyncio.gather(*[notify_peer(p) for p in peers])
        return {"notified": len([r for r in results if r is not None])}
 
 Mixed Sync and Async

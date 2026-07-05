@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Actor initialized - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <h1>Actor initialized</h1>
+  <p>Your actor <code>{{ id|default('') }}</code> is ready.</p>
+  <div class="aw-nav">
+    <a class="aw-btn" href="{{ actor_www|default('') }}">Go to dashboard</a>
+    <a class="aw-btn aw-btn-secondary" href="{{ actor_root|default('') }}">Actor root</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Sign in - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <h1>Sign in</h1>
+  {% if error %}<div class="aw-error">{{ error }}</div>{% endif %}
+
+  {% if oauth_enabled and oauth_providers %}
+    <p class="aw-muted">Continue with an identity provider:</p>
+    <div class="aw-nav">
+      {% for provider in oauth_providers %}
+        {% set purl = provider.get('url') if provider is mapping else '' %}
+        {% if purl %}
+          <a class="aw-btn" href="{{ purl }}">Sign in with {{ (provider.get('display_name') or provider.get('name') or 'provider') if provider is mapping else 'provider' }}</a>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% elif oauth_urls %}
+    <div class="aw-nav">
+      {% for name, purl in oauth_urls.items() %}
+        {% if purl %}<a class="aw-btn" href="{{ purl }}">Sign in with {{ name }}</a>{% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <h2>Or continue with your email</h2>
+  <form action="/" method="post">
+    <label for="creator">Email</label>
+    <input type="email" id="creator" name="creator" placeholder="you@example.com" autocomplete="email" required>
+    <p></p>
+    <input type="submit" value="Continue">
+  </form>
+</div>
+{% endblock %}

@@ -75,26 +75,28 @@ The ``AuthenticatedActorView`` class wraps an ``ActorInterface`` and enforces pe
 Creating Views
 --------------
 
+Prefer the ``actor.as_peer()`` / ``actor.as_client()`` factory methods shown
+above. They build the view for you and are the supported API. If you need to
+construct a view directly, pass an ``AuthContext`` (the accessor is a ``peer_id``
+**or** a ``client_id``, never both):
+
 .. code-block:: python
 
-    from actingweb.interface.authenticated_views import AuthenticatedActorView
-
-    # Create peer view
-    peer_view = AuthenticatedActorView(
-        actor_interface=actor,
-        accessor_id="peer123",
-        trust_relationship=trust_record,
-        is_peer=True,
-        is_client=False
+    from actingweb.interface.authenticated_views import (
+        AuthContext,
+        AuthenticatedActorView,
     )
 
-    # Create client view
+    # Peer view
+    peer_view = AuthenticatedActorView(
+        actor,
+        AuthContext(peer_id="peer123", trust_relationship=trust_record),
+    )
+
+    # Client view (OAuth2 / MCP)
     client_view = AuthenticatedActorView(
-        actor_interface=actor,
-        accessor_id="mcp_client_123",
-        trust_relationship=trust_record,
-        is_peer=False,
-        is_client=True
+        actor,
+        AuthContext(client_id="mcp_client_123", trust_relationship=trust_record),
     )
 
 Properties Access
@@ -231,8 +233,10 @@ The ``AuthenticatedActorView`` provides context about the accessor:
         # OAuth2/MCP client access
         pass
 
-    # Access underlying actor interface
-    core_actor = auth_view.actor_interface
+    # Identity of the accessor and the actor being viewed
+    accessor = auth_view.accessor_id     # peer_id or client_id
+    actor_id = auth_view.id
+    ctx = auth_view.auth_context
 
 Best Practices
 ==============
@@ -270,11 +274,11 @@ Best Practices
 
    .. code-block:: python
 
-       trust = actor.trust.get_relationship_by_peerid(peer_id)
-       if not trust or not trust.get("approved"):
+       trust = actor.trust.get_relationship(peer_id)
+       if not trust or not trust.approved:
            return self._unauthorized("No trust relationship")
 
-       auth_view = actor.as_peer(peer_id, trust)
+       auth_view = actor.as_peer(peer_id, trust.to_dict())
 
 See Also
 ========

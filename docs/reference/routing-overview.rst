@@ -116,6 +116,15 @@ and the ``with_web_ui()`` configuration:
 2. **Authenticated browsers** redirect to the appropriate UI endpoint based on
    whether the traditional web UI (``/www``) or SPA mode (``/app``) is configured.
 
+.. note::
+
+   "Authenticated" for the browser UI means an **OAuth2 browser session**. HTTP
+   **Basic auth** (creator + passphrase) authenticates the JSON API
+   (``/properties``, ``/trust``, ``/actions``, ...) but is **not** a browser
+   session: a Basic-auth request to ``/www`` is still redirected to ``/login`` /
+   OAuth. To view the web UI you must complete the OAuth flow, so a working
+   OAuth provider must be configured (``with_oauth(...)``).
+
 OAuth Callback Redirect Behavior
 --------------------------------
 

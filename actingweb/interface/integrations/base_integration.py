@@ -5,12 +5,27 @@ This module contains common handler selection logic, utility methods, and
 patterns used by both Flask and FastAPI integrations.
 """
 
+import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ...config import Config
     from ...handlers import base_handler
     from ..app import ActingWebApp
+
+
+def default_templates_dir() -> str:
+    """Absolute path to the library's built-in default web-UI templates.
+
+    ActingWeb ships a minimal set of templates (factory/create page, actor
+    dashboard, properties, trust, OAuth2 consent, ...) so that
+    ``with_web_ui(True)`` renders a working web UI out of the box. Applications
+    that provide their own template with the same filename always take
+    precedence over these defaults (see the loader wiring in each integration).
+    """
+    return os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "templates")
+    )
 
 
 class BaseActingWebIntegration:

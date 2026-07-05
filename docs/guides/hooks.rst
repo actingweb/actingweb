@@ -21,10 +21,18 @@ Property Hooks
    @app.property_hook("email")
    def handle_email(actor, operation, value, path):
        if operation == "get":
-           return value if actor.is_owner() else None  # hide from others
+           return value  # allow reads / transform here
        if operation in ("put", "post"):
            return value.lower() if "@" in value else None
        return value
+
+.. note::
+
+   Property hooks run for **every** accessor and cannot distinguish the owner
+   from a peer or client on their own. To restrict what a peer/client may read
+   or write, use the permission system and authenticated views
+   (:doc:`../sdk/authenticated-views`), not ``actor.is_owner()`` (a placeholder
+   that always returns ``True``).
 
 Method Hooks
 ------------

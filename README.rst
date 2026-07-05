@@ -1,6 +1,6 @@
-======================================================
-README - actingweb - an ActingWeb Library
-======================================================
+====================================================================
+ActingWeb — a Python framework for AI-ready, per-user micro-services
+====================================================================
 
 .. image:: https://github.com/actingweb/actingweb/actions/workflows/tests.yml/badge.svg
    :target: https://github.com/actingweb/actingweb/actions/workflows/tests.yml
@@ -18,337 +18,313 @@ README - actingweb - an ActingWeb Library
    :target: https://actingweb.readthedocs.io/en/latest/?badge=latest
    :alt: Documentation Status
 
-This is a python library implementation showcasing the REST-based `ActingWeb <http://actingweb.org>`_
-distributed micro-services model. A typical use case is bot to bot communication on a peer to peer level.
-It serves as the reference implementation for the `ActingWeb REST protocol
-specification <http://actingweb.readthedocs.io/en/release/>`_ for
-how such micro-services interact.
+**ActingWeb** is a Python framework for building secure, per-user services where
+each user gets their own isolated instance — an *actor* — with a unique URL, its
+own data, and its own set of relationships. It is the reference implementation of
+the `ActingWeb REST protocol <https://actingweb.readthedocs.io/>`_ for
+distributed micro-services, and it has grown into a full application framework for
+shipping the same backend to three kinds of clients at once:
 
-Repository and documentation
-----------------------------
+- **AI clients** over the `Model Context Protocol (MCP) <https://modelcontextprotocol.io>`_ —
+  expose per-user tools, prompts, and resources to ChatGPT, Claude, and other LLM
+  hosts, with OAuth2 authentication and per-user data isolation built in.
+- **Web apps** — a built-in server-rendered Web UI for simple deployments, or a
+  first-class **SPA mode** with a hardened token/refresh-token session flow for
+  React/Vue/Svelte front-ends.
+- **Native mobile apps** — iOS, Android, and Capacitor apps sign in with Apple,
+  Google, or GitHub using native OAuth flows (RFC 8252 code exchange, RFC 7523
+  JWT-bearer, and single-use deep-link tickets).
 
-The library is available as a PYPI library and installed with `pip install actingweb`. Project home is at
-`https://pypi.org/project/actingweb/ <https://pypi.org/project/actingweb/>`_.
+The same actor, the same properties, and the same trust and permission model back
+all three. You write your business logic once as hooks and it is reachable from an
+LLM tool call, a browser, a mobile app, or another ActingWeb service over REST.
 
-The git repository for this library can be found at
-`https://github.com/gregertw/actingweb <https://github.com/gregertw/actingweb>`_.
+Why ActingWeb?
+--------------
 
-The latest documentation for the released version (release branch) of this library can be found at 
-`http://actingweb.readthedocs.io/ <http://actingweb.readthedocs.io/>`_.
+ActingWeb is well suited to applications where **each individual user's data needs
+a high degree of security and privacy** *and* a high degree of controlled
+interaction with the outside world — personal AI assistants and memory services,
+IoT "things" that act on a user's behalf, and bot-to-bot / service-to-service
+data sharing where the user stays in control of who sees what.
 
-The master branch of the library has the latest features and bug fixes and the updated documentation can be found at
-`http://actingweb.readthedocs.io/en/master <http://actingweb.readthedocs.io/en/master>`_.
+Its defining constraint is that there is no way to query across users. Getting
+``xyz``'s data is a request to ``/{xyz}/...``; there is no endpoint that returns
+``xyz`` and ``yyz`` together. Sharing between users happens **only** through
+explicit, per-user trust relationships and the standardized ActingWeb REST
+protocol. This makes accidental data leakage structurally hard and makes granular,
+revocable sharing the default rather than an afterthought.
+
+Out of the box you get:
+
+- A REST **actor** representing one user's thing, service, or agent.
+- **Properties** — granular, per-actor key/value (and nested/list) storage exposed
+  over REST with per-property access hooks.
+- A **trust** system for per-user relationships with fine-grained permissions.
+- A **subscription** system so one actor can subscribe to another actor's changes.
+- **OAuth2 authentication** (Google, GitHub, Apple) for both humans and AI clients.
+- **MCP**, **Web UI / SPA**, and **native-mobile** front-ends over one backend.
+- Pluggable persistence: **DynamoDB** (serverless) or **PostgreSQL** (SQL).
+
+Quick example
+-------------
+
+.. code-block:: python
+
+    from actingweb.interface import ActingWebApp, ActorInterface
+    from actingweb.mcp import mcp_tool
+
+    app = (
+        ActingWebApp(
+            aw_type="urn:actingweb:example.com:myapp",
+            database="dynamodb",        # or "postgresql"
+            fqdn="myapp.example.com",
+        )
+        .with_oauth(client_id="...", client_secret="...")  # Google by default
+        .with_web_ui(enable=True)       # server-rendered UI (False for pure SPA)
+        .with_mcp(enable=True, server_name="myapp")         # AI clients over /mcp
+    )
+
+    # Lifecycle hook: initialize each new actor
+    @app.lifecycle_hook("actor_created")
+    def on_actor_created(actor: ActorInterface, **kwargs):
+        actor.properties.email = actor.creator
+
+    # Per-property access control
+    @app.property_hook("email")
+    def handle_email(actor, operation, value, path):
+        if operation == "get":
+            return None                 # hide email from external reads
+        return value
+
+    # An MCP tool — the same callable is reachable at GET/POST /<actor_id>/actions
+    @app.action_hook("search")
+    @mcp_tool(description="Search this actor's properties")
+    def search(actor: ActorInterface, action_name: str, data: dict):
+        q = str(data.get("query", "")).lower()
+        return "\n".join(f"{k}: {v}" for k, v in actor.properties.items()
+                         if q in k.lower() or q in str(v).lower())
+
+    # Wire into your web framework of choice
+    from fastapi import FastAPI
+    api = FastAPI()
+    app.integrate_fastapi(api)          # or app.integrate_flask(flask_app)
+
+The fluent ``ActingWebApp`` builder auto-generates every protocol route
+(``/properties``, ``/trust``, ``/subscriptions``, ``/callbacks``, ``/meta``,
+``/actions``, ``/methods``, the OAuth2 endpoints, and ``/mcp``) and wires your
+hooks in. You supply configuration and business logic; the framework supplies the
+protocol, auth, storage, and client surfaces.
+
+Installation
+------------
+
+ActingWeb requires **Python 3.11+**. Install from PyPI with the extras you need:
+
+.. code-block:: bash
+
+    # Minimal (no database backend or web framework)
+    pip install actingweb
+
+    # Pick a database backend
+    pip install 'actingweb[dynamodb]'
+    pip install 'actingweb[postgresql]'
+
+    # Pick a web framework integration
+    pip install 'actingweb[flask]'
+    pip install 'actingweb[fastapi]'
+
+    # Combine as needed
+    pip install 'actingweb[fastapi,postgresql]'
+
+    # Everything (both backends, both frameworks, MCP)
+    pip install 'actingweb[all]'
+
+Key capabilities
+----------------
+
+Fluent application builder
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``ActingWebApp`` configures the whole application through chained ``with_*``
+builders — OAuth providers, Web UI/SPA, MCP, database backend, indexed properties,
+subscription processing, peer caching, and more — then integrates with Flask or
+FastAPI in one call. Decorator-based hooks (``@app.lifecycle_hook``,
+``@app.property_hook``, ``@app.action_hook``, ``@app.method_hook``,
+``@app.subscription_hook``, ``@app.callback_hook``) replace the boilerplate
+subclassing of older ActingWeb apps.
+
+AI / MCP support
+^^^^^^^^^^^^^^^^
+
+``.with_mcp()`` exposes an authenticated MCP server at ``/mcp``. Action and method
+hooks annotated with ``@mcp_tool`` / ``@mcp_prompt`` become per-user MCP **tools**
+and **prompts**, with safety annotations and input schemas surfaced to the client.
+Because each MCP session is bound to an authenticated actor, an LLM only ever sees
+and mutates that one user's data. See ``docs/guides/mcp-applications.rst`` and
+``docs/guides/mcp-quickstart.rst``.
+
+Authentication: web, SPA, and native mobile
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+OAuth2 with Google, GitHub, and **Sign in with Apple** is built in, with email
+validation, encrypted-state CSRF protection, and login-hint support. Beyond the
+server-rendered login, ActingWeb ships a hardened session layer for rich clients:
+
+- **SPA mode** — ``/oauth/spa/*`` endpoints issue short-lived access tokens and
+  rotating refresh tokens with reuse detection, scoped chain revocation, bounded
+  retention, and a self-contained expiry purge (no cron/Lambda required).
+  ``with_spa_redirect_origins()`` / ``with_spa_cors_origins()`` support
+  split-domain deployments.
+- **Native mobile** — RFC 8252 authorization-code exchange, RFC 7523 JWT-bearer
+  grants (``with_google_native()``, ``with_apple_sign_in()``), and single-use
+  deep-link ``mobile_ticket`` grants (``with_github()`` and Apple-on-Android) so no
+  IdP code or ActingWeb token ever rides a deep link.
+
+See ``docs/guides/authentication.rst``, ``docs/guides/spa-authentication.rst``, and
+``docs/guides/apple-sign-in.rst``.
+
+Trust, permissions, and subscriptions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Per-user trust relationships carry fine-grained permissions that govern what a peer
+(or an AI client) may read, write, or call. Subscriptions let one actor be notified
+of another's changes, with sync or async callback delivery — use
+``.with_sync_callbacks()`` on Lambda/serverless so callbacks complete before the
+function freezes. See ``docs/guides/trust-relationships.rst``,
+``docs/guides/access-control.rst``, and ``docs/guides/subscriptions.rst``.
+
+Pluggable persistence
+^^^^^^^^^^^^^^^^^^^^^^
+
+Two production-ready backends behind a common protocol:
+
+- **DynamoDB** (default) — AWS-managed, auto-scaling, native TTL; ideal for
+  serverless. Uses PynamoDB / boto3.
+- **PostgreSQL** — PostgreSQL 12+ with Alembic migrations and connection pooling.
+  Install with the ``postgresql`` extra.
+
+Select with ``database="postgresql"`` or the ``DATABASE_BACKEND`` environment
+variable. Optional **property reverse-lookup tables** (``with_indexed_properties``)
+enable find-actor-by-property-value without GSI size limits. See
+``docs/reference/database-backends.rst``.
+
+The ActingWeb model
+-------------------
+
+The ActingWeb micro-services model defines bot-to-bot and
+service-to-service communication that allows extreme distribution of data and
+functionality — well suited to holding small pieces of sensitive data on behalf of
+a user or "thing" and sharing them in a granular, revocable way.
+
+The micro-services model
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The programming model focuses on representing exactly **one small set of
+functionality for exactly one user or entity**. The only way to reach that
+functionality is through the user's actor and its REST interface — for example
+``GET https://mini-app-url/{actor_id}/properties/location``. There is no
+cross-actor query, and the security model enforces access per actor: holding a
+token for one actor grants nothing on another. Any cross-actor behavior (``xyz``
+sharing location with ``yyz``) happens through the standardized ActingWeb REST
+protocol, so **any** service that speaks the protocol can interoperate.
+
+The REST protocol
+^^^^^^^^^^^^^^^^^
+
+Each actor exposes a set of standard endpoints under its root URL
+``https://mini-app-url/{actor_id}``:
+
+- ``/properties`` — attribute/value pairs (flat or nested JSON) to store the
+  actor's data.
+- ``/meta`` — a public structure so actors can discover each other's capabilities.
+- ``/trust`` — request, approve, and manage trust relationships with other actors.
+- ``/subscriptions`` — establish and manage subscriptions to another actor's paths
+  once a trust relationship exists.
+- ``/callbacks`` — verification during trust/subscription setup, subscription
+  delivery, and a hook for 3rd-party webhooks.
+- ``/resources`` — a skeleton for exposing arbitrary resources where
+  ``/properties`` does not fit.
+- ``/actions`` and ``/methods`` — application-defined operations (also surfaced as
+  MCP tools/prompts).
+- ``/oauth`` and ``/oauth/spa/*`` — OAuth2 flows tying an actor to an identity
+  provider for web, SPA, and native-mobile clients.
+
+The security model
+^^^^^^^^^^^^^^^^^^
+
+Trust is between **actors**, not applications. Each instance holding a user's
+sensitive data must be connected by a trust relationship to another actor — which
+need not be the same type of application. A location-sharing actor could, for
+example, establish trust with an emergency-services actor so responders can always
+locate the user, while every other relationship remains untouched and independently
+revocable.
+
+Trust is established either through an explicit OAuth flow (tying an actor to an
+account at Google, GitHub, Apple, etc.) or through a trust-request flow where one
+actor requests a relationship that another approves — interactively or
+programmatically over REST. The modern OAuth2 layer adds email validation,
+encrypted-state CSRF protection, provider auto-detection, and the SPA/native-mobile
+session hardening described above.
+
+See `https://actingweb.org/ <https://actingweb.org/>`_ for the model in depth.
+
+Documentation
+-------------
+
+Comprehensive documentation lives in ``docs/`` and is published at
+`https://actingweb.readthedocs.io/ <https://actingweb.readthedocs.io/>`_
+(``/en/master`` for the latest ``master`` branch).
+
+============================================  =========================================
+Topic                                         Location
+============================================  =========================================
+Quickstart & getting started                  ``docs/quickstart/``
+Configuration reference                       ``docs/quickstart/configuration.rst``
+Authentication & OAuth2                        ``docs/guides/authentication.rst``
+SPA authentication                             ``docs/guides/spa-authentication.rst``
+Sign in with Apple                             ``docs/guides/apple-sign-in.rst``
+Building MCP applications                      ``docs/guides/mcp-applications.rst``
+Web UI & routing                               ``docs/guides/web-ui.rst``, ``docs/reference/routing-overview.rst``
+Hooks reference                                ``docs/reference/hooks-reference.rst``
+Trust, access control, subscriptions           ``docs/guides/``
+Database backends                              ``docs/reference/database-backends.rst``
+SDK & developer API                            ``docs/sdk/``
+============================================  =========================================
+
+Repository and links
+---------------------
+
+- **PyPI**: `https://pypi.org/project/actingweb/ <https://pypi.org/project/actingweb/>`_ (``pip install actingweb``)
+- **Source**: `https://github.com/actingweb/actingweb <https://github.com/actingweb/actingweb>`_
+- **Docs**: `https://actingweb.readthedocs.io/ <https://actingweb.readthedocs.io/>`_
+- **Protocol & project home**: `https://actingweb.org/ <https://actingweb.org/>`_
+- **Example application**: `https://github.com/actingweb/actingwebdemo <https://github.com/actingweb/actingwebdemo>`_ —
+  a full reference app (MCP + Web/SPA + OAuth2) to develop against.
 
 Contributing
 ------------
 
-See ``CONTRIBUTING.rst`` for local setup, dev workflow, testing, coding standards, and devtest endpoint usage.
+See ``CONTRIBUTING.rst`` for local setup, the development workflow, testing, and
+coding standards. In short:
 
-Public Demo Application
------------------------
+.. code-block:: bash
 
-For a full example application and reference while developing, see the public demo repo:
-https://github.com/actingweb/actingwebdemo
+    poetry install --extras all      # install with all optional backends/integrations
+    poetry run pyright actingweb tests   # type checking — must be 0 errors
+    poetry run ruff check actingweb tests # linting — must pass
+    make test-all-parallel               # run the full test suite (900+ tests)
 
+ActingWeb holds a zero-tolerance quality standard: type hints on all functions,
+Pyright clean, Ruff clean, and 100% of tests passing before merge.
 
-Why use actingweb?
----------------------
-ActingWeb is well suited for applications where each individual user's data and functionality both needs high degree
-of security and privacy AND high degree of interactions with the outside world. Typical use cases are Internet of Things
-where each user's "Thing" becomes a bot that interacts with the outside world, as well as bot to bot
-communication where each user can get a dedicated, controllable bot talking to other user's bots.
+Releases are decoupled from PRs — PRs merge to ``master`` without version bumps,
+and maintainers cut releases by tagging (``vX.Y.Z``), which triggers CI to publish
+to PyPI. See ``CLAUDE.md`` and ``CHANGELOG.rst`` for the release process and history.
 
-As a developer, you get a set of out of the box functionality from the ActingWeb library:
+License
+-------
 
-- an out-of-the-box REST bot representing each user's thing, service, or functionality (your choice)
-- a way to store and expose data over REST in a very granular way using properties
-- a trust system that allows creation of relationships the user's bot on the user level
-- a subscription system that allows one bot (user) to subscribe to another bot's (user's) changes
-- an oauth framework to tie the bot to any other API service and thus allow user to user communication using
-    individual user's data from the API service
-
-There is a high degree of configurability in what to expose, and although the ActingWeb specification specifies
-a protocol set to allow bots from different developers to talk to each other, not all functionality needs to be
-exposed.`
-
-Each user's indvidual bot is called an ``actor`` and this actor has its own root URL where its data and services are
-exposed. See below for further details.
-
-Features of actingweb library
-----------------------------------
-The latest code in master is at all times deployed to
-`https://actingwebdemo.greger.io/ <https://actingwebdemo.greger.io/>`_
-It has implemented a simple sign-up page as a front-end to a REST-based factory URL that will instantiate a
-new actor with a guid to identify the actor. The guid is then embedded in the actor's root URL, e.g.
-``https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54``.
-
-**Modern Interface (v3.2+)**
-
-The library now provides a modern fluent API interface that simplifies application development:
-
-::
-
-    from actingweb.interface import ActingWebApp, ActorInterface
-
-    # Modern fluent configuration API
-    app = (
-        ActingWebApp(
-            aw_type="urn:actingweb:example.com:myapp",
-            database="postgresql",  # or "dynamodb" (default)
-            fqdn="myapp.example.com"
-        )
-        .with_oauth(
-            client_id="your-oauth-client-id",
-            client_secret="your-oauth-client-secret"
-        )
-        .with_web_ui(enable=True)
-        .with_mcp(enable=True)  # Enable Model Context Protocol
-    )
-
-    # Decorator-based hooks instead of classes
-    @app.lifecycle_hook("actor_created")
-    def on_actor_created(actor: ActorInterface, **kwargs):
-        # Initialize new actors
-        actor.properties.email = actor.creator
-
-    @app.property_hook("email")
-    def handle_email_property(actor, operation, value, path):
-        if operation == "get":
-            return None  # Hide email from external access
-        return value
-
-    # Automatic Flask/FastAPI integration
-    from flask import Flask
-    flask_app = Flask(__name__)
-    app.integrate_flask(flask_app)  # Auto-generates all routes
-
-**Key Modern Features:**
-- **Multiple Database Backends**: Choose between DynamoDB (serverless, auto-scaling) or PostgreSQL (SQL, cost-effective)
-- **OAuth2 Authentication**: Modern OAuth2 with Google/GitHub support, email validation, and CSRF protection
-- **Flask/FastAPI Integration**: Automatic route generation with async support for FastAPI
-- **MCP Support**: Model Context Protocol integration for AI language model interactions
-- **Content Negotiation**: Automatic JSON/HTML responses based on client preferences
-- **Type Safety**: Comprehensive type hints and mypy support
-- **90% Less Boilerplate**: Fluent API eliminates repetitive configuration code
-
-If you try to create an actor, you will get to a simple web front-end where you can set the actor's data
-(properties) and delete the actor. You can later access the actor (both /www and REST) by using the Creator
-you set as username and the passphrase you get when creating the actor and log in.
-
-**acting-web-gae-library** is a close to complete implementation of the full ActingWeb specification where all
-functionality can be accessed through the actor's root URL (e.g.
-``https://actingwebdemo.greger.io/9f1c331a3e3b5cf38d4c3600a2ab5d54``):
-
-- ``/properties``: attributed/value pairs as flat or nested json can be set, accessed, and deleted to store this actor's data
-- ``/meta``: a publicly available json structure allowing actor's to discover each other's capabilities
-- ``/trust``: access to requesting, approving, and managing trust relationships with other actors of either the same type or any other actor "talking actingweb"
-- ``/subscriptions``: once a trust relationship is set up, this path allows access to establishing, retrieving, and managing subscriptions that are based on paths and identified with target, sub-target, and resource, e.g. ``/resources/folders/12345``
-- ``/callbacks``: used for verification when establishing trust/subscriptions, to receive callbacks on subscriptions, as well as a programming hook to process webhooks from 3rd party services
-- ``/resources``: a skeleton to simplify exposure of any type of resource (where /properties is not suited)
-- ``/oauth``: used to initiate a www-based oauth flow to tie the actor to a specific OAuth user and service. Available if OAuth is turned on and a 3rd party OAuth service has been configured. The modern interface supports both legacy OAuth and OAuth2 with enhanced security features including email validation and CSRF protection
-
-**Sidenote**: The **actingweb  library** also implements a simple mechanism for protecting the /www path with oauth
-(not in the specification). On successful OAuth authorisation, it will set a browser cookie to the oauth
-token. This is not used in the inline demo and requires also that the identity of the user authorising OAuth
-access is the same user already tied to the instantiated actor. There is a programming hook that allows such
-verification as part of the OAuth flow, but it is not enabled in the actingwebdemo mini-application.
-
-Other applications using the actingweb library
----------------------------------------------------
-There is also another demo application available for `Cisco Webex Teams <http://https://www.webex.com/products/teams>`_
-. It uses the actingweb library to implement a Webex Teams bot and integration. If you have signed up as a
-Cisco Webex Teams user, you can try it out by sending a message to armyknife@webex.bot.
-
-More details about the Army Knife can be found on `this blog <http://stuff.ttwedel.no/tag/spark>`_
-.
-
-The ActingWeb Model
--------------------
-The ActingWeb micro-services model and protocol defines a bot-to-bot and micro-service-to-micro-service
-communication that allows extreme distribution of data and functionality. This makes it very suitable for
-holding small pieces of sensitive data on behalf of a user or "things" (as in Internet of Things).
-These sensitive data can then be used and shared in a very granular and controlled way through the secure
-and distributed ActingWeb REST protocol. This allows you to expose e.g. your location data from your phone
-directly on the Internet (protected by a security framework) and to be used by other services **on your choosing**.
-You can at any time revoke access to your data for one particular service without influencing anything else.
-
-The ActingWeb Micro-Services Model
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-The programming model in ActingWeb is based on an extreme focus on only representing one small set of functionality
-and for only one user or entity. This is achieved by not allowing any other way of calling the service
-(in ActingWeb called a "mini-application") than through a user and the mini-app's REST interface (a user's
-instance of a mini-application is called an *actor* in ActingWeb). From a practical point of view, getting xyz's
-location through the REST protocol is as simple as doing a GET ``http://mini-app-url/xyz/properties/location``.
-
-There is absolutely no way of getting xyz's and yyz's location information in one request, and the security model
-enforces access based on user (i.e. actor), so even if you have access to
-``http://mini-app-url/xyz/properties/location``, you may not have access to
-``http://mini-app-url/yyz/properties/location``.
-
-Any functionality desired across actors, for example xyz sharing location information with yyz
-**MUST** be done through the ActingWeb REST protocol. However, since the ActingWeb service-to-service
-REST protocol is standardised, **any** service implementing the protocol can easily share data with other services.
-
-The ActingWeb REST Protocol
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-The ActingWeb REST protocol specifies a set of default endpoints (like ``/properties``, ``/trust``,
-``/subscriptions`` etc) that are used to implement the service-to-service communication, as well as a set of
-suggested endpoints (like ``/resources``, ``/actions`` etc) where the mini-applications can expose their own
-functionality. All exchanges are based on REST principles and a set of flows are built into the protocol that
-support exchanging data, establishing trust between actors (per actor, not per mini-application), as well as
-subscribing to changes.
-
-The ActingWeb Security Model
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-The security model is based on trust between actors, not mini-applications. This means that each instance of the
-mini-application holding the sensitive data for one particular person or thing **must** be connected through a trust
-relationship to another ActingWeb actor, but it doesn't have to be a mini-application of the same type (like location
-sharing), but could be a location sharing actor establishing a trust relationship with 911 authorities to
-allow emergency services to always be able to look you up.
-
-There are currently two ways of establishing trust between actors: either through an explicit OAuth flow where an
-actor is tied to somebody's account somewhere else (like Google, GitHub, Box.com, etc) or through a flow where one actor
-requests a trust relationship with another, which then needs to be approved either interactively by a user or
-programatically through the REST interface.
-
-**Enhanced OAuth2 Security (v3.2+):**
-The modern interface includes an enhanced OAuth2 system with additional security measures:
-
-- **Email Validation**: Prevents identity confusion attacks by validating that the OAuth2 email matches the form input
-- **State Parameter Encryption**: CSRF protection through encrypted state parameters
-- **Login Hint Support**: Improved user experience by pre-selecting the correct account during OAuth2 flow
-- **Provider Auto-detection**: Supports Google and GitHub with automatic configuration
-
-See `http://actingweb.org/ <http://actingweb.org/>`_ for more information.
-
-Requirements
-------------
-
-**Python 3.11+**
-
-The actingweb library requires Python 3.11 or higher and uses modern Python features including:
-
-- Type hints with union syntax (``str | None``)
-- F-string formatting
-- Modern enum classes for constants
-- Enhanced error handling with custom exception hierarchies
-
-**Database Backends:**
-
-ActingWeb supports two production-ready database backends:
-
-- **DynamoDB** (default) - AWS DynamoDB with auto-scaling and global tables support
-- **PostgreSQL** - PostgreSQL 12+ with Alembic migrations and connection pooling
-
-Core dependencies:
-
-- ``requests`` - HTTP client library
-
-Backend-specific dependencies (installed via extras):
-
-- **DynamoDB**: ``pynamodb`` (DynamoDB ORM), ``boto3`` (AWS SDK)
-- **PostgreSQL**: ``psycopg`` (PostgreSQL driver with connection pool), ``sqlalchemy`` (for Alembic), ``alembic`` (database migrations)
-
-Development dependencies:
-
-- ``pytest`` - Testing framework
-- ``mypy`` - Static type checker
-- ``black`` - Code formatter
-- ``ruff`` - Fast Python linter
-
-Building and installing
-------------------------
-
-::
-
-    # Install from PyPI (minimal, no database backend):
-    pip install actingweb
-
-    # Install with DynamoDB backend:
-    pip install 'actingweb[dynamodb]'
-
-    # Install with PostgreSQL backend:
-    pip install 'actingweb[postgresql]'
-
-    # Install with Flask/FastAPI integration:
-    pip install 'actingweb[flask,postgresql]'
-    pip install 'actingweb[fastapi,dynamodb]'
-
-    # Install all backends and integrations:
-    pip install 'actingweb[all]'
-
-    # For development with Poetry:
-    poetry install
-    poetry install --with dev,docs --extras all
-
-    # Build source and binary distributions:
-    poetry build
-
-    # Upload to test server:
-    poetry publish --repository pypitest --username=__token__ --password=<your-pypi-token>
-
-    # Upload to production server:
-    poetry publish --username=__token__ --password=<your-pypi-token>
-
-Version Bumping
-^^^^^^^^^^^^^^^
-
-When releasing a new version, update the version string in **three files**:
-
-1. ``pyproject.toml`` - ``version = "X.Y.Z"``
-2. ``actingweb/__init__.py`` - ``__version__ = "X.Y.Z"``
-3. ``CHANGELOG.rst`` - Add new version entry at the top
-
-Development
------------
-
-The library uses modern Python development practices with Poetry:
-
-::
-
-    # Install development dependencies:
-    poetry install --with dev,docs
-
-    # Install git hooks (recommended for contributors):
-    bash scripts/install-git-hooks.sh
-
-    # Run tests:
-    poetry run pytest
-
-    # Type checking:
-    poetry run mypy actingweb
-
-    # Code formatting:
-    poetry run black actingweb tests
-
-    # Linting:
-    poetry run ruff check actingweb tests
-
-    # Activate virtual environment:
-    poetry shell
-
-Git Hooks
-^^^^^^^^^
-
-The repository includes a pre-commit hook that automatically regenerates ``docs/requirements.txt``
-when ``pyproject.toml`` is modified. This ensures ReadTheDocs can build documentation with the
-correct dependencies.
-
-**Install the hook:**
-
-::
-
-    bash scripts/install-git-hooks.sh
-
-**What it does:**
-
-- Detects when ``pyproject.toml`` is changed in a commit
-- Runs ``poetry export --with docs --without-hashes -o docs/requirements.txt``
-- Automatically stages the updated ``docs/requirements.txt``
-- Fails the commit if export fails
-
-**Manual regeneration:**
-
-::
-
-    poetry export --with docs --without-hashes -o docs/requirements.txt
+BSD. See ``LICENSE``.
+</content>
+</invoke>

@@ -25,7 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from ... import request_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, services
-from .base_integration import BaseActingWebIntegration
+from .base_integration import BaseActingWebIntegration, default_templates_dir
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
@@ -514,9 +514,15 @@ class FastAPIIntegration(BaseActingWebIntegration):
     ):
         super().__init__(aw_app)
         self.fastapi_app = fastapi_app
-        self.templates = (
-            Jinja2Templates(directory=templates_dir) if templates_dir else None
-        )
+        # Always configure templates: the app-supplied directory (if any) is
+        # searched first so app templates override the library defaults, and the
+        # built-in defaults fill in the rest so with_web_ui(True) works out of
+        # the box.
+        template_dirs: list[str] = []
+        if templates_dir:
+            template_dirs.append(templates_dir)
+        template_dirs.append(default_templates_dir())
+        self.templates = Jinja2Templates(directory=template_dirs)
         self.logger = logging.getLogger(__name__)
         # Thread pool for running synchronous ActingWeb handlers
         # Size is configurable via ActingWebApp.with_thread_pool_workers()
@@ -598,6 +604,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.get("/")
         async def app_root_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             # GET requests don't require authentication - show email form
+            return await self._handle_factory_get_request(request)
+
+        # Login page - unauthenticated browsers are redirected here. Renders the
+        # same factory/sign-in page as "/" so the built-in web UI works out of
+        # the box.
+        @self.fastapi_app.get("/login")
+        async def app_login_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_factory_get_request(request)
 
         @self.fastapi_app.post("/")

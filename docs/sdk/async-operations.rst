@@ -23,36 +23,38 @@ The core ``Actor`` class provides these async methods:
 
     class Actor:
         # Peer information
-        async def get_peer_info_async(self, peer_id: str) -> Optional[Dict]
+        async def get_peer_info_async(self, url: str) -> Optional[Dict]
 
         # Trust operations
         async def modify_trust_and_notify_async(
-            self, peer_id: str, relationship: str, ...
+            self, relationship=None, peerid=None, baseuri="", ...
         ) -> bool
 
         async def create_reciprocal_trust_async(
-            self, peer_id: str, relationship: str, baseuri: str, ...
+            self, url, secret=None, desc="", relationship="", trust_type="",
         ) -> Optional[Dict]
 
         async def create_verified_trust_async(
-            self, peer_id: str, relationship: str, baseuri: str, verify_token: str, ...
+            self, baseuri="", peerid=None, approved=False, secret=None,
+            verification_token=None, trust_type=None, peer_approved=None,
+            relationship=None, desc="",
         ) -> Optional[Dict]
 
         async def delete_reciprocal_trust_async(
-            self, peer_id: str, ...
+            self, peerid=None, delete_peer=False,
         ) -> bool
 
         # Subscription operations
         async def create_remote_subscription_async(
-            self, peer_id: str, baseuri: str, callback_path: str, ...
+            self, peerid=None, target=None, subtarget=None, ...
         ) -> Optional[Dict]
 
         async def delete_remote_subscription_async(
-            self, peer_id: str, ...
+            self, peerid=None, subid=None,
         ) -> bool
 
         async def callback_subscription_async(
-            self, peer_id: str, diff_data: Dict, ...
+            self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None,
         ) -> bool
 
 TrustManager Async Methods
@@ -63,21 +65,16 @@ The ``TrustManager`` wraps these for easier use:
 .. code-block:: python
 
     class TrustManager:
-        async def create_reciprocal_trust_async(
-            self, peer_id: str, relationship: str, baseuri: str
+        async def create_relationship_async(
+            self, peer_url: str, relationship: str = "friend",
+            secret: str = "", description: str = "",
         ) -> Optional[TrustRelationship]
 
-        async def create_verified_trust_async(
-            self, peer_id: str, relationship: str, baseuri: str, verify_token: str
-        ) -> Optional[TrustRelationship]
+        async def approve_relationship_async(self, peer_id: str) -> bool
 
-        async def modify_and_notify_async(
-            self, peer_id: str, relationship: str
-        ) -> bool
+        async def delete_relationship_async(self, peer_id: str) -> bool
 
-        async def delete_peer_trust_async(
-            self, peer_id: str
-        ) -> bool
+        async def delete_all_relationships_async(self) -> bool
 
 SubscriptionManager Async Methods
 ---------------------------------
@@ -140,12 +137,10 @@ FastAPI Route with Async Trust Creation
         actor = get_actor(actor_id)
         actor_interface = ActorInterface(actor)
 
-        # Non-blocking peer communication
-        trust = await actor_interface.trust.create_verified_trust_async(
-            peer_id="new_peer",
+        # Non-blocking peer communication (initiates the reciprocal handshake)
+        trust = await actor_interface.trust.create_relationship_async(
+            peer_url=peer_baseuri,
             relationship="friend",
-            baseuri=peer_baseuri,
-            verify_token=generate_token()
         )
 
         if not trust:
@@ -163,11 +158,11 @@ Concurrent Peer Operations
     async def notify_all_peers(actor: ActorInterface, message: Dict):
         """Notify all trusted peers concurrently."""
 
-        peers = actor.trust.get_all_relationships()
+        peers = actor.trust.relationships
 
         async def notify_peer(peer):
             proxy = AwProxy(
-                peer_target={"id": actor.id, "peerid": peer["peerid"]},
+                peer_target={"id": actor.id, "peerid": peer.peerid},
                 config=actor.config
             )
             return await proxy.create_resource_async(
@@ -192,10 +187,9 @@ Async Subscription with Callback
         """Subscribe to a remote service."""
 
         # Create trust first
-        trust = await actor.trust.create_reciprocal_trust_async(
-            peer_id="service",
+        trust = await actor.trust.create_relationship_async(
+            peer_url=service_uri,
             relationship="service",
-            baseuri=service_uri
         )
 
         if not trust:
@@ -203,7 +197,7 @@ Async Subscription with Callback
 
         # Then subscribe (includes automatic baseline sync)
         subscription_url = await actor.subscriptions.subscribe_to_peer_async(
-            peer_id="service",
+            peer_id=trust.peer_id,
             target="properties",
             granularity="high"
         )
@@ -236,16 +230,14 @@ Async methods use ``httpx`` for non-blocking HTTP:
 Async via asyncio.to_thread
 ---------------------------
 
-Some methods wrap synchronous code with ``asyncio.to_thread``:
+Some async methods wrap synchronous code with ``asyncio.to_thread`` so that
+blocking work runs off the event loop:
 
 .. code-block:: python
 
-    async def create_verified_trust_async(self, ...):
-        # Runs sync method in thread pool
-        return await asyncio.to_thread(
-            self.create_verified_trust,
-            peer_id, relationship, baseuri, verify_token, ...
-        )
+    async def some_operation_async(self, *args):
+        # Runs the sync implementation in a thread pool
+        return await asyncio.to_thread(self.some_operation, *args)
 
 Timeout Handling
 ----------------
@@ -271,10 +263,10 @@ Best Practices
    .. code-block:: python
 
        # Good - non-blocking
-       trust = await actor.trust.create_reciprocal_trust_async(...)
+       trust = await actor.trust.create_relationship_async(peer_url=...)
 
        # Avoid in async context - blocks event loop
-       trust = actor.trust.create_reciprocal_trust(...)
+       trust = actor.trust.create_relationship(peer_url=...)
 
 2. **Use asyncio.gather for Concurrent Operations**
 
@@ -294,7 +286,7 @@ Best Practices
 
        try:
            result = await asyncio.wait_for(
-               actor.trust.create_verified_trust_async(...),
+               actor.trust.create_relationship_async(peer_url=...),
                timeout=60.0
            )
        except asyncio.TimeoutError:
@@ -307,11 +299,11 @@ Best Practices
 
        # In async function - use async variant
        async def handler():
-           trust = await actor.trust.create_reciprocal_trust_async(...)
+           trust = await actor.trust.create_relationship_async(peer_url=...)
 
        # In sync function - use sync variant
        def handler():
-           trust = actor.trust.create_reciprocal_trust(...)
+           trust = actor.trust.create_relationship(peer_url=...)
 
 5. **Consider Connection Pooling**
 

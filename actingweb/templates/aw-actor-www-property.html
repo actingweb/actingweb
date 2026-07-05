@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{{ property|default('Property') }} - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <div class="aw-nav">
+    <a href="{{ actor_www|default('') }}/properties">&larr; Properties</a>
+  </div>
+  <h1>
+    {{ property|default('Property') }}
+    {% if is_read_only %}<span class="aw-badge">read-only</span>{% endif %}
+    {% if is_list_property %}<span class="aw-badge">list</span>{% endif %}
+  </h1>
+
+  {% if qual == 'n' %}
+    <p class="aw-muted">Property not found.</p>
+    <p><a class="aw-btn aw-btn-secondary" href="{{ actor_www|default('') }}/properties">Back to properties</a></p>
+
+  {% elif is_list_property %}
+    {% if list_description %}<p>{{ list_description }}</p>{% endif %}
+    {% if list_explanation %}<p class="aw-muted">{{ list_explanation }}</p>{% endif %}
+    {% if list_items %}
+      <div class="aw-table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Item</th></tr></thead>
+        <tbody>
+          {% for item in list_items %}
+            <tr><td>{{ loop.index0 }}</td><td><code>{{ item }}</code></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% else %}
+      <p class="aw-muted">This list is empty.</p>
+    {% endif %}
+
+  {% else %}
+    <h2>Value</h2>
+    <pre>{{ value|default('') }}</pre>
+
+    {% if not is_read_only %}
+      <h2>Edit</h2>
+      <form method="post" action="{{ actor_www|default('') }}/properties/{{ property|default('') }}">
+        <label for="value">New value</label>
+        <input type="text" id="value" name="value" value="{{ raw_value|default('') }}">
+        <p></p>
+        <input type="submit" value="Update">
+      </form>
+
+      <h2>Delete</h2>
+      <form method="get" action="{{ actor_www|default('') }}/properties/{{ property|default('') }}"
+            onsubmit="return confirm('Delete property {{ property|default('') }}?');">
+        <input type="hidden" name="_method" value="DELETE">
+        <button type="submit" class="aw-btn aw-btn-danger">Delete property</button>
+      </form>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

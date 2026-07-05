@@ -19,8 +19,35 @@ Install
     # Everything (incl. MCP)
     pip install 'actingweb[all]'
 
-1) Minimal app (choose one)
+1) Start a database
+===================
+
+ActingWeb needs a database backend. For local development the quickest option is
+**DynamoDB Local** in Docker:
+
+.. code-block:: bash
+
+    docker run -p 8000:8000 amazon/dynamodb-local
+
+    # Point ActingWeb at it (dummy AWS creds are fine for the local emulator)
+    export AWS_DB_HOST=http://localhost:8000
+    export AWS_ACCESS_KEY_ID=local
+    export AWS_SECRET_ACCESS_KEY=local
+    export AWS_DEFAULT_REGION=us-east-1
+
+Prefer PostgreSQL? Set ``database="postgresql"`` (or ``DATABASE_BACKEND=postgresql``)
+and see :doc:`local-dev-setup` and :doc:`../reference/database-backends`. ActingWeb
+creates the tables it needs on first use.
+
+2) Minimal app (choose one)
 ===========================
+
+Both apps enable the built-in web UI with ``with_web_ui(True)``. ActingWeb ships
+default templates, so the sign-in/factory page, actor dashboard, properties, and
+trust pages render **out of the box** — no templates required. To customise the
+look, drop a same-named template into your app's ``templates/`` directory (Flask)
+or the ``templates_dir`` you pass to ``integrate_fastapi`` (FastAPI); yours
+overrides the library default.
 
 Flask
 -----
@@ -61,23 +88,26 @@ FastAPI
         fqdn="localhost:5000",
     ).with_web_ui(True)
 
-    aw.integrate_fastapi(api, templates_dir="templates")
+    aw.integrate_fastapi(api)  # add templates_dir="templates" to override defaults
 
     # Run with: uvicorn app_fastapi:api --reload --port 5000
 
-2) Create an actor
+3) Create an actor
 ==================
 
-Use the root factory page in the browser and follow the form, or create via API:
+Open ``http://localhost:5000/`` in a browser and use the built-in sign-in/factory
+page, or create one via the API:
 
 .. code-block:: bash
 
     # Create new actor (no auth in dev)
-    curl -X POST http://localhost:5000/
+    curl -X POST http://localhost:5000/ \
+      -H 'Content-Type: application/json' \
+      -d '{"creator": "you@example.com"}'
 
 The response contains the new actor ID. The actor root is ``http://localhost:5000/<actor_id>``.
 
-3) Explore
+4) Explore
 ==========
 
 - Web UI: ``/<actor_id>/www`` — dashboard, properties, and trust management

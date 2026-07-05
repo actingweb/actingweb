@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Trust - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <div class="aw-nav">
+    <a href="{{ actor_www|default('') }}">&larr; Dashboard</a>
+  </div>
+  <h1>Trust relationships</h1>
+  <p><a class="aw-btn" href="{{ actor_www|default('') }}/trust/new">New trust</a></p>
+
+  {% if trusts %}
+    <div class="aw-table-wrap">
+    <table>
+      <thead>
+        <tr><th>Peer</th><th>Relationship</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for t in trusts %}
+          {% set peerid = t.get('peerid', '') if t is mapping else '' %}
+          {% set rel = t.get('relationship', '') if t is mapping else '' %}
+          {% set approved = t.get('approved') if t is mapping else None %}
+          {% set verified = t.get('verified') if t is mapping else None %}
+          {% set approveuri = t.get('approveuri', '') if t is mapping else '' %}
+          {% set peer_uri = (t.get('baseuri') or t.get('peer_identifier') or '') if t is mapping else '' %}
+          {% set client_name = t.get('client_name') if t is mapping else None %}
+          {% set desc = t.get('desc') if t is mapping else None %}
+          <tr>
+            <td>
+              <code>{{ peerid }}</code>
+              {% if client_name %}<div class="aw-muted">{{ client_name }}</div>{% endif %}
+              {% if peer_uri %}<div class="aw-muted">{{ peer_uri }}</div>{% endif %}
+              {% if desc %}<div class="aw-muted">{{ desc }}</div>{% endif %}
+            </td>
+            <td>
+              {{ rel }}
+              {% if t is mapping and t.get('has_custom_permissions') %}<span class="aw-badge">custom perms</span>{% endif %}
+            </td>
+            <td>
+              {% if approved %}<span class="aw-badge">approved</span>{% else %}<span class="aw-badge">pending</span>{% endif %}
+              {% if verified %}<span class="aw-badge">verified</span>{% endif %}
+            </td>
+            <td>
+              <div class="aw-actions">
+                {% if not approved and approveuri %}
+                  <form class="aw-inline" method="get" action="{{ approveuri }}">
+                    <input type="hidden" name="_method" value="PUT">
+                    <input type="hidden" name="approved" value="true">
+                    <button type="submit" class="aw-btn">Approve</button>
+                  </form>
+                {% endif %}
+                {% if approveuri %}
+                  <form class="aw-inline" method="get" action="{{ approveuri }}"
+                        onsubmit="return confirm('Delete trust with {{ peerid }}?');">
+                    <input type="hidden" name="_method" value="DELETE">
+                    <button type="submit" class="aw-btn aw-btn-danger">Delete</button>
+                  </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  {% else %}
+    <p class="aw-muted">No trust relationships yet.</p>
+  {% endif %}
+</div>
+
+{% if oauth_clients %}
+<div class="aw-card">
+  <h2>OAuth2 clients</h2>
+  <div class="aw-table-wrap">
+  <table>
+    <thead><tr><th>Client</th><th>Type</th><th>Created</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for c in oauth_clients %}
+        <tr>
+          <td>
+            {{ c.get('client_name', '') if c is mapping else '' }}
+            <div class="aw-muted"><code>{{ c.get('client_id', '') if c is mapping else '' }}</code></div>
+          </td>
+          <td>{{ c.get('trust_type', '') if c is mapping else '' }}</td>
+          <td>{{ c.get('created_at', '') if c is mapping else '' }}</td>
+          <td>{{ c.get('status', '') if c is mapping else '' }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{% if trust_connections %}
+<div class="aw-card">
+  <h2>Connections</h2>
+  <div class="aw-table-wrap">
+  <table>
+    <thead><tr><th>Peer</th><th>Established via</th><th>Created</th><th>Last connected</th></tr></thead>
+    <tbody>
+      {% for conn in trust_connections %}
+        <tr>
+          <td><code>{{ conn.get('peerid', '') if conn is mapping else '' }}</code></td>
+          <td>{{ conn.get('established_via', '') if conn is mapping else '' }}</td>
+          <td>{{ conn.get('created_at', '') if conn is mapping else '' }}</td>
+          <td>
+            {{ conn.get('last_connected_at', '') if conn is mapping else '' }}
+            {% if conn is mapping and conn.get('last_connected_via') %}
+              <span class="aw-muted">({{ conn.get('last_connected_via') }})</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

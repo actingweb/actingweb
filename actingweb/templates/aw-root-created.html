@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Actor created - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <h1>Actor created</h1>
+  <p>Your actor has been created. Save the passphrase below &mdash; it is your
+     credential and will not be shown again.</p>
+
+  <table>
+    <tr><th>Actor ID</th><td><code>{{ id|default('') }}</code></td></tr>
+    <tr><th>Creator</th><td><code>{{ creator|default('') }}</code></td></tr>
+    <tr><th>Passphrase</th><td><code>{{ passphrase|default('') }}</code></td></tr>
+    {% if trustee_root %}<tr><th>Trustee root</th><td><code>{{ trustee_root }}</code></td></tr>{% endif %}
+  </table>
+
+  {% if id %}
+    <p><a class="aw-btn" href="/{{ id }}/www">Go to dashboard</a></p>
+  {% else %}
+    <p><a class="aw-btn aw-btn-secondary" href="/">Back to start</a></p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Something went wrong - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <h1>Something went wrong</h1>
+  <div class="aw-error">{{ error|default('The actor could not be created. Please try again.') }}</div>
+  <p><a class="aw-btn aw-btn-secondary" href="/">Back to start</a></p>
+</div>
+{% endblock %}

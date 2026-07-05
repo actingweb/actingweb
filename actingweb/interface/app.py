@@ -157,6 +157,13 @@ class ActingWebApp:
         self._config.www_auth = self._www_auth
         self._config.unique_creator = self._unique_creator
         self._config.force_email_prop_as_creator = self._force_email_prop_as_creator
+        # MCP configuration. Must be re-applied here because __init__ builds the
+        # Config eagerly (via _initialize_permission_system) before with_mcp()
+        # runs; without this, with_mcp(enable=..., server_name=..., instructions=)
+        # would be silently ignored on the cached config.
+        self._config.mcp = self._enable_mcp
+        self._config.mcp_server_name = self._mcp_server_name
+        self._config.mcp_instructions = self._mcp_instructions
         # OAuth configuration — multi-provider support
         if self._oauth_configs:
             # Build named providers (skip the empty-string default key)

@@ -79,10 +79,10 @@ class TestTemplateResponseWithContext:
 
 
 class TestTemplateResponseWithoutTemplates:
-    """Verify fallback when no templates directory is configured."""
+    """Verify the built-in default templates render when the app supplies none."""
 
-    def test_factory_get_returns_inline_html(self) -> None:
-        """GET / without templates_dir should return inline HTML fallback."""
+    def test_factory_get_renders_default_template(self) -> None:
+        """GET / without templates_dir renders the library's default factory page."""
         aw_app = (
             ActingWebApp(
                 aw_type="urn:actingweb:test",
@@ -94,10 +94,12 @@ class TestTemplateResponseWithoutTemplates:
             .with_devtest(enable=True)
         )
         app = FastAPI()
-        aw_app.integrate_fastapi(app)  # No templates_dir
+        aw_app.integrate_fastapi(app)  # No templates_dir -> library defaults
         client = TestClient(app)
 
         response = client.get("/")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
-        assert "Welcome to ActingWeb" in response.text
+        # The built-in default factory/sign-in template renders out of the box
+        assert "<form" in response.text
+        assert "Sign in - ActingWeb" in response.text

@@ -31,7 +31,10 @@ Create a basic ActingWeb application:
     @app.property_hook("email")
     def handle_email(actor, operation, value, path):
         if operation == "put":
-            return value.lower() if "@" in value else None
+            # value may be non-string or None on delete — guard before using it
+            if isinstance(value, str) and "@" in value:
+                return value.lower()
+            return None
         return value
 
     # Run the application
@@ -88,8 +91,11 @@ If you prefer FastAPI and do not need MCP features:
     # Explicitly disable MCP exposure for this app
     aw.with_mcp(enable=False)
 
-    # Auto-generate all ActingWeb routes under the FastAPI app
-    aw.integrate_fastapi(app, templates_dir="templates")
+    # Auto-generate all ActingWeb routes under the FastAPI app.
+    # templates_dir is optional — ActingWeb ships default web-UI templates, so
+    # the UI works out of the box. Pass templates_dir="templates" only to
+    # override individual templates with your own.
+    aw.integrate_fastapi(app)
 
     # Run with: uvicorn main:app --reload
 
@@ -107,8 +113,15 @@ Creating and managing actors is straightforward:
 
 .. code-block:: python
 
-    # Create a new actor
-    actor = ActorInterface.create(creator="user@example.com", config=config)
+    # Create a new actor (config comes from your ActingWebApp instance).
+    # Pass hooks=app.hooks so lifecycle hooks (e.g. "actor_created") fire on
+    # creation — without it, ActorInterface.create() creates the actor but runs
+    # no lifecycle hooks. (Creating over HTTP via the factory endpoint always
+    # runs the hooks.)
+    config = app.get_config()
+    actor = ActorInterface.create(
+        creator="user@example.com", config=config, hooks=app.hooks
+    )
 
     # Access properties
     actor.properties.email = "user@example.com"
@@ -131,6 +144,14 @@ Creating and managing actors is straightforward:
         target="properties",
         data={"status": "active"}
     )
+
+.. note::
+
+   Actors can also be created over REST via the factory endpoint
+   (``POST /`` with a JSON ``{"creator": "..."}`` body), which is how a browser
+   sign-up flow or an external client creates them. See
+   :doc:`overview` for the HTTP request/response. The factory path runs the
+   ``actor_created`` lifecycle hook automatically.
 
 Configuration
 -------------
@@ -194,11 +215,15 @@ Handle property access and validation:
     @app.property_hook("email")
     def handle_email_property(actor, operation, value, path):
         if operation == "get":
-            # Control who can see the email
-            return value if actor.is_owner() else None
+            # Reads/transforms happen here (runs for every accessor).
+            # Restrict who may read via the permission system / authenticated
+            # views, not from inside the hook — see the SDK docs.
+            return value
         elif operation == "put":
-            # Validate email format
-            return value.lower() if "@" in value else None
+            # Validate email format (value may be non-string or None)
+            if isinstance(value, str) and "@" in value:
+                return value.lower()
+            return None
         return value
 
     @app.property_hook("settings")
@@ -297,17 +322,23 @@ The modern hook system provides better organization, type safety, and testing ca
 Database Configuration
 -----------------------
 
-ActingWeb currently supports DynamoDB as the database backend. For local development, you can use DynamoDB Local:
+ActingWeb supports two production-ready database backends: **DynamoDB** (default)
+and **PostgreSQL**. Select one with the ``database`` argument (or the
+``DATABASE_BACKEND`` environment variable, which takes precedence):
 
 .. code-block:: python
 
     app = ActingWebApp(
         aw_type="urn:actingweb:example.com:myapp",
-        database="dynamodb",
+        database="dynamodb",   # or "postgresql"
         fqdn="localhost:5000"
     )
 
-For production, ensure your AWS credentials are properly configured and DynamoDB tables are created with the appropriate permissions.
+For the full backend comparison, PostgreSQL setup, and migration guidance, see
+:doc:`configuration` and :doc:`../reference/database-backends`.
+
+For production with DynamoDB, ensure your AWS credentials are properly configured
+and DynamoDB tables are created with the appropriate permissions.
 
 For DynamoDB Local, set the following environment variables before running your app:
 

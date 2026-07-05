@@ -29,7 +29,18 @@ Example:
     def email_guard(actor, operation, value, path):
         if operation in ("put", "post", "delete"):
             return None  # read-only
-        return value if actor.is_owner() else None  # hide from non-owner
+        return value  # allow reads / transform here
+
+.. warning::
+
+   Property hooks fire for **every** access to the property, regardless of who
+   is making the request — they cannot by themselves distinguish the owner from
+   a peer or an OAuth2/MCP client. Do **not** use ``actor.is_owner()`` as an
+   access guard: it is a placeholder that currently always returns ``True``. To
+   restrict what a peer or client may read or write, use the permission system
+   and the permission-enforcing authenticated views (:doc:`../sdk/authenticated-views`,
+   ``actor.as_peer()`` / ``actor.as_client()``), which evaluate per-accessor
+   permissions before the property hook runs.
 
 Callback Hooks
 ==============
@@ -235,7 +246,9 @@ Event Details
         def on_subscription_deleted(actor, peer_id, subscription_id, subscription_data, initiated_by_peer):
             if initiated_by_peer:
                 # Peer unsubscribed from us - revoke their permissions
-                actor.trust.update_permissions(peer_id, [])
+                from actingweb.trust_permissions import get_trust_permission_store
+                store = get_trust_permission_store(actor.config)
+                store.update_permissions(actor.id, peer_id, {"properties": []})
                 notify_user(actor, f"{peer_id} unsubscribed from your data")
 
 ``email_verification_required``
@@ -409,7 +422,7 @@ Use ``async def`` for hooks that need to call async services:
 - **Async HTTP clients** (aiohttp, httpx)
 - **Async database operations** (asyncpg, motor)
 - **Async AWS services** (aioboto3, async AWS Bedrock)
-- **Async AwProxy methods** (``send_message_async()``, ``fetch_property_async()``)
+- **Async AwProxy methods** (``get_resource_async()``, ``create_resource_async()``, ``change_resource_async()``, ``delete_resource_async()``)
 - **Any async I/O operations**
 
 Performance Benefits
@@ -439,18 +452,20 @@ Async Action Hooks
 
 .. code-block:: python
 
-    from actingweb.interface import AwProxy
+    from actingweb.aw_proxy import AwProxy
 
     @app.action_hook("send_notification")
     async def async_notify(actor, action_name, data):
         """Async action hook using AwProxy."""
-        proxy = AwProxy(config)
+        proxy = AwProxy(
+            peer_target={"id": actor.id, "peerid": data["peer_id"]},
+            config=actor.config,
+        )
 
         # Use async methods for peer communication
-        result = await proxy.send_message_async(
-            peer_url=data["peer_url"],
-            message=data["message"],
-            secret=actor.get_trust_secret(data["peer_id"])
+        result = await proxy.create_resource_async(
+            path="callbacks/notification",
+            data={"message": data["message"]},
         )
 
         return {"sent": result is not None}

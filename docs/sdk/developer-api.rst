@@ -42,10 +42,10 @@ In hook functions, you receive an ``ActorInterface`` instance:
         status = actor.properties.get("status")
 
         # Work with trust relationships
-        friends = actor.trust.get_relationships_by_type("friend")
+        friends = actor.trust.get_peers_by_relationship("friend")
 
         # Access subscriptions
-        subs = actor.subscriptions.list_subscriptions()
+        subs = actor.subscriptions.all_subscriptions
 
         return {"results": [...]}
 
@@ -57,13 +57,15 @@ The ``ActorInterface`` exposes several useful properties:
 .. code-block:: python
 
     actor.id              # Actor ID string
-    actor.type            # Actor type (urn:...)
     actor.creator         # Creator email/identifier
     actor.passphrase      # Actor passphrase
+    actor.url             # Actor root URL
     actor.config          # ActingWeb configuration object
     actor.properties      # PropertyStore instance
+    actor.property_lists  # ListPropertyStore instance (list-valued properties)
     actor.trust           # TrustManager instance
     actor.subscriptions   # SubscriptionManager instance
+    actor.services        # ServiceRegistry (third-party OAuth2 services)
 
 PropertyStore
 =============
@@ -117,11 +119,12 @@ When properties change, ActingWeb automatically:
     # This automatically generates a diff and notifies subscribers
     actor.properties["status"] = "active"
 
-To suppress notification for a specific change:
+To suppress notification for a specific change, use
+``set_without_notification()`` (``set()`` always notifies):
 
 .. code-block:: python
 
-    actor.properties.set("internal_flag", True, notify=False)
+    actor.properties.set_without_notification("internal_flag", True)
 
 JSON Serialization
 ------------------
@@ -135,10 +138,13 @@ PropertyStore automatically handles JSON serialization for non-string values:
     actor.properties["tags"] = ["python", "actingweb"]
     actor.properties["count"] = 42
 
-    # Retrieved as original types
+    # Structured values (dict/list) round-trip as their original type
     config = actor.properties.get("config")  # Returns dict
     tags = actor.properties.get("tags")      # Returns list
-    count = actor.properties.get("count")    # Returns int
+
+    # NOTE: bare scalars are stored and returned as strings — a stored int comes
+    # back as a str. Cast on read if you need the numeric type:
+    count = int(actor.properties.get("count", 0))
 
 TrustManager
 ============
@@ -150,60 +156,79 @@ Getting Trust Relationships
 
 .. code-block:: python
 
-    # Get all trust relationships
-    all_trusts = actor.trust.get_all_relationships()
+    # Get all trust relationships (property, not a method)
+    all_trusts = actor.trust.relationships
 
-    # Get by peer ID
-    trust = actor.trust.get_relationship_by_peerid("peer123")
+    # Only active / only pending relationships
+    active = actor.trust.active_relationships
+    pending = actor.trust.pending_relationships
+
+    # Get by peer ID (returns None if not found)
+    trust = actor.trust.get_relationship("peer123")
 
     # Get by relationship type
-    friends = actor.trust.get_relationships_by_type("friend")
-    colleagues = actor.trust.get_relationships_by_type("colleague")
+    friends = actor.trust.get_peers_by_relationship("friend")
+    colleagues = actor.trust.get_peers_by_relationship("colleague")
+
+    # Membership checks
+    if actor.trust.has_relationship_with("peer123"):
+        ...
 
 Creating Trust Relationships
 -----------------------------
 
+Use ``create_relationship()`` to initiate an outgoing trust with another actor.
+It performs the reciprocal handshake with the peer (an HTTP call), so prefer the
+``_async`` variant in async contexts (FastAPI):
+
 .. code-block:: python
 
-    # Create simple trust (local only)
+    # Create trust (initiates the reciprocal handshake with the peer)
     trust = actor.trust.create_relationship(
-        peer_id="peer123",
-        relationship_type="friend",
-        baseuri="https://peer.example.com/peer123",
-        desc="Alice's actor"
+        peer_url="https://peer.example.com/peer123",
+        relationship="friend",       # defaults to "friend"
+        secret="",                    # auto-generated if omitted
+        description="Alice's actor",
     )
 
-    # Create with peer notification
-    trust = await actor.trust.create_reciprocal_trust_async(
-        peer_id="peer123",
-        relationship_type="friend",
-        baseuri="https://peer.example.com/peer123"
+    # Async variant (non-blocking; use in FastAPI handlers)
+    trust = await actor.trust.create_relationship_async(
+        peer_url="https://peer.example.com/peer123",
+        relationship="friend",
     )
 
-    # Create verified trust (handshake protocol)
-    trust = await actor.trust.create_verified_trust_async(
-        peer_id="peer123",
-        relationship_type="friend",
-        baseuri="https://peer.example.com/peer123",
-        verify_token="secret-token-from-peer"
-    )
-
-Modifying Trust Relationships
-------------------------------
+To *accept* an incoming trust request initiated by another actor (the peer POSTs
+the trust details to you), use the synchronous ``create_verified_trust()``:
 
 .. code-block:: python
 
-    # Update relationship type
-    updated = actor.trust.modify_relationship(
+    trust = actor.trust.create_verified_trust(
+        baseuri="https://peer.example.com/peer123",
         peer_id="peer123",
-        relationship_type="colleague"  # Changed from "friend"
+        approved=True,
+        secret="shared-secret",
+        verification_token="token-from-peer",
+        trust_type="friend",
+        peer_approved=True,
+        relationship="friend",
     )
 
-    # Modify with peer notification
-    updated = await actor.trust.modify_and_notify_async(
+Approving and Modifying Trust Relationships
+--------------------------------------------
+
+.. code-block:: python
+
+    # Approve a pending incoming relationship
+    actor.trust.approve_relationship("peer123")          # or approve_relationship_async
+
+    # Change relationship attributes and notify the peer
+    updated = actor.trust.modify_and_notify(
         peer_id="peer123",
-        relationship_type="colleague"
+        relationship="colleague",
     )
+
+    # Local-only modification (no peer notification)
+    actor.trust.modify_trust(peer_id="peer123", relationship="colleague")
 
 Deleting Trust Relationships
 -----------------------------
@@ -213,24 +238,27 @@ Deleting Trust Relationships
     # Delete local trust only
     success = actor.trust.delete_relationship("peer123")
 
-    # Delete with peer notification
-    success = await actor.trust.delete_peer_trust_async("peer123")
+    # Delete and notify the peer (default notify_peer=True)
+    success = actor.trust.delete_peer_trust("peer123")
+
+    # Async local delete
+    success = await actor.trust.delete_relationship_async("peer123")
 
 Permission Checking
 -------------------
 
-Trust relationships include permission checking based on relationship type:
+Per-peer permissions are managed through the trust permission store rather than
+on the ``TrustManager`` itself. For read/write access decisions in application
+code, prefer the permission-enforcing :doc:`authenticated-views` (``as_peer`` /
+``as_client``), which evaluate permissions for you. To inspect or update the
+stored permissions directly:
 
 .. code-block:: python
 
-    # Check if peer can access a property
-    trust = actor.trust.get_relationship_by_peerid("peer123")
-    if trust:
-        can_read = actor.trust.check_property_permission(
-            trust,
-            "user_profile",
-            "read"
-        )
+    from actingweb.trust_permissions import get_trust_permission_store
+
+    store = get_trust_permission_store(actor.config)
+    perms = store.get_permissions(actor.id, "peer123")
 
 SubscriptionManager
 ===================
@@ -370,7 +398,9 @@ The ``subscription_deleted`` lifecycle hook fires when inbound subscriptions are
             logger.info(f"Revoked {peer_id}'s subscription")
 
         # Common cleanup: revoke permissions, clear cached data, etc.
-        actor.trust.update_permissions(peer_id, [])
+        from actingweb.trust_permissions import get_trust_permission_store
+        store = get_trust_permission_store(actor.config)
+        store.update_permissions(actor.id, peer_id, {"properties": []})
 
 See :doc:`../reference/hooks-reference` for full hook documentation.
 
@@ -398,10 +428,10 @@ Best Practices
    .. code-block:: python
 
        # Good - async, non-blocking
-       trust = await actor.trust.create_verified_trust_async(...)
+       trust = await actor.trust.create_relationship_async(peer_url=...)
 
-       # Avoid - sync, may block for seconds
-       trust = actor.trust.create_verified_trust(...)
+       # Avoid in async contexts - sync, may block for seconds
+       trust = actor.trust.create_relationship(peer_url=...)
 
 3. **Let PropertyStore Handle Serialization**
 
@@ -426,7 +456,7 @@ Best Practices
        actor.properties["status"] = "active"
 
        # Only suppress for internal state
-       actor.properties.set("_internal_flag", True, notify=False)
+       actor.properties.set_without_notification("_internal_flag", True)
 
 5. **Check Trust Before Accessing**
 
@@ -434,7 +464,7 @@ Best Practices
 
    .. code-block:: python
 
-       trust = actor.trust.get_relationship_by_peerid(peer_id)
+       trust = actor.trust.get_relationship(peer_id)
        if not trust:
            return {"error": "No trust relationship"}
 

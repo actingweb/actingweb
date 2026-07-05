@@ -53,6 +53,11 @@ Launch DynamoDB Local and configure environment:
 Notes:
 
 - The library auto-creates tables on first access through its PynamoDB models.
+  Table names are prefixed (default ``demo_actingweb``, e.g.
+  ``demo_actingweb_actors``; override with the ``AWS_DB_PREFIX`` environment
+  variable). During startup you may see benign ``DEBUG`` log lines about a
+  not-yet-existent table (e.g. ``demo_actingweb_subscription_suspensions``) as
+  each table is created lazily on first use — these are harmless.
 - For production, configure IAM and real AWS hosts (do not set ``AWS_DB_HOST``).
 
 Option 2: PostgreSQL (Recommended for New Projects)
@@ -83,7 +88,7 @@ Option 2: PostgreSQL (Recommended for New Projects)
 
    # 3. Download migration helper script (one-time setup)
    mkdir -p scripts
-   curl -o scripts/migrate_db.py https://raw.githubusercontent.com/actingweb/actingweb/main/scripts/migrate_db.py
+   curl -o scripts/migrate_db.py https://raw.githubusercontent.com/actingweb/actingweb/master/scripts/migrate_db.py
 
    # 4. Run migrations (REQUIRED before first use)
    python scripts/migrate_db.py upgrade head

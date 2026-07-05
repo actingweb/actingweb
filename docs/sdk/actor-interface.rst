@@ -38,8 +38,12 @@ Creating and Loading Actors
 
 .. code-block:: python
 
-   # Create
-   actor = ActorInterface.create(creator="user@example.com", config=app.get_config())
+   # Create. Pass hooks=app.hooks so lifecycle hooks (e.g. "actor_created")
+   # fire on creation; omit it and the actor is created but no lifecycle hook
+   # runs. (Creating over REST via the factory endpoint always runs the hooks.)
+   actor = ActorInterface.create(
+       creator="user@example.com", config=app.get_config(), hooks=app.hooks
+   )
 
    # Load by id
    actor2 = ActorInterface.get_by_id(actor.id, config=app.get_config())

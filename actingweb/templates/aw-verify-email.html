@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Email verification - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  {% if status in ['success', 'verified', 'already_verified'] %}
+    <h1>Email verified</h1>
+  {% else %}
+    <h1>Email verification</h1>
+  {% endif %}
+
+  {% if status not in ['success', 'verified', 'already_verified'] and status %}
+    <div class="aw-error">{{ message|default(status) }}</div>
+  {% else %}
+    <p>{{ message|default('Your email address has been verified.') }}</p>
+  {% endif %}
+
+  {% if email %}<p class="aw-muted">{{ email }}</p>{% endif %}
+
+  {% if redirect_url %}
+    <p><a class="aw-btn" href="{{ redirect_url }}">Continue</a></p>
+  {% elif actor_id %}
+    <p><a class="aw-btn" href="/{{ actor_id }}/www">Continue</a></p>
+  {% endif %}
+</div>
+{% endblock %}

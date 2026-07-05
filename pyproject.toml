@@ -2,8 +2,8 @@
 name = "actingweb"
 version = "3.11.0"
 description = "The official ActingWeb library"
-authors = ["Greger Wedel <support@greger.io>"]
-maintainers = ["Greger Wedel <support@greger.io>"]
+authors = ["Greger Wedel <support@actingweb.io>"]
+maintainers = ["Greger Wedel <support@actingweb.io>"]
 license = "BSD"
 readme = "README.rst"
 homepage = "http://actingweb.org"
@@ -22,6 +22,9 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
 packages = [{ include = "actingweb" }]
+include = [
+    { path = "actingweb/templates/**/*", format = ["sdist", "wheel"] },
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"

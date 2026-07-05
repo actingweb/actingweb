@@ -114,6 +114,52 @@ class TestGetHookMetadata:
         result = get_hook_metadata(sample_hook)
         assert result.description == "Hook description"
 
+    def test_empty_hook_metadata_falls_back_to_mcp(self) -> None:
+        """Regression: an EMPTY _hook_metadata must not shadow _mcp_metadata.
+
+        ``@app.action_hook("name")`` (the mandatory registration decorator, no
+        metadata args) attaches a HookMetadata with description="" / schemas
+        None. When stacked with @mcp_tool this must not blank out the MCP
+        metadata in GET /actions — each unset field falls back to MCP.
+        """
+
+        def sample_hook(actor, name, data):
+            return {"result": "ok"}
+
+        # Empty explicit metadata, as produced by @app.action_hook("name")
+        sample_hook._hook_metadata = HookMetadata()  # type: ignore[attr-defined]
+        sample_hook._mcp_metadata = {  # type: ignore[attr-defined]
+            "description": "Search notes",
+            "input_schema": {"type": "object"},
+            "annotations": {"readOnlyHint": True},
+        }
+
+        result = get_hook_metadata(sample_hook)
+        assert result.description == "Search notes"
+        assert result.input_schema == {"type": "object"}
+        assert result.annotations == {"readOnlyHint": True}
+
+    def test_partial_hook_metadata_merges_with_mcp(self) -> None:
+        """Explicit non-empty fields win; unset fields fall back to MCP."""
+
+        def sample_hook(actor, name, data):
+            return {"result": "ok"}
+
+        # Explicit description only; schema/annotations unset
+        sample_hook._hook_metadata = HookMetadata(  # type: ignore[attr-defined]
+            description="Explicit desc"
+        )
+        sample_hook._mcp_metadata = {  # type: ignore[attr-defined]
+            "description": "MCP desc",
+            "input_schema": {"type": "object"},
+            "annotations": {"readOnlyHint": True},
+        }
+
+        result = get_hook_metadata(sample_hook)
+        assert result.description == "Explicit desc"  # explicit wins
+        assert result.input_schema == {"type": "object"}  # fell back to MCP
+        assert result.annotations == {"readOnlyHint": True}  # fell back to MCP
+
     def test_returns_default_when_no_metadata(self) -> None:
         """Test get_hook_metadata returns defaults when no metadata."""
 

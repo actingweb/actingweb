@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Authorize access - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <h1>Authorize access</h1>
+  <p>{{ message|default('An application is requesting access to your ActingWeb data.') }}</p>
+  {% if client_name %}<p><strong>{{ client_name }}</strong>{% if client_id %} <span class="aw-muted">(<code>{{ client_id }}</code>)</span>{% endif %}</p>{% endif %}
+
+  <form action="{{ form_action|default('/oauth/authorize') }}" method="{{ form_method|default('POST') }}">
+    <input type="hidden" name="client_id" value="{{ client_id|default('') }}">
+    <input type="hidden" name="redirect_uri" value="{{ redirect_uri|default('') }}">
+    <input type="hidden" name="state" value="{{ state|default('') }}">
+    <input type="hidden" name="response_type" value="{{ response_type|default('code') }}">
+    <input type="hidden" name="scope" value="{{ scope|default('') }}">
+    <input type="hidden" name="code_challenge" value="{{ code_challenge|default('') }}">
+    <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method|default('') }}">
+
+    {% if oauth2_trust_control_enabled and trust_types %}
+      <label for="trust_type">Access level</label>
+      <select id="trust_type" name="trust_type">
+        {% for tt in trust_types %}
+          {% set ttname = tt.get('name', '') if tt is mapping else '' %}
+          {% set ttlabel = (tt.get('display_name') or tt.get('name') or '') if tt is mapping else '' %}
+          <option value="{{ ttname }}"{% if ttname and ttname == default_trust_type %} selected{% endif %}>
+            {{ ttlabel }}{% if tt is mapping and tt.get('description') %} &ndash; {{ tt.get('description') }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    {% elif default_trust_type %}
+      <input type="hidden" name="trust_type" value="{{ default_trust_type }}">
+    {% endif %}
+
+    <p></p>
+    <input type="submit" value="Authorize">
+  </form>
+
+  {% if oauth_providers %}
+    <h2>Or sign in with</h2>
+    <div class="aw-nav">
+      {% for provider in oauth_providers %}
+        {% set purl = provider.get('url') if provider is mapping else '' %}
+        {% if purl %}
+          <a class="aw-btn aw-btn-secondary" href="{{ purl }}">{{ (provider.get('display_name') or provider.get('name') or 'provider') if provider is mapping else 'provider' }}</a>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

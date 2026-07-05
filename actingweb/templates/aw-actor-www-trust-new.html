@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}New trust - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <div class="aw-nav">
+    <a href="{{ actor_www|default('') }}/trust">&larr; Trust</a>
+  </div>
+  <h1>New trust relationship</h1>
+
+  {% if error %}<div class="aw-error">{{ error }}</div>{% endif %}
+
+  <form action="{{ form_action|default('') }}" method="{{ form_method|default('POST') }}">
+    <label for="peer_url">Peer URL</label>
+    <input type="url" id="peer_url" name="peer_url" placeholder="https://peer.example.com/actor-id" required>
+
+    <label for="trust_type">Relationship / trust type</label>
+    <select id="trust_type" name="trust_type" required>
+      {% if trust_types %}
+        {% for tt in trust_types %}
+          {% set ttname = tt.get('name', '') if tt is mapping else '' %}
+          {% set ttlabel = (tt.get('display_name') or tt.get('name') or '') if tt is mapping else '' %}
+          <option value="{{ ttname }}"{% if ttname and ttname == default_relationship %} selected{% endif %}>
+            {{ ttlabel }}{% if tt is mapping and tt.get('description') %} &ndash; {{ tt.get('description') }}{% endif %}
+          </option>
+        {% endfor %}
+      {% elif default_relationship %}
+        <option value="{{ default_relationship }}" selected>{{ default_relationship }}</option>
+      {% endif %}
+    </select>
+
+    <label for="description">Description (optional)</label>
+    <input type="text" id="description" name="description">
+
+    <p></p>
+    <input type="submit" value="Create trust">
+  </form>
+</div>
+{% endblock %}

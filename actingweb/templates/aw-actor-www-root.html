@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <h1>Actor dashboard</h1>
+  <table>
+    <tr><th>Actor ID</th><td><code>{{ id|default('') }}</code></td></tr>
+    {% if creator %}<tr><th>Creator</th><td><code>{{ creator }}</code></td></tr>{% endif %}
+  </table>
+
+  <h2>Manage</h2>
+  <div class="aw-nav">
+    <a class="aw-btn" href="{{ actor_www|default('') }}/properties">Properties</a>
+    <a class="aw-btn" href="{{ actor_www|default('') }}/trust">Trust</a>
+    <a class="aw-btn aw-btn-secondary" href="{{ actor_root|default('') }}">Actor root</a>
+  </div>
+</div>
+{% endblock %}

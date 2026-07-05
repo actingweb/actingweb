@@ -5,6 +5,55 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **Built-in default web-UI templates.** The library now ships a minimal set of
+  templates (factory/sign-in page, actor dashboard, properties, trust, OAuth2
+  consent, email/verification pages), so ``with_web_ui(True)`` renders a working
+  web UI out of the box with no app-supplied templates. Application templates of
+  the same name still take precedence (Flask: a template-only blueprint; FastAPI:
+  the app ``templates_dir`` is searched first). Both integrations also register a
+  ``/login`` route that renders the sign-in page.
+
+FIXED
+~~~~~
+
+- **``with_mcp(server_name=..., instructions=..., enable=...)`` were silently
+  ignored.** ``ActingWebApp.__init__`` builds the ``Config`` eagerly (permission
+  warmup), and the runtime config-sync did not re-apply the MCP fields, so
+  builder-set MCP options never reached ``Config``. ``config.mcp`` is now a
+  first-class attribute, kept in sync (including the advertised ``/meta``
+  capability tag).
+- **``@mcp_tool`` metadata no longer appears blank in ``GET /<id>/actions``.**
+  Stacking the required ``@app.action_hook("name")`` decorator over ``@mcp_tool``
+  attached empty explicit metadata that shadowed the MCP metadata. Hook metadata
+  resolution now merges per field: explicit non-empty values win, otherwise the
+  ``@mcp_tool`` metadata (then auto-generated schemas) is used.
+- **Built-in factory templates now honor a URL path prefix.** The sign-in form
+  action and the post-creation "Go to dashboard"/"Back to start" links in the
+  bundled factory templates hardcoded root-relative ``/`` URLs, so a deployment
+  mounted under a prefix (``config.root`` like ``https://host/base/``) posted to
+  and linked at the domain root instead of the mounted app. The factory handler
+  now passes a ``base_path`` (derived from ``config.root``) into the template
+  context and the templates prepend it.
+
+DOCUMENTATION
+~~~~~~~~~~~~~
+
+- Rewrote ``README.rst`` to reflect the current framework (AI/MCP + web/SPA +
+  native-mobile clients over one backend).
+- Corrected a range of API-reference inaccuracies verified against the code:
+  ``TrustManager``/``SubscriptionManager``/``PropertyStore`` method names and
+  signatures, ``AwProxy`` usage, ``ActorInterface`` attributes, authenticated
+  views, and the ``ActorInterface.create(hooks=app.hooks)`` requirement for
+  lifecycle hooks to fire. Stopped recommending ``actor.is_owner()`` (a
+  placeholder that always returns ``True``) as an access guard.
+- Fixed quickstart friction found by a cold-build usability pass: DynamoDB Local
+  prerequisites, the ``migrate_db.py`` download URL (``master`` branch), MCP
+  endpoint auth (no dev bypass), scalar-property stringification, ``templates_dir``
+  being optional, and Basic-auth vs OAuth for ``/www``.
+
 v3.11.0: July 4, 2026
 ---------------------
 

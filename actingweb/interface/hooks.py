@@ -267,24 +267,34 @@ def get_hook_metadata(func: Callable[..., Any]) -> HookMetadata:
     # Get auto-generated schemas from type hints (used as fallback)
     auto_input, auto_output = _get_auto_schemas(func)
 
+    # MCP metadata from @mcp_tool / @mcp_prompt, if the hook also carries it.
+    mcp_meta: dict[str, Any] = getattr(func, "_mcp_metadata", None) or {}
+
     # Check for explicit hook metadata
     if hasattr(func, "_hook_metadata"):
         metadata: HookMetadata = getattr(func, "_hook_metadata")  # noqa: B009
-        # Fill in auto-generated schemas if not explicitly provided
+        # Explicit @action_hook / @method_hook metadata takes precedence, but
+        # fall back to @mcp_tool metadata for any field the explicit decorator
+        # left unset. This matters because the mandatory registration decorator
+        # ``@app.action_hook("name")`` attaches an *empty* HookMetadata
+        # (description="", schemas=None); without this merge that empty metadata
+        # would shadow the populated @mcp_tool metadata and leave GET /actions
+        # blank for MCP tools.
         return HookMetadata(
-            description=metadata.description,
+            description=metadata.description or mcp_meta.get("description", "") or "",
             input_schema=metadata.input_schema
             if metadata.input_schema is not None
-            else auto_input,
+            else (mcp_meta.get("input_schema") or auto_input),
             output_schema=metadata.output_schema
             if metadata.output_schema is not None
-            else auto_output,
-            annotations=metadata.annotations,
+            else (mcp_meta.get("output_schema") or auto_output),
+            annotations=metadata.annotations
+            if metadata.annotations is not None
+            else mcp_meta.get("annotations"),
         )
 
     # Fall back to MCP metadata if available
-    if hasattr(func, "_mcp_metadata"):
-        mcp_meta = getattr(func, "_mcp_metadata")  # noqa: B009
+    if mcp_meta:
         return HookMetadata(
             description=mcp_meta.get("description", "") or "",
             input_schema=mcp_meta.get("input_schema") or auto_input,

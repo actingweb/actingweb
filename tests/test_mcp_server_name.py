@@ -42,3 +42,36 @@ class TestInstructionsInInitialize:
             make_mcp_config(server_name="emm", instructions="Call how_to_use() first")
         )["result"]
         assert result["instructions"] == "Call how_to_use() first"
+
+
+class TestWithMcpBuilderPropagation:
+    """with_mcp() settings must reach Config even though __init__ builds the
+    Config eagerly (via the permission-system warmup) before the fluent
+    builder methods run. Regression test for the builder->config sync gap.
+    """
+
+    def _app(self, **mcp_kwargs):
+        from actingweb.interface import ActingWebApp
+
+        return ActingWebApp(
+            aw_type="urn:actingweb:test:mcpbuild",
+            database="dynamodb",
+            fqdn="localhost:5000",
+        ).with_mcp(**mcp_kwargs)
+
+    def test_server_name_reaches_config(self) -> None:
+        cfg = self._app(enable=True, server_name="doctest").get_config()
+        assert cfg.mcp_server_name == "doctest"
+
+    def test_instructions_reach_config(self) -> None:
+        cfg = self._app(enable=True, instructions="Call how_to_use() first").get_config()
+        assert cfg.mcp_instructions == "Call how_to_use() first"
+
+    def test_enable_false_reaches_config(self) -> None:
+        cfg = self._app(enable=False).get_config()
+        assert cfg.mcp is False
+
+    def test_custom_server_name_surfaced_in_initialize_via_builder(self) -> None:
+        cfg = self._app(enable=True, server_name="doctest").get_config()
+        result = _initialize(cfg)["result"]
+        assert result["serverInfo"]["name"] == "doctest"

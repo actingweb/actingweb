@@ -104,22 +104,32 @@ Call initialize (no auth required):
      -H 'Content-Type: application/json' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"curl"}}}'
 
-List tools and prompts (requires auth in production; open in dev):
+Every other method — ``tools/list``, ``prompts/list``, ``tools/call``, etc. —
+**requires an OAuth2 bearer token** (only ``initialize`` and
+``notifications/initialized`` are unauthenticated). There is **no dev bypass**;
+``with_devtest(True)`` does not open the MCP endpoint. Sending these without a
+token returns HTTP 401 with a ``WWW-Authenticate: Bearer`` header:
 
 .. code-block:: bash
 
-   curl -s http://localhost:5000/mcp -H 'Content-Type: application/json' \
+   # 401 without a bearer token — obtain one via the OAuth2 flow first, then:
+   curl -s http://localhost:5000/mcp \
+     -H 'Content-Type: application/json' \
+     -H 'Authorization: Bearer <token>' \
      -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 
-   curl -s http://localhost:5000/mcp -H 'Content-Type: application/json' \
-     -d '{"jsonrpc":"2.0","id":3,"method":"prompts/list"}'
-
-Call the tool:
-
-.. code-block:: bash
-
-   curl -s http://localhost:5000/mcp -H 'Content-Type: application/json' \
+   curl -s http://localhost:5000/mcp \
+     -H 'Content-Type: application/json' \
+     -H 'Authorization: Bearer <token>' \
      -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_note","arguments":{"title":"Hello","content":"World"}}}'
+
+.. tip::
+
+   To test tool/prompt *logic* without standing up an OAuth2 client, call the
+   hooks directly in a unit test rather than over HTTP — e.g.
+   ``app.hooks.execute_action_hooks("create_note", actor, {...})``. Real MCP
+   clients (ChatGPT, Claude) perform the OAuth2 flow and send the bearer token
+   automatically.
 
 Tool Safety Annotations
 -----------------------

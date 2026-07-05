@@ -14,7 +14,7 @@ from werkzeug.wrappers import Response as WerkzeugResponse
 from ... import request_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, mcp, services
-from .base_integration import BaseActingWebIntegration
+from .base_integration import BaseActingWebIntegration, default_templates_dir
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
@@ -33,7 +33,33 @@ class FlaskIntegration(BaseActingWebIntegration):
     def __init__(self, aw_app: "ActingWebApp", flask_app: Flask):
         super().__init__(aw_app)
         self.flask_app = flask_app
+        self._install_default_templates()
         self._setup_context_hooks()
+
+    def _install_default_templates(self) -> None:
+        """Register the library's built-in templates as a fallback source.
+
+        Flask's template loader searches the application's own ``templates/``
+        directory first and blueprint template folders afterwards, so any
+        app-provided template overrides the library default of the same name.
+        The library defaults fill in whatever the app does not supply, making
+        ``with_web_ui(True)`` work out of the box. Registering a template-only
+        Blueprint (no routes) is the idiomatic, precedence-correct way to do
+        this. It is a no-op if already registered (e.g. re-integration).
+        """
+        from flask import Blueprint
+
+        blueprint = Blueprint(
+            "actingweb_default_templates",
+            __name__,
+            template_folder=default_templates_dir(),
+        )
+        try:
+            self.flask_app.register_blueprint(blueprint)
+        except ValueError:
+            # Already registered (e.g. the app was integrated twice); the
+            # default templates are already available, so nothing to do.
+            pass
 
     def _setup_context_hooks(self) -> None:
         """
@@ -113,6 +139,13 @@ class FlaskIntegration(BaseActingWebIntegration):
             else:
                 # For web form requests, extract email and redirect to OAuth2 with email hint
                 return self._handle_factory_post_with_oauth_redirect()
+
+        # Login page - unauthenticated browsers are redirected here (see
+        # _handle_actor_request). Renders the same factory/sign-in page as "/"
+        # so the built-in web UI works out of the box.
+        @self.flask_app.route("/login", methods=["GET"])
+        def app_login_get() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_factory_get_request()
 
         # OAuth2 callback - handles both ActingWeb and MCP OAuth2 flows
         @self.flask_app.route("/oauth/callback", methods=["GET"])

@@ -327,7 +327,8 @@ class Config:
         if self._check_trust_permissions_available():
             base_supported.append("trustpermissions")
 
-        if kwargs.get("mcp", False):
+        self.mcp: bool = kwargs.get("mcp", False)
+        if self.mcp:
             base_supported.append("mcp")
 
         self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")
@@ -383,6 +384,14 @@ class Config:
         """
         # Parse existing options into a set
         current_options = set(self.aw_supported.split(","))
+
+        # Keep the "mcp" capability tag in sync with the enable flag so that
+        # toggling MCP via the builder after Config construction is reflected in
+        # the advertised /meta capabilities.
+        if getattr(self, "mcp", False):
+            current_options.add("mcp")
+        else:
+            current_options.discard("mcp")
 
         # Add permission-related option tags if peer permissions caching is enabled
         if getattr(self, "peer_permissions_caching", False):

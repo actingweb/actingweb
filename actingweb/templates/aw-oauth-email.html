@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Enter your email - ActingWeb{% endblock %}
+{% block content %}
+<div class="aw-card">
+  <h1>Enter your email</h1>
+  {% if error %}<div class="aw-error">{{ error }}</div>{% endif %}
+  <p>{{ message|default('Please enter your email address to continue.') }}</p>
+  {% if provider_display %}<p class="aw-muted">Signing in with {{ provider_display }}.</p>{% endif %}
+
+  <form action="{{ action|default('/oauth/email') }}" method="{{ method|default('POST') }}">
+    <input type="hidden" name="session" value="{{ session_id|default('') }}">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" placeholder="you@example.com" autocomplete="email" required>
+    <p></p>
+    <input type="submit" value="Continue">
+  </form>
+</div>
+{% endblock %}

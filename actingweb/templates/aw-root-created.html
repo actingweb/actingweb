@@ -14,9 +14,9 @@
   </table>
 
   {% if id %}
-    <p><a class="aw-btn" href="/{{ id }}/www">Go to dashboard</a></p>
+    <p><a class="aw-btn" href="{{ base_path|default('') }}/{{ id }}/www">Go to dashboard</a></p>
   {% else %}
-    <p><a class="aw-btn aw-btn-secondary" href="/">Back to start</a></p>
+    <p><a class="aw-btn aw-btn-secondary" href="{{ base_path|default('') }}/">Back to start</a></p>
   {% endif %}
 </div>
 {% endblock %}

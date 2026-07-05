@@ -9,6 +9,21 @@ logger = logging.getLogger(__name__)
 
 
 class RootFactoryHandler(base_handler.BaseHandler):
+    def _base_path(self) -> str:
+        """Return the URL path prefix the app is mounted under, e.g. "/base" or "".
+
+        Derived from ``config.root`` (which may be ``https://host/base/``) so the
+        built-in factory templates keep working behind a path prefix.
+        """
+        try:
+            from urllib.parse import urlparse
+
+            if self.config and getattr(self.config, "root", None):
+                return urlparse(self.config.root).path.rstrip("/")
+        except (ValueError, AttributeError):
+            pass
+        return ""
+
     def _wants_json(self) -> bool:
         """Check if client prefers JSON response."""
         # Check Accept header
@@ -176,6 +191,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                 "oauth_urls": oauth_urls,  # Dict: {'google': url, 'github': url}
                 "oauth_providers": oauth_providers,  # List of dicts with name, display_name, url
                 "oauth_enabled": bool(oauth_urls),
+                "base_path": self._base_path(),
             }
         else:
             self.response.set_status(404)
@@ -253,6 +269,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
 
             # Generic creation failure
             self.response.set_status(400, "Not created")
+            self.response.template_values = {"base_path": self._base_path()}
             logger.warning(
                 "Was not able to create new Actor("
                 + str(self.request.url)
@@ -273,7 +290,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
         if trustee_root and isinstance(trustee_root, str) and len(trustee_root) > 0:
             pair["trustee_root"] = trustee_root
         if self.config.ui and not is_json:
-            self.response.template_values = pair
+            self.response.template_values = {**pair, "base_path": self._base_path()}
             return
         out = json.dumps(pair)
         self.response.write(out)

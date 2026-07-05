@@ -30,6 +30,13 @@ FIXED
   attached empty explicit metadata that shadowed the MCP metadata. Hook metadata
   resolution now merges per field: explicit non-empty values win, otherwise the
   ``@mcp_tool`` metadata (then auto-generated schemas) is used.
+- **Built-in factory templates now honor a URL path prefix.** The sign-in form
+  action and the post-creation "Go to dashboard"/"Back to start" links in the
+  bundled factory templates hardcoded root-relative ``/`` URLs, so a deployment
+  mounted under a prefix (``config.root`` like ``https://host/base/``) posted to
+  and linked at the domain root instead of the mounted app. The factory handler
+  now passes a ``base_path`` (derived from ``config.root``) into the template
+  context and the templates prepend it.
 
 DOCUMENTATION
 ~~~~~~~~~~~~~

@@ -24,7 +24,7 @@
   {% endif %}
 
   <h2>Or continue with your email</h2>
-  <form action="/" method="post">
+  <form action="{{ base_path|default('') }}/" method="post">
     <label for="creator">Email</label>
     <input type="email" id="creator" name="creator" placeholder="you@example.com" autocomplete="email" required>
     <p></p>

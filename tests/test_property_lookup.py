@@ -401,6 +401,78 @@ class TestPropertyListCleanup:
         lookup6 = lookup_mod.DbPropertyLookup()
         assert lookup6.get(property_name="externalUserId", value="ext999") is None
 
+    def test_bulk_delete_honors_programmatic_config_without_env(
+        self, backend: str, test_actor_id: str, monkeypatch
+    ):
+        """Regression: bulk delete must clean lookup entries when the lookup
+        table is enabled via ``Config`` (programmatically, as ``ActingWebApp``
+        does) rather than via environment variables.
+
+        Previously ``DbPropertyList.delete()`` (and
+        ``DbProperty.get_actor_id_from_property()``) constructed a fresh
+        ``Config()`` internally, which only saw env vars/defaults. A lookup
+        table enabled through the builder therefore read back as disabled inside
+        those methods, so bulk delete skipped cleanup and left stale lookup rows
+        pointing at a deleted actor. The accessors now inject the caller's
+        config, so this path must clean up.
+        """
+        from actingweb.config import Config
+        from actingweb.db import get_property, get_property_list
+
+        # The lookup table must NOT be enabled via the environment - only via
+        # the Config object we pass in. This is what makes the old code fail.
+        monkeypatch.delenv("USE_PROPERTY_LOOKUP_TABLE", raising=False)
+        monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
+
+        lookup_mod = get_db_module(backend, "property_lookup")
+
+        # Build a Config for the running backend and enable the lookup table the
+        # same way ActingWebApp.get_config() does: by setting attributes, not env.
+        config = Config()
+        config.use_lookup_table = True
+        config.indexed_properties = ["oauthId", "email", "externalUserId"]
+
+        # Set indexed properties through the config-injected accessor.
+        get_property(config).set(
+            actor_id=test_actor_id, name="oauthId", value="github:prog1"
+        )
+        get_property(config).set(
+            actor_id=test_actor_id, name="email", value="prog@example.com"
+        )
+
+        # Sanity: lookup entries were created for the indexed properties.
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="oauthId", value="github:prog1"
+            )
+            == test_actor_id
+        )
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="email", value="prog@example.com"
+            )
+            == test_actor_id
+        )
+
+        # Bulk delete via the config-injected accessor.
+        prop_list = get_property_list(config)
+        prop_list.fetch(actor_id=test_actor_id)
+        prop_list.delete()
+
+        # Lookup entries must be gone (this leaked stale rows before the fix).
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="oauthId", value="github:prog1"
+            )
+            is None
+        )
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="email", value="prog@example.com"
+            )
+            is None
+        )
+
 
 @pytest.mark.parametrize("backend", ["postgresql"])
 class TestLargeValueSupport:

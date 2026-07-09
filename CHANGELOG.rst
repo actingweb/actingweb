@@ -19,6 +19,22 @@ ADDED
 FIXED
 ~~~~~
 
+- **Programmatically-enabled property lookup tables leaked stale reverse-lookup
+  rows on bulk delete.** ``DbPropertyList.delete()`` and
+  ``DbProperty.get_actor_id_from_property()`` constructed a fresh ``Config()``
+  internally to decide whether to maintain the property lookup table. A fresh
+  ``Config()`` only reflects environment variables and defaults, so a lookup
+  table enabled through the builder (``with_indexed_properties()`` /
+  ``with_legacy_property_index(enable=False)``, which set attributes on the
+  app's ``Config`` — not env vars) read back as *disabled* inside these methods.
+  As a result, deleting all of an actor's properties (e.g. on actor deletion)
+  skipped lookup-table cleanup and left stale entries that could resolve reverse
+  lookups to a deleted actor; reverse lookup could likewise take the wrong code
+  path. ``get_property_list()`` now injects ``use_lookup_table`` /
+  ``indexed_properties`` into ``DbPropertyList`` (matching ``get_property()``),
+  and both methods use the injected settings instead of a throwaway ``Config``.
+  Applies to both the DynamoDB and PostgreSQL backends. Env-var-based
+  configuration is unchanged (constructors still fall back to the environment).
 - **``with_mcp(server_name=..., instructions=..., enable=...)`` were silently
   ignored.** ``ActingWebApp.__init__`` builds the ``Config`` eagerly (permission
   warmup), and the runtime config-sync did not re-apply the MCP fields, so

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.11.0"
+version = "3.12.0"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@actingweb.io>"]
 maintainers = ["Greger Wedel <support@actingweb.io>"]

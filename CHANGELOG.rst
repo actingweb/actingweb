@@ -38,6 +38,15 @@ FIXED
   and both methods use the injected settings instead of a throwaway ``Config``.
   Applies to both the DynamoDB and PostgreSQL backends. Env-var-based
   configuration is unchanged (constructors still fall back to the environment).
+- **DynamoDB bulk property delete could remove another actor's reverse-lookup
+  row.** The DynamoDB property lookup table is keyed on ``(property_name,
+  value)``, so when two actors share the same indexed value the row points at
+  whichever actor wrote last. ``DbPropertyList.delete()`` deleted the lookup
+  row for each of the deleted actor's indexed values unconditionally, which
+  could wipe out a *different* actor's still-valid reverse-lookup entry. The
+  bulk cleanup now verifies the row belongs to the actor being deleted before
+  removing it, matching the single-property delete path. PostgreSQL was
+  unaffected (its cleanup already scopes the delete by ``actor_id``).
 - **``with_mcp(server_name=..., instructions=..., enable=...)`` were silently
   ignored.** ``ActingWebApp.__init__`` builds the ``Config`` eagerly (permission
   warmup), and the runtime config-sync did not re-apply the MCP fields, so

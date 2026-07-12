@@ -473,6 +473,70 @@ class TestPropertyListCleanup:
             is None
         )
 
+    def test_bulk_delete_preserves_other_actors_lookup_row(
+        self, backend: str, test_actor_id: str, config_with_lookup_table
+    ):
+        """Regression: bulk delete must not remove a lookup row owned by a
+        different actor that shares the same indexed value.
+
+        In DynamoDB the lookup table is keyed on ``(property_name, value)`` and
+        a duplicate indexed value is overwritten by the latest writer. So when
+        two actors have the same indexed value, the row points at whichever
+        wrote last. ``DbPropertyList.delete()`` collects the older actor's
+        indexed values and previously deleted the lookup row unconditionally,
+        wiping out the newer actor's reverse-lookup entry. The bulk cleanup now
+        verifies ownership before deleting, matching the single-property path.
+        """
+        property_mod = get_db_module(backend, "property")
+        lookup_mod = get_db_module(backend, "property_lookup")
+
+        # Second actor sharing the same indexed value. Create the actor row in
+        # PostgreSQL so the property_lookup foreign key constraint is satisfied.
+        actor2_id = str(uuid.uuid4())
+        if backend == "postgresql":
+            actor_mod = get_db_module("postgresql", "actor")
+            actor_mod.DbActor().create(
+                actor_id=actor2_id, creator="test@example.com", passphrase=""
+            )
+
+        shared_value = "shared@example.com"
+        try:
+            # Older actor writes first, newer actor overwrites the shared value.
+            prop1 = property_mod.DbProperty()
+            prop1.set(actor_id=test_actor_id, name="email", value=shared_value)
+            prop2 = property_mod.DbProperty()
+            prop2.set(actor_id=actor2_id, name="email", value=shared_value)
+
+            # In DynamoDB the lookup row now points at the newer actor.
+            owner = lookup_mod.DbPropertyLookup().get(
+                property_name="email", value=shared_value
+            )
+
+            # Bulk-delete the older actor's properties.
+            prop_list = property_mod.DbPropertyList()
+            prop_list.fetch(actor_id=test_actor_id)
+            prop_list.delete()
+
+            # The lookup row for the newer actor must survive.
+            still = lookup_mod.DbPropertyLookup().get(
+                property_name="email", value=shared_value
+            )
+            assert still == owner, (
+                "Bulk delete of the older actor removed the newer actor's "
+                "shared lookup row"
+            )
+        finally:
+            prop_list2 = property_mod.DbPropertyList()
+            prop_list2.fetch(actor_id=actor2_id)
+            prop_list2.delete()
+            if backend == "postgresql":
+                try:
+                    get_db_module("postgresql", "actor").DbActor().delete(
+                        actor_id=actor2_id
+                    )
+                except Exception:
+                    pass
+
 
 @pytest.mark.parametrize("backend", ["postgresql"])
 class TestLargeValueSupport:

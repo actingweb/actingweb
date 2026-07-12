@@ -441,7 +441,12 @@ class DbPropertyList:
             for name, value in indexed_props:
                 try:
                     lookup = PropertyLookup.get(name, value)
-                    lookup.delete()
+                    # Verify it belongs to this actor before deleting. In
+                    # DynamoDB a shared indexed value is overwritten by the
+                    # latest writer, so deleting an older actor must not remove
+                    # a newer actor's reverse-lookup row.
+                    if str(lookup.actor_id) == self.actor_id:
+                        lookup.delete()
                 except Exception as e:
                     logger.warning(
                         f"Failed to delete lookup entry for property {name}: {e}"

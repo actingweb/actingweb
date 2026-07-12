@@ -118,11 +118,7 @@ class DbProperty:
         if not name or not value:
             return None
 
-        from actingweb.config import Config
-
-        config = Config()
-
-        if config.use_lookup_table and name in config.indexed_properties:
+        if self._use_lookup_table and name in self._indexed_properties:
             # Use new lookup table approach
             from actingweb.db.postgresql.property_lookup import DbPropertyLookup
 
@@ -407,11 +403,35 @@ class DbPropertyList:
     actor_id: str | None
     props: dict[str, str] | None
 
-    def __init__(self) -> None:
-        """Initialize DbPropertyList."""
+    def __init__(
+        self,
+        use_lookup_table: bool | None = None,
+        indexed_properties: list[str] | None = None,
+    ) -> None:
+        """Initialize DbPropertyList.
+
+        Args:
+            use_lookup_table: Whether to use property lookup table. If None, reads from env.
+            indexed_properties: List of property names to index. If None, uses defaults.
+        """
         self.handle = None
         self.actor_id = None
         self.props = None
+
+        if use_lookup_table is not None:
+            self._use_lookup_table = use_lookup_table
+        else:
+            self._use_lookup_table = (
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
+            )
+
+        if indexed_properties is not None:
+            self._indexed_properties = indexed_properties
+        else:
+            self._indexed_properties = ["oauthId", "email", "externalUserId"]
+            if os.getenv("INDEXED_PROPERTIES"):
+                env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
+                self._indexed_properties = [p.strip() for p in env_props if p.strip()]
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
         """
@@ -513,15 +533,11 @@ class DbPropertyList:
             return False
 
         try:
-            from actingweb.config import Config
-
-            config = Config()
-
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     # If using lookup table, collect indexed properties before deletion
                     indexed_props: list[tuple[str, str]] = []
-                    if config.use_lookup_table:
+                    if self._use_lookup_table:
                         cur.execute(
                             """
                             SELECT name, value
@@ -533,7 +549,7 @@ class DbPropertyList:
                         rows = cur.fetchall()
                         for row in rows:
                             name, value = row
-                            if name in config.indexed_properties:
+                            if name in self._indexed_properties:
                                 indexed_props.append((name, value))
 
                     # Delete all properties

@@ -401,6 +401,150 @@ class TestPropertyListCleanup:
         lookup6 = lookup_mod.DbPropertyLookup()
         assert lookup6.get(property_name="externalUserId", value="ext999") is None
 
+    def test_bulk_delete_honors_programmatic_config_without_env(
+        self, backend: str, test_actor_id: str, monkeypatch
+    ):
+        """Regression: bulk delete must clean lookup entries when the lookup
+        table is enabled via ``Config`` (programmatically, as ``ActingWebApp``
+        does) rather than via environment variables.
+
+        Previously ``DbPropertyList.delete()`` (and
+        ``DbProperty.get_actor_id_from_property()``) constructed a fresh
+        ``Config()`` internally, which only saw env vars/defaults. A lookup
+        table enabled through the builder therefore read back as disabled inside
+        those methods, so bulk delete skipped cleanup and left stale lookup rows
+        pointing at a deleted actor. The accessors now inject the caller's
+        config, so this path must clean up.
+        """
+        from actingweb.config import Config
+        from actingweb.db import get_property, get_property_list
+
+        # The lookup table must NOT be enabled via the environment - only via
+        # the Config object we pass in. This is what makes the old code fail.
+        monkeypatch.delenv("USE_PROPERTY_LOOKUP_TABLE", raising=False)
+        monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
+
+        lookup_mod = get_db_module(backend, "property_lookup")
+
+        # Build a Config for the running backend and enable the lookup table the
+        # same way ActingWebApp.get_config() does: by setting attributes, not env.
+        config = Config()
+        config.use_lookup_table = True
+        config.indexed_properties = ["oauthId", "email", "externalUserId"]
+
+        # Set indexed properties through the config-injected accessor.
+        get_property(config).set(
+            actor_id=test_actor_id, name="oauthId", value="github:prog1"
+        )
+        get_property(config).set(
+            actor_id=test_actor_id, name="email", value="prog@example.com"
+        )
+
+        # Sanity: lookup entries were created for the indexed properties.
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="oauthId", value="github:prog1"
+            )
+            == test_actor_id
+        )
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="email", value="prog@example.com"
+            )
+            == test_actor_id
+        )
+
+        # Bulk delete via the config-injected accessor.
+        prop_list = get_property_list(config)
+        prop_list.fetch(actor_id=test_actor_id)
+        prop_list.delete()
+
+        # Lookup entries must be gone (this leaked stale rows before the fix).
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="oauthId", value="github:prog1"
+            )
+            is None
+        )
+        assert (
+            lookup_mod.DbPropertyLookup().get(
+                property_name="email", value="prog@example.com"
+            )
+            is None
+        )
+
+    def test_bulk_delete_preserves_other_actors_lookup_row(
+        self, backend: str, test_actor_id: str, config_with_lookup_table
+    ):
+        """Regression: bulk delete must not remove a lookup row owned by a
+        *different* actor that happens to share the same indexed value.
+
+        The lookup table is keyed on ``(property_name, value)``, so when two
+        actors share an indexed value only one of them owns the reverse-lookup
+        row. The owner differs by backend: DynamoDB is last-writer-wins, while
+        PostgreSQL is first-writer-wins (``ON CONFLICT DO NOTHING``).
+        ``DbPropertyList.delete()`` collected the deleted actor's indexed values
+        and previously removed the lookup row unconditionally, so deleting the
+        *non-owning* actor could wipe out the owner's entry. The cleanup now
+        verifies ownership before deleting, matching the single-property path.
+
+        This test deletes whichever actor does not own the row and asserts the
+        owner's row survives, which is meaningful for both backends.
+        """
+        property_mod = get_db_module(backend, "property")
+        lookup_mod = get_db_module(backend, "property_lookup")
+
+        # Second actor sharing the same indexed value. Create the actor row in
+        # PostgreSQL so the property_lookup foreign key constraint is satisfied.
+        actor2_id = str(uuid.uuid4())
+        if backend == "postgresql":
+            actor_mod = get_db_module("postgresql", "actor")
+            actor_mod.DbActor().create(
+                actor_id=actor2_id, creator="test@example.com", passphrase=""
+            )
+
+        shared_value = "shared@example.com"
+        try:
+            # Both actors write the same indexed value.
+            prop1 = property_mod.DbProperty()
+            prop1.set(actor_id=test_actor_id, name="email", value=shared_value)
+            prop2 = property_mod.DbProperty()
+            prop2.set(actor_id=actor2_id, name="email", value=shared_value)
+
+            # Whichever actor currently owns the (name, value) lookup row.
+            owner = lookup_mod.DbPropertyLookup().get(
+                property_name="email", value=shared_value
+            )
+            assert owner in (test_actor_id, actor2_id)
+            non_owner = actor2_id if owner == test_actor_id else test_actor_id
+
+            # Bulk-delete the actor that does NOT own the lookup row. Its cleanup
+            # must not touch the owner's row.
+            prop_list = property_mod.DbPropertyList()
+            prop_list.fetch(actor_id=non_owner)
+            prop_list.delete()
+
+            # The owner's lookup row must survive.
+            still = lookup_mod.DbPropertyLookup().get(
+                property_name="email", value=shared_value
+            )
+            assert still == owner, (
+                "Bulk delete of the non-owning actor removed the owner's "
+                "shared lookup row"
+            )
+        finally:
+            for aid in (test_actor_id, actor2_id):
+                prop_cleanup = property_mod.DbPropertyList()
+                prop_cleanup.fetch(actor_id=aid)
+                prop_cleanup.delete()
+            if backend == "postgresql":
+                try:
+                    get_db_module("postgresql", "actor").DbActor().delete(
+                        actor_id=actor2_id
+                    )
+                except Exception:
+                    pass
+
 
 @pytest.mark.parametrize("backend", ["postgresql"])
 class TestLargeValueSupport:

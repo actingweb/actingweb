@@ -149,11 +149,7 @@ class DbProperty:
         if not name or not value:
             return None
 
-        from actingweb.config import Config
-
-        config = Config()
-
-        if config.use_lookup_table and name in config.indexed_properties:
+        if self._use_lookup_table and name in self._indexed_properties:
             # Use new lookup table approach
             from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
 
@@ -336,10 +332,36 @@ class DbPropertyList:
     The actor_id must always be set.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        use_lookup_table: bool | None = None,
+        indexed_properties: list[str] | None = None,
+    ) -> None:
+        """Initialize DbPropertyList.
+
+        Args:
+            use_lookup_table: Whether to use property lookup table. If None, reads from env.
+            indexed_properties: List of property names to index. If None, uses defaults.
+        """
         self.handle: Any | None = None
         self.actor_id: str | None = None
         self.props: dict[str, str] | None = None
+
+        if use_lookup_table is not None:
+            self._use_lookup_table = use_lookup_table
+        else:
+            self._use_lookup_table = (
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
+            )
+
+        if indexed_properties is not None:
+            self._indexed_properties = indexed_properties
+        else:
+            self._indexed_properties = ["oauthId", "email", "externalUserId"]
+            if os.getenv("INDEXED_PROPERTIES"):
+                env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
+                self._indexed_properties = [p.strip() for p in env_props if p.strip()]
+
         if not Property.exists():
             try:
                 Property.create_table(wait=True)
@@ -391,15 +413,11 @@ class DbPropertyList:
         # Collect indexed properties before deletion
         indexed_props: list[tuple[str, str]] = []
 
-        from actingweb.config import Config
-
-        config = Config()
-
-        if config.use_lookup_table:
+        if self._use_lookup_table:
             # Scan properties to find indexed ones
             self.handle = Property.scan(Property.id == self.actor_id)
             for p in self.handle:
-                if str(p.name) in config.indexed_properties:
+                if str(p.name) in self._indexed_properties:
                     indexed_props.append((str(p.name), str(p.value)))
 
         # Delete all properties
@@ -423,7 +441,12 @@ class DbPropertyList:
             for name, value in indexed_props:
                 try:
                     lookup = PropertyLookup.get(name, value)
-                    lookup.delete()
+                    # Verify it belongs to this actor before deleting. In
+                    # DynamoDB a shared indexed value is overwritten by the
+                    # latest writer, so deleting an older actor must not remove
+                    # a newer actor's reverse-lookup row.
+                    if str(lookup.actor_id) == self.actor_id:
+                        lookup.delete()
                 except Exception as e:
                     logger.warning(
                         f"Failed to delete lookup entry for property {name}: {e}"

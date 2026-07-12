@@ -90,20 +90,27 @@ def get_property(config: "Config") -> "DbPropertyProtocol":
 
 
 def get_property_list(config: "Config") -> "DbPropertyListProtocol":
-    """Create a DbPropertyList instance for batch property operations.
+    """Create a DbPropertyList instance with configuration injected.
+
+    This ensures batch operations (e.g. deleting all of an actor's properties)
+    respect the same use_lookup_table / indexed_properties settings as
+    get_property(), so lookup table rows stay in sync on bulk delete.
 
     Args:
         config: ActingWeb configuration instance
 
     Returns:
-        DbPropertyList instance
+        DbPropertyList instance configured with indexed_properties and use_lookup_table
 
     Example:
         >>> from actingweb.db import get_property_list
         >>> db_list = get_property_list(config)
         >>> props = db_list.fetch(actor_id="abc123")
     """
-    return config.DbProperty.DbPropertyList()
+    return config.DbProperty.DbPropertyList(
+        use_lookup_table=config.use_lookup_table,
+        indexed_properties=config.indexed_properties,
+    )
 
 
 # =============================================================================

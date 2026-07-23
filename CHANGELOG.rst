@@ -18,6 +18,15 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Per-actor DynamoDB reads no longer scan the whole table.** Nine call
+  sites (property fetch/delete, trust list fetch/delete, peer-trustee
+  fetch/lookup/delete) issued a full-table ``Scan`` with a partition-key
+  filter — read cost grew with total table size, not the actor's data
+  (measured ~2,000 RCU per property fetch on a 16 MB table). All are now
+  partition ``Query`` calls; the trust reads keep their strong consistency.
+  Trust and peer-trustee list results are now range-key sorted
+  (deterministic order) instead of arbitrary scan order.
+
 - **DynamoDB table-existence checks are now memoised per process.** Every
   accessor construction used to issue a live ``DescribeTable`` call
   (measured at >1,000/minute in a near-idle deployment); the check now runs

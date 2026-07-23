@@ -444,7 +444,7 @@ class DbTrustList:
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Trust.scan(Trust.id == self.actor_id, consistent_read=True)
+        self.handle = Trust.query(self.actor_id, consistent_read=True)
         self.trusts = []
         if self.handle:
             for t in self.handle:
@@ -509,8 +509,10 @@ class DbTrustList:
             return []
 
     def delete(self):
-        """Deletes all the properties in the database"""
-        self.handle = Trust.scan(Trust.id == self.actor_id, consistent_read=True)
+        """Deletes all the trusts in the database"""
+        if not self.actor_id:
+            return False
+        self.handle = Trust.query(self.actor_id, consistent_read=True)
         if not self.handle:
             return False
         for p in self.handle:

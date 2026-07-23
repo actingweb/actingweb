@@ -151,7 +151,11 @@ class DbActorList:
     """
 
     def fetch(self):
-        """Retrieves the actors in the database"""
+        """Retrieves ALL actors in the database.
+
+        Admin/maintenance use only: this is a deliberate full-table Scan,
+        O(table size) and unpaginated — do not call it on a serving path.
+        """
         self.handle = Actor.scan()
         if self.handle:
             ret = []

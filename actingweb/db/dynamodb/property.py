@@ -362,7 +362,7 @@ class DbPropertyList:
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Property.scan(Property.id == actor_id)
+        self.handle = Property.query(actor_id)
         if self.handle:
             self.props = {}
             for d in self.handle:
@@ -380,7 +380,7 @@ class DbPropertyList:
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Property.scan(Property.id == actor_id)
+        self.handle = Property.query(actor_id)
         if self.handle:
             props = {}
             for d in self.handle:
@@ -399,13 +399,13 @@ class DbPropertyList:
 
         if self._use_lookup_table:
             # Scan properties to find indexed ones
-            self.handle = Property.scan(Property.id == self.actor_id)
+            self.handle = Property.query(self.actor_id)
             for p in self.handle:
                 if str(p.name) in self._indexed_properties:
                     indexed_props.append((str(p.name), str(p.value)))
 
         # Delete all properties
-        self.handle = Property.scan(Property.id == self.actor_id)
+        self.handle = Property.query(self.actor_id)
         if not self.handle:
             return False
 

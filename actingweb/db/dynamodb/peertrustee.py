@@ -48,8 +48,8 @@ class DbPeerTrustee:
                 self.handle = PeerTrustee.get(actor_id, peerid, consistent_read=True)
             elif not self.handle and peer_type:
                 count = 0
-                peer_trustees = PeerTrustee.scan(
-                    (PeerTrustee.id == actor_id) & (PeerTrustee.type == peer_type)
+                peer_trustees = PeerTrustee.query(
+                    actor_id, filter_condition=PeerTrustee.type == peer_type
                 )
                 for h in peer_trustees:
                     self.handle = h
@@ -143,7 +143,7 @@ class DbPeerTrusteeList:
             return None
         self.actor_id = actor_id
         self.peertrustees = []
-        self.handle = PeerTrustee.scan(PeerTrustee.id == self.actor_id)
+        self.handle = PeerTrustee.query(self.actor_id)
         if self.handle:
             for t in self.handle:
                 self.peertrustees.append(
@@ -161,7 +161,9 @@ class DbPeerTrusteeList:
 
     def delete(self):
         """Deletes all the peertrustees in the database"""
-        self.handle = PeerTrustee.scan(PeerTrustee.id == self.actor_id)
+        if not self.actor_id:
+            return False
+        self.handle = PeerTrustee.query(self.actor_id)
         if not self.handle:
             return False
         for p in self.handle:

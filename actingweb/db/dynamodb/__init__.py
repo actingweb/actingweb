@@ -8,7 +8,7 @@ properties, trust relationships, and subscriptions.
 from .actor import Actor, CreatorIndex, DbActor, DbActorList
 from .attribute import Attribute, DbAttribute, DbAttributeBucketList
 from .peertrustee import DbPeerTrustee, DbPeerTrusteeList, PeerTrustee
-from .property import DbProperty, DbPropertyList, Property
+from .property import DbProperty, DbPropertyList, Property, PropertyLegacy
 from .property_lookup import DbPropertyLookup, PropertyLookup, PropertyLookupV2
 from .subscription import DbSubscription, DbSubscriptionList, Subscription
 from .subscription_diff import (
@@ -34,6 +34,7 @@ __all__ = [
     "DbPeerTrusteeList",
     # Property
     "Property",
+    "PropertyLegacy",
     "DbProperty",
     "DbPropertyList",
     # PropertyLookup

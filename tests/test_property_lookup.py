@@ -242,14 +242,37 @@ class TestPropertyReverseLookuWithLookupTable:
         """Test reverse lookup when legacy index is enabled."""
         property_mod = get_db_module(backend, "property")
 
+        if backend == "dynamodb":
+            # The shared test table's schema is fixed by whoever created it
+            # first (lookup mode creates it WITHOUT the legacy GSI). The
+            # legacy path needs the GSI — skip when absent; the GSI query
+            # mechanics are covered on a dedicated table in
+            # test_conditional_gsi_schema.py.
+            from actingweb.db.dynamodb.property import PropertyLegacy
+
+            try:
+                desc = PropertyLegacy._get_connection().describe_table()
+            except Exception:
+                desc = None
+            has_gsi = bool(desc and desc.get("GlobalSecondaryIndexes"))
+            if not has_gsi:
+                pytest.skip(
+                    "shared properties table was created without the legacy "
+                    "GSI (lookup-mode shape)"
+                )
+
+        # Unique value: the legacy GSI matches on value only, so residue
+        # from earlier runs could otherwise shadow this test's row.
+        legacy_value = f"github:{uuid.uuid4()}"
+
         # Set a property
         prop = property_mod.DbProperty()
-        prop.set(actor_id=test_actor_id, name="oauthId", value="github:11111")
+        prop.set(actor_id=test_actor_id, name="oauthId", value=legacy_value)
 
         # Reverse lookup should use legacy index/GSI
         prop2 = property_mod.DbProperty()
         found_actor_id = prop2.get_actor_id_from_property(
-            name="oauthId", value="github:11111"
+            name="oauthId", value=legacy_value
         )
         assert found_actor_id == test_actor_id, (
             f"Expected {test_actor_id}, got {found_actor_id}"

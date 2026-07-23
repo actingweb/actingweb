@@ -132,7 +132,7 @@ class TestReverseLookupContract:
 
         prop = prop_mod.DbProperty(use_lookup_table=True, indexed_properties=["email"])
         with (
-            mock.patch.object(prop_mod.Property, "property_index") as gsi,
+            mock.patch.object(prop_mod.PropertyLegacy, "property_index") as gsi,
             caplog.at_level("WARNING"),
         ):
             result = prop.get_actor_id_from_property(name="notIndexed", value="v")
@@ -145,7 +145,7 @@ class TestReverseLookupContract:
 
         prop = prop_mod.DbProperty(use_lookup_table=False)
         with mock.patch.object(
-            prop_mod.Property.property_index,
+            prop_mod.PropertyLegacy.property_index,
             "query",
             side_effect=Exception(
                 "ValidationException: The table does not have the specified index"

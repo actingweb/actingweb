@@ -48,7 +48,10 @@ def _mock_authenticator(raw_user_info: dict) -> MagicMock:
     auth.is_enabled.return_value = True
     auth.provider.name = "github"
     auth.provider.mobile_deep_link = ""  # not a -mobile provider
-    auth.exchange_code_for_token.return_value = {"access_token": "gh-at", "expires_in": 3600}
+    auth.exchange_code_for_token.return_value = {
+        "access_token": "gh-at",
+        "expires_in": 3600,
+    }
     # GitHub fetches userinfo from the endpoint (no id_token in the token response).
     auth.provider.extract_user_info_from_token_response.return_value = None
     auth.validate_token_and_get_user_info.return_value = raw_user_info

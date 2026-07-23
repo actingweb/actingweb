@@ -18,6 +18,15 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Freshly created properties tables match the configured reverse-lookup
+  mode.** In lookup-table mode, auto-created ``<prefix>_properties``
+  tables no longer carry the legacy value-keyed ``property-index`` GSI —
+  previously every fresh deployment inherited it even when nothing read
+  it, paying double write/storage cost and rejecting any property value
+  over DynamoDB's 2048-byte GSI-key limit (values over 2 KB now verified
+  to store correctly). Legacy mode still creates the GSI so the legacy
+  reverse-lookup path works. Existing tables are never altered.
+
 - **Property reverse-lookup table redesigned (v2, digest keys).** On
   DynamoDB, lookup rows now live in a new ``<prefix>_property_lookup_v2``
   table keyed by a SHA-256 digest of (property name, value); the plaintext

@@ -212,9 +212,7 @@ class TestAppleSpaCallbackErrorRedirect:
             "timestamp": int(time.time()),
         }
         nonce = StateNonceStore(config).create(payload)
-        webobj = _apple_webobj(
-            {"error": "user_cancelled_authorize", "state": nonce}
-        )
+        webobj = _apple_webobj({"error": "user_cancelled_authorize", "state": nonce})
         result = OAuth2AppleCallbackHandler(webobj, config).post()
 
         assert result.get("redirect_required") is True

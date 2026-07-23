@@ -31,7 +31,9 @@ class TestNormalizeUserInfo:
 
     def test_github_falls_back_to_login_when_name_missing(self) -> None:
         # GitHub's `name` is optional; `login` (username) is always present.
-        out = normalize_user_info("github", {"name": None, "login": "octo", "email": "o@x.com"})
+        out = normalize_user_info(
+            "github", {"name": None, "login": "octo", "email": "o@x.com"}
+        )
         assert out["display_name"] == "octo"
 
     def test_github_falls_back_to_login_when_name_absent(self) -> None:

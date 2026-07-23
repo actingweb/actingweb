@@ -61,13 +61,11 @@ class TestPropertyStoreBulkReads:
     def test_to_dict_is_single_bulk_read(self, config, populated_actor):
         store, core = self._interface_store(config, populated_actor)
         with (
+            mock.patch.object(type(core), "get_all", wraps=core.get_all) as get_all_spy,
             mock.patch.object(
-                type(core), "get_all", wraps=core.get_all
-            ) as get_all_spy,
-            mock.patch.object(
-                type(core), "__getattr__", side_effect=AssertionError(
-                    "per-key read on the bulk path"
-                )
+                type(core),
+                "__getattr__",
+                side_effect=AssertionError("per-key read on the bulk path"),
             ),
         ):
             result = store.to_dict()
@@ -153,9 +151,9 @@ class TestInternalStoreLazy:
         from actingweb import attribute
 
         with mock.patch.object(
-            attribute.Attributes, "get_bucket", side_effect=AssertionError(
-                "bucket loaded during construction"
-            )
+            attribute.Attributes,
+            "get_bucket",
+            side_effect=AssertionError("bucket loaded during construction"),
         ):
             attribute.InternalStore(actor_id=actor_id, config=config)
 

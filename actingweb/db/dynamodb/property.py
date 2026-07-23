@@ -32,7 +32,15 @@ class PropertyIndex(GlobalSecondaryIndex[Any]):
 
 class Property(Model):
     """
-    DynamoDB data model for a property
+    DynamoDB data model for a property.
+
+    Deliberately declares NO global secondary index: in lookup-table mode
+    (the reverse-lookup mechanism of record) the legacy value-keyed GSI
+    would only add write/storage amplification and DynamoDB's 2048-byte
+    GSI-key limit on every property value. Tables created through this
+    class therefore have no GSI. Legacy-mode deployments create the table
+    through :class:`PropertyLegacy` instead — the schema a deployment
+    creates matches the code path its configuration selects.
     """
 
     class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -49,6 +57,29 @@ class Property(Model):
         aws_access_key_id: str | None = None
         aws_secret_access_key: str | None = None
         aws_session_token: str | None = None
+
+    id = UnicodeAttribute(hash_key=True)
+    name = UnicodeAttribute(range_key=True)
+    value = UnicodeAttribute()
+
+
+class PropertyLegacy(Model):
+    """Legacy schema variant of the SAME properties table (deprecated).
+
+    Identical item shape to :class:`Property` plus the value-keyed
+    ``property-index`` GSI. Used only (a) to create the table when the
+    deployment runs in legacy reverse-lookup mode, and (b) to query the
+    GSI on the legacy reverse-lookup path. All regular data-plane
+    operations go through :class:`Property` — the two classes are
+    item-compatible. Removed in the next major release together with the
+    legacy path.
+    """
+
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_properties"
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
+        region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
+        host = os.getenv("AWS_DB_HOST", None)
 
     id = UnicodeAttribute(hash_key=True)
     name = UnicodeAttribute(range_key=True)
@@ -77,10 +108,10 @@ class DbProperty:
             use_lookup_table: Whether to use property lookup table. If None, reads from env.
             indexed_properties: List of property names to index. If None, uses defaults.
         """
-        self.handle: Property | None = None
-        ensure_table(Property)
+        self.handle: Property | PropertyLegacy | None = None
 
-        # Store configuration for lookup table
+        # Store configuration for lookup table (resolved before table
+        # creation — the mode decides which schema a fresh table gets)
         if use_lookup_table is not None:
             self._use_lookup_table = use_lookup_table
         else:
@@ -95,6 +126,10 @@ class DbProperty:
             if os.getenv("INDEXED_PROPERTIES"):
                 env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
                 self._indexed_properties = [p.strip() for p in env_props if p.strip()]
+
+        # Lookup mode creates the table WITHOUT the legacy GSI; legacy mode
+        # keeps it. Existing tables are never altered — first creator wins.
+        ensure_table(Property if self._use_lookup_table else PropertyLegacy)
 
     def _should_index_property(self, name: str) -> bool:
         """
@@ -174,7 +209,7 @@ class DbProperty:
         else:
             # Legacy GSI approach (deprecated)
             try:
-                results = Property.property_index.query(value)
+                results = PropertyLegacy.property_index.query(value)
                 self.handle = None
                 for res in results:
                     self.handle = res
@@ -375,7 +410,9 @@ class DbPropertyList:
                 env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
                 self._indexed_properties = [p.strip() for p in env_props if p.strip()]
 
-        ensure_table(Property)
+        # Lookup mode creates the table WITHOUT the legacy GSI; legacy mode
+        # keeps it. Existing tables are never altered — first creator wins.
+        ensure_table(Property if self._use_lookup_table else PropertyLegacy)
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
         """Retrieves the properties of an actor_id from the database"""

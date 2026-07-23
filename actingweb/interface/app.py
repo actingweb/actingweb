@@ -1338,17 +1338,20 @@ class ActingWebApp:
             from ..db.dynamodb.actor import Actor
             from ..db.dynamodb.attribute import Attribute
             from ..db.dynamodb.peertrustee import PeerTrustee
-            from ..db.dynamodb.property import Property
+            from ..db.dynamodb.property import Property, PropertyLegacy
             from ..db.dynamodb.subscription import Subscription
             from ..db.dynamodb.subscription_diff import SubscriptionDiff
             from ..db.dynamodb.subscription_suspension import SubscriptionSuspension
             from ..db.dynamodb.trust import Trust
 
+            use_lookup = bool(self.get_config().use_lookup_table)
             models = [
                 Actor,
                 Attribute,
                 PeerTrustee,
-                Property,
+                # Lookup mode creates the properties table WITHOUT the
+                # legacy value-keyed GSI; legacy mode keeps it.
+                Property if use_lookup else PropertyLegacy,
                 Subscription,
                 SubscriptionDiff,
                 SubscriptionSuspension,
@@ -1358,7 +1361,7 @@ class ActingWebApp:
             # lookup-table mode; don't create it for legacy deployments.
             # (The deprecated v1 lookup model is read-only and never
             # auto-created.)
-            if self.get_config().use_lookup_table:
+            if use_lookup:
                 from ..db.dynamodb.property_lookup import PropertyLookupV2
 
                 models.append(PropertyLookupV2)

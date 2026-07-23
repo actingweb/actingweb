@@ -3,6 +3,7 @@ import os
 from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -23,8 +24,6 @@ class CreatorIndex(GlobalSecondaryIndex[Any]):
 
     class Meta:
         index_name = "creator-index"
-        read_capacity_units = 2
-        write_capacity_units = 1
         projection = AllProjection()
 
     creator = UnicodeAttribute(hash_key=True)
@@ -37,8 +36,7 @@ class Actor(Model):
 
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_actors"
-        read_capacity_units = 6
-        write_capacity_units = 2
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 

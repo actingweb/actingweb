@@ -18,6 +18,20 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Auto-created DynamoDB tables now use on-demand billing.** Tables the
+  library creates were provisioned with tiny fixed capacities inherited
+  from old Meta defaults (the property lookup table — the login path —
+  got 2 read units / 1 write unit per second, a hard throughput wall).
+  Newly created tables are now ``PAY_PER_REQUEST``. **Existing tables are
+  not changed** — convert them once, in place (never recreate; the lookup
+  table holds live login data)::
+
+      aws dynamodb update-table --table-name <prefix>_property_lookup \
+          --billing-mode PAY_PER_REQUEST
+
+  (AWS allows one billing-mode switch per table per 24 hours. Check
+  ``<prefix>_peertrustees`` too.)
+
 - **Per-actor DynamoDB reads no longer scan the whole table.** Nine call
   sites (property fetch/delete, trust list fetch/delete, peer-trustee
   fetch/lookup/delete) issued a full-table ``Scan`` with a partition-key

@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -54,8 +55,6 @@ class SecretIndex(GlobalSecondaryIndex):
 
     class Meta:
         index_name = "secret-index"
-        read_capacity_units = 2
-        write_capacity_units = 1
         projection = AllProjection()
 
     secret = UnicodeAttribute(hash_key=True)
@@ -66,8 +65,7 @@ class Trust(Model):
 
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_trusts"
-        read_capacity_units = 5
-        write_capacity_units = 2
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 

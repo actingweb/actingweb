@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -24,8 +25,6 @@ class PropertyIndex(GlobalSecondaryIndex[Any]):
 
     class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         index_name = "property-index"
-        read_capacity_units = 2
-        write_capacity_units = 1
         projection = AllProjection()
 
     value = UnicodeAttribute(default="0", hash_key=True)
@@ -38,8 +37,7 @@ class Property(Model):
 
     class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_properties"
-        read_capacity_units = 26
-        write_capacity_units = 2
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
         # Optional PynamoDB configuration attributes

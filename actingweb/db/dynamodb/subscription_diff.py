@@ -3,6 +3,7 @@ import logging
 import os
 
 from pynamodb.attributes import NumberAttribute, UnicodeAttribute, UTCDateTimeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
@@ -20,8 +21,7 @@ logger = logging.getLogger(__name__)
 class SubscriptionDiff(Model):
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_subscriptiondiffs"
-        read_capacity_units = 2
-        write_capacity_units = 3
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 

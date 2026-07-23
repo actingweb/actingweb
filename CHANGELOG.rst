@@ -5,6 +5,19 @@ CHANGELOG
 Unreleased
 ----------
 
+FIXED
+~~~~~
+
+- **Property lookup env overrides were silently ignored by the fluent builder.**
+  ``ActingWebApp`` stamped its own hardcoded lookup-table defaults onto the
+  config on every ``with_*()`` call (a guard intended to detect "explicitly
+  set" was always true), so the documented ``USE_PROPERTY_LOOKUP_TABLE`` and
+  ``INDEXED_PROPERTIES`` environment variables were clobbered for any app that
+  called a builder method after construction — including the documented
+  rollback path for lookup-table migration. The builder now tracks whether
+  these settings were explicitly configured; precedence is consistently
+  explicit builder call > environment variable > library default.
+
 v3.12.0: July 9, 2026
 ---------------------
 

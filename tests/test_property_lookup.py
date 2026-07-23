@@ -622,3 +622,70 @@ class TestConfigurationIntegration:
         assert "oauthId" in config.indexed_properties
         assert "email" in config.indexed_properties
         assert "externalUserId" in config.indexed_properties
+
+
+class TestBuilderConfigPrecedence:
+    """Lookup-table settings precedence: explicit builder > env var > default.
+
+    Regression tests for the bug where ActingWebApp stamped its own hardcoded
+    lookup-table defaults onto the config on every with_*() call, silently
+    clobbering the USE_PROPERTY_LOOKUP_TABLE / INDEXED_PROPERTIES env
+    overrides (the documented rollback path).
+    """
+
+    def _make_app(self):
+        from actingweb.interface import ActingWebApp
+
+        return ActingWebApp(
+            aw_type="urn:actingweb:test:precedence",
+            database="dynamodb",
+            fqdn="test.example.com",
+        )
+
+    def test_env_true_survives_builder_calls(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
+        app = self._make_app().with_web_ui(enable=True).with_devtest(enable=True)
+        assert app.get_config().use_lookup_table is True
+
+    def test_env_false_survives_builder_calls(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "false")
+        app = self._make_app().with_web_ui(enable=True).with_devtest(enable=True)
+        assert app.get_config().use_lookup_table is False
+
+    def test_indexed_properties_env_survives_builder_calls(self, monkeypatch):
+        monkeypatch.setenv("INDEXED_PROPERTIES", "custom1,custom2")
+        app = self._make_app().with_web_ui(enable=True)
+        assert app.get_config().indexed_properties == ["custom1", "custom2"]
+
+    def test_explicit_builder_beats_env(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
+        app = self._make_app().with_legacy_property_index(enable=True)
+        assert app.get_config().use_lookup_table is False
+        # ... and stays pinned across later builder calls
+        app.with_web_ui(enable=True)
+        assert app.get_config().use_lookup_table is False
+
+    def test_explicit_indexed_properties_beats_env(self, monkeypatch):
+        monkeypatch.setenv("INDEXED_PROPERTIES", "fromenv")
+        app = self._make_app().with_indexed_properties(["explicit1", "explicit2"])
+        assert app.get_config().indexed_properties == ["explicit1", "explicit2"]
+
+    def test_no_env_no_builder_uses_config_default(self, monkeypatch):
+        monkeypatch.delenv("USE_PROPERTY_LOOKUP_TABLE", raising=False)
+        monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
+        app = self._make_app().with_web_ui(enable=True)
+        config = app.get_config()
+        # Must match Config's own defaults (guards the future default flip:
+        # this asserts equality with Config(), not a hardcoded value)
+        if hasattr(Config, "_instance"):
+            delattr(Config, "_instance")
+        reference = Config()
+        assert config.use_lookup_table == reference.use_lookup_table
+        assert config.indexed_properties == reference.indexed_properties
+
+    def test_with_indexed_properties_no_args_leaves_env_authoritative(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("INDEXED_PROPERTIES", "fromenv")
+        app = self._make_app().with_indexed_properties()
+        assert app.get_config().indexed_properties == ["fromenv"]

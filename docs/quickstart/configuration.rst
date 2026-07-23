@@ -147,7 +147,7 @@ Backend selection is controlled by the ``database`` parameter in ``ActingWebApp(
      - DynamoDB
      - PostgreSQL
    * - Setup Complexity
-     - Low (auto-creates tables)
+     - Low (auto-creates tables; disable in production)
      - Medium (requires migrations)
    * - Local Development
      - DynamoDB Local (Docker)
@@ -197,10 +197,25 @@ Local Development (DynamoDB Local)
 
 Point your app to DynamoDB Local via these environment variables (no code changes needed). The library uses its bundled PynamoDB models to create/access required tables at runtime.
 
+Other DynamoDB environment variables:
+
+- ``AWS_DB_PREFIX`` — table-name prefix (default ``demo_actingweb``); every
+  table is named ``<prefix>_<kind>``. Must be set **before** the first
+  import of any ``actingweb.db.dynamodb`` module — table names are bound
+  at import time.
+- ``AWS_DB_AUTO_CREATE_TABLES`` — set ``false`` to disable table
+  auto-creation entirely (recommended in production with
+  infrastructure-as-code-managed tables). Equivalent fluent API:
+  ``with_dynamodb(auto_create_tables=False)``. Auto-created tables use
+  on-demand (``PAY_PER_REQUEST``) billing.
+
 Production (AWS DynamoDB)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``.
+  With auto-creation enabled (the default) the role also needs
+  ``dynamodb:CreateTable`` and ``dynamodb:DescribeTable``; with
+  ``AWS_DB_AUTO_CREATE_TABLES=false`` both can be dropped.
 - Ensure tables exist (actor, properties, attributes, subscriptions, trust, and related indexes) before first traffic; the library's DB modules are under ``actingweb.db.dynamodb``.
 - Set region/credentials via standard AWS mechanisms (env vars, instance roles, profiles).
 
@@ -407,14 +422,20 @@ Property Reverse Lookup
 
 ActingWeb supports efficient reverse lookups (find actor by property value) using a dedicated lookup table. This is particularly useful for OAuth authentication where you need to find an actor by their OAuth provider ID.
 
-**Why Use Lookup Tables?**
+**How it works**
 
-By default, ActingWeb uses database indexes for reverse lookups:
+Lookup-table mode is the **default** (since v3.13) and the mechanism of
+record. On DynamoDB, lookup rows are keyed by a SHA-256 digest of the
+(property name, value) pair — no value-size limit, uniform partition
+distribution, and no plaintext values in the lookup table.
 
-- **DynamoDB**: Global Secondary Index (GSI) on the ``value`` field - limited to 2048 bytes
-- **PostgreSQL**: Index on the ``value`` column - works but less efficient for large values
+The deprecated legacy mode used database indexes instead:
 
-The lookup table approach removes size limits and improves query performance for configured properties.
+- **DynamoDB**: Global Secondary Index (GSI) on the ``value`` field — limited to 2048 bytes
+- **PostgreSQL**: unindexed query on the ``value`` column — a full-table scan
+
+Legacy mode remains available for migration (``with_legacy_property_index(enable=True)``)
+and is removed in the next major release.
 
 Configuration
 ~~~~~~~~~~~~~
@@ -430,20 +451,24 @@ Enable lookup tables via API or environment variables:
         fqdn="myapp.example.com"
     ).with_indexed_properties(["oauthId", "email", "externalUserId"])
 
-    # Enable lookup table mode (disable legacy indexes)
-    app.with_legacy_property_index(enable=False)  # Recommended for new deployments
+    # Lookup-table mode is the default; pin legacy mode only for migration:
+    # app.with_legacy_property_index(enable=True)
 
 **Environment Variables:**
 
 .. code-block:: bash
 
-    export USE_PROPERTY_LOOKUP_TABLE=true                           # Enable lookup table
+    export USE_PROPERTY_LOOKUP_TABLE=false                         # Pin deprecated legacy mode
     export INDEXED_PROPERTIES=oauthId,email,externalUserId         # Which properties to index
 
 **Default Configuration:**
 
-- ``USE_PROPERTY_LOOKUP_TABLE``: ``false`` (uses legacy GSI/index for backward compatibility)
+- ``USE_PROPERTY_LOOKUP_TABLE``: ``true`` (lookup-table mode; set ``false`` to pin the deprecated legacy GSI/index)
 - ``INDEXED_PROPERTIES``: ``["oauthId", "email", "externalUserId"]``
+
+Precedence: an explicit ``with_indexed_properties()`` /
+``with_legacy_property_index()`` call beats the environment variable,
+which beats the library default.
 
 Usage Example
 ~~~~~~~~~~~~~
@@ -488,40 +513,26 @@ The lookup happens automatically when you set indexed properties:
 Migration Guide
 ~~~~~~~~~~~~~~~
 
-**New Deployments:** Enable lookup tables from the start:
+**New deployments** need nothing — lookup-table mode is the default.
 
-.. code-block:: python
+**Deployments upgrading from pre-3.13** (or from the v1 lookup-table
+format): reverse lookups keep working through deprecated fallbacks, but
+you must populate the v2 lookup table:
 
-    app.with_legacy_property_index(enable=False)
+.. code-block:: bash
 
-**Existing Deployments:** Use dual-mode for gradual migration:
+    # With the same environment as the app:
+    poetry run python scripts/backfill_property_lookup.py --dry-run
+    poetry run python scripts/backfill_property_lookup.py --rps 50
 
-1. **Phase 1 - Deploy with Lookup Table Support:**
+The script is streaming, rate-limited, resumable and idempotent, and
+reports (without overwriting) any value shared by two actors. See
+:doc:`../migration/v3.13` for the full decision tree, verification steps,
+and the optional legacy-GSI / v1-table cleanup.
 
-   .. code-block:: python
-
-       # Keep legacy mode enabled (default)
-       app = ActingWebApp(...)  # use_lookup_table defaults to False
-
-   Deploy this version. Both legacy and lookup table code paths are available.
-
-2. **Phase 2 - Enable Lookup Tables:**
-
-   .. code-block:: bash
-
-       export USE_PROPERTY_LOOKUP_TABLE=true
-
-   Restart the application. New writes will populate lookup tables. Legacy GSI/index still used for reads.
-
-3. **Phase 3 - Backfill Existing Data (Optional):**
-
-   Run a backfill script to populate lookup tables for existing actors (implementation depends on your deployment).
-
-4. **Phase 4 - Disable Legacy Index:**
-
-   Once backfill is complete and you've verified lookup tables work correctly, you can disable the legacy GSI/index at the database level.
-
-**Rollback:** Set ``USE_PROPERTY_LOOKUP_TABLE=false`` to revert to legacy GSI/index mode.
+**Rollback:** Set ``USE_PROPERTY_LOOKUP_TABLE=false`` (or call
+``with_legacy_property_index(enable=True)``) to pin the deprecated
+legacy GSI/index mode.
 
 Size Limits
 ~~~~~~~~~~~

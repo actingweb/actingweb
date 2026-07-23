@@ -116,7 +116,7 @@ class DbProperty:
             self._use_lookup_table = use_lookup_table
         else:
             self._use_lookup_table = (
-                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "true").lower() == "true"
             )
 
         if indexed_properties is not None:
@@ -194,6 +194,39 @@ class DbProperty:
 
             lookup = DbPropertyLookup()
             actor_id = lookup.get(property_name=name, value=value)
+
+            if actor_id is None:
+                # Migration fallback tier 1: the deprecated v1 lookup table
+                # (deployments that adopted lookup mode before the v2 digest
+                # format). A hit means the v2 backfill has not run yet.
+                actor_id = lookup.get_v1(property_name=name, value=value)
+                if actor_id:
+                    logger.warning(
+                        f"DEPRECATED: reverse lookup for '{name}' served from "
+                        f"the v1 lookup table — run "
+                        f"scripts/backfill_property_lookup.py to migrate to "
+                        f"the v2 format, then drop the v1 table. This "
+                        f"fallback is removed in the next major release."
+                    )
+
+            if actor_id is None:
+                # Migration fallback tier 2: the legacy value-keyed GSI
+                # (deployments upgrading from legacy mode with an un-backfilled
+                # lookup table). Missing index/table is a normal state.
+                try:
+                    for res in PropertyLegacy.property_index.query(value):
+                        actor_id = str(res.id) if res.id else None
+                        break
+                except Exception:
+                    actor_id = None
+                if actor_id:
+                    logger.warning(
+                        f"DEPRECATED: reverse lookup for '{name}' served from "
+                        f"the legacy property-index GSI — run "
+                        f"scripts/backfill_property_lookup.py to populate the "
+                        f"lookup table. This fallback is removed in the next "
+                        f"major release."
+                    )
 
             if actor_id:
                 # Load the property into self.handle for subsequent operations
@@ -399,7 +432,7 @@ class DbPropertyList:
             self._use_lookup_table = use_lookup_table
         else:
             self._use_lookup_table = (
-                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "true").lower() == "true"
             )
 
         if indexed_properties is not None:

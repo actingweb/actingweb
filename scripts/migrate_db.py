@@ -87,7 +87,9 @@ def run_alembic(alembic_ini, args):
 
     print(f"🔧 Running: alembic {' '.join(alembic_args)}")
     print(f"📁 Config: {alembic_ini}")
-    print(f"🗄️  Database: {os.getenv('PG_DB_NAME')} @ {os.getenv('PG_DB_HOST')}:{os.getenv('PG_DB_PORT')}")
+    print(
+        f"🗄️  Database: {os.getenv('PG_DB_NAME')} @ {os.getenv('PG_DB_HOST')}:{os.getenv('PG_DB_PORT')}"
+    )
     print()
 
     try:
@@ -95,10 +97,11 @@ def run_alembic(alembic_ini, args):
         print("\n✅ Migration completed successfully")
     except Exception as e:
         import traceback
+
         print(f"\n❌ Migration failed: {e}")
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("Full error traceback:")
-        print("="*60)
+        print("=" * 60)
         traceback.print_exc()
         sys.exit(1)
 
@@ -108,6 +111,7 @@ def main():
     # Load .env file if it exists
     try:
         from dotenv import load_dotenv
+
         if Path(".env").exists():
             load_dotenv()
             print("✅ Loaded environment variables from .env")

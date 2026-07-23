@@ -646,8 +646,9 @@ class TestConfigurationIntegration:
             delattr(Config, "_instance")
 
         config = Config()
-        # Default should be False for backward compatibility
-        assert config.use_lookup_table is False
+        # Lookup-table mode is the default since v3.13 (legacy GSI mode is
+        # deprecated; pin it via USE_PROPERTY_LOOKUP_TABLE=false)
+        assert config.use_lookup_table is True
         # Default indexed properties
         assert "oauthId" in config.indexed_properties
         assert "email" in config.indexed_properties

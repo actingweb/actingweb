@@ -18,6 +18,18 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Lookup-table mode is now the default reverse-lookup mechanism**
+  (``use_lookup_table`` defaults to ``True``; the deprecated legacy
+  GSI/index mode can be pinned with ``with_legacy_property_index(True)``
+  or ``USE_PROPERTY_LOOKUP_TABLE=false``). Upgrading deployments keep
+  resolving reverse lookups through deprecated fallbacks (v1 lookup
+  table, then the legacy GSI where present) with per-hit warnings and a
+  loud startup ERROR until the new
+  ``scripts/backfill_property_lookup.py`` is run — see
+  ``docs/migration/v3.13.rst`` for the per-deployment decision tree.
+  Note the semantic change: lookup-table matching is per (property name,
+  value); the legacy GSI matched on value alone.
+
 - **Freshly created properties tables match the configured reverse-lookup
   mode.** In lookup-table mode, auto-created ``<prefix>_properties``
   tables no longer carry the legacy value-keyed ``property-index`` GSI —

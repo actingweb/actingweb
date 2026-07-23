@@ -1380,6 +1380,62 @@ class ActingWebApp:
         except Exception as e:
             logger.info(f"Table pre-warm skipped: {e}")
 
+    def _check_lookup_backfill_needed(self) -> None:
+        """Warn loudly when reverse lookups would silently miss.
+
+        Fires when lookup-table mode is active, the properties table has
+        data, but the v2 lookup table is empty — the state every upgrading
+        deployment is in until it runs the backfill. Without the backfill,
+        indexed lookups are served by deprecated fallbacks (or return None
+        once those are removed). One cheap single-item probe per table,
+        once per process. Modeled on _warn_lambda_async_callbacks.
+        """
+        if self.database != "dynamodb" or getattr(self, "_backfill_checked", False):
+            return
+        self._backfill_checked = True
+        import logging
+
+        logger = logging.getLogger(__name__)
+        try:
+            if not self.get_config().use_lookup_table:
+                return
+            from ..db.dynamodb.property import Property
+            from ..db.dynamodb.property_lookup import (
+                PropertyLookup,
+                PropertyLookupV2,
+            )
+
+            if any(True for _ in PropertyLookupV2.scan(limit=1)):
+                return  # v2 populated — nothing to do
+            if not any(True for _ in Property.scan(limit=1)):
+                return  # fresh deployment, nothing to backfill
+            v1_has_rows = False
+            try:
+                v1_has_rows = any(True for _ in PropertyLookup.scan(limit=1))
+            except Exception:
+                pass
+            if v1_has_rows:
+                logger.error(
+                    "Property lookup table needs migration: the v1 lookup "
+                    "table has data but the v2 table "
+                    f"('{PropertyLookupV2.Meta.table_name}') is empty. "
+                    "Reverse lookups are being served by a deprecated "
+                    "fallback. Run scripts/backfill_property_lookup.py to "
+                    "rebuild the v2 table from the properties table, verify, "
+                    "then drop the v1 table. See docs/migration/v3.13."
+                )
+            else:
+                logger.error(
+                    "Property lookup table is empty but the properties table "
+                    "has data: reverse lookups (e.g. find-actor-by-email) "
+                    "depend on a deprecated fallback or will return None. "
+                    "Run scripts/backfill_property_lookup.py to populate "
+                    f"'{PropertyLookupV2.Meta.table_name}'. "
+                    "See docs/migration/v3.13."
+                )
+        except Exception as e:
+            logger.debug(f"Lookup backfill check skipped: {e}")
+
     def integrate_flask(self, flask_app: Any) -> "FlaskIntegration":
         """Integrate with Flask application."""
         try:
@@ -1390,6 +1446,7 @@ class ActingWebApp:
                 "Install with: pip install 'actingweb[flask]'"
             ) from e
         self._prewarm_dynamodb_tables()
+        self._check_lookup_backfill_needed()
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
         return integration
@@ -1420,6 +1477,7 @@ class ActingWebApp:
             ) from e
 
         self._prewarm_dynamodb_tables()
+        self._check_lookup_backfill_needed()
         integration = FastAPIIntegration(
             self,
             fastapi_app,

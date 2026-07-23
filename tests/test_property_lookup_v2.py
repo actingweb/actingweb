@@ -94,7 +94,9 @@ class TestWriteFailureLogging:
             pl.PropertyLookupV2, "save", side_effect=Exception("throttled")
         ):
             db = pl.DbPropertyLookup()
-            with caplog.at_level("ERROR"):
+            with caplog.at_level(
+                "ERROR", logger="actingweb.db.dynamodb.property_lookup"
+            ):
                 assert db.create("email", secret_value, actor_id) is False
         assert any("LOOKUP_CREATE_FAILED" in r.message for r in caplog.records)
         assert all(secret_value not in r.message for r in caplog.records)
@@ -133,7 +135,7 @@ class TestReverseLookupContract:
         prop = prop_mod.DbProperty(use_lookup_table=True, indexed_properties=["email"])
         with (
             mock.patch.object(prop_mod.PropertyLegacy, "property_index") as gsi,
-            caplog.at_level("WARNING"),
+            caplog.at_level("WARNING", logger="actingweb.db.dynamodb.property"),
         ):
             result = prop.get_actor_id_from_property(name="notIndexed", value="v")
         assert result is None

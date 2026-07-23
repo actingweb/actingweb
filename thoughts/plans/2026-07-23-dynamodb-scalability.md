@@ -1,7 +1,7 @@
 # Implementation Plan: DynamoDB Backend Scalability (v3.13.0)
 
 **Date:** 2026-07-23
-**Status:** Ready for Implementation
+**Status:** Implemented (all 8 phases, branch `dynamodb-scalability`; pending PR + release)
 **Research:** thoughts/research/2026-07-23-dynamodb-scaling-defects.md (companion measurement doc:
 `../actingweb_mcp/thoughts/research/2026-07-23-scaling-review-apigw-lambda-dynamodb.md`)
 **Branch:** master (plan written at commit `29783f8`; implement on a feature branch)
@@ -245,7 +245,7 @@ before merge; treat any as test fixes, not code fixes.
 - [ ] Manual (optional, high-value): against DynamoDB Local, confirm via boto debug logs
       that property fetch issues `Query` not `Scan`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (branch `dynamodb-scalability`)
 
 ---
 
@@ -279,7 +279,7 @@ before merge; treat any as test fixes, not code fixes.
 - [ ] `poetry run pyright actingweb tests`; `poetry run ruff check` — clean
 - [ ] `make test-all-parallel` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (branch `dynamodb-scalability`)
 
 ---
 
@@ -335,7 +335,7 @@ re-read list metadata.
 - [ ] `make test-all-parallel` passes (property handlers are heavily covered — treat any
       failure as a semantics regression, not test brittleness)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (branch `dynamodb-scalability`)
 
 ---
 
@@ -425,7 +425,7 @@ v2 is a **new table**; v1 stays intact for rollback and as a Phase 8 fallback ti
 - [ ] `poetry run pyright actingweb tests`; `poetry run ruff check` — clean
 - [ ] `make test-all-parallel` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (branch `dynamodb-scalability`)
 
 ---
 
@@ -468,7 +468,7 @@ first use (`models.py:265-275,1059-1080`); runtime `_indexes` mutation makes
 - [ ] `poetry run pyright actingweb tests`; `poetry run ruff check` — clean
 - [ ] `make test-all-parallel` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (branch `dynamodb-scalability`)
 
 ---
 
@@ -592,7 +592,7 @@ Ships last, after every safety mechanism above is in place.
 - [ ] Manual: fresh-prefix end-to-end against DynamoDB Local — deploy, write indexed
       property, reverse-lookup, verify no GSI on table, verify PAY_PER_REQUEST
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (branch `dynamodb-scalability`)
 
 ---
 

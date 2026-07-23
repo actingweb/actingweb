@@ -43,6 +43,40 @@ Choose the appropriate section based on your database backend:
   use pg_cron or scheduled cleanup scripts for the remaining temporary data
   (OAuth sessions, MCP tokens, orphaned index entries)
 
+DynamoDB Billing Mode for Auto-Created Tables
+---------------------------------------------
+
+Tables auto-created by ActingWeb **before v3.13** were PROVISIONED with
+tiny fixed capacities inherited from old defaults — typically
+``<prefix>_property_lookup`` (2 read units / 1 write unit per second — a
+hard throughput wall on the login path) and ``<prefix>_peertrustees``.
+Since v3.13 auto-created tables are on-demand, but **existing tables are
+never changed automatically**. Convert them in place:
+
+.. code-block:: bash
+
+    # Find provisioned stragglers
+    for t in $(aws dynamodb list-tables --query 'TableNames[]' --output text); do
+      aws dynamodb describe-table --table-name "$t" \
+        --query 'Table.[TableName,BillingModeSummary.BillingMode]' --output text
+    done
+
+    # Convert (allowed once per table per 24 hours)
+    aws dynamodb update-table --table-name <prefix>_peertrustees \
+      --billing-mode PAY_PER_REQUEST
+
+.. warning::
+
+   Never delete and recreate a table to change its billing mode — every
+   ActingWeb table holds live data (the lookup table backs the login
+   path). ``update-table`` converts in place with no downtime.
+
+For fully infrastructure-as-code-managed deployments, disable
+auto-creation (``AWS_DB_AUTO_CREATE_TABLES=false`` or
+``with_dynamodb(auto_create_tables=False)``) and drop
+``dynamodb:CreateTable`` / ``dynamodb:DescribeTable`` from the runtime
+role.
+
 DynamoDB TTL Configuration
 --------------------------
 

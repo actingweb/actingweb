@@ -52,12 +52,13 @@ Launch DynamoDB Local and configure environment:
 
 Notes:
 
-- The library auto-creates tables on first access through its PynamoDB models.
-  Table names are prefixed (default ``demo_actingweb``, e.g.
-  ``demo_actingweb_actors``; override with the ``AWS_DB_PREFIX`` environment
-  variable). During startup you may see benign ``DEBUG`` log lines about a
-  not-yet-existent table (e.g. ``demo_actingweb_subscription_suspensions``) as
-  each table is created lazily on first use — these are harmless.
+- The library auto-creates tables (a development convenience — disable in
+  production with ``AWS_DB_AUTO_CREATE_TABLES=false`` when tables are managed
+  by infrastructure-as-code). Table names are prefixed (default
+  ``demo_actingweb``, e.g. ``demo_actingweb_actors``; override with the
+  ``AWS_DB_PREFIX`` environment variable **before** the app imports any
+  database module). Tables are pre-created at framework-integration time and
+  use on-demand billing.
 - For production, configure IAM and real AWS hosts (do not set ``AWS_DB_HOST``).
 
 Option 2: PostgreSQL (Recommended for New Projects)
@@ -133,7 +134,7 @@ If you prefer to run alembic directly without the helper script:
 
 **Notes:**
 
-- PostgreSQL requires running Alembic migrations before first use (unlike DynamoDB which auto-creates tables)
+- PostgreSQL requires running Alembic migrations before first use (unlike DynamoDB, which auto-creates tables by default)
 - For native PostgreSQL: ``brew install postgresql`` (macOS) or ``apt install postgresql`` (Ubuntu)
 - Connection pooling is automatic (psycopg3 with configurable min/max connections)
 - Use Docker Compose for multi-service setups (see :doc:`../guides/postgresql-migration`)

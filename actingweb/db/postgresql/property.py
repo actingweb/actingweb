@@ -39,7 +39,7 @@ class DbProperty:
             self._use_lookup_table = use_lookup_table
         else:
             self._use_lookup_table = (
-                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "true").lower() == "true"
             )
 
         if indexed_properties is not None:
@@ -137,6 +137,36 @@ class DbProperty:
 
             lookup = DbPropertyLookup()
             actor_id = lookup.get(property_name=name, value=value)
+
+            if actor_id is None:
+                # Migration fallback: an un-backfilled lookup table on an
+                # upgrading deployment. The legacy query is an unindexed
+                # sequential scan (the value index was dropped by migration
+                # c3d4e5f6a7b8) — populate the lookup table to escape it.
+                try:
+                    with get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                SELECT id FROM properties
+                                WHERE value = %s
+                                LIMIT 1
+                                """,
+                                (value,),
+                            )
+                            row = cur.fetchone()
+                            if row:
+                                actor_id = row[0]
+                except Exception:
+                    actor_id = None
+                if actor_id:
+                    logger.warning(
+                        f"DEPRECATED: reverse lookup for '{name}' served by a "
+                        f"full-table scan of the properties table — run "
+                        f"scripts/backfill_property_lookup.py to populate the "
+                        f"lookup table. This fallback is removed in the next "
+                        f"major release."
+                    )
 
             if actor_id:
                 # Load the property into self.handle for subsequent operations
@@ -435,7 +465,7 @@ class DbPropertyList:
             self._use_lookup_table = use_lookup_table
         else:
             self._use_lookup_table = (
-                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "").lower() == "true"
+                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "true").lower() == "true"
             )
 
         if indexed_properties is not None:

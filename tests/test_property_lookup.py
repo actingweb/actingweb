@@ -167,11 +167,14 @@ class TestPropertyLookupBasicOperations:
     def test_create_duplicate_lookup(self, backend: str, test_actor_id: str):
         """Test creating a duplicate lookup entry (backend-specific behavior)."""
         lookup_mod = get_db_module(backend, "property_lookup")
+        # Unique per run: with conditional puts, a residual row from an
+        # earlier run would otherwise be (correctly) treated as a collision.
+        dup_value = f"duplicate-{uuid.uuid4()}"
 
         # Create first entry
         lookup1 = lookup_mod.DbPropertyLookup()
         result1 = lookup1.create(
-            property_name="oauthId", value="duplicate_value", actor_id=test_actor_id
+            property_name="oauthId", value=dup_value, actor_id=test_actor_id
         )
         assert result1 is True
 
@@ -179,25 +182,29 @@ class TestPropertyLookupBasicOperations:
         other_actor_id = str(uuid.uuid4())
         lookup2 = lookup_mod.DbPropertyLookup()
         result2 = lookup2.create(
-            property_name="oauthId", value="duplicate_value", actor_id=other_actor_id
+            property_name="oauthId", value=dup_value, actor_id=other_actor_id
         )
 
-        # Verify behavior based on backend
+        # Unified behavior (v2): a duplicate for a DIFFERENT actor is a
+        # collision — rejected and logged, the original entry preserved.
+        # (DynamoDB used to silently overwrite last-writer-wins; the v2
+        # conditional put aligned it with PostgreSQL.)
         lookup3 = lookup_mod.DbPropertyLookup()
-        found_actor_id = lookup3.get(property_name="oauthId", value="duplicate_value")
+        found_actor_id = lookup3.get(property_name="oauthId", value=dup_value)
 
-        if backend == "dynamodb":
-            # DynamoDB PutItem overwrites existing entry (last write wins)
-            assert result2 is True, "DynamoDB allows overwrite"
-            assert found_actor_id == other_actor_id, (
-                "DynamoDB overwrites with new value"
+        assert result2 is False, "duplicate for another actor must be rejected"
+        assert found_actor_id == test_actor_id, "original entry must be preserved"
+
+        # Re-creating the SAME mapping is idempotent
+        lookup4 = lookup_mod.DbPropertyLookup()
+        assert (
+            lookup4.create(
+                property_name="oauthId",
+                value=dup_value,
+                actor_id=test_actor_id,
             )
-        elif backend == "postgresql":
-            # PostgreSQL INSERT fails on duplicate primary key
-            assert result2 is False, "PostgreSQL rejects duplicate"
-            assert found_actor_id == test_actor_id, (
-                "PostgreSQL preserves original entry"
-            )
+            is True
+        )
 
         # Cleanup
         lookup3.delete()

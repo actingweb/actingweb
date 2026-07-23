@@ -18,6 +18,24 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Property reverse-lookup table redesigned (v2, digest keys).** On
+  DynamoDB, lookup rows now live in a new ``<prefix>_property_lookup_v2``
+  table keyed by a SHA-256 digest of (property name, value); the plaintext
+  value is no longer stored. This removes the old design's hot-partition
+  key (all emails shared one partition), its undocumented 1024-byte value
+  cap, and plaintext PII in key material. Writes are conditional: a value
+  already mapped to a **different** actor is now a loudly-logged collision
+  instead of a silent last-writer-wins overwrite (PostgreSQL gained the
+  same idempotent-create/collision semantics). Existing v1 lookup tables
+  are read as a deprecated fallback; rebuild the v2 table from the
+  properties table with the backfill script, verify, then drop the v1
+  table. Reverse lookups for property names not configured as indexed now
+  return ``None`` with a warning instead of silently using the legacy
+  path, and the legacy GSI path raises an actionable error when the index
+  is missing from the live table instead of an opaque backend exception.
+  Lookup write failures are logged at ERROR (previously swallowed —
+  a failed lookup write silently broke login-by-email for that user).
+
 - **Hot-path read amplification removed across the property and actor
   paths.** ``GET /<actor>/properties`` now serves the entire response
   (simple properties, list discovery, list metadata and list items) from a

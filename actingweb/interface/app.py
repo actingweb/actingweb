@@ -1356,10 +1356,12 @@ class ActingWebApp:
             ]
             # The lookup table is only used (and thus only created) in
             # lookup-table mode; don't create it for legacy deployments.
+            # (The deprecated v1 lookup model is read-only and never
+            # auto-created.)
             if self.get_config().use_lookup_table:
-                from ..db.dynamodb.property_lookup import PropertyLookup
+                from ..db.dynamodb.property_lookup import PropertyLookupV2
 
-                models.append(PropertyLookup)
+                models.append(PropertyLookupV2)
 
             with ThreadPoolExecutor(max_workers=len(models)) as pool:
                 futures = {m: pool.submit(ensure_table, m) for m in models}

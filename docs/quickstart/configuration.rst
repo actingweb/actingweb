@@ -537,10 +537,18 @@ Size Limits
      - 2048 bytes
      - 8191 bytes (btree index)
    * - Lookup Table
-     - No limit (400KB item)
+     - No limit (fixed-size digest key)
      - No limit (TEXT column)
 
 **Recommendation:** Use lookup tables if you need to store OAuth tokens, long external IDs, or any property values exceeding 2KB.
+
+.. note::
+   On DynamoDB, lookup rows are keyed by a SHA-256 digest of
+   ``(property name, value)`` and the plaintext value is **not stored** in
+   the lookup table — this removes any value-size limit and keeps
+   personally identifiable values (emails, OAuth IDs) out of the lookup
+   table entirely. Note this is pseudonymisation, not anonymisation: the
+   properties table itself still stores values in plaintext.
 
 **Practical Size Limits:**
 

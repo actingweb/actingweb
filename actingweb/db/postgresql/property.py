@@ -118,6 +118,19 @@ class DbProperty:
         if not name or not value:
             return None
 
+        if self._use_lookup_table and name not in self._indexed_properties:
+            # Same contract as the DynamoDB backend: only properties
+            # configured via with_indexed_properties() support reverse
+            # lookup in lookup-table mode. The old behaviour silently fell
+            # through to an unindexed full-table sequential scan.
+            logger.warning(
+                f"Reverse lookup requested for non-indexed property "
+                f"'{name}' — add it to with_indexed_properties() (or "
+                f"INDEXED_PROPERTIES) to enable reverse lookup; "
+                f"returning None"
+            )
+            return None
+
         if self._use_lookup_table and name in self._indexed_properties:
             # Use new lookup table approach
             from actingweb.db.postgresql.property_lookup import DbPropertyLookup

@@ -140,8 +140,21 @@ class DbProperty:
         if not name or not value:
             return None
 
-        if self._use_lookup_table and name in self._indexed_properties:
-            # Use new lookup table approach
+        if self._use_lookup_table:
+            if name not in self._indexed_properties:
+                # Enforce the documented contract: only properties configured
+                # via with_indexed_properties() support reverse lookup. The
+                # old behaviour silently fell through to the legacy GSI,
+                # which crashes on tables created without that index.
+                logger.warning(
+                    f"Reverse lookup requested for non-indexed property "
+                    f"'{name}' — add it to with_indexed_properties() (or "
+                    f"INDEXED_PROPERTIES) to enable reverse lookup; "
+                    f"returning None"
+                )
+                return None
+
+            # Use lookup table approach
             from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
 
             lookup = DbPropertyLookup()
@@ -159,12 +172,34 @@ class DbProperty:
 
             return actor_id
         else:
-            # Fall back to legacy GSI approach
-            results = Property.property_index.query(value)
-            self.handle = None
-            for res in results:
-                self.handle = res
-                break
+            # Legacy GSI approach (deprecated)
+            try:
+                results = Property.property_index.query(value)
+                self.handle = None
+                for res in results:
+                    self.handle = res
+                    break
+            except Exception as e:
+                if "index" in str(e).lower() or "ValidationException" in str(e):
+                    raise RuntimeError(
+                        f"Legacy property-index GSI is missing from table "
+                        f"'{Property.Meta.table_name}'. Reverse lookup is "
+                        f"configured to use the legacy DynamoDB GSI "
+                        f"(use_lookup_table=False), but this table has no "
+                        f"'property-index' GSI — it was created without one, "
+                        f"and the library cannot add a GSI to a live table. "
+                        f"Three ways to resolve: "
+                        f"(1) RECOMMENDED: switch to lookup-table mode with "
+                        f"with_legacy_property_index(enable=False) and run "
+                        f"scripts/backfill_property_lookup.py; "
+                        f"(2) keep legacy mode and add the GSI to the live "
+                        f"table via 'aws dynamodb update-table' — note this "
+                        f"imposes a 2048-byte limit on ALL property values; "
+                        f"(3) disable reverse lookup entirely with "
+                        f"with_indexed_properties([]). "
+                        f"See docs/migration/v3.13 for details."
+                    ) from e
+                raise
 
             if not self.handle:
                 return None
@@ -234,32 +269,25 @@ class DbProperty:
 
         Best-effort update - logs errors but doesn't fail property write.
         """
+        # Unchanged value: nothing to sync — avoids a delete+put per
+        # repeated write of the same indexed value.
+        if old_value is not None and old_value == new_value:
+            return
         try:
-            from actingweb.db.dynamodb.property_lookup import (
-                DbPropertyLookup,
-                PropertyLookup,
-            )
+            from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
 
-            # Ensure table exists
-            DbPropertyLookup()
+            db = DbPropertyLookup()
 
-            # Delete old lookup entry if exists
-            # Note: Theoretical race condition if another actor creates same value
-            # between get() and delete(), but best-effort design accepts this edge case
-            if old_value and old_value != new_value:
-                try:
-                    lookup = PropertyLookup.get(name, old_value)
-                    if str(lookup.actor_id) == actor_id:  # Verify it's ours
-                        lookup.delete()
-                except Exception:
-                    pass  # Entry doesn't exist or already deleted
+            # Delete the old entry if it exists and belongs to this actor.
+            # Note: theoretical race if another actor creates the same value
+            # between get() and delete(); best-effort design accepts this.
+            if old_value:
+                if db.get(property_name=name, value=old_value) == actor_id:
+                    db.delete()
 
-            # Create new lookup entry (skip if value unchanged)
-            if not old_value or old_value != new_value:
-                lookup = PropertyLookup(
-                    property_name=name, value=new_value, actor_id=actor_id
-                )
-                lookup.save()
+            # Conditional create: a row owned by another actor is a logged
+            # collision, not a silent overwrite (see DbPropertyLookup.create).
+            db.create(property_name=name, value=new_value, actor_id=actor_id)
 
         except Exception as e:
             logger.error(
@@ -276,18 +304,12 @@ class DbProperty:
         Best-effort deletion - logs errors but doesn't fail property delete.
         """
         try:
-            from actingweb.db.dynamodb.property_lookup import (
-                DbPropertyLookup,
-                PropertyLookup,
-            )
+            from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
 
-            # Ensure table exists
-            DbPropertyLookup()
-
-            lookup = PropertyLookup.get(name, value)
+            db = DbPropertyLookup()
             # Verify it belongs to the same actor before deleting
-            if str(lookup.actor_id) == actor_id:
-                lookup.delete()
+            if db.get(property_name=name, value=value) == actor_id:
+                db.delete()
         except Exception as e:
             logger.warning(
                 f"LOOKUP_DELETE_FAILED: actor={actor_id} property={name} "
@@ -403,23 +425,16 @@ class DbPropertyList:
 
         # Delete lookup entries
         if indexed_props:
-            from actingweb.db.dynamodb.property_lookup import (
-                DbPropertyLookup,
-                PropertyLookup,
-            )
+            from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
 
-            # Ensure table exists
-            DbPropertyLookup()
-
+            db = DbPropertyLookup()
             for name, value in indexed_props:
                 try:
-                    lookup = PropertyLookup.get(name, value)
-                    # Verify it belongs to this actor before deleting. In
-                    # DynamoDB a shared indexed value is overwritten by the
-                    # latest writer, so deleting an older actor must not remove
-                    # a newer actor's reverse-lookup row.
-                    if str(lookup.actor_id) == self.actor_id:
-                        lookup.delete()
+                    # Verify ownership before deleting: a shared indexed value
+                    # may map to another actor's row, which must survive this
+                    # actor's deletion.
+                    if db.get(property_name=name, value=value) == self.actor_id:
+                        db.delete()
                 except Exception as e:
                     logger.warning(
                         f"Failed to delete lookup entry for property {name}: {e}"

@@ -18,6 +18,20 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Hot-path read amplification removed across the property and actor
+  paths.** ``GET /<actor>/properties`` now serves the entire response
+  (simple properties, list discovery, list metadata and list items) from a
+  single partition read — it previously re-read every property
+  individually after the bulk read, read the partition a second time for
+  lists, and re-read each list's metadata row. Single-property reads no
+  longer pay an extra list-existence check on every hit, repeat property
+  writes skip the list-collision read, the actor's internal attribute
+  bucket is loaded lazily (once, instead of eagerly twice per actor
+  construction), attribute buckets in general no longer load fully on
+  construction, bulk property deletion reads its partition once instead of
+  twice, and permission evaluation caches confirmed-absent trust
+  overrides instead of re-reading per request.
+
 - **Auto-created DynamoDB tables now use on-demand billing.** Tables the
   library creates were provisioned with tiny fixed capacities inherited
   from old Meta defaults (the property lookup table — the login path —

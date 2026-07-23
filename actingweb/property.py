@@ -97,8 +97,13 @@ class PropertyStore:
             if k in self.__dict__:
                 self.__delattr__(k)
         else:
-            # Check for list collision - error if list exists
-            if self.__dict__.get("_config"):
+            # Check for list collision - error if list exists. Only needed
+            # when the property is not already known as an existing simple
+            # property in this store (collision checks in both directions
+            # guarantee a name cannot be both) — skipping it saves one
+            # metadata read on every repeat write. A cached None (missed
+            # read) must NOT skip the check.
+            if self.__dict__.get(k) is None and self.__dict__.get("_config"):
                 list_store = PropertyListStore(
                     actor_id=self.__dict__.get("_actor_id"),
                     config=self.__dict__["_config"],

@@ -91,7 +91,10 @@ class TrustPermissionStore:
 
     def __init__(self, config: config_class.Config):
         self.config = config
-        self._cache: dict[str, TrustPermissions] = {}
+        # Values may be None: a confirmed "no override stored" is cached too,
+        # otherwise every permission evaluation for a peer without an
+        # override re-reads the attribute bucket.
+        self._cache: dict[str, TrustPermissions | None] = {}
 
     def _get_permissions_bucket(self, actor_id: str) -> attribute.Attributes | None:
         """Get the trust permissions attribute bucket for an actor."""
@@ -483,6 +486,9 @@ class TrustPermissionStore:
             attr_data = bucket.get_attr(name=permission_key)
 
             if not attr_data or "data" not in attr_data:
+                # Cache the negative: store/delete paths update the cache, so
+                # this stays correct within the process.
+                self._cache[cache_key] = None
                 return None
 
             # Parse JSON and create TrustPermissions

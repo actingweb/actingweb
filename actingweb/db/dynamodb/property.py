@@ -392,22 +392,13 @@ class DbPropertyList:
         if not self.actor_id:
             return False
 
-        # Collect indexed properties before deletion
+        # Single partition read: collect indexed properties (for lookup-row
+        # cleanup) and delete in the same pass.
         indexed_props: list[tuple[str, str]] = []
-
-        if self._use_lookup_table:
-            # Scan properties to find indexed ones
-            self.handle = Property.query(self.actor_id)
-            for p in self.handle:
-                if str(p.name) in self._indexed_properties:
-                    indexed_props.append((str(p.name), str(p.value)))
-
-        # Delete all properties
         self.handle = Property.query(self.actor_id)
-        if not self.handle:
-            return False
-
         for p in self.handle:
+            if self._use_lookup_table and str(p.name) in self._indexed_properties:
+                indexed_props.append((str(p.name), str(p.value)))
             p.delete()
 
         # Delete lookup entries

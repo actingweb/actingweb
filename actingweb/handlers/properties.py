@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Any
 
+from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
 
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
@@ -156,9 +157,16 @@ class PropertiesHandler(base_handler.BaseHandler):
                 self.response.set_status(404, "Not found")
             return
 
-        # Check if this is a list property first
+        # Try the simple property first (one read). Only on a miss consult
+        # the list metadata — the collision checks guarantee a name cannot be
+        # both a simple property and a list, so a simple-property hit never
+        # needs the extra list-existence read.
+        lookup = myself.property[name] if myself and myself.property else None
+
+        # Check if this is a list property
         if (
-            myself
+            lookup is None
+            and myself
             and hasattr(myself, "property_lists")
             and myself.property_lists is not None
             and myself.property_lists.exists(name)
@@ -284,8 +292,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(500, "Error accessing list property")
                 return
 
-        # Regular property handling
-        lookup = myself.property[name] if myself and myself.property else None
+        # Regular property handling (lookup was fetched above)
         if not lookup:
             if self.response:
                 self.response.set_status(404, "Property not found")
@@ -342,7 +349,22 @@ class PropertiesHandler(base_handler.BaseHandler):
                 self.response.set_status(500, "Internal error")
             return
 
-        properties = actor_interface.properties.to_dict()
+        # One partition read serves the whole response: simple properties,
+        # list discovery, list metadata and (for format=full/metadata) list
+        # items all come from this mapping instead of separate re-reads.
+        all_rows: dict[str, Any] = {}
+        if myself and myself.id and self.config:
+            try:
+                db_list = get_property_list(self.config)
+                all_rows = db_list.fetch_all_including_lists(actor_id=myself.id) or {}
+            except Exception as e:
+                logger.error(f"Error bulk-reading properties: {e}")
+                all_rows = {}
+        properties = {
+            name: value
+            for name, value in all_rows.items()
+            if not name.startswith("list:")
+        }
         # Check query parameters
         include_metadata = self.request.get("metadata") == "true"
         format_param = self.request.get("format") or None
@@ -413,7 +435,12 @@ class PropertiesHandler(base_handler.BaseHandler):
             and hasattr(actor_interface, "property_lists")
             and actor_interface.property_lists is not None
         ):
-            all_list_names = set(actor_interface.property_lists.list_all() or [])
+            # Derived from the bulk read above (same parse as list_all())
+            all_list_names = {
+                name[5:-5]
+                for name in all_rows
+                if name.startswith("list:") and name.endswith("-meta")
+            }
 
             # Filter list properties based on peer permissions (bulk evaluation)
             if peer_id and actor_interface and actor_interface.id:
@@ -446,7 +473,8 @@ class PropertiesHandler(base_handler.BaseHandler):
             lists_info: dict[str, Any] = {}
             for list_name in list_names:
                 list_prop = getattr(actor_interface.property_lists, list_name)
-                items = list(list_prop)
+                list_prop.prime_from_rows(all_rows)
+                items = list_prop.to_list_from_rows(all_rows)
                 total_bytes = sum(len(json.dumps(item)) for item in items)
                 lists_info[list_name] = {
                     "count": len(items),
@@ -465,7 +493,8 @@ class PropertiesHandler(base_handler.BaseHandler):
             # Full format: simple props as-is + list props with items, description, explanation
             for list_name in list_names:
                 list_prop = getattr(actor_interface.property_lists, list_name)
-                items = list(list_prop)
+                list_prop.prime_from_rows(all_rows)
+                items = list_prop.to_list_from_rows(all_rows)
                 # Execute property hooks on list items if available
                 if self.hooks and actor_interface:
                     auth_context = self._create_auth_context(check, "read")
@@ -490,6 +519,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             # Default / format=short: simple props as-is + minimal list markers
             for list_name in list_names:
                 list_prop = getattr(actor_interface.property_lists, list_name)
+                list_prop.prime_from_rows(all_rows)
                 pair[list_name] = {
                     "_list": True,
                     "count": len(list_prop),

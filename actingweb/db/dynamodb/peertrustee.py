@@ -4,6 +4,8 @@ import os
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
+
 """
     DbPeerTrustee handles all db operations for a peer we are a trustee for.
     Google datastore for google is used as a backend.
@@ -125,16 +127,7 @@ class DbPeerTrustee:
 
     def __init__(self):
         self.handle = None
-        if not PeerTrustee.exists():
-            try:
-                PeerTrustee.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(PeerTrustee)
 
 
 class DbPeerTrusteeList:
@@ -180,3 +173,4 @@ class DbPeerTrusteeList:
         self.handle = None
         self.actor_id = None
         self.peertrustees = None
+        ensure_table(PeerTrustee)

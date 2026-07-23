@@ -444,6 +444,32 @@ class ActingWebApp:
         self._apply_runtime_changes_to_config()
         return self
 
+    def with_dynamodb(self, auto_create_tables: bool = True) -> "ActingWebApp":
+        """Configure DynamoDB backend options.
+
+        Args:
+            auto_create_tables: When True (default), tables are created
+                automatically on first access — convenient for development.
+                Set False for production deployments that manage tables via
+                infrastructure-as-code; the runtime IAM role can then drop
+                the ``dynamodb:CreateTable`` and ``dynamodb:DescribeTable``
+                permissions.
+
+        Returns:
+            Self for method chaining
+
+        Note:
+            An explicit call takes precedence over the
+            ``AWS_DB_AUTO_CREATE_TABLES`` environment variable. Call it
+            before integrating with the web framework — the setting only
+            affects tables not yet accessed. Has no effect on the
+            PostgreSQL backend (tables there are managed by Alembic).
+        """
+        from ..db.dynamodb._ensure import set_auto_create
+
+        set_auto_create(auto_create_tables)
+        return self
+
     def with_bot(
         self, token: str = "", email: str = "", secret: str = "", admin_room: str = ""
     ) -> "ActingWebApp":
@@ -1287,6 +1313,68 @@ class ActingWebApp:
         """Check if MCP functionality is enabled."""
         return self._enable_mcp
 
+    def _prewarm_dynamodb_tables(self) -> None:
+        """Ensure all DynamoDB tables exist before serving traffic.
+
+        Runs the per-table existence checks concurrently at integration time
+        so the first request per process does not pay a serial DescribeTable
+        sweep (worst on serverless cold starts, which land during scale-up
+        bursts). No-op for other backends or when auto-creation is disabled.
+        Failures degrade to the lazy per-accessor path.
+        """
+        if self.database != "dynamodb":
+            return
+        import logging
+
+        logger = logging.getLogger(__name__)
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+
+            from ..db.dynamodb._ensure import auto_create_enabled, ensure_table
+
+            if not auto_create_enabled():
+                return
+
+            from ..db.dynamodb.actor import Actor
+            from ..db.dynamodb.attribute import Attribute
+            from ..db.dynamodb.peertrustee import PeerTrustee
+            from ..db.dynamodb.property import Property
+            from ..db.dynamodb.subscription import Subscription
+            from ..db.dynamodb.subscription_diff import SubscriptionDiff
+            from ..db.dynamodb.subscription_suspension import SubscriptionSuspension
+            from ..db.dynamodb.trust import Trust
+
+            models = [
+                Actor,
+                Attribute,
+                PeerTrustee,
+                Property,
+                Subscription,
+                SubscriptionDiff,
+                SubscriptionSuspension,
+                Trust,
+            ]
+            # The lookup table is only used (and thus only created) in
+            # lookup-table mode; don't create it for legacy deployments.
+            if self.get_config().use_lookup_table:
+                from ..db.dynamodb.property_lookup import PropertyLookup
+
+                models.append(PropertyLookup)
+
+            with ThreadPoolExecutor(max_workers=len(models)) as pool:
+                futures = {m: pool.submit(ensure_table, m) for m in models}
+            for model, future in futures.items():
+                exc = future.exception()
+                if exc is not None:
+                    logger.info(
+                        "Table pre-warm failed for %s (will fall back to "
+                        "lazy creation): %s",
+                        model.Meta.table_name,
+                        exc,
+                    )
+        except Exception as e:
+            logger.info(f"Table pre-warm skipped: {e}")
+
     def integrate_flask(self, flask_app: Any) -> "FlaskIntegration":
         """Integrate with Flask application."""
         try:
@@ -1296,6 +1384,7 @@ class ActingWebApp:
                 "Flask integration requires Flask to be installed. "
                 "Install with: pip install 'actingweb[flask]'"
             ) from e
+        self._prewarm_dynamodb_tables()
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
         return integration
@@ -1325,6 +1414,7 @@ class ActingWebApp:
                 "Install with: pip install 'actingweb[fastapi]'"
             ) from e
 
+        self._prewarm_dynamodb_tables()
         integration = FastAPIIntegration(
             self,
             fastapi_app,

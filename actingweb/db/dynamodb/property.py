@@ -7,6 +7,8 @@ from pynamodb.attributes import UnicodeAttribute
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
+
 logger = logging.getLogger(__name__)
 
 """
@@ -78,16 +80,7 @@ class DbProperty:
             indexed_properties: List of property names to index. If None, uses defaults.
         """
         self.handle: Property | None = None
-        if not Property.exists():
-            try:
-                Property.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Property)
 
         # Store configuration for lookup table
         if use_lookup_table is not None:
@@ -362,16 +355,7 @@ class DbPropertyList:
                 env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
                 self._indexed_properties = [p.strip() for p in env_props if p.strip()]
 
-        if not Property.exists():
-            try:
-                Property.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Property)
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
         """Retrieves the properties of an actor_id from the database"""

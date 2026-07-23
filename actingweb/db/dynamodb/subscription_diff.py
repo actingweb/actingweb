@@ -5,6 +5,8 @@ import os
 from pynamodb.attributes import NumberAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
+
 """
     DbSubscriptionDiff handles all db operations for a subscription diff
 
@@ -100,16 +102,7 @@ class DbSubscriptionDiff:
 
     def __init__(self):
         self.handle = None
-        if not SubscriptionDiff.exists():
-            try:
-                SubscriptionDiff.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(SubscriptionDiff)
 
 
 class DbSubscriptionDiffList:
@@ -168,13 +161,4 @@ class DbSubscriptionDiffList:
         self.diffs = []
         self.actor_id = None
         self.subid = None
-        if not SubscriptionDiff.exists():
-            try:
-                SubscriptionDiff.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(SubscriptionDiff)

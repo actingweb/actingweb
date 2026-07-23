@@ -6,6 +6,7 @@ from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeA
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
 from actingweb.db.utils import ensure_timezone_aware_iso
 from actingweb.trust import canonical_connection_method
 
@@ -428,16 +429,7 @@ class DbTrust:
 
     def __init__(self):
         self.handle = None
-        if not Trust.exists():
-            try:
-                Trust.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Trust)
 
 
 class DbTrustList:
@@ -530,13 +522,4 @@ class DbTrustList:
         self.handle = None
         self.actor_id = None
         self.trusts = []
-        if not Trust.exists():
-            try:
-                Trust.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Trust)

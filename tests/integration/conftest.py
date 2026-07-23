@@ -133,6 +133,12 @@ def cleanup_dynamodb_tables(worker_info: dict) -> None:
     """
     import boto3
 
+    from actingweb.db.dynamodb._ensure import reset_ensure_cache
+
+    # Tables are deleted in-process below; the process-wide ensure_table()
+    # memo must forget them or later accessors would skip re-creation.
+    reset_ensure_cache()
+
     client = boto3.client(
         "dynamodb",
         region_name="us-west-1",
@@ -312,7 +318,21 @@ def setup_database(docker_services, worker_info):
 
     For PostgreSQL: Runs migrations to create tables with worker-specific schema.
     For DynamoDB: Pre-cleanup stale tables from previous failed runs.
+
+    Sets the backend env vars FIRST: pynamodb model classes freeze
+    AWS_DB_PREFIX / AWS_DB_HOST into Meta at import time, and importing
+    anything under actingweb.db.dynamodb (e.g. the ensure-cache reset in
+    cleanup_dynamodb_tables) imports every model module via the package
+    __init__. If the env is not set before that first import, every model
+    binds to the default prefix and to real AWS for the whole process.
     """
+    os.environ["DATABASE_BACKEND"] = DATABASE_BACKEND
+    if DATABASE_BACKEND == "dynamodb":
+        os.environ["AWS_ACCESS_KEY_ID"] = "test"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
+        os.environ["AWS_DB_HOST"] = TEST_DYNAMODB_HOST
+        os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
+
     if DATABASE_BACKEND == "postgresql":
         # Pre-cleanup: Drop schema from previous failed run
         schema_name = f"{worker_info['db_prefix']}public"

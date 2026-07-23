@@ -4,6 +4,8 @@ import os
 from pynamodb.attributes import BooleanAttribute, NumberAttribute, UnicodeAttribute
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
+
 """
     DbSubscription handles all db operations for a subscription
 
@@ -154,16 +156,7 @@ class DbSubscription:
 
     def __init__(self):
         self.handle = None
-        if not Subscription.exists():
-            try:
-                Subscription.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Subscription)
 
 
 class DbSubscriptionList:
@@ -215,13 +208,4 @@ class DbSubscriptionList:
         self.handle = None
         self.actor_id = None
         self.subscriptions = []
-        if not Subscription.exists():
-            try:
-                Subscription.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Subscription)

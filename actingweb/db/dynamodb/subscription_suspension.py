@@ -13,6 +13,8 @@ from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.exceptions import DoesNotExist
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +49,7 @@ class DbSubscriptionSuspension:
 
     def __init__(self, actor_id: str) -> None:
         self._actor_id = actor_id
+        ensure_table(SubscriptionSuspension)
 
     def is_suspended(self, target: str, subtarget: str | None = None) -> bool:
         """Check if a target/subtarget is currently suspended."""

@@ -5,8 +5,33 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **DynamoDB table auto-creation can now be disabled** for deployments that
+  manage tables via infrastructure-as-code: set
+  ``AWS_DB_AUTO_CREATE_TABLES=false`` or call
+  ``with_dynamodb(auto_create_tables=False)``. With auto-creation off, the
+  library never calls ``DescribeTable``/``CreateTable``, so both permissions
+  can be dropped from the runtime IAM role.
+
+CHANGED
+~~~~~~~
+
+- **DynamoDB table-existence checks are now memoised per process.** Every
+  accessor construction used to issue a live ``DescribeTable`` call
+  (measured at >1,000/minute in a near-idle deployment); the check now runs
+  at most once per table per process, and all tables are pre-warmed
+  concurrently at Flask/FastAPI integration time instead of serially on the
+  first request.
+
 FIXED
 ~~~~~
+
+- **Two DynamoDB accessors never auto-created their tables.** First use of
+  subscription suspension (``DbSubscriptionSuspension``) or the peer-trustee
+  list on a fresh deployment crashed with a table-not-found error; both now
+  go through the same table-existence guard as every other accessor.
 
 - **Property lookup env overrides were silently ignored by the fluent builder.**
   ``ActingWebApp`` stamped its own hardcoded lookup-table defaults onto the

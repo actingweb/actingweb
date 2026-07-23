@@ -180,13 +180,21 @@ IaC-managed production.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -k "ensure or auto_create" -v` passes
-- [ ] `poetry run pyright actingweb tests` — 0 errors; `poetry run ruff check` passes
-- [ ] `make test-all-parallel` passes (exercises `reset_ensure_cache` wiring via xdist)
-- [ ] Manual: run any integration test with `PYNAMODB_DEBUG`/boto logging and confirm
-      exactly one `DescribeTable` per table per process
+- [x] `poetry run pytest tests/test_ensure_table.py` — 22 passed
+- [x] `poetry run pyright actingweb tests` — 0 errors; `poetry run ruff check` passes
+- [x] `make test-all-parallel` — 2399 passed; 2 known-flaky xdist tests pass sequentially
+      (same family failed on master pre-change)
+- [x] Memoisation verified by unit call-count tests (mocked exists/create_table)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Implementation note (found the hard way):** importing anything under
+`actingweb.db.dynamodb` triggers the package `__init__`, which imports every model
+module and permanently freezes `Meta.table_name`/`host` from env. The conftest's
+`reset_ensure_cache` import tripped this before the test env was set; fixed by
+setting the backend env vars at the top of the session-scoped `setup_database`
+fixture. The same hazard applies to consumer code importing db modules before
+configuring env — added to the known-next doc (deferred table-name resolution).
 
 ---
 
@@ -544,8 +552,11 @@ Ships last, after every safety mechanism above is in place.
   file:line inventory (batch deletes incl. `property_list.py:351-390` worst case; list
   `__getitem__`/`__delitem__`; `consistent_read` audit list; `subscription_diff.py:50-60`
   ordering; `DbActorList` pagination; secret-uniqueness eventual-consistency note at
-  `trust.py:273-278`); the GSI-removal doc also covers next-major removal of the v1
-  lookup model/table and both fallback tiers.
+  `trust.py:273-278`; import-time freezing of `Meta.table_name`/`host` from env —
+  importing anything under `actingweb.db.dynamodb` binds all models permanently, a trap
+  for consumers that configure env after import; consider deferred resolution); the
+  GSI-removal doc also covers next-major removal of the v1 lookup model/table and both
+  fallback tiers.
 - **Demo app coordination** (separate repo, not in this plan's diffs): keep auto-create on;
   add comments in `serverless.yml` (why CreateTable/DescribeTable are needed, how to drop
   them in production) and a commented-out CFN `resources:` block as canonical schema;

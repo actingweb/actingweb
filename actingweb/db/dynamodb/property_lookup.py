@@ -5,6 +5,8 @@ import os
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
+
 logger = logging.getLogger(__name__)
 
 """
@@ -54,16 +56,7 @@ class DbPropertyLookup:
 
     def __init__(self) -> None:
         self.handle: PropertyLookup | None = None
-        if not PropertyLookup.exists():
-            try:
-                PropertyLookup.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(PropertyLookup)
 
     def get(
         self, property_name: str | None = None, value: str | None = None

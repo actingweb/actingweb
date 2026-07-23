@@ -10,6 +10,8 @@ from pynamodb.attributes import (
 )
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
+
 """
     DbAttribute handles all db operations for an attribute (internal)
     AWS DynamoDB is used as a backend.
@@ -331,16 +333,7 @@ class DbAttribute:
         return deleted
 
     def __init__(self):
-        if not Attribute.exists():
-            try:
-                Attribute.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Attribute)
 
 
 class DbAttributeBucketList:
@@ -398,13 +391,4 @@ class DbAttributeBucketList:
         return True
 
     def __init__(self):
-        if not Attribute.exists():
-            try:
-                Attribute.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Attribute)

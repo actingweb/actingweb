@@ -205,8 +205,9 @@ Two production-ready backends behind a common protocol:
   Install with the ``postgresql`` extra.
 
 Select with ``database="postgresql"`` or the ``DATABASE_BACKEND`` environment
-variable. Optional **property reverse-lookup tables** (``with_indexed_properties``)
-enable find-actor-by-property-value without GSI size limits. See
+variable. **Property reverse-lookup tables** (on by default; configure names
+with ``with_indexed_properties``) enable find-actor-by-property-value with no
+value-size limits and no plaintext values in the lookup table. See
 ``docs/reference/database-backends.rst``.
 
 The ActingWeb model

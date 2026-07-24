@@ -3,9 +3,11 @@ import os
 from datetime import datetime
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
+from actingweb.db.dynamodb._ensure import ensure_table
 from actingweb.db.utils import ensure_timezone_aware_iso
 from actingweb.trust import canonical_connection_method
 
@@ -53,8 +55,6 @@ class SecretIndex(GlobalSecondaryIndex):
 
     class Meta:
         index_name = "secret-index"
-        read_capacity_units = 2
-        write_capacity_units = 1
         projection = AllProjection()
 
     secret = UnicodeAttribute(hash_key=True)
@@ -65,8 +65,7 @@ class Trust(Model):
 
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_trusts"
-        read_capacity_units = 5
-        write_capacity_units = 2
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 
@@ -428,16 +427,7 @@ class DbTrust:
 
     def __init__(self):
         self.handle = None
-        if not Trust.exists():
-            try:
-                Trust.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Trust)
 
 
 class DbTrustList:
@@ -452,7 +442,7 @@ class DbTrustList:
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Trust.scan(Trust.id == self.actor_id, consistent_read=True)
+        self.handle = Trust.query(self.actor_id, consistent_read=True)
         self.trusts = []
         if self.handle:
             for t in self.handle:
@@ -517,8 +507,10 @@ class DbTrustList:
             return []
 
     def delete(self):
-        """Deletes all the properties in the database"""
-        self.handle = Trust.scan(Trust.id == self.actor_id, consistent_read=True)
+        """Deletes all the trusts in the database"""
+        if not self.actor_id:
+            return False
+        self.handle = Trust.query(self.actor_id, consistent_read=True)
         if not self.handle:
             return False
         for p in self.handle:
@@ -530,13 +522,4 @@ class DbTrustList:
         self.handle = None
         self.actor_id = None
         self.trusts = []
-        if not Trust.exists():
-            try:
-                Trust.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Trust)

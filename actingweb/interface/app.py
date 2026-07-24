@@ -74,11 +74,13 @@ class ActingWebApp:
             10  # Default thread pool size for FastAPI integration
         )
 
-        # Property lookup configuration
-        self._indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
-        self._use_lookup_table: bool = (
-            False  # False by default for backward compatibility
-        )
+        # Property lookup configuration. None means "not set via the builder":
+        # Config's own default and the INDEXED_PROPERTIES /
+        # USE_PROPERTY_LOOKUP_TABLE env overrides stay authoritative. An
+        # explicit with_indexed_properties()/with_legacy_property_index() call
+        # takes precedence over both (builder > env > default).
+        self._indexed_properties: list[str] | None = None
+        self._use_lookup_table: bool | None = None
 
         # Peer profile caching configuration
         # None = disabled, list of attributes = enabled
@@ -186,10 +188,14 @@ class ActingWebApp:
             self._config.actors = dict(self._actors_config)
         if self._enable_bot:
             self._config.bot = dict(self._bot_config or {})
-        # Property lookup configuration
-        if hasattr(self, "_indexed_properties"):
+        # Property lookup configuration. Only stamp values the builder was
+        # explicitly given; None must leave Config's default and the
+        # INDEXED_PROPERTIES / USE_PROPERTY_LOOKUP_TABLE env overrides intact.
+        # (An unconditional hasattr() guard here used to clobber the env vars
+        # on every with_*() call.)
+        if self._indexed_properties is not None:
             self._config.indexed_properties = self._indexed_properties
-        if hasattr(self, "_use_lookup_table"):
+        if self._use_lookup_table is not None:
             self._config.use_lookup_table = self._use_lookup_table
         # Subscription callback mode
         if hasattr(self, "_sync_subscription_callbacks"):
@@ -405,7 +411,9 @@ class ActingWebApp:
         Note:
             Only properties listed here can be used with Actor.get_from_property().
             Changes require application restart to take effect.
-            Use environment variable INDEXED_PROPERTIES for runtime override.
+            An explicit call to this method takes precedence over the
+            INDEXED_PROPERTIES environment variable; if this method is never
+            called, the env variable (when set) overrides the library default.
         """
         if properties is not None:
             self._indexed_properties = properties
@@ -416,9 +424,9 @@ class ActingWebApp:
         """
         Enable legacy GSI/index-based property reverse lookup (for migration).
 
-        When False (default), uses new lookup table approach which supports
-        property values larger than 2048 bytes. When True, uses legacy DynamoDB
-        GSI or PostgreSQL index on value field (limited to 2048 bytes).
+        When False, uses the new lookup table approach which supports property
+        values larger than 2048 bytes. When True, uses the legacy DynamoDB GSI
+        or PostgreSQL index on the value field (limited to 2048 bytes).
 
         Args:
             enable: True to use legacy GSI/index, False for new lookup table
@@ -427,11 +435,39 @@ class ActingWebApp:
             Self for method chaining
 
         Note:
-            Set this to True during migration from legacy systems. Once all
-            properties are migrated to lookup table, set back to False (default).
+            An explicit call to this method takes precedence over the
+            USE_PROPERTY_LOOKUP_TABLE environment variable. If this method is
+            never called, the env variable (when set) overrides the library
+            default, which is currently the legacy GSI/index path.
         """
         self._use_lookup_table = not enable
         self._apply_runtime_changes_to_config()
+        return self
+
+    def with_dynamodb(self, auto_create_tables: bool = True) -> "ActingWebApp":
+        """Configure DynamoDB backend options.
+
+        Args:
+            auto_create_tables: When True (default), tables are created
+                automatically on first access — convenient for development.
+                Set False for production deployments that manage tables via
+                infrastructure-as-code; the runtime IAM role can then drop
+                the ``dynamodb:CreateTable`` and ``dynamodb:DescribeTable``
+                permissions.
+
+        Returns:
+            Self for method chaining
+
+        Note:
+            An explicit call takes precedence over the
+            ``AWS_DB_AUTO_CREATE_TABLES`` environment variable. Call it
+            before integrating with the web framework — the setting only
+            affects tables not yet accessed. Has no effect on the
+            PostgreSQL backend (tables there are managed by Alembic).
+        """
+        from ..db.dynamodb._ensure import set_auto_create
+
+        set_auto_create(auto_create_tables)
         return self
 
     def with_bot(
@@ -1237,13 +1273,19 @@ class ActingWebApp:
                 mcp=self._enable_mcp,
                 mcp_server_name=self._mcp_server_name,
                 mcp_instructions=self._mcp_instructions,
-                indexed_properties=self._indexed_properties,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
-                use_lookup_table=self._use_lookup_table,
                 peer_profile_attributes=self._peer_profile_attributes,
                 peer_capabilities_caching=self._peer_capabilities_caching,
                 peer_permissions_caching=self._peer_permissions_caching,
             )
+            # Property lookup settings are deliberately NOT passed as kwargs:
+            # Config applies its INDEXED_PROPERTIES / USE_PROPERTY_LOOKUP_TABLE
+            # env overrides after kwargs, so kwargs could never win. Stamping
+            # explicit builder values here gives builder > env > default.
+            if self._indexed_properties is not None:
+                self._config.indexed_properties = self._indexed_properties
+            if self._use_lookup_table is not None:
+                self._config.use_lookup_table = self._use_lookup_table
             # Populate multi-provider OAuth config on initial creation
             named = {k: dict(v) for k, v in self._oauth_configs.items() if k}
             if named:
@@ -1271,6 +1313,129 @@ class ActingWebApp:
         """Check if MCP functionality is enabled."""
         return self._enable_mcp
 
+    def _prewarm_dynamodb_tables(self) -> None:
+        """Ensure all DynamoDB tables exist before serving traffic.
+
+        Runs the per-table existence checks concurrently at integration time
+        so the first request per process does not pay a serial DescribeTable
+        sweep (worst on serverless cold starts, which land during scale-up
+        bursts). No-op for other backends or when auto-creation is disabled.
+        Failures degrade to the lazy per-accessor path.
+        """
+        if self.database != "dynamodb":
+            return
+        import logging
+
+        logger = logging.getLogger(__name__)
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+
+            from ..db.dynamodb._ensure import auto_create_enabled, ensure_table
+
+            if not auto_create_enabled():
+                return
+
+            from ..db.dynamodb.actor import Actor
+            from ..db.dynamodb.attribute import Attribute
+            from ..db.dynamodb.peertrustee import PeerTrustee
+            from ..db.dynamodb.property import Property, PropertyLegacy
+            from ..db.dynamodb.subscription import Subscription
+            from ..db.dynamodb.subscription_diff import SubscriptionDiff
+            from ..db.dynamodb.subscription_suspension import SubscriptionSuspension
+            from ..db.dynamodb.trust import Trust
+
+            use_lookup = bool(self.get_config().use_lookup_table)
+            models = [
+                Actor,
+                Attribute,
+                PeerTrustee,
+                # Lookup mode creates the properties table WITHOUT the
+                # legacy value-keyed GSI; legacy mode keeps it.
+                Property if use_lookup else PropertyLegacy,
+                Subscription,
+                SubscriptionDiff,
+                SubscriptionSuspension,
+                Trust,
+            ]
+            # The lookup table is only used (and thus only created) in
+            # lookup-table mode; don't create it for legacy deployments.
+            # (The deprecated v1 lookup model is read-only and never
+            # auto-created.)
+            if use_lookup:
+                from ..db.dynamodb.property_lookup import PropertyLookupV2
+
+                models.append(PropertyLookupV2)
+
+            with ThreadPoolExecutor(max_workers=len(models)) as pool:
+                futures = {m: pool.submit(ensure_table, m) for m in models}
+            for model, future in futures.items():
+                exc = future.exception()
+                if exc is not None:
+                    logger.info(
+                        "Table pre-warm failed for %s (will fall back to "
+                        "lazy creation): %s",
+                        model.Meta.table_name,
+                        exc,
+                    )
+        except Exception as e:
+            logger.info(f"Table pre-warm skipped: {e}")
+
+    def _check_lookup_backfill_needed(self) -> None:
+        """Warn loudly when reverse lookups would silently miss.
+
+        Fires when lookup-table mode is active, the properties table has
+        data, but the v2 lookup table is empty — the state every upgrading
+        deployment is in until it runs the backfill. Without the backfill,
+        indexed lookups are served by deprecated fallbacks (or return None
+        once those are removed). One cheap single-item probe per table,
+        once per process. Modeled on _warn_lambda_async_callbacks.
+        """
+        if self.database != "dynamodb" or getattr(self, "_backfill_checked", False):
+            return
+        self._backfill_checked = True
+        import logging
+
+        logger = logging.getLogger(__name__)
+        try:
+            if not self.get_config().use_lookup_table:
+                return
+            from ..db.dynamodb.property import Property
+            from ..db.dynamodb.property_lookup import (
+                PropertyLookup,
+                PropertyLookupV2,
+            )
+
+            if any(True for _ in PropertyLookupV2.scan(limit=1)):
+                return  # v2 populated — nothing to do
+            if not any(True for _ in Property.scan(limit=1)):
+                return  # fresh deployment, nothing to backfill
+            v1_has_rows = False
+            try:
+                v1_has_rows = any(True for _ in PropertyLookup.scan(limit=1))
+            except Exception:
+                pass
+            if v1_has_rows:
+                logger.error(
+                    "Property lookup table needs migration: the v1 lookup "
+                    "table has data but the v2 table "
+                    f"('{PropertyLookupV2.Meta.table_name}') is empty. "
+                    "Reverse lookups are being served by a deprecated "
+                    "fallback. Run scripts/backfill_property_lookup.py to "
+                    "rebuild the v2 table from the properties table, verify, "
+                    "then drop the v1 table. See docs/migration/v3.13."
+                )
+            else:
+                logger.error(
+                    "Property lookup table is empty but the properties table "
+                    "has data: reverse lookups (e.g. find-actor-by-email) "
+                    "depend on a deprecated fallback or will return None. "
+                    "Run scripts/backfill_property_lookup.py to populate "
+                    f"'{PropertyLookupV2.Meta.table_name}'. "
+                    "See docs/migration/v3.13."
+                )
+        except Exception as e:
+            logger.debug(f"Lookup backfill check skipped: {e}")
+
     def integrate_flask(self, flask_app: Any) -> "FlaskIntegration":
         """Integrate with Flask application."""
         try:
@@ -1280,6 +1445,8 @@ class ActingWebApp:
                 "Flask integration requires Flask to be installed. "
                 "Install with: pip install 'actingweb[flask]'"
             ) from e
+        self._prewarm_dynamodb_tables()
+        self._check_lookup_backfill_needed()
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
         return integration
@@ -1309,6 +1476,8 @@ class ActingWebApp:
                 "Install with: pip install 'actingweb[fastapi]'"
             ) from e
 
+        self._prewarm_dynamodb_tables()
+        self._check_lookup_backfill_needed()
         integration = FastAPIIntegration(
             self,
             fastapi_app,

@@ -16,7 +16,7 @@ Quick Comparison
      - DynamoDB
      - PostgreSQL
    * - **Setup Complexity**
-     - Low (auto-creates tables)
+     - Low (auto-creates tables; disable via ``AWS_DB_AUTO_CREATE_TABLES=false`` in production)
      - Medium (requires Alembic migrations)
    * - **Local Development**
      - DynamoDB Local (Docker)
@@ -367,9 +367,11 @@ Index Strategy
 **DynamoDB:**
 
 - Global Secondary Indexes (GSI) for non-key lookups:
-  - ``actors``: GSI on ``creator`` field
-  - ``properties``: GSI on ``value`` field (reverse lookups)
-  - ``trusts``: GSI on ``secret`` field (token lookups)
+  ``actors`` has a GSI on the ``creator`` field, ``trusts`` on the
+  ``secret`` field (token lookups).
+- ``properties`` reverse lookups use the dedicated digest-keyed
+  ``property_lookup_v2`` table (default). Only tables created in the
+  deprecated legacy mode carry a GSI on ``value`` (2048-byte limit).
 
 **PostgreSQL:**
 

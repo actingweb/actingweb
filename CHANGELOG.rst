@@ -5,6 +5,137 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc1: July 24, 2026
+-------------------------
+
+ADDED
+~~~~~
+
+- **DynamoDB table auto-creation can now be disabled** for deployments that
+  manage tables via infrastructure-as-code: set
+  ``AWS_DB_AUTO_CREATE_TABLES=false`` or call
+  ``with_dynamodb(auto_create_tables=False)``. With auto-creation off, the
+  library never calls ``DescribeTable``/``CreateTable``, so both permissions
+  can be dropped from the runtime IAM role.
+
+CHANGED
+~~~~~~~
+
+- **Lookup-table mode is now the default reverse-lookup mechanism**
+  (``use_lookup_table`` defaults to ``True``; the deprecated legacy
+  GSI/index mode can be pinned with ``with_legacy_property_index(True)``
+  or ``USE_PROPERTY_LOOKUP_TABLE=false``). Upgrading deployments keep
+  resolving reverse lookups through deprecated fallbacks (v1 lookup
+  table, then the legacy GSI where present) with per-hit warnings and a
+  loud startup ERROR until the new
+  ``scripts/backfill_property_lookup.py`` is run — see
+  ``docs/migration/v3.13.rst`` for the per-deployment decision tree.
+  Note the semantic change: lookup-table matching is per (property name,
+  value); the legacy GSI matched on value alone.
+
+- **Freshly created properties tables match the configured reverse-lookup
+  mode.** In lookup-table mode, auto-created ``<prefix>_properties``
+  tables no longer carry the legacy value-keyed ``property-index`` GSI —
+  previously every fresh deployment inherited it even when nothing read
+  it, paying double write/storage cost and rejecting any property value
+  over DynamoDB's 2048-byte GSI-key limit (values over 2 KB now verified
+  to store correctly). Legacy mode still creates the GSI so the legacy
+  reverse-lookup path works. Existing tables are never altered.
+
+- **Property reverse-lookup table redesigned (v2, digest keys).** On
+  DynamoDB, lookup rows now live in a new ``<prefix>_property_lookup_v2``
+  table keyed by a SHA-256 digest of (property name, value); the plaintext
+  value is no longer stored. This removes the old design's hot-partition
+  key (all emails shared one partition), its undocumented 1024-byte value
+  cap, and plaintext PII in key material. Writes are conditional: a value
+  already mapped to a **different** actor is now a loudly-logged collision
+  instead of a silent last-writer-wins overwrite (PostgreSQL gained the
+  same idempotent-create/collision semantics). Existing v1 lookup tables
+  are read as a deprecated fallback; rebuild the v2 table from the
+  properties table with the backfill script, verify, then drop the v1
+  table. Reverse lookups for property names not configured as indexed now
+  return ``None`` with a warning instead of silently using the legacy
+  path, and the legacy GSI path raises an actionable error when the index
+  is missing from the live table instead of an opaque backend exception.
+  Lookup write failures are logged at ERROR (previously swallowed —
+  a failed lookup write silently broke login-by-email for that user).
+
+- **Hot-path read amplification removed across the property and actor
+  paths.** ``GET /<actor>/properties`` now serves the entire response
+  (simple properties, list discovery, list metadata and list items) from a
+  single partition read — it previously re-read every property
+  individually after the bulk read, read the partition a second time for
+  lists, and re-read each list's metadata row. Single-property reads no
+  longer pay an extra list-existence check on every hit, repeat property
+  writes skip the list-collision read, the actor's internal attribute
+  bucket is loaded lazily (once, instead of eagerly twice per actor
+  construction), attribute buckets in general no longer load fully on
+  construction, bulk property deletion reads its partition once instead of
+  twice, and permission evaluation caches confirmed-absent trust
+  overrides instead of re-reading per request.
+
+- **Auto-created DynamoDB tables now use on-demand billing.** Tables the
+  library creates were provisioned with tiny fixed capacities inherited
+  from old Meta defaults (the property lookup table — the login path —
+  got 2 read units / 1 write unit per second, a hard throughput wall).
+  Newly created tables are now ``PAY_PER_REQUEST``. **Existing tables are
+  not changed** — convert them once, in place (never recreate; the lookup
+  table holds live login data)::
+
+      aws dynamodb update-table --table-name <prefix>_property_lookup \
+          --billing-mode PAY_PER_REQUEST
+
+  (AWS allows one billing-mode switch per table per 24 hours. Check
+  ``<prefix>_peertrustees`` too.)
+
+- **Per-actor DynamoDB reads no longer scan the whole table.** Nine call
+  sites (property fetch/delete, trust list fetch/delete, peer-trustee
+  fetch/lookup/delete) issued a full-table ``Scan`` with a partition-key
+  filter — read cost grew with total table size, not the actor's data
+  (measured ~2,000 RCU per property fetch on a 16 MB table). All are now
+  partition ``Query`` calls; the trust reads keep their strong consistency.
+  Trust and peer-trustee list results are now range-key sorted
+  (deterministic order) instead of arbitrary scan order.
+
+- **DynamoDB table-existence checks are now memoised per process.** Every
+  accessor construction used to issue a live ``DescribeTable`` call
+  (measured at >1,000/minute in a near-idle deployment); the check now runs
+  at most once per table per process, and all tables are pre-warmed
+  concurrently at Flask/FastAPI integration time instead of serially on the
+  first request.
+
+FIXED
+~~~~~
+
+- **Changing an indexed property left its old reverse-lookup row behind on
+  DynamoDB.** When an indexed value (e.g. ``email``) was updated through the
+  normal properties API, the old lookup row was never deleted, so reverse
+  lookup by the previous value kept resolving to the actor and blocked any
+  other actor from claiming that value. The DynamoDB backend now reads the
+  current value before writing, matching the PostgreSQL backend. (Only
+  affected lookup-table mode, which is unreleased.)
+
+- **Reverse-lookup migration fallbacks matched on value alone, ignoring the
+  property name.** During a not-yet-backfilled migration, the legacy-GSI
+  (DynamoDB) and sequential-scan (PostgreSQL) fallbacks could return an actor
+  whose *different* property happened to share the requested value; both now
+  filter by property name. (Migration-only path, unreleased.)
+
+- **Two DynamoDB accessors never auto-created their tables.** First use of
+  subscription suspension (``DbSubscriptionSuspension``) or the peer-trustee
+  list on a fresh deployment crashed with a table-not-found error; both now
+  go through the same table-existence guard as every other accessor.
+
+- **Property lookup env overrides were silently ignored by the fluent builder.**
+  ``ActingWebApp`` stamped its own hardcoded lookup-table defaults onto the
+  config on every ``with_*()`` call (a guard intended to detect "explicitly
+  set" was always true), so the documented ``USE_PROPERTY_LOOKUP_TABLE`` and
+  ``INDEXED_PROPERTIES`` environment variables were clobbered for any app that
+  called a builder method after construction — including the documented
+  rollback path for lookup-table migration. The builder now tracks whether
+  these settings were explicitly configured; precedence is consistently
+  explicit builder call > environment variable > library default.
+
 v3.12.0: July 9, 2026
 ---------------------
 

@@ -2,7 +2,10 @@ import logging
 import os
 
 from pynamodb.attributes import UnicodeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.models import Model
+
+from actingweb.db.dynamodb._ensure import ensure_table
 
 """
     DbPeerTrustee handles all db operations for a peer we are a trustee for.
@@ -15,8 +18,7 @@ logger = logging.getLogger(__name__)
 class PeerTrustee(Model):
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_peertrustees"
-        read_capacity_units = 1
-        write_capacity_units = 1
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 
@@ -46,8 +48,8 @@ class DbPeerTrustee:
                 self.handle = PeerTrustee.get(actor_id, peerid, consistent_read=True)
             elif not self.handle and peer_type:
                 count = 0
-                peer_trustees = PeerTrustee.scan(
-                    (PeerTrustee.id == actor_id) & (PeerTrustee.type == peer_type)
+                peer_trustees = PeerTrustee.query(
+                    actor_id, filter_condition=PeerTrustee.type == peer_type
                 )
                 for h in peer_trustees:
                     self.handle = h
@@ -125,16 +127,7 @@ class DbPeerTrustee:
 
     def __init__(self):
         self.handle = None
-        if not PeerTrustee.exists():
-            try:
-                PeerTrustee.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(PeerTrustee)
 
 
 class DbPeerTrusteeList:
@@ -150,7 +143,7 @@ class DbPeerTrusteeList:
             return None
         self.actor_id = actor_id
         self.peertrustees = []
-        self.handle = PeerTrustee.scan(PeerTrustee.id == self.actor_id)
+        self.handle = PeerTrustee.query(self.actor_id)
         if self.handle:
             for t in self.handle:
                 self.peertrustees.append(
@@ -168,7 +161,9 @@ class DbPeerTrusteeList:
 
     def delete(self):
         """Deletes all the peertrustees in the database"""
-        self.handle = PeerTrustee.scan(PeerTrustee.id == self.actor_id)
+        if not self.actor_id:
+            return False
+        self.handle = PeerTrustee.query(self.actor_id)
         if not self.handle:
             return False
         for p in self.handle:
@@ -180,3 +175,4 @@ class DbPeerTrusteeList:
         self.handle = None
         self.actor_id = None
         self.peertrustees = None
+        ensure_table(PeerTrustee)

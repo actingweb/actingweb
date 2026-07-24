@@ -3,7 +3,10 @@ import logging
 import os
 
 from pynamodb.attributes import NumberAttribute, UnicodeAttribute, UTCDateTimeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.models import Model
+
+from actingweb.db.dynamodb._ensure import ensure_table
 
 """
     DbSubscriptionDiff handles all db operations for a subscription diff
@@ -18,8 +21,7 @@ logger = logging.getLogger(__name__)
 class SubscriptionDiff(Model):
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_subscriptiondiffs"
-        read_capacity_units = 2
-        write_capacity_units = 3
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 
@@ -100,16 +102,7 @@ class DbSubscriptionDiff:
 
     def __init__(self):
         self.handle = None
-        if not SubscriptionDiff.exists():
-            try:
-                SubscriptionDiff.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(SubscriptionDiff)
 
 
 class DbSubscriptionDiffList:
@@ -168,13 +161,4 @@ class DbSubscriptionDiffList:
         self.diffs = []
         self.actor_id = None
         self.subid = None
-        if not SubscriptionDiff.exists():
-            try:
-                SubscriptionDiff.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(SubscriptionDiff)

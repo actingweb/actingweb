@@ -172,14 +172,12 @@ class PropertyStore:
         return iter(self)
 
     def values(self) -> Iterator[Any]:
-        """Get all property values."""
-        for key in self:
-            yield self[key]
+        """Get all property values (single bulk read)."""
+        yield from self.to_dict().values()
 
     def items(self) -> Iterator[tuple[str, Any]]:
-        """Get all property key-value pairs."""
-        for key in self:
-            yield (key, self[key])
+        """Get all property key-value pairs (single bulk read)."""
+        yield from self.to_dict().items()
 
     def update(self, other: dict[str, Any]) -> None:
         """Update properties from dictionary with hooks and diff registration."""
@@ -197,8 +195,20 @@ class PropertyStore:
             self._actor.register_diffs(target="properties", subtarget=None, blob="")
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return dict(self.items())
+        """Convert to dictionary with one backend read.
+
+        Reads everything via get_all() instead of re-fetching each key
+        individually (the old path issued one GetItem per property right
+        after having bulk-read them all).
+        """
+        try:
+            if hasattr(self._core_store, "get_all"):
+                all_props = self._core_store.get_all()
+                if isinstance(all_props, dict):
+                    return dict(all_props)
+        except (AttributeError, TypeError):
+            pass
+        return {}
 
     @property
     def core_store(self) -> CorePropertyStore:
@@ -294,6 +304,12 @@ class NotifyingListProperty:
 
     def to_list(self) -> list[Any]:
         return self._list_prop.to_list()
+
+    def prime_from_rows(self, rows: dict[str, Any]) -> None:
+        self._list_prop.prime_from_rows(rows)
+
+    def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
+        return self._list_prop.to_list_from_rows(rows)
 
     def slice(self, start: int, end: int) -> list[Any]:
         return self._list_prop.slice(start, end)

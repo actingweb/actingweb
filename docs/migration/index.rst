@@ -12,6 +12,7 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   v3.13
    v3.11
    v3.10
    v3.7

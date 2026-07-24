@@ -63,17 +63,19 @@ class DbPropertyLookup:
         property_name: str | None = None,
         value: str | None = None,
         actor_id: str | None = None,
+        overwrite: bool = False,
     ) -> bool:
         """
         Create lookup entry.
 
-        Args:
-            property_name: Property name
-            value: Property value
-            actor_id: Actor ID
+        Same contract as the DynamoDB backend: an existing row for the same
+        (name, value) owned by a DIFFERENT actor is a collision — logged
+        loudly and rejected (pass overwrite=True for legitimate moves).
+        Re-creating the identical mapping is idempotent.
 
         Returns:
-            True on success, False on duplicate or error
+            True on success (including idempotent re-create), False on
+            collision or error
         """
         if not property_name or not value or not actor_id:
             return False
@@ -81,13 +83,45 @@ class DbPropertyLookup:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO property_lookup (property_name, value, actor_id)
-                        VALUES (%s, %s, %s)
-                        """,
-                        (property_name, value, actor_id),
-                    )
+                    if overwrite:
+                        cur.execute(
+                            """
+                            INSERT INTO property_lookup (property_name, value, actor_id)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (property_name, value)
+                            DO UPDATE SET actor_id = EXCLUDED.actor_id
+                            """,
+                            (property_name, value, actor_id),
+                        )
+                        inserted = True
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO property_lookup (property_name, value, actor_id)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (property_name, value) DO NOTHING
+                            """,
+                            (property_name, value, actor_id),
+                        )
+                        inserted = cur.rowcount > 0
+                    if not inserted:
+                        cur.execute(
+                            """
+                            SELECT actor_id FROM property_lookup
+                            WHERE property_name = %s AND value = %s
+                            """,
+                            (property_name, value),
+                        )
+                        row = cur.fetchone()
+                        existing_actor = row[0] if row else None
+                        if existing_actor != actor_id:
+                            logger.error(
+                                f"LOOKUP_COLLISION: property={property_name} "
+                                f"actor={actor_id} existing_actor={existing_actor} — "
+                                "two actors share an indexed value; not overwriting"
+                            )
+                            conn.commit()
+                            return False
                 conn.commit()
                 self.handle = {
                     "property_name": property_name,

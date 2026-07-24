@@ -64,7 +64,9 @@ class TestWithMcpBuilderPropagation:
         assert cfg.mcp_server_name == "doctest"
 
     def test_instructions_reach_config(self) -> None:
-        cfg = self._app(enable=True, instructions="Call how_to_use() first").get_config()
+        cfg = self._app(
+            enable=True, instructions="Call how_to_use() first"
+        ).get_config()
         assert cfg.mcp_instructions == "Call how_to_use() first"
 
     def test_enable_false_reaches_config(self) -> None:

@@ -61,9 +61,12 @@ class Config:
         # Property lookup configuration (backward compatible defaults)
         #########
         self.indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
-        self.use_lookup_table: bool = (
-            False  # False = use old GSI/index (backward compatible)
-        )
+        # True = lookup-table reverse lookup (the mechanism of record since
+        # v3.13; no value-size limit, no legacy GSI). Legacy GSI/index mode
+        # is deprecated — pin it with use_lookup_table=False /
+        # USE_PROPERTY_LOOKUP_TABLE=false / with_legacy_property_index(True)
+        # only while migrating; see docs/migration/v3.13.rst.
+        self.use_lookup_table: bool = True
         #########
         # Peer profile caching configuration
         #########

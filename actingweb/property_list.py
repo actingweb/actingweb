@@ -144,6 +144,47 @@ class ListProperty:
         """Invalidate the metadata cache."""
         self._meta_cache = None
 
+    def prime_from_rows(self, rows: dict[str, Any]) -> None:
+        """Hydrate the metadata cache from a pre-fetched name->value mapping.
+
+        `rows` is the result of a bulk fetch_all_including_lists() read.
+        Priming avoids re-reading the `list:<name>-meta` row that the bulk
+        read already returned. Ignores missing or unparsable metadata (the
+        normal lazy path then applies).
+        """
+        meta_str = rows.get(self._get_meta_property_name())
+        if meta_str is None:
+            return
+        try:
+            parsed = json.loads(meta_str)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if isinstance(parsed, dict):
+            self._meta_cache = parsed
+
+    def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
+        """Like to_list(), but served from a pre-fetched name->value mapping.
+
+        Falls back to a per-item database read for any row missing from the
+        mapping. Item decoding matches __getitem__: JSON with a raw-string
+        fallback.
+        """
+        length = len(self)
+        result: list[Any] = []
+        for i in range(length):
+            item_str = rows.get(self._get_item_property_name(i))
+            if item_str is None:
+                try:
+                    result.append(self[i])
+                except (IndexError, json.JSONDecodeError) as e:
+                    logger.error(f"Error loading list item {i}: {e}")
+                continue
+            try:
+                result.append(json.loads(item_str))
+            except (json.JSONDecodeError, TypeError):
+                result.append(item_str)
+        return result
+
     def get_description(self) -> str:
         """Get the description field for UI info about the list."""
         meta = self._load_metadata()

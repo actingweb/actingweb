@@ -762,9 +762,7 @@ class TestLogoutDoesNotRevokeProviderGrant:
     def _endpoints_handler(mock_webobj, mock_config):
         from unittest.mock import patch
 
-        with patch(
-            "actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server"
-        ):
+        with patch("actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server"):
             from actingweb.handlers.oauth2_endpoints import OAuth2EndpointsHandler
 
             return OAuth2EndpointsHandler(mock_webobj, mock_config)
@@ -778,9 +776,10 @@ class TestLogoutDoesNotRevokeProviderGrant:
 
         fake_actor = self._fake_actor()
         handler = OAuth2SPAHandler(mock_webobj, mock_config)
-        with patch("actingweb.actor.Actor", return_value=fake_actor), patch(
-            "actingweb.oauth2.create_oauth2_authenticator"
-        ) as mk_auth:
+        with (
+            patch("actingweb.actor.Actor", return_value=fake_actor),
+            patch("actingweb.oauth2.create_oauth2_authenticator") as mk_auth,
+        ):
             handler._clear_provider_token_for_actor("actor-1")
 
         # Token cleared locally so the backend can't use it any more...
@@ -795,17 +794,16 @@ class TestLogoutDoesNotRevokeProviderGrant:
     ):
         from unittest.mock import patch
 
-        with patch(
-            "actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server"
-        ):
+        with patch("actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server"):
             from actingweb.handlers.oauth2_endpoints import OAuth2EndpointsHandler
 
             handler = OAuth2EndpointsHandler(mock_webobj, mock_config)
 
         fake_actor = self._fake_actor()
-        with patch("actingweb.actor.Actor", return_value=fake_actor), patch(
-            "actingweb.oauth2.create_oauth2_authenticator"
-        ) as mk_auth:
+        with (
+            patch("actingweb.actor.Actor", return_value=fake_actor),
+            patch("actingweb.oauth2.create_oauth2_authenticator") as mk_auth,
+        ):
             handler._clear_provider_token_for_actor("actor-1")
 
         assert fake_actor.store.oauth_token is None
@@ -821,9 +819,10 @@ class TestLogoutDoesNotRevokeProviderGrant:
         fake_actor = self._fake_actor()
         fake_actor.store.oauth_token = None
         handler = self._spa_handler(mock_webobj, mock_config)
-        with patch("actingweb.actor.Actor", return_value=fake_actor), patch(
-            "actingweb.oauth2.create_oauth2_authenticator"
-        ) as mk_auth:
+        with (
+            patch("actingweb.actor.Actor", return_value=fake_actor),
+            patch("actingweb.oauth2.create_oauth2_authenticator") as mk_auth,
+        ):
             handler._clear_provider_token_for_actor("actor-1")
 
         assert fake_actor.store.oauth_token is None
@@ -838,9 +837,10 @@ class TestLogoutDoesNotRevokeProviderGrant:
         missing_actor.id = None
         missing_actor.store = None
         handler = self._spa_handler(mock_webobj, mock_config)
-        with patch("actingweb.actor.Actor", return_value=missing_actor), patch(
-            "actingweb.oauth2.create_oauth2_authenticator"
-        ) as mk_auth:
+        with (
+            patch("actingweb.actor.Actor", return_value=missing_actor),
+            patch("actingweb.oauth2.create_oauth2_authenticator") as mk_auth,
+        ):
             # Must not raise.
             handler._clear_provider_token_for_actor("does-not-exist")
 

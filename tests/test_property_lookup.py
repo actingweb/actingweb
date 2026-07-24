@@ -167,11 +167,14 @@ class TestPropertyLookupBasicOperations:
     def test_create_duplicate_lookup(self, backend: str, test_actor_id: str):
         """Test creating a duplicate lookup entry (backend-specific behavior)."""
         lookup_mod = get_db_module(backend, "property_lookup")
+        # Unique per run: with conditional puts, a residual row from an
+        # earlier run would otherwise be (correctly) treated as a collision.
+        dup_value = f"duplicate-{uuid.uuid4()}"
 
         # Create first entry
         lookup1 = lookup_mod.DbPropertyLookup()
         result1 = lookup1.create(
-            property_name="oauthId", value="duplicate_value", actor_id=test_actor_id
+            property_name="oauthId", value=dup_value, actor_id=test_actor_id
         )
         assert result1 is True
 
@@ -179,25 +182,29 @@ class TestPropertyLookupBasicOperations:
         other_actor_id = str(uuid.uuid4())
         lookup2 = lookup_mod.DbPropertyLookup()
         result2 = lookup2.create(
-            property_name="oauthId", value="duplicate_value", actor_id=other_actor_id
+            property_name="oauthId", value=dup_value, actor_id=other_actor_id
         )
 
-        # Verify behavior based on backend
+        # Unified behavior (v2): a duplicate for a DIFFERENT actor is a
+        # collision — rejected and logged, the original entry preserved.
+        # (DynamoDB used to silently overwrite last-writer-wins; the v2
+        # conditional put aligned it with PostgreSQL.)
         lookup3 = lookup_mod.DbPropertyLookup()
-        found_actor_id = lookup3.get(property_name="oauthId", value="duplicate_value")
+        found_actor_id = lookup3.get(property_name="oauthId", value=dup_value)
 
-        if backend == "dynamodb":
-            # DynamoDB PutItem overwrites existing entry (last write wins)
-            assert result2 is True, "DynamoDB allows overwrite"
-            assert found_actor_id == other_actor_id, (
-                "DynamoDB overwrites with new value"
+        assert result2 is False, "duplicate for another actor must be rejected"
+        assert found_actor_id == test_actor_id, "original entry must be preserved"
+
+        # Re-creating the SAME mapping is idempotent
+        lookup4 = lookup_mod.DbPropertyLookup()
+        assert (
+            lookup4.create(
+                property_name="oauthId",
+                value=dup_value,
+                actor_id=test_actor_id,
             )
-        elif backend == "postgresql":
-            # PostgreSQL INSERT fails on duplicate primary key
-            assert result2 is False, "PostgreSQL rejects duplicate"
-            assert found_actor_id == test_actor_id, (
-                "PostgreSQL preserves original entry"
-            )
+            is True
+        )
 
         # Cleanup
         lookup3.delete()
@@ -235,14 +242,37 @@ class TestPropertyReverseLookuWithLookupTable:
         """Test reverse lookup when legacy index is enabled."""
         property_mod = get_db_module(backend, "property")
 
+        if backend == "dynamodb":
+            # The shared test table's schema is fixed by whoever created it
+            # first (lookup mode creates it WITHOUT the legacy GSI). The
+            # legacy path needs the GSI — skip when absent; the GSI query
+            # mechanics are covered on a dedicated table in
+            # test_conditional_gsi_schema.py.
+            from actingweb.db.dynamodb.property import PropertyLegacy
+
+            try:
+                desc = PropertyLegacy._get_connection().describe_table()
+            except Exception:
+                desc = None
+            has_gsi = bool(desc and desc.get("GlobalSecondaryIndexes"))
+            if not has_gsi:
+                pytest.skip(
+                    "shared properties table was created without the legacy "
+                    "GSI (lookup-mode shape)"
+                )
+
+        # Unique value: the legacy GSI matches on value only, so residue
+        # from earlier runs could otherwise shadow this test's row.
+        legacy_value = f"github:{uuid.uuid4()}"
+
         # Set a property
         prop = property_mod.DbProperty()
-        prop.set(actor_id=test_actor_id, name="oauthId", value="github:11111")
+        prop.set(actor_id=test_actor_id, name="oauthId", value=legacy_value)
 
         # Reverse lookup should use legacy index/GSI
         prop2 = property_mod.DbProperty()
         found_actor_id = prop2.get_actor_id_from_property(
-            name="oauthId", value="github:11111"
+            name="oauthId", value=legacy_value
         )
         assert found_actor_id == test_actor_id, (
             f"Expected {test_actor_id}, got {found_actor_id}"
@@ -326,6 +356,52 @@ class TestPropertyReverseLookuWithLookupTable:
 
         # Cleanup
         prop.delete()
+
+    def test_update_indexed_property_via_fresh_instance_updates_lookup(
+        self, backend: str, test_actor_id: str, config_with_lookup_table
+    ):
+        """A new DbProperty per write (the PropertyStore path) must still
+        clean up the old lookup row.
+
+        PropertyStore.__setattr__ builds a fresh DbProperty for every write,
+        so self.handle is unset when set() runs. The old test reused a single
+        instance (warm handle), which hid the case where old_value could not
+        be recovered and the stale lookup row survived.
+        """
+        property_mod = get_db_module(backend, "property")
+        lookup_mod = get_db_module(backend, "property_lookup")
+
+        # v2 lookup rows are keyed globally by (name, value), so derive
+        # unique values from the actor id to stay collision-free under
+        # parallel execution.
+        old_value = f"old-{test_actor_id}@example.com"
+        new_value = f"new-{test_actor_id}@example.com"
+
+        # Set initial value with one instance...
+        property_mod.DbProperty().set(
+            actor_id=test_actor_id, name="email", value=old_value
+        )
+        assert (
+            lookup_mod.DbPropertyLookup().get(property_name="email", value=old_value)
+            == test_actor_id
+        )
+
+        # ...and update it with a brand-new instance (cold handle).
+        property_mod.DbProperty().set(
+            actor_id=test_actor_id, name="email", value=new_value
+        )
+
+        assert (
+            lookup_mod.DbPropertyLookup().get(property_name="email", value=old_value)
+            is None
+        ), "Old lookup entry should be deleted even via a fresh DbProperty"
+        assert (
+            lookup_mod.DbPropertyLookup().get(property_name="email", value=new_value)
+            == test_actor_id
+        ), "New lookup entry should be created"
+
+        # Cleanup
+        property_mod.DbProperty().set(actor_id=test_actor_id, name="email", value="")
 
     def test_delete_indexed_property_deletes_lookup(
         self, backend: str, test_actor_id: str, config_with_lookup_table
@@ -616,9 +692,77 @@ class TestConfigurationIntegration:
             delattr(Config, "_instance")
 
         config = Config()
-        # Default should be False for backward compatibility
-        assert config.use_lookup_table is False
+        # Lookup-table mode is the default since v3.13 (legacy GSI mode is
+        # deprecated; pin it via USE_PROPERTY_LOOKUP_TABLE=false)
+        assert config.use_lookup_table is True
         # Default indexed properties
         assert "oauthId" in config.indexed_properties
         assert "email" in config.indexed_properties
         assert "externalUserId" in config.indexed_properties
+
+
+class TestBuilderConfigPrecedence:
+    """Lookup-table settings precedence: explicit builder > env var > default.
+
+    Regression tests for the bug where ActingWebApp stamped its own hardcoded
+    lookup-table defaults onto the config on every with_*() call, silently
+    clobbering the USE_PROPERTY_LOOKUP_TABLE / INDEXED_PROPERTIES env
+    overrides (the documented rollback path).
+    """
+
+    def _make_app(self):
+        from actingweb.interface import ActingWebApp
+
+        return ActingWebApp(
+            aw_type="urn:actingweb:test:precedence",
+            database="dynamodb",
+            fqdn="test.example.com",
+        )
+
+    def test_env_true_survives_builder_calls(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
+        app = self._make_app().with_web_ui(enable=True).with_devtest(enable=True)
+        assert app.get_config().use_lookup_table is True
+
+    def test_env_false_survives_builder_calls(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "false")
+        app = self._make_app().with_web_ui(enable=True).with_devtest(enable=True)
+        assert app.get_config().use_lookup_table is False
+
+    def test_indexed_properties_env_survives_builder_calls(self, monkeypatch):
+        monkeypatch.setenv("INDEXED_PROPERTIES", "custom1,custom2")
+        app = self._make_app().with_web_ui(enable=True)
+        assert app.get_config().indexed_properties == ["custom1", "custom2"]
+
+    def test_explicit_builder_beats_env(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
+        app = self._make_app().with_legacy_property_index(enable=True)
+        assert app.get_config().use_lookup_table is False
+        # ... and stays pinned across later builder calls
+        app.with_web_ui(enable=True)
+        assert app.get_config().use_lookup_table is False
+
+    def test_explicit_indexed_properties_beats_env(self, monkeypatch):
+        monkeypatch.setenv("INDEXED_PROPERTIES", "fromenv")
+        app = self._make_app().with_indexed_properties(["explicit1", "explicit2"])
+        assert app.get_config().indexed_properties == ["explicit1", "explicit2"]
+
+    def test_no_env_no_builder_uses_config_default(self, monkeypatch):
+        monkeypatch.delenv("USE_PROPERTY_LOOKUP_TABLE", raising=False)
+        monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
+        app = self._make_app().with_web_ui(enable=True)
+        config = app.get_config()
+        # Must match Config's own defaults (guards the future default flip:
+        # this asserts equality with Config(), not a hardcoded value)
+        if hasattr(Config, "_instance"):
+            delattr(Config, "_instance")
+        reference = Config()
+        assert config.use_lookup_table == reference.use_lookup_table
+        assert config.indexed_properties == reference.indexed_properties
+
+    def test_with_indexed_properties_no_args_leaves_env_authoritative(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("INDEXED_PROPERTIES", "fromenv")
+        app = self._make_app().with_indexed_properties()
+        assert app.get_config().indexed_properties == ["fromenv"]

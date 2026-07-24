@@ -15,11 +15,27 @@ class InternalStore:
         if not bucket:
             bucket = "_internal"
         self._db = Attributes(actor_id=actor_id, bucket=bucket, config=config)
-        d = self._db.get_bucket()
+        # The bucket is loaded lazily on first access: constructing the
+        # store (which happens on every Actor construction) must not cost a
+        # database query when the attributes are never touched.
+        self._loaded = False
+        self.__initialised = True
+
+    def _ensure_loaded(self) -> None:
+        """Load the whole bucket into the instance on first access.
+
+        Must run before the first write as well as the first read: a write
+        populates the underlying Attributes cache with a single key, after
+        which get_bucket() would return a partial bucket.
+        """
+        if self.__dict__.get("_loaded"):
+            return
+        self.__dict__["_loaded"] = True
+        d = self.__dict__["_db"].get_bucket()
         if d:
             for k, v in d.items():
-                self.__setattr__(k, v.get("data"))
-        self.__initialised = True
+                # Populate directly — no write-through back to the database
+                self.__dict__[k] = (v or {}).get("data")
 
     def __getitem__(self, k: str) -> Any:
         return self.__getattr__(k)
@@ -32,6 +48,7 @@ class InternalStore:
             return object.__setattr__(self, k, v)
         if k is None:
             raise ValueError
+        self._ensure_loaded()
         if v is None:
             self.__dict__["_db"].delete_attr(name=k)
             if k in self.__dict__:
@@ -41,10 +58,12 @@ class InternalStore:
             self.__dict__["_db"].set_attr(name=k, data=v)
 
     def __getattr__(self, k: str) -> Any:
-        try:
-            return self.__dict__[k]
-        except KeyError:
+        # Only reached when k is not in __dict__. Avoid triggering a load
+        # for private/dunder lookups (pickling, introspection).
+        if k.startswith("_"):
             return None
+        self._ensure_loaded()
+        return self.__dict__.get(k)
 
 
 class Attributes:
@@ -56,8 +75,14 @@ class Attributes:
     """
 
     def get_bucket(self) -> dict[str, Any] | None:
-        """Retrieves the attribute bucket from the database"""
-        if not self.data or len(self.data) == 0:
+        """Retrieves the attribute bucket from the database.
+
+        Tracks full-bucket loads with a flag rather than data emptiness:
+        a set_attr()/get_attr() may have cached individual entries, and
+        treating a partially-cached dict as "loaded" would silently return
+        an incomplete bucket.
+        """
+        if not self._bucket_loaded:
             if self.dbprop:
                 fetched_data = self.dbprop.get_bucket(
                     actor_id=self.actor_id, bucket=self.bucket
@@ -70,6 +95,7 @@ class Attributes:
                     self.data = cast(dict[str, dict[str, Any] | None], fetched_data)
             else:
                 self.data = {}
+            self._bucket_loaded = True
         return self.data
 
     def get_attr(self, name: str | None = None) -> dict[str, Any] | None:
@@ -216,6 +242,7 @@ class Attributes:
             else:
                 self.dbprop = None
             self.data = {}
+            self._bucket_loaded = False
             return True
         else:
             return False
@@ -235,8 +262,11 @@ class Attributes:
         self.bucket = bucket
         self.actor_id = actor_id
         self.data: dict[str, dict[str, Any] | None] = {}
-        if actor_id and bucket and len(bucket) > 0 and config:
-            self.get_bucket()
+        # The bucket is loaded lazily by get_bucket(): most consumers only
+        # ever read/write single attributes (get_attr/set_attr), and eagerly
+        # loading the whole bucket here cost a database query per
+        # construction — including twice per Actor construction.
+        self._bucket_loaded = False
 
 
 class Buckets:

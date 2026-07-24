@@ -8,7 +8,10 @@ from pynamodb.attributes import (
     UnicodeAttribute,
     UTCDateTimeAttribute,
 )
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.models import Model
+
+from actingweb.db.dynamodb._ensure import ensure_table
 
 """
     DbAttribute handles all db operations for an attribute (internal)
@@ -23,8 +26,7 @@ class Attribute(Model):
 
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_attributes"
-        read_capacity_units = 26
-        write_capacity_units = 2
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 
@@ -331,16 +333,7 @@ class DbAttribute:
         return deleted
 
     def __init__(self):
-        if not Attribute.exists():
-            try:
-                Attribute.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Attribute)
 
 
 class DbAttributeBucketList:
@@ -398,13 +391,4 @@ class DbAttributeBucketList:
         return True
 
     def __init__(self):
-        if not Attribute.exists():
-            try:
-                Attribute.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Attribute)

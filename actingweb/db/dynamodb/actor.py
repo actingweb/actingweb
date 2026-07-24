@@ -3,8 +3,11 @@ import os
 from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
+
+from actingweb.db.dynamodb._ensure import ensure_table
 
 """
     DbActor handles all db operations for an actor
@@ -21,8 +24,6 @@ class CreatorIndex(GlobalSecondaryIndex[Any]):
 
     class Meta:
         index_name = "creator-index"
-        read_capacity_units = 2
-        write_capacity_units = 1
         projection = AllProjection()
 
     creator = UnicodeAttribute(hash_key=True)
@@ -35,8 +36,7 @@ class Actor(Model):
 
     class Meta:  # type: ignore[misc]
         table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_actors"
-        read_capacity_units = 6
-        write_capacity_units = 2
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
         region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
         host = os.getenv("AWS_DB_HOST", None)
 
@@ -140,16 +140,7 @@ class DbActor:
 
     def __init__(self):
         self.handle = None
-        if not Actor.exists():
-            try:
-                Actor.create_table(wait=True)
-            except Exception as e:
-                # Handle race condition where another process created the table
-                # between our exists() check and create_table() call
-                if "ResourceInUseException" in str(e):
-                    pass  # Table was created by another process, continue
-                else:
-                    raise
+        ensure_table(Actor)
 
 
 class DbActorList:
@@ -158,7 +149,11 @@ class DbActorList:
     """
 
     def fetch(self):
-        """Retrieves the actors in the database"""
+        """Retrieves ALL actors in the database.
+
+        Admin/maintenance use only: this is a deliberate full-table Scan,
+        O(table size) and unpaginated — do not call it on a serving path.
+        """
         self.handle = Actor.scan()
         if self.handle:
             ret = []

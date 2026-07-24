@@ -490,6 +490,9 @@ Config-Aware DB Accessors
 **Why This Matters**:
 
 - Property lookup table settings (``use_lookup_table``, ``indexed_properties``) must be properly configured
+- Directly-constructed accessors fall back to environment variables, which can
+  silently disagree with app-level configuration (e.g. reverse-lookup mode) —
+  the factory injects the resolved config
 - Accessor functions provide type-safe, testable interfaces
 - Clearer dependency on configuration
 

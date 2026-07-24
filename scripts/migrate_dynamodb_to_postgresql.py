@@ -93,7 +93,9 @@ def export_dynamodb(
             TrustModel,  # type: ignore[import-untyped]
         )
     except ImportError as e:
-        logger.error("Failed to import DynamoDB models. Install with: poetry install --extras dynamodb")
+        logger.error(
+            "Failed to import DynamoDB models. Install with: poetry install --extras dynamodb"
+        )
         logger.error("Error: %s", e)
         sys.exit(1)
 
@@ -128,13 +130,17 @@ def export_dynamodb(
 
             count = len(records)
             total_records += count
-            logger.info("Exported %d records from %s to %s", count, table_name, output_file)
+            logger.info(
+                "Exported %d records from %s to %s", count, table_name, output_file
+            )
 
         except Exception as e:
             logger.error("Failed to export %s: %s", table_name, e)
             raise
 
-    logger.info("Export complete: %d total records exported to %s", total_records, output_dir)
+    logger.info(
+        "Export complete: %d total records exported to %s", total_records, output_dir
+    )
 
 
 def import_postgresql(
@@ -172,7 +178,9 @@ def import_postgresql(
     try:
         from actingweb.db.postgresql.connection import get_connection
     except ImportError as e:
-        logger.error("Failed to import PostgreSQL dependencies. Install with: poetry install --extras postgresql")
+        logger.error(
+            "Failed to import PostgreSQL dependencies. Install with: poetry install --extras postgresql"
+        )
         logger.error("Error: %s", e)
         sys.exit(1)
 
@@ -220,13 +228,21 @@ def import_postgresql(
                         if table_name == "actors":
                             cur.execute(
                                 "INSERT INTO actors (id, creator, passphrase) VALUES (%s, %s, %s)",
-                                (record.get("id"), record.get("creator"), record.get("passphrase")),
+                                (
+                                    record.get("id"),
+                                    record.get("creator"),
+                                    record.get("passphrase"),
+                                ),
                             )
 
                         elif table_name == "properties":
                             cur.execute(
                                 "INSERT INTO properties (id, name, value) VALUES (%s, %s, %s)",
-                                (record.get("id"), record.get("name"), record.get("value")),
+                                (
+                                    record.get("id"),
+                                    record.get("name"),
+                                    record.get("value"),
+                                ),
                             )
 
                         elif table_name == "attributes":
@@ -243,7 +259,9 @@ def import_postgresql(
                                     bucket_name,
                                     record.get("bucket"),
                                     record.get("name"),
-                                    json.dumps(record.get("data")) if record.get("data") else None,
+                                    json.dumps(record.get("data"))
+                                    if record.get("data")
+                                    else None,
                                     record.get("timestamp"),
                                     record.get("ttl_timestamp"),
                                 ),
@@ -302,7 +320,9 @@ def import_postgresql(
 
                         elif table_name == "subscriptions":
                             # Convert peer_sub_id composite key
-                            peer_sub_id = f"{record.get('peerid')}:{record.get('subid')}"
+                            peer_sub_id = (
+                                f"{record.get('peerid')}:{record.get('subid')}"
+                            )
                             cur.execute(
                                 """
                                 INSERT INTO subscriptions
@@ -349,18 +369,26 @@ def import_postgresql(
                             skipped += 1
                             logger.debug("Skipped duplicate: %s", record)
                         else:
-                            logger.error("Failed to import record from %s: %s", table_name, e)
+                            logger.error(
+                                "Failed to import record from %s: %s", table_name, e
+                            )
                             logger.error("Record: %s", record)
                             raise
 
                 # Commit after each table
                 conn.commit()
 
-        logger.info("Imported %d records from %s (%d skipped)", imported, table_name, skipped)
+        logger.info(
+            "Imported %d records from %s (%d skipped)", imported, table_name, skipped
+        )
         total_imported += imported
         total_skipped += skipped
 
-    logger.info("Import complete: %d total records imported, %d skipped", total_imported, total_skipped)
+    logger.info(
+        "Import complete: %d total records imported, %d skipped",
+        total_imported,
+        total_skipped,
+    )
 
 
 def validate_migration(
@@ -399,7 +427,9 @@ def validate_migration(
     try:
         from actingweb.db.postgresql.connection import get_connection
     except ImportError as e:
-        logger.error("Failed to import PostgreSQL dependencies. Install with: poetry install --extras postgresql")
+        logger.error(
+            "Failed to import PostgreSQL dependencies. Install with: poetry install --extras postgresql"
+        )
         logger.error("Error: %s", e)
         sys.exit(1)
 
@@ -423,7 +453,9 @@ def validate_migration(
                 json_file = input_path / f"{table_name}.json"
 
                 if not json_file.exists():
-                    logger.warning("File not found: %s (skipping validation)", json_file)
+                    logger.warning(
+                        "File not found: %s (skipping validation)", json_file
+                    )
                     continue
 
                 # Load JSON data
@@ -440,7 +472,12 @@ def validate_migration(
                 if json_count == pg_count:
                     logger.info("✓ %s: %d records (match)", table_name, pg_count)
                 else:
-                    logger.error("✗ %s: JSON=%d, PostgreSQL=%d (MISMATCH)", table_name, json_count, pg_count)
+                    logger.error(
+                        "✗ %s: JSON=%d, PostgreSQL=%d (MISMATCH)",
+                        table_name,
+                        json_count,
+                        pg_count,
+                    )
                     all_valid = False
 
                 # Sample validation (check first record exists)
@@ -448,7 +485,10 @@ def validate_migration(
                     first_record = records[0]
 
                     if table_name == "actors":
-                        cur.execute("SELECT id FROM actors WHERE id = %s", (first_record.get("id"),))
+                        cur.execute(
+                            "SELECT id FROM actors WHERE id = %s",
+                            (first_record.get("id"),),
+                        )
                     elif table_name == "properties":
                         cur.execute(
                             "SELECT id FROM properties WHERE id = %s AND name = %s",

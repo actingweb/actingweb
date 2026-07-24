@@ -60,4 +60,15 @@ Data Backend
 
 - Local dev: use DynamoDB Local with `AWS_DB_HOST` set.
 - Production: use IAM with least privilege and do not set `AWS_DB_HOST`.
+- Production with IaC-managed tables: set ``AWS_DB_AUTO_CREATE_TABLES=false``
+  (or ``with_dynamodb(auto_create_tables=False)``) and drop
+  ``dynamodb:CreateTable`` and ``dynamodb:DescribeTable`` from the runtime
+  role.
+- **Data mapping / GDPR**: indexed property values (emails, OAuth IDs)
+  used for reverse lookup are stored in the DynamoDB lookup table only as
+  SHA-256 digests — no plaintext copy. This is pseudonymisation, not
+  anonymisation: low-entropy values remain dictionary-attackable, and the
+  properties table itself stores values in plaintext, so include *both*
+  tables in your data map. On PostgreSQL the lookup table stores plaintext
+  values (same database and access surface as the properties table).
 

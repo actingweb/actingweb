@@ -144,9 +144,11 @@ Behaviour changes to be aware of
 
 - **Reverse-lookup matching is now (name, value)**, not value-only: the
   legacy GSI matched on value alone, so a value shared across *different*
-  property names could resolve "cross-name". The lookup table cannot.
-  The fallback tiers preserve the old behaviour until removed in the next
-  major release.
+  property names could resolve "cross-name". The lookup table cannot, and
+  the migration fallback tiers (v1 table, legacy GSI, PostgreSQL scan) now
+  also filter by property name — so the value-only cross-name match is gone
+  on every path, not just the primary one. The fallbacks remain only to
+  serve un-backfilled deployments and are removed in the next major release.
 - **Non-indexed property names return None** from
   ``Actor.get_from_property()`` / ``ActorInterface.get_by_property()``
   (with a warning) instead of silently querying the legacy path. Add

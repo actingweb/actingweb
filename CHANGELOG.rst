@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc1: July 24, 2026
+-------------------------
+
 ADDED
 ~~~~~
 

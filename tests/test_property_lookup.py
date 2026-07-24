@@ -357,6 +357,52 @@ class TestPropertyReverseLookuWithLookupTable:
         # Cleanup
         prop.delete()
 
+    def test_update_indexed_property_via_fresh_instance_updates_lookup(
+        self, backend: str, test_actor_id: str, config_with_lookup_table
+    ):
+        """A new DbProperty per write (the PropertyStore path) must still
+        clean up the old lookup row.
+
+        PropertyStore.__setattr__ builds a fresh DbProperty for every write,
+        so self.handle is unset when set() runs. The old test reused a single
+        instance (warm handle), which hid the case where old_value could not
+        be recovered and the stale lookup row survived.
+        """
+        property_mod = get_db_module(backend, "property")
+        lookup_mod = get_db_module(backend, "property_lookup")
+
+        # v2 lookup rows are keyed globally by (name, value), so derive
+        # unique values from the actor id to stay collision-free under
+        # parallel execution.
+        old_value = f"old-{test_actor_id}@example.com"
+        new_value = f"new-{test_actor_id}@example.com"
+
+        # Set initial value with one instance...
+        property_mod.DbProperty().set(
+            actor_id=test_actor_id, name="email", value=old_value
+        )
+        assert (
+            lookup_mod.DbPropertyLookup().get(property_name="email", value=old_value)
+            == test_actor_id
+        )
+
+        # ...and update it with a brand-new instance (cold handle).
+        property_mod.DbProperty().set(
+            actor_id=test_actor_id, name="email", value=new_value
+        )
+
+        assert (
+            lookup_mod.DbPropertyLookup().get(property_name="email", value=old_value)
+            is None
+        ), "Old lookup entry should be deleted even via a fresh DbProperty"
+        assert (
+            lookup_mod.DbPropertyLookup().get(property_name="email", value=new_value)
+            == test_actor_id
+        ), "New lookup entry should be created"
+
+        # Cleanup
+        property_mod.DbProperty().set(actor_id=test_actor_id, name="email", value="")
+
     def test_delete_indexed_property_deletes_lookup(
         self, backend: str, test_actor_id: str, config_with_lookup_table
     ):

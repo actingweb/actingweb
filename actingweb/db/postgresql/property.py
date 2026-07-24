@@ -149,10 +149,10 @@ class DbProperty:
                             cur.execute(
                                 """
                                 SELECT id FROM properties
-                                WHERE value = %s
+                                WHERE name = %s AND value = %s
                                 LIMIT 1
                                 """,
-                                (value,),
+                                (name, value),
                             )
                             row = cur.fetchone()
                             if row:

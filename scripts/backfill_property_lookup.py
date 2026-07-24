@@ -42,6 +42,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -76,7 +77,9 @@ class Checkpoint:
     def __init__(self, path: str | None, total_segments: int) -> None:
         self._path = path
         self._lock = threading.Lock()
-        self._state: dict[str, object] = {}
+        # Per-segment value is the DynamoDB last_evaluated_key (a key dict)
+        # or the "done" sentinel once the segment is exhausted.
+        self._state: dict[str, dict[str, Any] | str] = {}
         if path and os.path.exists(path):
             try:
                 with open(path) as f:
@@ -90,10 +93,10 @@ class Checkpoint:
                 logger.warning(f"Could not read checkpoint {path}: {e}")
         self._total_segments = total_segments
 
-    def get(self, segment: int):
+    def get(self, segment: int) -> dict[str, Any] | str | None:
         return self._state.get(str(segment))
 
-    def set(self, segment: int, last_evaluated_key) -> None:
+    def set(self, segment: int, last_evaluated_key: dict[str, Any] | None) -> None:
         with self._lock:
             self._state[str(segment)] = (
                 last_evaluated_key if last_evaluated_key is not None else "done"

@@ -104,6 +104,20 @@ CHANGED
 FIXED
 ~~~~~
 
+- **Changing an indexed property left its old reverse-lookup row behind on
+  DynamoDB.** When an indexed value (e.g. ``email``) was updated through the
+  normal properties API, the old lookup row was never deleted, so reverse
+  lookup by the previous value kept resolving to the actor and blocked any
+  other actor from claiming that value. The DynamoDB backend now reads the
+  current value before writing, matching the PostgreSQL backend. (Only
+  affected lookup-table mode, which is unreleased.)
+
+- **Reverse-lookup migration fallbacks matched on value alone, ignoring the
+  property name.** During a not-yet-backfilled migration, the legacy-GSI
+  (DynamoDB) and sequential-scan (PostgreSQL) fallbacks could return an actor
+  whose *different* property happened to share the requested value; both now
+  filter by property name. (Migration-only path, unreleased.)
+
 - **Two DynamoDB accessors never auto-created their tables.** First use of
   subscription suspension (``DbSubscriptionSuspension``) or the peer-trustee
   list on a fresh deployment crashed with a table-not-found error; both now

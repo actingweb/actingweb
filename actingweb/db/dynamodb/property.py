@@ -214,7 +214,12 @@ class DbProperty:
                 # (deployments upgrading from legacy mode with an un-backfilled
                 # lookup table). Missing index/table is a normal state.
                 try:
-                    for res in PropertyLegacy.property_index.query(value):
+                    # The GSI is keyed on value alone; filter by name so a
+                    # same-value/different-property row on another actor
+                    # can't hijack the lookup.
+                    for res in PropertyLegacy.property_index.query(
+                        value, filter_condition=PropertyLegacy.name == name
+                    ):
                         actor_id = str(res.id) if res.id else None
                         break
                 except Exception:
@@ -309,6 +314,13 @@ class DbProperty:
         if self._should_index_property(name):
             if self.handle and self.handle.value:
                 old_value = str(self.handle.value)
+            elif actor_id:
+                # PropertyStore.__setattr__ builds a fresh DbProperty for
+                # every write, so self.handle is unset on the primary public
+                # path. Read the current stored value (like the PostgreSQL
+                # backend) so changing an indexed value deletes its stale
+                # lookup row instead of leaving it to resolve forever.
+                old_value = self.get(actor_id=actor_id, name=name)
 
         # Save property
         if not self.handle:

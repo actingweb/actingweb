@@ -184,7 +184,7 @@ Lifecycle Hooks
            revoke_permissions(actor, peer_id)
            notify_user(actor, f"{peer_id} unsubscribed from your data")
 
-Available events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``.
+Available events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``.
 
 Subscription Hook
 -----------------

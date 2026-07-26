@@ -1,6 +1,10 @@
 import json
+import logging
 
+from actingweb import deletion
 from actingweb.handlers import base_handler
+
+logger = logging.getLogger(__name__)
 
 
 class RootHandler(base_handler.BaseHandler):
@@ -77,12 +81,48 @@ class RootHandler(base_handler.BaseHandler):
         if not auth_result.authorize("DELETE", "/"):
             return  # Response already set
         myself = auth_result.actor
-        # Execute actor deletion lifecycle hook
+        deleted_actor_id = myself.id
+
+        # Tombstone BEFORE the pre-delete hook, not just before the wipe.
+        # actor_deleted is where an application calls an external API to cancel
+        # a subscription, and that provider's callback can arrive while the
+        # call is still in flight — i.e. before Actor.delete() has run its own
+        # mark_actor_deleted(). That is not a corner case: it is the exact
+        # sequence that produced the orphan rows this feature exists to stop.
+        # Actor.delete() still writes its own tombstone, which covers
+        # programmatic deletion; the two are idempotent (a plain overwrite).
+        #
+        # AuthResult.success guarantees a non-None actor but not a non-None id,
+        # and mark_actor_deleted() treats a falsy id as "nothing to do" — which
+        # would put us back to the un-tombstoned behaviour with no signal. This
+        # release is about not having silent no-ops in this area, so say so.
+        if deleted_actor_id:
+            deletion.mark_actor_deleted(deleted_actor_id, self.config)
+        else:
+            logger.error(
+                "Authorized DELETE for an actor with no id; no deletion "
+                "tombstone written. Late writes for it cannot be suppressed."
+            )
+
+        # actor_deleted runs BEFORE any data is removed — it is the only place
+        # the actor's own data is still readable, so it is where an application
+        # reads what it needs (e.g. a stored external subscription id).
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 self.hooks.execute_lifecycle_hooks("actor_deleted", actor_interface)
 
         myself.delete()
+
+        # actor_deleted_complete runs AFTER the wipe. External side effects
+        # belong here, not in actor_deleted: an API call made there triggers a
+        # provider callback that races the wipe and lands while the actor still
+        # resolves, writing rows that outlive the actor. There is deliberately
+        # no ActorInterface to hand over — the actor is gone.
+        if self.hooks and deleted_actor_id:
+            self.hooks.execute_lifecycle_hooks(
+                "actor_deleted_complete", None, actor_id=deleted_actor_id
+            )
+
         self.response.set_status(204)
         return

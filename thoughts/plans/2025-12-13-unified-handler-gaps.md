@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Gap Implementation Plan: Unified Handler Architecture (Full Scope)
 
 ## Overview

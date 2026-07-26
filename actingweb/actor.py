@@ -2,11 +2,12 @@ import base64
 import datetime
 import json
 import logging
+import time
 from typing import Any
 
 import requests
 
-from actingweb import attribute, peertrustee, property, subscription, trust
+from actingweb import attribute, deletion, peertrustee, property, subscription, trust
 from actingweb.constants import (
     DEFAULT_CREATOR,
 )
@@ -14,6 +15,17 @@ from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
+
+# Rate limit for the suspension-check failure ERROR (see
+# is_subscription_suspended()). Time-windowed rather than once-per-process:
+# a warm serverless container — or any long-lived one — can outlive the
+# incident by days, and "once ever" would report a broken suspensions table a
+# single time and then stay silent through every later failure, including a
+# different one. A repeating heartbeat is alertable and stops on its own once
+# the fault is fixed, while still costing at most one line per window per
+# container.
+_SUSPENSION_ERROR_LOG_INTERVAL_SECONDS = 300.0
+_suspension_check_error_logged_at: float | None = None
 
 
 class ActorError(Exception):
@@ -365,10 +377,23 @@ class Actor:
             self.id = self.config.new_uuid(seed) if self.config else ""
         if not self.handle and self.config:
             self.handle = get_actor(self.config)
+        created = False
         if self.handle:
-            self.handle.create(
+            created = self.handle.create(
                 creator=self.creator, passphrase=self.passphrase, actor_id=self.id
             )
+        # Generated ids are never reused, but create(actor_id=...) accepts a
+        # caller-supplied one. A stale tombstone would report the new actor as
+        # deleted for the rest of the retention window.
+        #
+        # Only when the row was actually persisted. create() returns False if
+        # the id is already taken — including by an actor mid-deletion, whose
+        # row survives until the wipe's last step — and clearing the tombstone
+        # there would strip the marker off a deletion still in progress,
+        # reopening the very race it guards. A backend insert failure is the
+        # same shape: nothing created, so nothing to un-tombstone.
+        if created:
+            deletion.clear_actor_tombstone(self.id, self.config)
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(
@@ -413,10 +438,18 @@ class Actor:
         return True
 
     def delete(self) -> None:
-        """Deletes an actor and cleans up all relevant stored data"""
+        """Deletes an actor and cleans up all relevant stored data.
+
+        The actor row is removed **last**, so the actor keeps resolving for the
+        duration of the wipe. Existence checks therefore fail open here, and
+        that is why the tombstone is written first: it is readable throughout
+        the wipe, whereas ``get()`` cannot distinguish mid-deletion from live.
+        See :mod:`actingweb.deletion`.
+        """
         if not self.handle:
             logger.debug("Attempted delete of actor with no handle")
             return
+        deletion.mark_actor_deleted(self.id, self.config)
         self.delete_peer_trustee(shorttype="*")
         if not self.property_list:
             self.property_list = property.Properties(
@@ -1468,6 +1501,15 @@ class Actor:
             resource=resource,
             granularity=granularity,
         )
+        # Invalidate the cached subscription list so register_diffs() on this
+        # instance sees the new subscription. Previously each caller had to
+        # remember this (only handlers/subscription.py did), so subscriptions
+        # created through the interface layer silently received no diffs for
+        # the rest of the instance's lifetime — unbounded where an Actor is
+        # cached across requests. NOTE: this only refreshes *this* instance;
+        # another process, or a cross-request cached Actor elsewhere, still
+        # holds its own list. See thoughts/todo/subs-list-cache-asymmetry.md.
+        self.subs_list = None
         return new_sub.get()
 
     def create_remote_subscription(
@@ -2065,7 +2107,45 @@ class Actor:
             db = get_subscription_suspension(self.config, self.id)
             return db.is_suspended(target, subtarget)
         except Exception as e:
-            logger.debug(f"Error checking suspension: {e}")
+            # "Not suspended" and "could not tell" must not look the same:
+            # a missing suspensions table (TableDoesNotExist) or a denied
+            # read makes every target look un-suspended, so a bulk import's
+            # suspend() silently no-ops and per-item callbacks fire anyway.
+            # Log loudly — but at most once per window per process:
+            # register_diffs() calls this on every property write, so an
+            # unconditional ERROR would flood the log at write rate (the same
+            # shape as the per-construction DescribeTable this release
+            # removed). Failures in between stay at DEBUG.
+            global _suspension_check_error_logged_at
+            now = time.monotonic()
+            if (
+                _suspension_check_error_logged_at is None
+                or now - _suspension_check_error_logged_at
+                >= _SUSPENSION_ERROR_LOG_INTERVAL_SECONDS
+            ):
+                _suspension_check_error_logged_at = now
+                logger.error(
+                    "Suspension check FAILED for %s/%s%s — treating as NOT "
+                    "suspended, so subscription diffs and callbacks will fire "
+                    "during any suspended window. Verify the subscription "
+                    "suspensions table exists and is readable "
+                    "(python -m actingweb.db.verify_tables). Repeats at most "
+                    "every %.0fs per process; failures in between are logged "
+                    "at DEBUG: %s",
+                    self.id,
+                    target,
+                    f"/{subtarget}" if subtarget else "",
+                    _SUSPENSION_ERROR_LOG_INTERVAL_SECONDS,
+                    e,
+                )
+            else:
+                logger.debug(
+                    "Suspension check failed for %s/%s%s: %s",
+                    self.id,
+                    target,
+                    f"/{subtarget}" if subtarget else "",
+                    e,
+                )
             return False
 
     def suspend_subscriptions(self, target: str, subtarget: str | None = None) -> bool:
@@ -2581,19 +2661,27 @@ class Actor:
         if blob is None or not target:
             return
 
+        # Get all subscriptions, both with the specific subtarget/resource and those
+        # without. Deliberately BEFORE the suspension check: with no subscriptions
+        # on this target, nothing below the loop runs and the old order paid a
+        # suspension GetItem *plus* this fetch to reach the same no-op — on every
+        # property write. Suspension and "no subscribers" are the same outcome
+        # here, so the cheaper discriminator goes first. (Costs one extra fetch
+        # for an actor that is both subscribed and suspended; that fetch is
+        # memoised per actor instance and is dwarfed by the callback fan-out
+        # suspension exists to avoid.)
+        subs = self.get_subscriptions(
+            target=target, subtarget=None, resource=None, callback=False
+        )
+        if not subs:
+            return
+
         # Check suspension BEFORE registering diffs
         if self.is_subscription_suspended(target, subtarget):
             logger.debug(
                 f"Skipping diff registration for {target}/{subtarget}: suspended"
             )
             return
-        # Get all subscriptions, both with the specific subtarget/resource and those
-        # without
-        subs = self.get_subscriptions(
-            target=target, subtarget=None, resource=None, callback=False
-        )
-        if not subs:
-            subs = []
         if subtarget and resource:
             logger.debug(
                 "register_diffs() - blob(%s chars), target(%s), subtarget(%s), resource(%s), # of subs(%s)",

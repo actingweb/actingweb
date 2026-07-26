@@ -223,6 +223,15 @@ hook (best-effort / rate-limited):
 ``actor.store.oauth_provider`` is written on every sign-in, so it reflects the
 most recent provider.
 
+.. note::
+
+   ``actor_deleted`` is the right hook here because Apple's ``/auth/revoke`` is
+   one-way — nothing calls back into the actor. For a provider that *does* call
+   back (a payment webhook, say), read the token here and make the call from
+   ``actor_deleted_complete`` instead: the actor keeps resolving for the whole
+   of the wipe, so a callback triggered from ``actor_deleted`` can land while it
+   still looks live. See :doc:`../reference/actor-deletion`.
+
 MCP / LLM-triggered web form
 ============================
 

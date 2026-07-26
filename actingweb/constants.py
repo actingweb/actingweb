@@ -97,6 +97,12 @@ ACTINGWEB_SYSTEM_ACTOR = "_actingweb_system"
 # OAuth2/MCP system actor for authentication-related data
 OAUTH2_SYSTEM_ACTOR = "_actingweb_oauth2"
 
+# Deletion tombstone store. Deliberately NOT one of the system actors above:
+# those exist as real actors, and deleting an actor wipes every attribute
+# bucket it owns. A tombstone kept under an id that is never itself an actor
+# cannot be destroyed by the deletion it describes.
+DELETED_ACTORS_STORE = "_actingweb_deleted"
+
 # Standard Bucket Names for Global Data
 # =====================================
 # These bucket names are used consistently across the system
@@ -162,6 +168,10 @@ EMAIL_VERIFY_TOKEN_INDEX_BUCKET = (
     "_email_verify_tokens"  # Reverse index: verification token → actor_id
 )
 
+# Actor deletion tombstones: actor_id -> {actor_id, deleted_at}. Lives under
+# DELETED_ACTORS_STORE, not under the deleted actor itself.
+DELETED_ACTORS_BUCKET = "_deleted_actors"
+
 # TTL Values for Attribute Storage (in seconds)
 # =============================================
 # These define how long different data types should persist before
@@ -199,6 +209,12 @@ OAUTH_STATE_NONCE_TTL = 600  # 10 minutes
 # Mobile exchange-ticket TTL (deep-link → /oauth/spa/token round-trip)
 MOBILE_TICKET_TTL = 300  # 5 minutes
 APPLE_TICKET_TTL = MOBILE_TICKET_TTL  # backward-compatible alias
+
+# Actor deletion tombstone TTL. Must comfortably outlive every provider's
+# webhook retry window, since the whole point is to suppress a late callback
+# that arrives after the actor is gone: Stripe retries for up to 3 days, and
+# others are comparable. 30 days costs a handful of bytes per deleted actor.
+DELETION_TOMBSTONE_TTL = 86400 * 30  # 30 days
 
 # Clock skew buffer for TTL calculations
 # DynamoDB TTL can be delayed up to 48 hours, but items may appear

@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Remaining Handlers Analysis
 
 **Date**: 2025-12-14

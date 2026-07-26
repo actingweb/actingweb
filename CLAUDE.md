@@ -305,15 +305,23 @@ Parallel tests are 2-3x faster but may have occasional isolation issues. If para
 
 ## Project Documentation System
 
-The `thoughts/` directory tracks development work:
+The `thoughts/` directory tracks development work. **`thoughts/README.md` is the
+authoritative convention** — read it before adding anything there.
 
 ```text
 thoughts/
-├── research/    # Architecture analysis and design investigations
-├── patterns/    # Reusable patterns and best practices
-├── plans/       # Implementation plans (YYYY-MM-DD-*.md)
-└── completed/   # Completed work documentation
+├── research/       # What we found out          (dated, /research_codebase)
+├── plans/          # What we intend to do       (dated, /create_plan)
+├── verifications/  # Evidence a plan landed     (dated, /verify_implementation)
+├── reference/      # Durable knowledge          (undated, updated in place)
+└── todo/           # Known work not scheduled   (undated, deleted when done)
 ```
+
+A directory is a **kind** of document, never a **status**. A finished plan stays
+in `plans/` with `status: done` in its frontmatter — it is never moved, because
+moving it rots the links that verifications and research write to it.
+
+Find work in flight: `grep -l "^status: active" thoughts/plans/*.md`
 
 Check these before starting significant work to find existing patterns and context.
 

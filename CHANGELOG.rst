@@ -5,8 +5,24 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.13.0rc1: July 24, 2026
+v3.13.0rc2: July 26, 2026
 -------------------------
+
+Everything from ``v3.13.0rc1`` (July 24, 2026), plus the items marked
+*(since rc1)* below — all from the first consumer to run a real production
+upgrade on the release candidate.
+
+.. note::
+
+   **rc1 deployments should re-validate before pinning to rc2.** Three changes
+   touch a code path rather than only docs: ``register_diffs()`` now resolves
+   subscriptions before consulting suspension state, ``create_subscription()``
+   invalidates the actor's cached subscription list, and **actor deletion now
+   writes a tombstone before the wipe begins** (one extra write per deletion;
+   no change to any read path). All are argued below and covered by the suite,
+   but the lesson of this release is that read-path changes are invisible to
+   functional tests — use the operation-profile recipe in
+   ``docs/migration/v3.13.rst`` to confirm the profile on your own hot paths.
 
 ADDED
 ~~~~~
@@ -17,6 +33,86 @@ ADDED
   ``with_dynamodb(auto_create_tables=False)``. With auto-creation off, the
   library never calls ``DescribeTable``/``CreateTable``, so both permissions
   can be dropped from the runtime IAM role.
+
+- *(since rc1)* **Actor deletion tombstones and a tri-state deletion check.**
+  ``ActorInterface.get_deletion_status(actor_id, config)`` returns
+  ``DeletionStatus.DELETED`` / ``NOT_DELETED`` / ``UNKNOWN`` from a tombstone
+  written *before* the ``actor_deleted`` hook runs — so an external call made
+  from that hook, and any provider callback racing it, already sees
+  ``DELETED`` — and retained for 30 days, past every provider's webhook retry
+  window.
+
+  This exists because a guard of the form "skip this work if the actor no
+  longer exists" could not be written correctly. ``Actor.delete()`` removes the
+  actor row **last**, so ``get_by_id()`` keeps returning a live actor for the
+  entire wipe: the check fails **open** in exactly the window it matters,
+  which the documented cleanup pattern enters deliberately (``actor_deleted``
+  cancels an external subscription; the provider's callback races the wipe).
+  Checking harder is not available either, because ``get_by_id()`` returns
+  ``None`` for a deleted actor *and* for a failed read — so the same guard
+  fails **closed** on a throttle, which for a paid-subscription webhook means
+  the customer paid and silently never got access. A consumer hit both:
+  4 attribute rows in production belonged to fully deleted accounts.
+
+  A tombstone is *positive* evidence, so it has a safe failure direction:
+  ``UNKNOWN`` means proceed, costing at most one orphan row an operator sweep
+  can find, rather than dropping work for a paying customer. The read is a
+  single strongly-consistent point read — measured at exactly one ``GetItem``,
+  not asserted. Tombstones live under a reserved id that is never itself an
+  actor, so no deletion can destroy them, and expired ones are filtered at
+  read time so TTL means the same thing on both backends. Re-creating an actor
+  clears its tombstone (``create(actor_id=...)`` accepts a caller-supplied id).
+
+  The actor row deliberately still goes last. Deleting it first would make
+  existence checks fail closed rather than open, but "missing" is
+  indistinguishable from "read failed" anyway, and it would cost the two
+  properties that ordering buys: deletion stays retriable if a wipe step
+  fails, and rows are never briefly classifiable as orphaned. The tombstone
+  answers the question without that trade.
+
+- *(since rc1)* **``actor_deleted_complete`` lifecycle hook**, fired after the
+  wipe completes with ``actor=None`` and ``actor_id=<id>``. There was
+  previously nowhere to put "do this once the actor is definitely gone", which
+  forced applications into the race above by design: ``actor_deleted`` is the
+  only place the actor's data is readable, so it was also the only place to
+  act on it. Now the work splits — read in ``actor_deleted``, act in
+  ``actor_deleted_complete`` — which removes the race at its source
+  independently of the tombstone. The absent ``ActorInterface`` is the point,
+  not an omission.
+
+- *(since rc1)* **``get_attr_strict()`` on both attribute backends** —
+  a point read that raises on infrastructure errors instead of collapsing them
+  into ``None``, and treats an expired row as absent. Used by the tombstone
+  read; available to applications with the same need. Building the tombstone
+  read on ``get_attr()`` would have reintroduced the very bug it fixes.
+
+  **Custom backend implementers:** this method is now part of
+  ``DbAttributeProtocol``, which is ``@runtime_checkable`` — an out-of-tree
+  attribute backend must add ``get_attr_strict()`` to keep satisfying
+  ``isinstance()`` checks against the protocol. Both bundled backends
+  implement it.
+
+- *(since rc1)* **Operator-facing table verifier:**
+  ``python -m actingweb.db.verify_tables`` reports which required DynamoDB
+  tables exist and which are missing. With auto-creation disabled, "all
+  tables exist" becomes a precondition the library deliberately no longer
+  checks (an existence check would cost an ``AccessDenied`` per accessor
+  construction on a slimmed role), and the required set previously had to be
+  read out of the source. Run it out-of-band with operator credentials —
+  it only reads, never creates, and adds nothing to the request path.
+  ``--list`` prints the names without calling AWS. Exit codes: ``0`` all
+  present, ``1`` one or more missing, ``2`` the check could not run. The
+  same list now drives table pre-warm, so what the library creates and what
+  operators are told to pre-create cannot drift apart.
+
+- *(since rc1)* **``auto_create_enabled()`` is public API**
+  (``from actingweb.db.dynamodb import auto_create_enabled``). Dropping
+  ``DescribeTable``/``CreateTable`` from the runtime role affects the whole
+  role, not just the library, so application code that probes its own tables
+  (boto3 ``table.load()``/``describe_table``, pynamodb ``exists()``) needs
+  the same switch — previously it had to re-implement the environment
+  parsing. ``set_auto_create()`` and ``reset_ensure_cache()`` are exported
+  alongside it.
 
 CHANGED
 ~~~~~~~
@@ -107,6 +203,21 @@ CHANGED
 FIXED
 ~~~~~
 
+- *(since rc1)* **A failed actor read on DynamoDB was completely silent.**
+  ``DbActor.get()`` caught bare ``Exception`` and returned ``None`` with no log
+  line at any level. The comment said "PynamoDB DoesNotExist", but the clause
+  also swallowed ``ProvisionedThroughputExceededException``, request timeouts,
+  credential errors and ``TableDoesNotExist`` — every one of which then
+  presented to callers as "this actor does not exist". An infrastructure fault
+  causing an existence check to answer "no" was undiagnosable from outside the
+  process. Genuine absence now returns ``None`` quietly as before; anything
+  else logs at ERROR naming the exception type and the consequence. It still
+  returns ``None`` rather than raising: raising would turn every transient
+  throttle across authentication, OAuth2 and MCP into an HTTP 500 on a release
+  already validated in production. Callers needing the distinction should use
+  ``get_deletion_status()``, which reports ``UNKNOWN`` rather than guessing.
+  (PostgreSQL already logged this at ERROR; DynamoDB was the asymmetric one.)
+
 - **Changing an indexed property left its old reverse-lookup row behind on
   DynamoDB.** When an indexed value (e.g. ``email``) was updated through the
   normal properties API, the old lookup row was never deleted, so reverse
@@ -135,6 +246,139 @@ FIXED
   rollback path for lookup-table migration. The builder now tracks whether
   these settings were explicitly configured; precedence is consistently
   explicit builder call > environment variable > library default.
+
+- *(since rc1)* **Every property write issued a subscription-suspension read,
+  even with no subscribers.** ``register_diffs()`` runs on each write and
+  checked suspension *before* fetching subscriptions, so an actor with no
+  subscriptions on the target paid a DynamoDB ``GetItem`` **and** the
+  subscription query, only to do nothing either way. The subscription fetch
+  now comes first and returns early when empty; suspension is consulted only
+  when there is something to suspend — one fewer read per property write on
+  the common path, no caching assumptions required. Behaviour is unchanged
+  (suspended and no-subscriptions were already the same outcome). Measured on
+  DynamoDB Local, a property write on an actor with no subscribers is now
+  ``{GetItem: 1, PutItem: 1, Query: 1}`` — no suspension read, no
+  ``DescribeTable``, no ``Scan``.
+
+- *(since rc1)* **A failed subscription-suspension check was indistinguishable
+  from "not suspended".** ``Actor.is_subscription_suspended()`` logged any
+  failure at DEBUG and returned ``False``, so a missing suspensions table
+  (pynamodb raises ``TableDoesNotExist``, which is *not* ``DoesNotExist``) or
+  a denied read made every target read as un-suspended: a bulk import's
+  ``suspend()`` silently no-opped and per-item callbacks fired for every
+  imported item — exactly what suspension exists to prevent — with no error
+  anywhere. Operational failures are now logged at ERROR, naming the actor,
+  the target and the consequence. The call still degrades to "not suspended";
+  it is no longer silent about it. (The PostgreSQL accessor already logged
+  these at ERROR.) The ERROR is rate-limited to once per five minutes per
+  process — ``register_diffs()`` calls this on every property write, so an
+  unconditional ERROR would flood at write rate, while a once-per-process
+  guard would report the fault a single time on a warm serverless container
+  and then stay silent through every later failure, including a different
+  one. Throttled failures are logged at DEBUG.
+
+- *(since rc1)* **Suspending a target suppressed nothing.**
+  ``suspend_subscriptions("properties")`` — the documented bulk-import usage —
+  had no effect on property writes. ``PropertyStore`` registers every diff
+  with the property name as the **subtarget**, so the check looked up
+  ``"properties:<name>"`` while ``suspend()`` had stored ``"properties"``, and
+  the two never met. Only an exactly matching ``(target, subtarget)`` pair
+  ever suspended anything. Target-level suspension now **cascades** to every
+  subtarget beneath it, on both backends.
+
+  This is the functional half of the same symptom the missing-table fix above
+  addresses: a bulk import's ``suspend()`` no-opping and per-item callbacks
+  firing for every item. Restoring the table alone would not have fixed it.
+
+  Verified on DynamoDB Local: a property write under a suspended target now
+  issues ``{GetItem: 1, PutItem: 1, Query: 2}`` against ``{GetItem: 3,
+  PutItem: 3, Query: 3}`` un-suspended — the diff row and sequence bump are
+  genuinely skipped. Previously the two were identical, because suspension
+  did nothing.
+
+  **Behaviour change.** Code that suspended a target while expecting
+  individual subtargets to keep notifying will now see them suppressed. The
+  reverse case is unaffected: ``suspend(target, subtarget)`` still suspends
+  only that pair, and a subtarget suspension made while its target is already
+  suspended is still recorded separately, so resuming the target does not
+  silently lift it.
+
+- *(since rc1)* **Subscriptions created through the interface layer received
+  no diffs for the lifetime of the actor instance.**
+  ``Actor.create_subscription()`` did not invalidate the actor's cached
+  subscription list (``subs_list``); only the *delete* paths did, and only the
+  protocol handler invalidated by hand after a create. So a subscription
+  created via ``ActorInterface.subscriptions`` or the authenticated-peer view
+  was invisible to ``register_diffs()`` afterwards — a silently dropped
+  notification with no error anywhere. ``create_subscription()`` now
+  invalidates it itself, so the invariant no longer depends on every caller
+  remembering. Note this refreshes only the instance it is called on: a
+  subscription created in another process, or against a different cached
+  ``Actor``, still leaves that instance's list stale until it is rebuilt —
+  tracked in ``thoughts/todo/subs-list-cache-asymmetry.md``.
+
+DOCUMENTATION
+~~~~~~~~~~~~~
+
+*All since rc1, from a production upgrade of the release candidate.*
+
+- **New page: Actor Deletion Semantics** (``docs/reference/actor-deletion.rst``).
+  States the contract that previously had to be read out of the source: the
+  exact deletion order and why the actor row goes last, that ``get_by_id()``
+  keeps resolving throughout the wipe, that its ``None`` means "not found *or*
+  read failed", which of the two deletion hooks to use for what, and how to
+  write the guard. Also documents that **attribute and property writes do not
+  validate that the actor exists** — an unknown ``actor_id`` creates rows
+  nothing will clean up. That is by design (``actor_id`` is a key prefix, not a
+  foreign key, on both backends), but the API shape invites the opposite
+  assumption: one consumer's test fixture wrote 228 rows under 114 ids that
+  were never actors, unnoticed for five months. Closes with the four
+  non-obvious edge cases in classifying orphaned rows, each of which is a way
+  to delete live data.
+
+- The Apple Sign-In revocation example now says why ``actor_deleted`` is the
+  right hook *there* (``/auth/revoke`` is one-way) and what to do instead for a
+  provider that calls back.
+
+- **The required-table list is published** (``docs/reference/database-backends.rst``,
+  ``Required DynamoDB tables``) with hash/range keys and which tables are
+  conditional. ``AWS_DB_AUTO_CREATE_TABLES=false`` makes this a precondition,
+  and it previously existed only in source. ``<prefix>_subscription_suspensions``
+  is called out specifically: its accessor had no auto-create guard before
+  3.13, so long-lived deployments frequently never created it.
+- **The pre-warm/IaC race is documented.** Declaring the new tables in
+  CloudFormation/Terraform in the *same* deploy as the library bump lets a
+  cold start create ``<prefix>_property_lookup_v2`` first, failing the stack
+  with ``ResourceInUseException``. Sequence the deploys, or let auto-creation
+  own the tables — not both.
+- **The rollback instruction is qualified.** Legacy mode needs the
+  ``property-index`` GSI on the properties table; a table created before that
+  index existed has no rollback path for reverse lookup. Check
+  ``describe-table`` before upgrading.
+- **Migration rehearsal against DynamoDB Local** is documented end-to-end —
+  table creation, fallback tiers, backfill, tripwire — so the backfill is not
+  performed for the first time in production.
+- **A recipe for proving the fixes landed**, since both are invisible to
+  functional tests: count DynamoDB operations via
+  ``botocore.client.BaseClient._make_api_call``. Includes the trap that a
+  ``before-call.dynamodb`` session handler counts *nothing* under pynamodb
+  (``get_session()`` returns a fresh session per call), which makes
+  ``assert scans == 0`` pass vacuously.
+- **Validating this release requires a DynamoDB backend** — a green suite on
+  PostgreSQL exercises none of the changed code.
+- **Auditing your own ``DescribeTable``/``CreateTable`` use** is called out
+  when recommending the flag: the IAM change is account-wide, not
+  library-scoped.
+- **Reverse lookup is not always the login path** — apps resolving via
+  ``get_from_creator()`` are unaffected, which changes how urgent the backfill
+  is. The doc now says to check rather than assume.
+- **Direct ``DbPropertyLookup().get()`` use bypasses the fallback tiers**
+  (v2-only), so operational scripts return ``None`` during the migration
+  window while the app is healthy. ``get_actor_id_from_property()`` is named
+  as the supported entry point.
+- **``describe-table``'s ``ItemCount`` refreshes only every ~6 hours**, so a
+  freshly backfilled lookup table still reports ``ItemCount: 0``. Verify with
+  ``scan --select COUNT``.
 
 v3.12.0: July 9, 2026
 ---------------------

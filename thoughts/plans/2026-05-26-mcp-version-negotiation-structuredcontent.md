@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Implementation Plan: MCP Version Negotiation + structuredContent (with 2025-11-25 roadmap)
 
 **Date:** 2026-05-26

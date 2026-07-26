@@ -299,8 +299,15 @@ Handle actor lifecycle events:
 
     @app.lifecycle_hook("actor_deleted")
     def on_actor_deleted(actor, **kwargs):
-        # Cleanup before deletion
+        # Runs BEFORE any data is removed - the actor is still readable, so
+        # this is where to read whatever external cleanup will need.
         print(f"Actor {actor.id} is being deleted")
+
+    @app.lifecycle_hook("actor_deleted_complete")
+    def on_actor_deleted_complete(actor, actor_id=None, **kwargs):
+        # Runs AFTER the wipe. No ActorInterface - the actor is gone. External
+        # side effects belong here; see reference/actor-deletion.
+        print(f"Actor {actor_id} is gone")
 
     @app.lifecycle_hook("oauth_success")
     def on_oauth_success(actor, **kwargs):

@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Property Lookup Table Implementation Plan
 
 **Date**: 2026-01-14

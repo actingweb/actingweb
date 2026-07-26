@@ -709,6 +709,27 @@ class DbAttributeProtocol(Protocol):
         ...
 
     @staticmethod
+    def get_attr_strict(
+        actor_id: str | None = None, bucket: str | None = None, name: str | None = None
+    ) -> dict[str, Any] | None:
+        """
+        Get single attribute, distinguishing absence from failure.
+
+        Unlike ``get_attr``, which returns None for every outcome including a
+        throttle or a missing table, this returns None only for a confirmed
+        absence and raises otherwise. Expired rows (``ttl_timestamp`` in the
+        past) count as absent on both backends.
+
+        Returns:
+            Dict with "data" and "timestamp", or None if the attribute does
+            not exist or has expired.
+
+        Raises:
+            Exception: Any backend/operational error.
+        """
+        ...
+
+    @staticmethod
     def set_attr(
         actor_id: str | None = None,
         bucket: str | None = None,

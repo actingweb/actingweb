@@ -20,7 +20,31 @@ class DbSubscriptionSuspension:
         self._actor_id = actor_id
 
     def is_suspended(self, target: str, subtarget: str | None = None) -> bool:
-        """Check if a target/subtarget is currently suspended."""
+        """Check if a target/subtarget is currently suspended.
+
+        Suspending a *target* cascades to every subtarget under it — see the
+        DynamoDB accessor for why the exact-match-only behaviour made
+        target-level suspension a no-op for property writes.
+        """
+        subtarget_value = subtarget or ""
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT 1 FROM subscription_suspensions
+                        WHERE id = %s AND target = %s
+                          AND subtarget IN (%s, '')
+                        """,
+                        (self._actor_id, target, subtarget_value),
+                    )
+                    return cur.fetchone() is not None
+        except Exception as e:
+            logger.error(f"Error checking suspension for {self._actor_id}: {e}")
+            return False
+
+    def _is_suspended_exact(self, target: str, subtarget: str | None) -> bool:
+        """Exact-key check, ignoring target-level cascade."""
         subtarget_value = subtarget or ""
         try:
             with get_connection() as conn:
@@ -39,7 +63,10 @@ class DbSubscriptionSuspension:
 
     def suspend(self, target: str, subtarget: str | None = None) -> bool:
         """Suspend diff registration. Returns True if newly suspended."""
-        if self.is_suspended(target, subtarget):
+        # Exact, not cascaded: a subtarget suspension under an already
+        # suspended target must still be recorded, or resuming the target
+        # would silently lift a suspension the caller asked for separately.
+        if self._is_suspended_exact(target, subtarget):
             return False
 
         subtarget_value = subtarget or ""

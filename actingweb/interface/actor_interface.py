@@ -7,6 +7,7 @@ Provides a clean, intuitive interface for working with ActingWeb actors.
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..actor import Actor as CoreActor
+from ..deletion import DeletionStatus, get_deletion_status
 from .property_store import PropertyStore
 from .subscription_manager import SubscriptionManager
 from .trust_manager import TrustManager
@@ -160,6 +161,53 @@ class ActorInterface:
         if core_actor.id:
             return cls(core_actor, service_registry)
         return None
+
+    @classmethod
+    def get_deletion_status(cls, actor_id: str, config: "Config") -> DeletionStatus:
+        """
+        Whether an actor has been deleted — or whether that cannot be determined.
+
+        Prefer this over ``get_by_id(...) is None`` for any guard of the form
+        "do not do this work if the actor is gone". Two reasons, both of which
+        make the absence check wrong rather than merely weaker:
+
+        - ``get_by_id()`` keeps returning an actor for the whole of
+          :meth:`delete`, because the actor row is removed last. The absence
+          check fails **open** exactly in the window it exists for.
+        - ``get_by_id()`` returns ``None`` for a deleted actor *and* for a
+          failed read. A guard that skips on ``None`` also skips on a DynamoDB
+          throttle — silently. For a paid-subscription webhook that means the
+          customer paid and never got access.
+
+        This call answers with three values instead of two, from a tombstone
+        written before the wipe begins. Treat ``UNKNOWN`` as "proceed": the
+        worst case is one orphan row an operator sweep can find, whereas
+        treating it as "deleted" drops real work.
+
+        Costs one strongly-consistent point read.
+
+        .. code-block:: python
+
+            from actingweb.interface import ActorInterface, DeletionStatus
+
+            status = ActorInterface.get_deletion_status(actor_id, config)
+            if status == DeletionStatus.DELETED:
+                return  # late provider callback for a deleted account
+            # NOT_DELETED and UNKNOWN both proceed
+
+        Args:
+            actor_id: Actor ID
+            config: ActingWeb Config object
+
+        Returns:
+            :class:`~actingweb.deletion.DeletionStatus`
+
+        See Also:
+            :mod:`actingweb.deletion` for the full rationale, and the
+            ``actor_deleted_complete`` lifecycle hook for cleanup that must run
+            after the wipe rather than racing it.
+        """
+        return get_deletion_status(actor_id, config)
 
     @classmethod
     def get_by_creator(
@@ -323,7 +371,14 @@ class ActorInterface:
         return self._core_actor.config
 
     def delete(self) -> None:
-        """Delete this actor and all associated data."""
+        """Delete this actor and all associated data.
+
+        Note that this does **not** run lifecycle hooks — neither
+        ``actor_deleted`` nor ``actor_deleted_complete``. Only the HTTP
+        ``DELETE /<actor_id>`` path fires those, so an application deleting an
+        actor programmatically owns its own cleanup. A deletion tombstone *is*
+        written either way (see :meth:`get_deletion_status`).
+        """
         self._core_actor.delete()
 
     def modify_creator(self, new_creator: str) -> bool:

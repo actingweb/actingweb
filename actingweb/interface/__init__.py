@@ -6,6 +6,7 @@ with improved developer experience.
 """
 
 from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
+from ..deletion import DeletionStatus, get_deletion_status
 from ..fanout import FanOutManager, FanOutResult
 from ..peer_capabilities import PeerCapabilities
 from ..remote_storage import RemotePeerStore, get_remote_bucket
@@ -42,6 +43,8 @@ from .trust_manager import TrustManager
 __all__ = [
     "ActingWebApp",
     "ActorInterface",
+    "DeletionStatus",
+    "get_deletion_status",
     "PropertyStore",
     "TrustManager",
     "SubscriptionManager",

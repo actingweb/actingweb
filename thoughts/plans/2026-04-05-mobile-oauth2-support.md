@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Implementation Plan: Mobile App OAuth2 Support
 
 **Date:** 2026-04-05

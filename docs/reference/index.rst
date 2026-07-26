@@ -14,6 +14,7 @@ Contents
 
    interface-api
    hooks-reference
+   actor-deletion
    handlers
    routing-overview
    database-backends
@@ -29,6 +30,10 @@ High-Level API
 
 **Hooks Reference**
    Complete reference for all hook decorators and their signatures.
+
+**Actor Deletion Semantics**
+   What deletion does and in what order, what ``get_by_id()`` reports while it
+   happens, and how to guard external cleanup against late writes.
 
 HTTP Handlers
 =============
@@ -73,6 +78,8 @@ Common tasks and their reference sections:
 | Choose database backend   | :doc:`database-backends`       |
 +---------------------------+--------------------------------+
 | Register hooks            | :doc:`hooks-reference`         |
++---------------------------+--------------------------------+
+| Delete an actor safely    | :doc:`actor-deletion`          |
 +---------------------------+--------------------------------+
 | Understand routing        | :doc:`routing-overview`        |
 +---------------------------+--------------------------------+

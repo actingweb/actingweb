@@ -37,8 +37,10 @@ ADDED
 - *(since rc1)* **Actor deletion tombstones and a tri-state deletion check.**
   ``ActorInterface.get_deletion_status(actor_id, config)`` returns
   ``DeletionStatus.DELETED`` / ``NOT_DELETED`` / ``UNKNOWN`` from a tombstone
-  written *before* the wipe begins and retained for 30 days — past every
-  provider's webhook retry window.
+  written *before* the ``actor_deleted`` hook runs — so an external call made
+  from that hook, and any provider callback racing it, already sees
+  ``DELETED`` — and retained for 30 days, past every provider's webhook retry
+  window.
 
   This exists because a guard of the form "skip this work if the actor no
   longer exists" could not be written correctly. ``Actor.delete()`` removes the

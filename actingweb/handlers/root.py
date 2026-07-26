@@ -1,6 +1,10 @@
 import json
+import logging
 
+from actingweb import deletion
 from actingweb.handlers import base_handler
+
+logger = logging.getLogger(__name__)
 
 
 class RootHandler(base_handler.BaseHandler):
@@ -78,6 +82,28 @@ class RootHandler(base_handler.BaseHandler):
             return  # Response already set
         myself = auth_result.actor
         deleted_actor_id = myself.id
+
+        # Tombstone BEFORE the pre-delete hook, not just before the wipe.
+        # actor_deleted is where an application calls an external API to cancel
+        # a subscription, and that provider's callback can arrive while the
+        # call is still in flight — i.e. before Actor.delete() has run its own
+        # mark_actor_deleted(). That is not a corner case: it is the exact
+        # sequence that produced the orphan rows this feature exists to stop.
+        # Actor.delete() still writes its own tombstone, which covers
+        # programmatic deletion; the two are idempotent (a plain overwrite).
+        #
+        # AuthResult.success guarantees a non-None actor but not a non-None id,
+        # and mark_actor_deleted() treats a falsy id as "nothing to do" — which
+        # would put us back to the un-tombstoned behaviour with no signal. This
+        # release is about not having silent no-ops in this area, so say so.
+        if deleted_actor_id:
+            deletion.mark_actor_deleted(deleted_actor_id, self.config)
+        else:
+            logger.error(
+                "Authorized DELETE for an actor with no id; no deletion "
+                "tombstone written. Late writes for it cannot be suppressed."
+            )
+
         # actor_deleted runs BEFORE any data is removed — it is the only place
         # the actor's own data is still readable, so it is where an application
         # reads what it needs (e.g. a stored external subscription id).

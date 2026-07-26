@@ -45,17 +45,21 @@ What deletion does, in order
 ``DELETE /<actor_id>`` (and :meth:`actingweb.interface.ActorInterface.delete`)
 runs these steps in this order:
 
-#. **Write a deletion tombstone.** Before anything is removed.
+#. **Write a deletion tombstone.** On the HTTP path this happens *before the*
+   ``actor_deleted`` *hook runs* — so an external call made from that hook, and
+   any provider callback racing it, already sees ``DELETED``.
+#. Run the ``actor_deleted`` lifecycle hook (HTTP path only).
 #. Delete peer-trustee relationships.
 #. Delete properties and property lists.
 #. Delete subscriptions.
 #. Delete trust relationships, including reciprocal ones on peers.
 #. Delete all attribute buckets.
 #. **Delete the actor row** — last.
+#. Run the ``actor_deleted_complete`` lifecycle hook (HTTP path only).
 
 Two consequences follow from the row going last, and both are contract:
 
-- The actor **remains resolvable for the whole of steps 1–6**.
+- The actor **remains resolvable for the whole of steps 1–7**.
   ``ActorInterface.get_by_id()`` returns an actor, and reading its properties
   returns progressively less data as the wipe proceeds.
 - Deletion is **retriable**. If a step fails, the actor row is still there and

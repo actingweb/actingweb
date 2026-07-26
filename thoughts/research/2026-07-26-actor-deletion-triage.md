@@ -37,17 +37,27 @@ semantics. That set the scope.
 
 `actingweb/deletion.py`: `mark_actor_deleted()` / `clear_actor_tombstone()` /
 `get_deletion_status()`, plus `DeletionStatus` (`DELETED` / `NOT_DELETED` /
-`UNKNOWN`) and `ActorInterface.get_deletion_status()`. Written as the first
-statement of `CoreActor.delete()` — which covers every deletion path, since all
-three callsites (`handlers/root.py`, `ActorInterface.delete()`,
-`Actor.create(delete=True)`) funnel through it.
+`UNKNOWN`) and `ActorInterface.get_deletion_status()`.
+
+Marked in **two** places, both needed (see the PR-review section below — the
+second was missing initially and it was the important one):
+
+- `RootHandler.delete()`, **before** the `actor_deleted` hook runs. The hook is
+  where an application calls an external provider, and that provider's callback
+  can race the call itself — earlier than `Actor.delete()` ever executes.
+- the first statement of `CoreActor.delete()`, which covers programmatic
+  deletion (`ActorInterface.delete()`, `Actor.create(delete=True)`) where no
+  handler is involved.
+
+The two are idempotent overwrites, so the HTTP path pays one extra `PutItem` on
+a rare operation.
 
 Storage: the attributes table under `DELETED_ACTORS_STORE = "_actingweb_deleted"`,
 bucket `_deleted_actors`, `name=<actor_id>`. Deliberately **not**
 `ACTINGWEB_SYSTEM_ACTOR`: that is a real actor, and deleting an actor wipes every
 bucket it owns, so tombstones under it would be destroyable by the very mechanism
-they describe. A test asserts a `Buckets(ACTINGWEB_SYSTEM_ACTOR).delete()` leaves
-tombstones intact.
+they describe. Asserted on the constants, plus a test that one actor's wipe
+leaves another's tombstone intact.
 
 **The trap this design walked into and had to route around.**
 `DbAttribute.get_attr()` has *exactly the DEL2 collapse* — bare
@@ -64,10 +74,11 @@ is a bare `Attribute.get(...)`. **Measured, not asserted:** exactly
 `{GetItem: 1}` via `BaseClient._make_api_call`, with a live-counter assertion so
 the count cannot be vacuous (the `get_session()` trap from D7).
 
-`Actor.create()` now clears any tombstone for its id. Not in the feedback doc,
-but a real hole: generated ids are never reused, yet `create(actor_id=...)`
-accepts a caller-supplied one, and a stale tombstone would report the new actor
-as deleted for 30 days and suppress every write for it.
+`Actor.create()` now clears any tombstone for its id — **only when the row was
+actually persisted** (see the PR-review section). Not in the feedback doc, but a
+real hole: generated ids are never reused, yet `create(actor_id=...)` accepts a
+caller-supplied one, and a stale tombstone would report the new actor as deleted
+for 30 days and suppress every write for it.
 
 ### DEL1 preference #2 — delete the actor row first. **Rejected**, deliberately.
 
@@ -137,7 +148,7 @@ consumer writing their own sweep needs them whether or not the library ships one
 
 | # | Requirement | Test |
 | --- | --- | --- |
-| 1 | DELETED throughout the wipe | sampled at the **first** wipe step and again **after** `Buckets.delete()` — both DELETED |
+| 1 | DELETED throughout the wipe | sampled **inside the `actor_deleted` hook** (the window their production failure actually hit), at the first wipe step, and again **after** `Buckets.delete()` — all DELETED |
 | — | (why it's needed) | `get_by_id()` asserted **non-None** mid-wipe, pinning the ordering |
 | 2 | Outlives 3 days | raw `ttl_timestamp > now + 3d`; expired tombstone reads as absent |
 | 3 | Infra failure ≠ deleted | store raising → `UNKNOWN` + ERROR logged; `get_attr_strict` raises where `get_attr` returns `None` |
@@ -145,9 +156,41 @@ consumer writing their own sweep needs them whether or not the library ships one
 | 5 | Live actor + store unreachable → still writes | end-to-end: entitlement written |
 | — | Point read | `{GetItem: 1}`, counted with a live-counter check |
 
-`tests/test_actor_deletion_tombstone.py`, 29 cases.
+`tests/test_actor_deletion_tombstone.py`, 33 cases.
 
-## Two defects caught in review of this work, both fixed
+## Two defects caught by automated review on PR #116, both fixed
+
+Both were correct, and the first was the more serious of the two.
+
+- **The tombstone was written too late to cover the case that motivated it.**
+  It was the first statement of `CoreActor.delete()` — but on the HTTP path
+  `RootHandler.delete()` runs the `actor_deleted` hook *before* calling
+  `myself.delete()`. So the hook's own external API call, and any provider
+  callback racing it, executed with **no tombstone present**. That is exactly
+  the production sequence in the feedback doc: the consumer's orphan rows were
+  written by a `subscription.deleted` webhook arriving in response to the
+  cancellation their `actor_deleted` hook had just issued. The feature closed
+  the wipe window and left the hook window — the one that actually fired — open.
+  Now marked in `root.py` before the hook runs. `Actor.delete()` keeps its own
+  mark for programmatic deletion; the two are idempotent overwrites.
+
+  Worth recording *why* this was missed: the tests sampled the tombstone at the
+  first and last steps of `Actor.delete()`, which is the boundary the design
+  document reasons about. Nothing sampled *inside the pre-delete hook*, so the
+  gap sat outside the frame the tests were drawn around.
+
+- **A failed create cleared the tombstone anyway.** `Actor.create()` ignored the
+  return of `handle.create()`. `DbActor.create()` returns False when the id is
+  already taken — which includes an actor **mid-deletion**, since its row
+  survives until the wipe's last step — so a create racing a deletion on the
+  same id would strip the marker off a deletion still in progress. A backend
+  insert failure had the same effect. Clearing is now conditional on the row
+  actually being persisted.
+
+All three regression tests were confirmed to **fail against the pre-fix code**
+and pass after, so none is vacuous.
+
+## Two defects caught in self-review before opening the PR, both fixed
 
 - **A test wiped global state.** `test_tombstone_survives_the_wipe_of_a_system_actor`
   called `Buckets(ACTINGWEB_SYSTEM_ACTOR).delete()`, which removes *every*
@@ -174,9 +217,9 @@ consumer writing their own sweep needs them whether or not the library ships one
 
 - pyright **0 errors / 0 warnings**; ruff check clean; ruff format applied.
 - Sphinx builds clean (0 warnings) with all new cross-references resolving.
-- DynamoDB: `make test-all-parallel` → **2515 passed, 26 skipped, 0 failed**
-  (2486 before; +29 new), stable across three consecutive runs.
-- PostgreSQL: the new file → **21 passed, 8 skipped** (skips are the
+- DynamoDB: `make test-all-parallel` → **2518 passed, 26 skipped, 0 failed**
+  (2486 before; +32 new).
+- PostgreSQL: the new file → **24 passed, 8 skipped** (skips are the
   DynamoDB-internals cases). Full suite → 6 failures, **all pre-existing**:
   verified by stashing the change and reproducing the identical 6 in the same
   environment (5 × `tests/performance/test_backend_performance.py` failing on

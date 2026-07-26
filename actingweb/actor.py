@@ -377,14 +377,23 @@ class Actor:
             self.id = self.config.new_uuid(seed) if self.config else ""
         if not self.handle and self.config:
             self.handle = get_actor(self.config)
+        created = False
         if self.handle:
-            self.handle.create(
+            created = self.handle.create(
                 creator=self.creator, passphrase=self.passphrase, actor_id=self.id
             )
         # Generated ids are never reused, but create(actor_id=...) accepts a
         # caller-supplied one. A stale tombstone would report the new actor as
         # deleted for the rest of the retention window.
-        deletion.clear_actor_tombstone(self.id, self.config)
+        #
+        # Only when the row was actually persisted. create() returns False if
+        # the id is already taken — including by an actor mid-deletion, whose
+        # row survives until the wipe's last step — and clearing the tombstone
+        # there would strip the marker off a deletion still in progress,
+        # reopening the very race it guards. A backend insert failure is the
+        # same shape: nothing created, so nothing to un-tombstone.
+        if created:
+            deletion.clear_actor_tombstone(self.id, self.config)
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(

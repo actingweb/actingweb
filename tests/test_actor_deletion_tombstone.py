@@ -420,6 +420,58 @@ class TestTombstoneDoesNotOutliveItsActor:
         # Still reserved, so an orphan sweep excludes it.
         assert DELETED_ACTORS_STORE.startswith("_actingweb_")
 
+    def test_a_failed_create_does_not_clear_the_tombstone(
+        self, config, actor_id, tombstone_cleanup
+    ):
+        """Clearing is conditional on the row actually being persisted.
+
+        ``DbActor.create()`` returns False when the id is already taken — which
+        includes an actor **mid-deletion**, since its row survives until the
+        wipe's last step. An unconditional clear would strip the marker off a
+        deletion still in progress and reopen the race it guards. A backend
+        insert failure is the same shape: nothing created, nothing to clear.
+        """
+        tombstone_cleanup.append(actor_id)
+        mark_actor_deleted(actor_id, config)
+
+        actor = Actor(config=config)
+        # Pre-set the handle so create() uses this one rather than building a
+        # real accessor; a backend that refuses the insert returns False.
+        actor.handle = mock.Mock(create=mock.Mock(return_value=False))
+
+        actor.create(
+            url="http://test.example.com",
+            creator="failed-create@example.com",
+            passphrase="secret",
+            actor_id=actor_id,
+        )
+
+        assert actor.handle.create.called, "test did not exercise the create path"
+        assert get_deletion_status(actor_id, config) == DeletionStatus.DELETED
+
+    def test_creating_over_an_id_still_being_wiped_keeps_the_tombstone(
+        self, config, live_actor, tombstone_cleanup
+    ):
+        """The concurrent case, end to end against the real backend.
+
+        Mimics "actor X is mid-deletion (tombstone written, row not yet
+        removed) and a create races it on the same id": the real backend
+        refuses the insert because the row is still there, so the in-flight
+        deletion must keep its tombstone.
+        """
+        actor_id = live_actor.id or ""
+        mark_actor_deleted(actor_id, config)
+
+        racer = Actor(config=config)
+        racer.create(
+            url="http://test.example.com",
+            creator="racer@example.com",
+            passphrase="secret",
+            actor_id=actor_id,
+        )
+
+        assert get_deletion_status(actor_id, config) == DeletionStatus.DELETED
+
     def test_a_normal_actors_wipe_leaves_other_tombstones_alone(
         self, config, actor_id, tombstone_cleanup, live_actor
     ):
@@ -577,6 +629,66 @@ class TestPostWipeLifecycleHook:
         # And by this point the actor really is gone, and reported gone.
         assert resolved is None
         assert status == DeletionStatus.DELETED
+
+    def test_tombstone_exists_while_the_pre_delete_hook_runs(self, config, live_actor):
+        """The window that actually produced the reported orphan rows.
+
+        The production sequence was: ``actor_deleted`` calls the payment
+        provider to cancel, and the provider's webhook arrives *in response to
+        that call* — potentially while it is still in flight, i.e. before
+        ``Actor.delete()`` has started and written its own tombstone. Marking
+        only at the start of the wipe leaves precisely the motivating case
+        uncovered, so the HTTP path marks before running the hook.
+        """
+        from actingweb.interface.hooks import HookRegistry
+
+        observed = {}
+        hooks = HookRegistry()
+
+        def during(actor, **kwargs):
+            # Stands in for the provider callback landing mid-cancellation.
+            observed["actor_id"] = actor.id
+            observed["status"] = get_deletion_status(actor.id, config)
+
+        hooks.register_lifecycle_hook("actor_deleted", during)
+
+        handler = self._handler(config, hooks)
+        with mock.patch.object(
+            handler, "authenticate_actor", return_value=self._auth_result(live_actor)
+        ):
+            handler.delete(live_actor.id)
+
+        # Guards against a vacuous pass: a falsy id would make
+        # mark_actor_deleted() a silent no-op and the status read meaningless.
+        assert observed["actor_id"]
+        assert observed["status"] == DeletionStatus.DELETED
+
+    def test_the_two_marks_collapse_to_one_tombstone_row(self, config, live_actor):
+        """The HTTP path marks twice; that must be an overwrite, not a duplicate.
+
+        Keeping both marks (pre-hook in the handler, start-of-wipe in
+        ``Actor.delete()`` for programmatic deletion) is justified by them being
+        idempotent, so pin it rather than assert it in prose: one row, still
+        readable, carrying a usable ``deleted_at``.
+        """
+        from actingweb import attribute
+
+        actor_id = live_actor.id
+        handler = self._handler(config, None)
+        with mock.patch.object(
+            handler, "authenticate_actor", return_value=self._auth_result(live_actor)
+        ):
+            handler.delete(actor_id)
+
+        bucket = attribute.Attributes(
+            actor_id=DELETED_ACTORS_STORE,
+            bucket=DELETED_ACTORS_BUCKET,
+            config=config,
+        ).get_bucket()
+        rows = [k for k in (bucket or {}) if k == actor_id]
+        assert rows == [actor_id], f"expected exactly one tombstone row, got {rows}"
+        assert (bucket or {})[actor_id]["data"]["deleted_at"]
+        assert get_deletion_status(actor_id, config) == DeletionStatus.DELETED
 
     def test_delete_still_returns_204_when_the_hook_raises(self, config, live_actor):
         from actingweb.interface.hooks import HookRegistry

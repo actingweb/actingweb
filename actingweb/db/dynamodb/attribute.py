@@ -9,6 +9,7 @@ from pynamodb.attributes import (
     UTCDateTimeAttribute,
 )
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
+from pynamodb.exceptions import DoesNotExist
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
@@ -77,6 +78,36 @@ class DbAttribute:
         try:
             r = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
         except Exception:  # PynamoDB DoesNotExist exception
+            return None
+        return {
+            "data": r.data,
+            "timestamp": r.timestamp,
+        }
+
+    @staticmethod
+    def get_attr_strict(actor_id=None, bucket=None, name=None):
+        """Point-read one attribute, distinguishing absence from failure.
+
+        ``get_attr()`` collapses every outcome into ``None``: a missing row, a
+        throttle, an expired credential and a missing table are
+        indistinguishable. That is tolerable for a cache read and wrong for any
+        caller whose "row is absent" branch is a decision rather than a
+        fallback — the deletion tombstone read being the case in the library.
+
+        Absence returns ``None``; anything else raises so the caller can tell
+        "I looked and it is not there" from "I could not look".
+
+        An expired row reads as absent. DynamoDB's TTL sweep may lag by up to
+        48 hours, and a tombstone past its window must stop suppressing writes
+        on time rather than whenever the sweeper gets to it.
+        """
+        if not actor_id or not bucket or not name:
+            return None
+        try:
+            r = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
+        except DoesNotExist:
+            return None
+        if r.ttl_timestamp is not None and r.ttl_timestamp <= int(time.time()):
             return None
         return {
             "data": r.data,

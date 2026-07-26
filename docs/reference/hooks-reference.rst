@@ -105,7 +105,7 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-- Common events: ``actor_created``, ``actor_deleted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_verified``
+- Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_verified``
 
 Event Details
 ~~~~~~~~~~~~~
@@ -116,9 +116,29 @@ Event Details
     **Signature**: ``func(actor: ActorInterface) -> None``
 
 ``actor_deleted``
-    Triggered when an actor is deleted.
+    Triggered when an actor is deleted, **before any data is removed**. The
+    actor is still fully readable, so this is where to *read* whatever external
+    cleanup will need.
 
     **Signature**: ``func(actor: ActorInterface) -> None``
+
+    .. warning::
+
+       Do not make external API calls here. The actor keeps resolving for the
+       whole of the wipe, so a provider callback triggered from this hook lands
+       while the actor still appears live and writes rows that outlive it. Act
+       in ``actor_deleted_complete`` instead. See
+       :doc:`actor-deletion`.
+
+``actor_deleted_complete``
+    Triggered **after** the wipe completes. Receives ``actor=None`` and
+    ``actor_id`` — there is deliberately no ``ActorInterface``, because the
+    actor no longer exists. External side effects belong here.
+
+    **Signature**: ``func(actor: None, actor_id: str) -> None``
+
+    Fires only on the HTTP ``DELETE /<actor_id>`` path, like ``actor_deleted``.
+    See :doc:`actor-deletion` for the full contract.
 
 ``oauth_success``
     Triggered after successful OAuth2 authentication.

@@ -116,6 +116,47 @@ class DbAttribute:
             return None
 
     @staticmethod
+    def get_attr_strict(
+        actor_id: str | None = None, bucket: str | None = None, name: str | None = None
+    ) -> dict[str, Any] | None:
+        """Read one attribute, distinguishing absence from failure.
+
+        ``get_attr()`` logs and returns ``None`` for both a missing row and a
+        failed query. Callers whose "absent" branch is a decision rather than a
+        fallback — the deletion tombstone read — need the two separated, so
+        operational errors propagate here instead of being swallowed.
+
+        Expired rows read as absent. ``ttl_timestamp`` is only reclaimed by an
+        explicit ``delete_expired()`` sweep on this backend, so honouring it at
+        read time is what makes TTL mean the same thing on both backends.
+        """
+        if not actor_id or not bucket or not name:
+            return None
+
+        bucket_name = bucket + ":" + name
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT data, timestamp, ttl_timestamp
+                    FROM attributes
+                    WHERE id = %s AND bucket_name = %s
+                    """,
+                    (actor_id, bucket_name),
+                )
+                row = cur.fetchone()
+
+        if not row:
+            return None
+        if row[2] is not None and row[2] <= int(time.time()):
+            return None
+        return {
+            "data": row[0],
+            "timestamp": row[1],
+        }
+
+    @staticmethod
     def set_attr(
         actor_id: str | None = None,
         bucket: str | None = None,

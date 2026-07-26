@@ -4,6 +4,7 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
+from pynamodb.exceptions import DoesNotExist
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -58,7 +59,24 @@ class DbActor:
             return None
         try:
             self.handle = Actor.get(actor_id, consistent_read=True)
-        except Exception:  # PynamoDB DoesNotExist exception
+        except DoesNotExist:
+            return None
+        except Exception as e:
+            # Anything that is not a confirmed absence — a throttle, a timeout,
+            # bad credentials, a missing table — used to return None here with
+            # no log line at any level, so callers could not tell "no such
+            # actor" from "the read failed" and nothing recorded that it had.
+            # None is still returned for backward compatibility (raising would
+            # turn every throttle across auth, OAuth2 and MCP into a 500), so
+            # this ERROR is the only signal that an existence check just
+            # answered "no" for an infrastructure reason. Callers needing the
+            # distinction should use actingweb.deletion.get_deletion_status(),
+            # which reports UNKNOWN rather than guessing.
+            logger.error(
+                f"Failed to read actor {actor_id} from DynamoDB: "
+                f"{type(e).__name__}: {e}. Returning None — callers will see "
+                "this as 'actor does not exist'."
+            )
             return None
         if self.handle:
             t = self.handle

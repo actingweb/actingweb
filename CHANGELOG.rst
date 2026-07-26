@@ -14,14 +14,15 @@ upgrade on the release candidate.
 
 .. note::
 
-   **rc1 deployments should re-validate before pinning to rc2.** Two changes
-   touch the property-write path rather than only docs: ``register_diffs()``
-   now resolves subscriptions before consulting suspension state, and
-   ``create_subscription()`` invalidates the actor's cached subscription list.
-   Both are argued below and covered by the suite, but the lesson of this
-   release is that read-path changes are invisible to functional tests — use
-   the operation-profile recipe in ``docs/migration/v3.13.rst`` to confirm the
-   profile on your own hot paths.
+   **rc1 deployments should re-validate before pinning to rc2.** Three changes
+   touch a code path rather than only docs: ``register_diffs()`` now resolves
+   subscriptions before consulting suspension state, ``create_subscription()``
+   invalidates the actor's cached subscription list, and **actor deletion now
+   writes a tombstone before the wipe begins** (one extra write per deletion;
+   no change to any read path). All are argued below and covered by the suite,
+   but the lesson of this release is that read-path changes are invisible to
+   functional tests — use the operation-profile recipe in
+   ``docs/migration/v3.13.rst`` to confirm the profile on your own hot paths.
 
 ADDED
 ~~~~~
@@ -32,6 +33,62 @@ ADDED
   ``with_dynamodb(auto_create_tables=False)``. With auto-creation off, the
   library never calls ``DescribeTable``/``CreateTable``, so both permissions
   can be dropped from the runtime IAM role.
+
+- *(since rc1)* **Actor deletion tombstones and a tri-state deletion check.**
+  ``ActorInterface.get_deletion_status(actor_id, config)`` returns
+  ``DeletionStatus.DELETED`` / ``NOT_DELETED`` / ``UNKNOWN`` from a tombstone
+  written *before* the wipe begins and retained for 30 days — past every
+  provider's webhook retry window.
+
+  This exists because a guard of the form "skip this work if the actor no
+  longer exists" could not be written correctly. ``Actor.delete()`` removes the
+  actor row **last**, so ``get_by_id()`` keeps returning a live actor for the
+  entire wipe: the check fails **open** in exactly the window it matters,
+  which the documented cleanup pattern enters deliberately (``actor_deleted``
+  cancels an external subscription; the provider's callback races the wipe).
+  Checking harder is not available either, because ``get_by_id()`` returns
+  ``None`` for a deleted actor *and* for a failed read — so the same guard
+  fails **closed** on a throttle, which for a paid-subscription webhook means
+  the customer paid and silently never got access. A consumer hit both:
+  4 attribute rows in production belonged to fully deleted accounts.
+
+  A tombstone is *positive* evidence, so it has a safe failure direction:
+  ``UNKNOWN`` means proceed, costing at most one orphan row an operator sweep
+  can find, rather than dropping work for a paying customer. The read is a
+  single strongly-consistent point read — measured at exactly one ``GetItem``,
+  not asserted. Tombstones live under a reserved id that is never itself an
+  actor, so no deletion can destroy them, and expired ones are filtered at
+  read time so TTL means the same thing on both backends. Re-creating an actor
+  clears its tombstone (``create(actor_id=...)`` accepts a caller-supplied id).
+
+  The actor row deliberately still goes last. Deleting it first would make
+  existence checks fail closed rather than open, but "missing" is
+  indistinguishable from "read failed" anyway, and it would cost the two
+  properties that ordering buys: deletion stays retriable if a wipe step
+  fails, and rows are never briefly classifiable as orphaned. The tombstone
+  answers the question without that trade.
+
+- *(since rc1)* **``actor_deleted_complete`` lifecycle hook**, fired after the
+  wipe completes with ``actor=None`` and ``actor_id=<id>``. There was
+  previously nowhere to put "do this once the actor is definitely gone", which
+  forced applications into the race above by design: ``actor_deleted`` is the
+  only place the actor's data is readable, so it was also the only place to
+  act on it. Now the work splits — read in ``actor_deleted``, act in
+  ``actor_deleted_complete`` — which removes the race at its source
+  independently of the tombstone. The absent ``ActorInterface`` is the point,
+  not an omission.
+
+- *(since rc1)* **``get_attr_strict()`` on both attribute backends** —
+  a point read that raises on infrastructure errors instead of collapsing them
+  into ``None``, and treats an expired row as absent. Used by the tombstone
+  read; available to applications with the same need. Building the tombstone
+  read on ``get_attr()`` would have reintroduced the very bug it fixes.
+
+  **Custom backend implementers:** this method is now part of
+  ``DbAttributeProtocol``, which is ``@runtime_checkable`` — an out-of-tree
+  attribute backend must add ``get_attr_strict()`` to keep satisfying
+  ``isinstance()`` checks against the protocol. Both bundled backends
+  implement it.
 
 - *(since rc1)* **Operator-facing table verifier:**
   ``python -m actingweb.db.verify_tables`` reports which required DynamoDB
@@ -144,6 +201,21 @@ CHANGED
 FIXED
 ~~~~~
 
+- *(since rc1)* **A failed actor read on DynamoDB was completely silent.**
+  ``DbActor.get()`` caught bare ``Exception`` and returned ``None`` with no log
+  line at any level. The comment said "PynamoDB DoesNotExist", but the clause
+  also swallowed ``ProvisionedThroughputExceededException``, request timeouts,
+  credential errors and ``TableDoesNotExist`` — every one of which then
+  presented to callers as "this actor does not exist". An infrastructure fault
+  causing an existence check to answer "no" was undiagnosable from outside the
+  process. Genuine absence now returns ``None`` quietly as before; anything
+  else logs at ERROR naming the exception type and the consequence. It still
+  returns ``None`` rather than raising: raising would turn every transient
+  throttle across authentication, OAuth2 and MCP into an HTTP 500 on a release
+  already validated in production. Callers needing the distinction should use
+  ``get_deletion_status()``, which reports ``UNKNOWN`` rather than guessing.
+  (PostgreSQL already logged this at ERROR; DynamoDB was the asymmetric one.)
+
 - **Changing an indexed property left its old reverse-lookup row behind on
   DynamoDB.** When an indexed value (e.g. ``email``) was updated through the
   normal properties API, the old lookup row was never deleted, so reverse
@@ -247,6 +319,24 @@ DOCUMENTATION
 ~~~~~~~~~~~~~
 
 *All since rc1, from a production upgrade of the release candidate.*
+
+- **New page: Actor Deletion Semantics** (``docs/reference/actor-deletion.rst``).
+  States the contract that previously had to be read out of the source: the
+  exact deletion order and why the actor row goes last, that ``get_by_id()``
+  keeps resolving throughout the wipe, that its ``None`` means "not found *or*
+  read failed", which of the two deletion hooks to use for what, and how to
+  write the guard. Also documents that **attribute and property writes do not
+  validate that the actor exists** — an unknown ``actor_id`` creates rows
+  nothing will clean up. That is by design (``actor_id`` is a key prefix, not a
+  foreign key, on both backends), but the API shape invites the opposite
+  assumption: one consumer's test fixture wrote 228 rows under 114 ids that
+  were never actors, unnoticed for five months. Closes with the four
+  non-obvious edge cases in classifying orphaned rows, each of which is a way
+  to delete live data.
+
+- The Apple Sign-In revocation example now says why ``actor_deleted`` is the
+  right hook *there* (``/auth/revoke`` is one-way) and what to do instead for a
+  provider that calls back.
 
 - **The required-table list is published** (``docs/reference/database-backends.rst``,
   ``Required DynamoDB tables``) with hash/range keys and which tables are

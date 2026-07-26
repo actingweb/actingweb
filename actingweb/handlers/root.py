@@ -77,12 +77,26 @@ class RootHandler(base_handler.BaseHandler):
         if not auth_result.authorize("DELETE", "/"):
             return  # Response already set
         myself = auth_result.actor
-        # Execute actor deletion lifecycle hook
+        deleted_actor_id = myself.id
+        # actor_deleted runs BEFORE any data is removed — it is the only place
+        # the actor's own data is still readable, so it is where an application
+        # reads what it needs (e.g. a stored external subscription id).
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 self.hooks.execute_lifecycle_hooks("actor_deleted", actor_interface)
 
         myself.delete()
+
+        # actor_deleted_complete runs AFTER the wipe. External side effects
+        # belong here, not in actor_deleted: an API call made there triggers a
+        # provider callback that races the wipe and lands while the actor still
+        # resolves, writing rows that outlive the actor. There is deliberately
+        # no ActorInterface to hand over — the actor is gone.
+        if self.hooks and deleted_actor_id:
+            self.hooks.execute_lifecycle_hooks(
+                "actor_deleted_complete", None, actor_id=deleted_actor_id
+            )
+
         self.response.set_status(204)
         return

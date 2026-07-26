@@ -221,6 +221,10 @@ class LifecycleEvent(Enum):
 
     ACTOR_CREATED = "actor_created"
     ACTOR_DELETED = "actor_deleted"
+    # Fired after the wipe completes. Receives actor=None and actor_id=<id>:
+    # there is no live actor left to hand over, which is the point — see
+    # actingweb.deletion.
+    ACTOR_DELETED_COMPLETE = "actor_deleted_complete"
     OAUTH_SUCCESS = "oauth_success"
     TRUST_APPROVED = "trust_approved"
     TRUST_DELETED = "trust_deleted"

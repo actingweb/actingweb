@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-from actingweb import attribute, peertrustee, property, subscription, trust
+from actingweb import attribute, deletion, peertrustee, property, subscription, trust
 from actingweb.constants import (
     DEFAULT_CREATOR,
 )
@@ -381,6 +381,10 @@ class Actor:
             self.handle.create(
                 creator=self.creator, passphrase=self.passphrase, actor_id=self.id
             )
+        # Generated ids are never reused, but create(actor_id=...) accepts a
+        # caller-supplied one. A stale tombstone would report the new actor as
+        # deleted for the rest of the retention window.
+        deletion.clear_actor_tombstone(self.id, self.config)
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(
@@ -425,10 +429,18 @@ class Actor:
         return True
 
     def delete(self) -> None:
-        """Deletes an actor and cleans up all relevant stored data"""
+        """Deletes an actor and cleans up all relevant stored data.
+
+        The actor row is removed **last**, so the actor keeps resolving for the
+        duration of the wipe. Existence checks therefore fail open here, and
+        that is why the tombstone is written first: it is readable throughout
+        the wipe, whereas ``get()`` cannot distinguish mid-deletion from live.
+        See :mod:`actingweb.deletion`.
+        """
         if not self.handle:
             logger.debug("Attempted delete of actor with no handle")
             return
+        deletion.mark_actor_deleted(self.id, self.config)
         self.delete_peer_trustee(shorttype="*")
         if not self.property_list:
             self.property_list = property.Properties(

@@ -1331,40 +1331,15 @@ class ActingWebApp:
             from concurrent.futures import ThreadPoolExecutor
 
             from ..db.dynamodb._ensure import auto_create_enabled, ensure_table
+            from ..db.verify_tables import required_models
 
             if not auto_create_enabled():
                 return
 
-            from ..db.dynamodb.actor import Actor
-            from ..db.dynamodb.attribute import Attribute
-            from ..db.dynamodb.peertrustee import PeerTrustee
-            from ..db.dynamodb.property import Property, PropertyLegacy
-            from ..db.dynamodb.subscription import Subscription
-            from ..db.dynamodb.subscription_diff import SubscriptionDiff
-            from ..db.dynamodb.subscription_suspension import SubscriptionSuspension
-            from ..db.dynamodb.trust import Trust
-
-            use_lookup = bool(self.get_config().use_lookup_table)
-            models = [
-                Actor,
-                Attribute,
-                PeerTrustee,
-                # Lookup mode creates the properties table WITHOUT the
-                # legacy value-keyed GSI; legacy mode keeps it.
-                Property if use_lookup else PropertyLegacy,
-                Subscription,
-                SubscriptionDiff,
-                SubscriptionSuspension,
-                Trust,
-            ]
-            # The lookup table is only used (and thus only created) in
-            # lookup-table mode; don't create it for legacy deployments.
-            # (The deprecated v1 lookup model is read-only and never
-            # auto-created.)
-            if use_lookup:
-                from ..db.dynamodb.property_lookup import PropertyLookupV2
-
-                models.append(PropertyLookupV2)
+            # Same list the operator-facing check uses
+            # (python -m actingweb.db.verify_tables), so what we create and
+            # what we tell operators to pre-create cannot drift apart.
+            models = required_models(bool(self.get_config().use_lookup_table))
 
             with ThreadPoolExecutor(max_workers=len(models)) as pool:
                 futures = {m: pool.submit(ensure_table, m) for m in models}

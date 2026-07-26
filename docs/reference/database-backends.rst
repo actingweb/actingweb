@@ -360,6 +360,110 @@ ActingWeb uses the same logical schema for both backends:
      - ``(id, subid_seqnr)``
      - Hash key: ``id``, Range: ``subid_seqnr``
      - Composite key: ``(id, subid_seqnr)``
+   * - subscription_suspensions
+     - ``(id, target_key)``
+     - Hash key: ``id``, Range: ``target_key``
+     - Composite key: ``(id, target_key)``
+   * - property_lookup_v2
+     - ``lookup_key``
+     - Hash key: ``lookup_key`` (SHA-256 digest)
+     - Primary key: ``lookup_key``
+
+.. _required-dynamodb-tables:
+
+Required DynamoDB tables
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default the library creates any missing table on first use. Deployments
+that manage tables via infrastructure-as-code set
+``AWS_DB_AUTO_CREATE_TABLES=false`` and drop ``CreateTable``/``DescribeTable``
+from the runtime IAM role — see :doc:`../migration/v3.13`. In that mode
+**every table below must already exist**; the library will not create them
+and (by design, to avoid an ``AccessDenied`` per accessor construction) will
+not tell you they are missing.
+
+All names take the ``AWS_DB_PREFIX`` prefix (default ``demo_actingweb``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 22 22 22
+
+   * - Table
+     - Hash key
+     - Range key
+     - Required when
+   * - ``<prefix>_actors``
+     - ``id``
+     - —
+     - Always (GSI ``creator-index`` on ``creator``)
+   * - ``<prefix>_attributes``
+     - ``id``
+     - ``bucket_name``
+     - Always
+   * - ``<prefix>_peertrustees``
+     - ``id``
+     - ``peerid``
+     - Always
+   * - ``<prefix>_properties``
+     - ``id``
+     - ``name``
+     - Always (GSI ``property-index`` **only** in legacy mode)
+   * - ``<prefix>_subscriptions``
+     - ``id``
+     - ``peer_sub_id``
+     - Always
+   * - ``<prefix>_subscriptiondiffs``
+     - ``id``
+     - ``subid_seqnr``
+     - Always
+   * - ``<prefix>_subscription_suspensions``
+     - ``id``
+     - ``target_key``
+     - Always
+   * - ``<prefix>_trusts``
+     - ``id``
+     - ``peerid``
+     - Always (GSI ``secret-index`` on ``secret``)
+   * - ``<prefix>_property_lookup_v2``
+     - ``lookup_key``
+     - —
+     - Lookup-table mode (the default since 3.13)
+
+Notes:
+
+- ``<prefix>_subscription_suspensions`` is easy to miss: before 3.13 its
+  accessor had no auto-create guard, so long-lived deployments may never have
+  created it. A missing suspensions table does not crash — it makes every
+  target read as un-suspended (an ERROR is now logged on each failed check).
+- ``<prefix>_property_lookup`` (v1, no ``_v2``) is a **deprecated read-only
+  fallback**. It is never auto-created and is not required; drop it once the
+  backfill is verified.
+- All auto-created tables use ``PAY_PER_REQUEST`` billing.
+
+Verify the precondition instead of reading source — run this with operator
+credentials (the ones that *do* have ``DescribeTable``), using the same
+``AWS_DB_PREFIX``/region/``USE_PROPERTY_LOOKUP_TABLE`` as the app::
+
+    poetry run python -m actingweb.db.verify_tables
+
+    # Just print the required names, no AWS calls:
+    poetry run python -m actingweb.db.verify_tables --list
+
+It only reads — nothing is created. Exit code ``0`` means all present, ``1``
+means one or more missing (each named), ``2`` means the check could not run.
+
+.. important::
+
+   The reverse-lookup mode decides whether ``<prefix>_property_lookup_v2`` is
+   required, and the CLI can only read it from the environment. If your app
+   selects the mode with the fluent builder
+   (``with_legacy_property_index(...)``) rather than
+   ``USE_PROPERTY_LOOKUP_TABLE``, pass ``--legacy`` or ``--lookup-table``
+   explicitly — otherwise a correctly-configured legacy deployment is told
+   the v2 table is missing.
+
+PostgreSQL needs no equivalent: its schema is created by Alembic migrations
+(``alembic upgrade head``).
 
 Index Strategy
 ~~~~~~~~~~~~~~

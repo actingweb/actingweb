@@ -52,17 +52,51 @@ class DbSubscriptionSuspension:
         ensure_table(SubscriptionSuspension)
 
     def is_suspended(self, target: str, subtarget: str | None = None) -> bool:
-        """Check if a target/subtarget is currently suspended."""
+        """Check if a target/subtarget is currently suspended.
+
+        Suspending a *target* cascades to every subtarget under it. Without
+        that, suspending "properties" would not stop property writes at all:
+        PropertyStore registers each diff with the property name as the
+        subtarget, so the check would look for "properties:<name>" and never
+        match the stored "properties" key — the documented bulk-import usage
+        would silently do nothing.
+        """
+        if subtarget is None:
+            try:
+                SubscriptionSuspension.get(self._actor_id, target)
+                return True
+            except DoesNotExist:
+                return False
+
+        # One Query over this target's keys instead of two GetItems, so the
+        # cascade costs no extra round trip on the per-write path.
         target_key = _make_target_key(target, subtarget)
+        for item in SubscriptionSuspension.query(
+            self._actor_id,
+            SubscriptionSuspension.target_key.startswith(target),
+        ):
+            # begins_with also matches sibling targets sharing this prefix
+            # (e.g. "properties_v2"), so compare exactly.
+            if item.target_key in (target, target_key):
+                return True
+        return False
+
+    def _is_suspended_exact(self, target: str, subtarget: str | None) -> bool:
+        """Exact-key check, ignoring target-level cascade."""
         try:
-            SubscriptionSuspension.get(self._actor_id, target_key)
+            SubscriptionSuspension.get(
+                self._actor_id, _make_target_key(target, subtarget)
+            )
             return True
         except DoesNotExist:
             return False
 
     def suspend(self, target: str, subtarget: str | None = None) -> bool:
         """Suspend diff registration. Returns True if newly suspended."""
-        if self.is_suspended(target, subtarget):
+        # Exact, not cascaded: a subtarget suspension under an already
+        # suspended target must still be recorded, or resuming the target
+        # would silently lift a suspension the caller asked for separately.
+        if self._is_suspended_exact(target, subtarget):
             return False
 
         target_key = _make_target_key(target, subtarget)

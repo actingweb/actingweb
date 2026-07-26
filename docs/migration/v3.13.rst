@@ -16,8 +16,27 @@ reverse-lookup mechanism to lookup-table mode**, backed by a redesigned
 
 Nothing in this release requires code changes. What it may require is
 **one operational step**: running the lookup-table backfill script so
-reverse lookups (find-actor-by-email/oauthId — typically your login path)
-are served from the new table instead of deprecated fallbacks.
+reverse lookups (find-actor-by-email/oauthId) are served from the new table
+instead of deprecated fallbacks.
+
+How urgent that step is depends on how your app resolves the logged-in user
+— check rather than assume:
+
+- If it calls ``Actor.get_from_creator()`` (the ``creator-index`` GSI on the
+  actor table), reverse lookup is **not** on your login path and deferring
+  the backfill is low-risk.
+- If it calls ``get_from_property()`` / ``get_by_property()`` on ``email``,
+  ``oauthId`` or another indexed property, that *is* your login path and it
+  runs on deprecated fallbacks — or returns ``None`` — until the backfill
+  completes.
+
+.. note::
+
+   **Validating this release requires a DynamoDB backend.** Every change
+   here is DynamoDB-specific, so a green test suite run against PostgreSQL
+   (``DATABASE_BACKEND=postgresql``) exercises none of it — an easy trap,
+   because the suite passing reads as "validated". Run against DynamoDB
+   Local or a real table; see `Rehearse the migration first`_.
 
 Which deployment am I?
 ======================
@@ -60,6 +79,36 @@ called ``with_legacy_property_index()`` and never set
        intended end state
      - None.
 
+Rehearse the migration first
+============================
+
+The backfill is the riskiest step in this release and it is easy to treat as
+a one-shot production procedure. It isn't: the **whole** migration — new-table
+creation, the three-tier fallback, the backfill script, the startup tripwire —
+runs end-to-end against DynamoDB Local at zero cost and zero risk. Do it once
+before touching production::
+
+    docker run -d -p 8000:8000 amazon/dynamodb-local
+
+    export AWS_DB_HOST=http://localhost:8000
+    export AWS_DEFAULT_REGION=us-west-1
+    export AWS_ACCESS_KEY_ID=fake AWS_SECRET_ACCESS_KEY=fake
+    export AWS_DB_PREFIX=rehearsal
+
+Then, in order:
+
+1. Start the app (or create a couple of actors with properties on the
+   indexed names). Confirm the startup ERROR tripwire fires — it names the
+   resolved lookup table and the exact script to run.
+2. ``python -m actingweb.db.verify_tables`` — confirms which tables exist.
+3. Run the backfill, then restart. The per-hit ``DEPRECATED: reverse
+   lookup ...`` warnings and the startup ERROR should both stop.
+4. Optionally flip ``AWS_DB_AUTO_CREATE_TABLES=false`` and confirm the app
+   still serves.
+
+An operator who has done this once is not doing it for the first time in
+production.
+
 Required: run the backfill (all upgrading deployments using reverse lookup)
 ===========================================================================
 
@@ -88,6 +137,17 @@ Verify, then clean up:
 1. Watch logs: reverse lookups should stop logging
    ``DEPRECATED: reverse lookup ... served from ...`` warnings, and the
    startup ERROR should disappear on the next restart.
+
+   .. warning::
+
+      Do **not** verify the backfill with ``describe-table``'s ``ItemCount``
+      — it refreshes only about every six hours, so a freshly backfilled
+      table still reports ``ItemCount: 0``. That reads as a no-op backfill
+      when the rows are actually there. Use the real count::
+
+          aws dynamodb scan --table-name <prefix>_property_lookup_v2 \
+            --select COUNT
+
 2. **v1 cohort**: drop the old table —
    ``aws dynamodb delete-table --table-name <prefix>_property_lookup``.
    (Never touch ``<prefix>_properties`` — that is the source of truth.)
@@ -102,10 +162,43 @@ Verify, then clean up:
    GSI makes a later return to legacy mode impossible without recreating
    the index.
 
-Rollback: setting ``USE_PROPERTY_LOOKUP_TABLE=false`` (or
-``with_legacy_property_index(enable=True)``) restores the legacy path.
-(3.13 also fixed a bug where the env variable was silently ignored by
-apps using the fluent builder — the rollback now actually works.)
+Rollback — check *before* you upgrade
+=====================================
+
+Setting ``USE_PROPERTY_LOOKUP_TABLE=false`` (or
+``with_legacy_property_index(enable=True)``) restores the legacy path. (3.13
+also fixed a bug where the env variable was silently ignored by apps using
+the fluent builder — the rollback now actually works.)
+
+.. warning::
+
+   **Rollback requires the legacy GSI to exist on your properties table.**
+   Legacy mode queries ``property-index``; a properties table created before
+   that index existed does not have it, and tables are never altered
+   in place. Such a deployment has **no rollback path** for reverse lookup
+   — worth knowing before upgrading, not after. Check first::
+
+       aws dynamodb describe-table --table-name <prefix>_properties \
+         --query 'Table.GlobalSecondaryIndexes[].IndexName'
+
+   ``null`` means no GSI, therefore no rollback. (The same applies after you
+   delete the GSI in the cleanup step above.)
+
+Direct use of the lookup accessor degrades during the migration window
+======================================================================
+
+The three-tier read path (v2 → deprecated v1 → legacy GSI) lives in
+``DbProperty.get_actor_id_from_property()``. Code that constructs
+``DbPropertyLookup()`` directly and calls ``.get()`` gets the **v2-only**
+path with no fallback, so between the upgrade deploy and a completed
+backfill it returns ``None`` while the application itself is perfectly
+healthy — which reads like "the migration broke actor lookup".
+
+Operational scripts (actor management, debugging, seeding, cleanup) are the
+usual offenders. Audit yours: resolve actors through
+``get_actor_id_from_property()`` — or the interface-level
+``ActorInterface.get_by_property()`` — which is the supported entry point and
+carries the fallbacks.
 
 Recommended: convert old auto-created tables to on-demand billing
 =================================================================
@@ -138,6 +231,123 @@ With auto-creation off the library never calls ``DescribeTable`` or
 ``CreateTable``, so both can be dropped from the runtime IAM policy. If
 your IAM policy lists tables by name, add the new
 ``<prefix>_property_lookup_v2`` table.
+
+Three things this hands you responsibility for.
+
+**1. Every required table must already exist.** The library will no longer
+create them, and — deliberately, so a role without ``DescribeTable`` does not
+pay an ``AccessDenied`` per accessor construction — it will not tell you one
+is missing. The authoritative list is in
+:ref:`required-dynamodb-tables`; verify it with operator credentials rather
+than by inspection::
+
+    poetry run python -m actingweb.db.verify_tables
+
+Use the same ``AWS_DB_PREFIX``, region and credentials as the app. If the app
+selects reverse-lookup mode with ``with_legacy_property_index(...)`` rather
+than ``USE_PROPERTY_LOOKUP_TABLE``, pass ``--legacy``/``--lookup-table``
+explicitly — the CLI can only read the environment.
+
+Run this **before** dropping the permissions. ``<prefix>_subscription_suspensions``
+is the one to watch: before 3.13 its accessor had no auto-create guard, so
+long-lived deployments frequently never created it, and a missing suspensions
+table degrades silently rather than crashing (an ERROR is now logged on each
+failed check).
+
+**2. Do not create the new tables in the same deploy as the library bump.**
+Table pre-warm runs at integration time, so a new container's first cold
+start can create ``<prefix>_property_lookup_v2`` *before* your
+CloudFormation/Terraform resource is created — the stack then fails with
+``ResourceInUseException`` and rolls back. Pick one owner:
+
+- declare the new tables in a deploy **before** the library upgrade (still on
+  3.12), then bump the library, then disable auto-creation; **or**
+- let auto-creation own them and never declare them in IaC.
+
+Doing both in one deploy is the race.
+
+**3. The IAM change is account-wide, not library-scoped.** Dropping
+``DescribeTable``/``CreateTable`` from the runtime role also breaks **your
+own** code that probes tables — boto3 ``table.load()`` or ``describe_table()``,
+pynamodb ``Model.exists()``. A caller that catches broadly will just log a
+warning and quietly disable a feature while re-issuing the denied call on
+every construction. Audit for those probes before flipping the flag; where you
+have one, honour the same switch rather than restoring the permission::
+
+    from actingweb.db.dynamodb import auto_create_enabled
+
+    if auto_create_enabled():
+        ...  # safe to probe / create
+    else:
+        ...  # tables are managed externally — skip the probe
+
+Proving the fixes actually landed
+=================================
+
+Both headline fixes are invisible to functional tests: a ``Scan`` → ``Query``
+conversion returns identical data, and removing ``DescribeTable`` calls
+changes no behaviour. What *is* observable is the **operation profile** —
+count the DynamoDB API calls a hot path issues. This works against DynamoDB
+Local, so it costs nothing and needs no production access.
+
+.. warning::
+
+   The obvious implementation does not work. Registering a
+   ``before-call.dynamodb`` handler on a botocore session **silently counts
+   nothing** under pynamodb: ``pynamodb.connection.base.Connection.session``
+   resolves via ``botocore.session.get_session()``, which returns a *new*
+   ``Session`` per call, so a handler on any session you can reach never sees
+   pynamodb's traffic. The failure mode is an empty counter — which makes
+   ``assert scans == 0`` pass **vacuously**, worse than no test at all.
+
+Patch ``BaseClient._make_api_call`` instead; every botocore client funnels
+through it::
+
+    import collections
+
+    import botocore.client
+
+    counts = collections.Counter()
+    original = botocore.client.BaseClient._make_api_call
+
+    def _counting(self, operation_name, api_params):
+        if self.meta.service_model.service_name == "dynamodb":
+            counts[operation_name] += 1
+        return original(self, operation_name, api_params)
+
+    monkeypatch.setattr(botocore.client.BaseClient, "_make_api_call", _counting)
+
+Exercise a hot path and assert the profile. Measured on identical code
+against 3.12.0 and 3.13.0:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Exercise
+     - 3.12.0
+     - 3.13.0
+   * - ``DbPropertyList().fetch(actor_id)``
+     - ``{'DescribeTable': 1, 'Scan': 1}``
+     - ``Query``; **Scan: 0**
+   * - ``DbTrustList().fetch(actor_id)``
+     - ``{'DescribeTable': 1, 'Scan': 1}``
+     - ``Query``; **Scan: 0**
+   * - 25 × ``DbProperty()`` construction
+     - ``{'DescribeTable': 25}``
+     - ``{}`` — **0 calls**
+
+``DescribeTable: 25 → 0`` for 25 constructions is exactly the
+one-call-per-construction defect and its removal. Sanity-check that the
+counter is live (assert a non-zero count for some operation) before trusting
+a zero.
+
+In production, ``DescribeTable`` volume is visible in CloudTrail attributed
+to the runtime role. Expect a large drop on the upgrade alone (memoisation
+fixes the warm steady state) and **zero** only after
+``AWS_DB_AUTO_CREATE_TABLES=false`` — the per-container pre-warm sweep is the
+residual. Make sure the measurement window contains a cold start, or the zero
+is vacuous.
 
 Behaviour changes to be aware of
 ================================

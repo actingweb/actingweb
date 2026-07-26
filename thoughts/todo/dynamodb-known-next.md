@@ -71,3 +71,19 @@ delete + conditional put. Fine at current scale; a transactional
 (TransactWriteItems) property+lookup write would also close the
 "property saved, lookup write failed" inconsistency window that today
 is only logged (LOOKUP_TABLE_SYNC_FAILED / LOOKUP_CREATE_FAILED).
+
+## 9. `Actor.subs_list` cache asymmetry (added 2026-07-26, post-3.13.0)
+`get_subscriptions()` guards its memo on truthiness (`if not
+self.subs_list`), so the cache never sticks for actors with **zero**
+subscriptions — `register_diffs()` runs per property write, so that is
+one strongly-consistent `Query` per write to learn there is nobody to
+notify. Conversely, for actors that *do* have subscriptions the cache
+sticks and `create_subscription()` never invalidates it, so a
+subscription created mid-instance is invisible to `register_diffs()`
+(the protocol handler patches this by hand at one call site; two
+interface paths do not). The two defects mask each other, and fixing the
+cheap one first makes the correctness one worse — invalidation must land
+before the guard change. Overlaps item 3: the subscription list fetch is
+one of the `consistent_read=True` relaxation candidates. Full analysis,
+affected call sites and proposed ordering:
+`thoughts/todo/subs-list-cache-asymmetry.md`.

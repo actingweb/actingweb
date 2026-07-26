@@ -65,6 +65,16 @@ Closed vocabulary, four values:
 
 Find work in flight with `grep -l "^status: active" thoughts/plans/*.md`.
 
+The workflow commands maintain this themselves: `/create_plan` opens a plan at
+`proposed`, `/implement_plan` moves it to `active` when work actually starts and
+to `done` when the phases finish, `/verify_implementation` adds the `verified:`
+back-link.
+
+**Never leave a stalled plan `active`.** A plan whose remaining phases were never
+picked up is `done` — write the unfinished remainder to `todo/` and let the plan
+close. Agreed-but-blocked is `proposed`, not `active`. Otherwise the grep above
+stops meaning anything, which is the only reason status lives in frontmatter.
+
 ### Don't add a `completed/` directory
 
 It is the obvious idea and it fails four ways:
@@ -90,7 +100,7 @@ point.
 ```
 /research_codebase      → research/YYYY-MM-DD-slug.md
 /create_plan            → plans/YYYY-MM-DD-slug.md      (status: proposed)
-        ↓ agreed                                         (status: active)
+        ↓ implementation starts                          (status: active)
 /implement_plan         → code
 /verify_implementation  → verifications/YYYY-MM-DD-slug.md
         ↓                                                (status: done + verified:)

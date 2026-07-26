@@ -1,3 +1,7 @@
+---
+status: proposed
+---
+
 # FastAPI Async Handler Optimization
 
 **Date**: 2026-01-25

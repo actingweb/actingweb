@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Refactoring Plan: Unified Permission Handling in ActingWeb
 
 ## Overview

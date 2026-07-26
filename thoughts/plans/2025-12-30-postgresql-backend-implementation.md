@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # PostgreSQL Backend Implementation Plan
 
 ## Executive Summary

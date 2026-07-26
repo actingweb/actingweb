@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Implementation Plan: Multi-Provider OAuth Support (ActingWeb Library)
 
 **Date:** 2026-02-24

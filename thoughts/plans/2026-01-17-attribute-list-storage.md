@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Plan: AttributeListProperty and AttributeListStore Implementation
 
 ## Summary

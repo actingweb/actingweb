@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # ActingWeb Async/Await Hook Support Implementation Plan
 
 **Date**: 2026-01-14

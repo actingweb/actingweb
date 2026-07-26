@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Subscription Sync Redundancy Fix
 
 **Date**: 2026-02-01 (Updated: 2026-02-02)

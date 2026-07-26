@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # TODO: Property-Level Subscription Suspension and Resync Callback
 
 ## Status

@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Automatic Subscription Handling Implementation Plan
 
 ## Overview

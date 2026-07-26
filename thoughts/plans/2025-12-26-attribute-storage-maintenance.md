@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Attribute Storage Maintenance Plan
 
 **Date:** 2025-12-26

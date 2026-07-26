@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Implementation Plan: DynamoDB Backend Scalability (v3.13.0)
 
 **Date:** 2026-07-23

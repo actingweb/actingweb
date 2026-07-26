@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Passphrase Login Feature Implementation Plan
 
 **Date**: 2025-12-18

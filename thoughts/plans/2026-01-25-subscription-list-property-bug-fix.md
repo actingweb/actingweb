@@ -1,3 +1,7 @@
+---
+status: done
+---
+
 # Fix Subscription Baseline Sync for List Properties
 
 ## Updated Problem Analysis

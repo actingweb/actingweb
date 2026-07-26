@@ -1,3 +1,8 @@
+---
+status: done
+verified: thoughts/verifications/2026-06-14-apple-signin-and-native-oidc-grant.md
+---
+
 # Implementation Plan: Sign in with Apple + Unified Native OIDC Grant
 
 **Date:** 2026-05-29

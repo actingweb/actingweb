@@ -627,16 +627,101 @@ release.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_runtime_context_unit.py tests/integration/test_runtime_context_advanced.py -v` passes
-- [ ] `poetry run pytest tests/ -k "mcp" -v` passes
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `make test-all-parallel` passes, and again sequentially
-      (`make test-integration`) since this phase changes concurrency semantics
-- [ ] Manual: run the research document's R2 reproduction script; both the
-      asyncio and threaded scenarios must report OK rather than LEAK
+- [x] `poetry run pytest tests/test_runtime_context_unit.py tests/integration/test_runtime_context_advanced.py -v` passes (5/5, 13/13)
+- [x] `poetry run pytest tests/ -k "mcp" -v` passes (232/232)
+- [x] `poetry run pyright actingweb tests` — 0 errors, 0 warnings
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `make test-all-parallel` passes — 2572 passed, 26 skipped, 0 failed
+      (up from 2559 in Phase 3 — the 13 new isolation/teardown tests), and
+      again sequentially (`make test-integration`) since this phase changes
+      concurrency semantics — 756 passed, 8 skipped, 0 failed
+- [x] Manual: ran the research document's R2 reproduction script against the
+      ContextVar implementation; both the asyncio and threaded scenarios
+      report OK — `RESULT: ALL OK`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:**
+
+- `RuntimeContext` storage is now a module-level
+  `ContextVar[dict[str, dict[str, Any]] | None]` (`_runtime_context_var`),
+  keyed by `_actor_key(actor)` — `str(actor.id)` when the actor has an id,
+  else `f"_no_id_{id(actor)}"` for the unsaved-actor edge case (matches the
+  old attribute-storage behavior for that one case, since there's no stable
+  identity to key on yet). The value is treated as immutable: every write
+  path (`_set_context_data`, `clear_context`) builds a *new* outer dict and
+  a *new* per-actor dict via `dict(...)` rather than mutating in place,
+  because a context snapshot captured by `copy_context()` shares the same
+  dict objects as its parent — in-place mutation would cross that boundary.
+  Ruff's `B039` flagged a first draft that used a mutable `{}` `ContextVar`
+  default (the single shared sentinel object every un-set context would
+  return); fixed by defaulting to `None` and normalizing via a
+  `_all_contexts()` helper.
+- Added `runtime_context.clear_all_context()` — a module-level "reset this
+  thread's/task's own view to empty" used by Flask's new
+  `teardown_request`, FastAPI's middleware `finally`, and test fixtures.
+  Framework code doesn't generally know which actor id(s) a request
+  touched, so a blanket per-thread/task reset is the natural granularity
+  (and it's cheap: `.set({})`, not a scan).
+- `hooks.py:562`'s executor hop (`_execute_hook_in_sync_context`'s
+  thread-pool branch) now does
+  `ctx = contextvars.copy_context()` on the calling thread, then
+  `executor.submit(ctx.run, asyncio.run, hook(*args, **kwargs))`. Confirmed
+  by mutation: reverting to the bare `executor.submit(asyncio.run,
+  hook(*args, **kwargs))` makes
+  `TestExecutorHopIsolation::test_async_lifecycle_hook_sees_callers_context`
+  fail (`seen == [None]` instead of the caller's peer id); restored and
+  reconfirmed green.
+- Flask: added `teardown_request` (not `after_request`, which does not run
+  when a view raises) that calls `runtime_context.clear_all_context()`.
+  Confirmed by mutation: removing the `teardown_request` registration
+  makes all three `TestFlaskRuntimeContextTeardown` tests fail (context
+  survives a successful request, survives an exception, and leaks into a
+  second request on the same thread); restored and reconfirmed green.
+- FastAPI: added the same `runtime_context.clear_all_context()` call to
+  `RequestContextMiddleware`'s existing `finally`. This one needed a more
+  careful teeth-proof: Starlette's `BaseHTTPMiddleware` runs `call_next()`
+  in its own child `asyncio` task, so `RuntimeContext` set deep inside a
+  real handler already lives in a context that's discarded when that child
+  task completes — the end-to-end `TestClient`-based tests
+  (`test_runtime_context_cleared_after_successful_request`,
+  `test_runtime_context_cleared_after_exception`) pass identically whether
+  or not the middleware's own clearing line is present, because Starlette's
+  task boundary already isolates them. Wrote one additional test
+  (`test_dispatch_finally_clears_context_set_in_same_task`) that calls
+  `RequestContextMiddleware.dispatch()` directly with a `call_next` that
+  runs inline in the *same* task (bypassing `BaseHTTPMiddleware`'s
+  task-spawning `__call__`), which does fail when the clearing line is
+  removed and passes when it's present — confirmed both ways. Documented
+  in-line why the middleware's own clearing is defense-in-depth rather than
+  the primary isolation mechanism on the FastAPI side, unlike Flask where
+  `teardown_request` is load-bearing (worker-thread reuse has no equivalent
+  automatic boundary).
+- Two-actor-objects test added the case the plan called out by name: a
+  `Wrapper` object and the `SharedActor` (`CoreActor` stand-in) it wraps,
+  both with the same `.id`, now observe the *same* context — the asymmetry
+  fix. And two objects with different ids never share context.
+- Per-test reset fixture added to
+  `tests/integration/test_runtime_context_advanced.py` (`autouse`,
+  `clear_all_context()` before and after each test) and to the new
+  `tests/test_runtime_context_isolation.py`. In practice the integration
+  tests didn't collide even without it (each test creates a fresh actor
+  with a unique DB-assigned id), but the fixture matches production
+  discipline and guards against future tests that reuse a fixed id.
+- New test file `tests/test_runtime_context_isolation.py` (7 tests):
+  asyncio interleaving (2, including the R2 skeleton and an
+  async-hook-reads-after-await variant), threaded isolation (2, including
+  a reused-worker-thread scenario), two-actor-objects (2), executor-hop (1,
+  via the real `HookRegistry.execute_lifecycle_hooks` public API rather
+  than a hand-rolled copy of the fix). Plus 6 new tests split across
+  `tests/test_flask_context_integration.py` (3) and
+  `tests/test_fastapi_context_integration.py` (3) for end-of-request
+  cleanup.
+- `docs/guides/hooks.rst`: updated the "request-scoped and automatically
+  managed" line to describe the ContextVar mechanism, and added a `.. note::`
+  documenting the one real semantic change for app developers:
+  `set_custom_context()` data no longer persists across requests on a hot
+  cached actor — it's genuinely per-request now.
 
 ---
 

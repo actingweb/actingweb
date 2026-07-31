@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ... import request_context
+from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, services
 from .base_integration import BaseActingWebIntegration, default_templates_dir
@@ -472,8 +472,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
             return response
         finally:
-            # Always clear context to prevent leakage between requests
+            # Always clear context to prevent leakage between requests.
+            # Starlette's BaseHTTPMiddleware runs call_next() in its own
+            # child task, so RuntimeContext set deep inside a handler
+            # (e.g. AsyncMCPHandler.set_mcp_context) lives in that child
+            # task's own copied context and is already gone once call_next
+            # returns; clearing here is defense in depth for any code path
+            # that runs directly in this middleware's context instead.
             request_context.clear_request_context()
+            runtime_context.clear_all_context()
 
 
 def _run_with_context(

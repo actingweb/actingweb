@@ -12,6 +12,7 @@ from actingweb.interface.integrations.fastapi_integration import (
     FastAPIIntegration,
     RequestContextMiddleware,
 )
+from actingweb.runtime_context import RuntimeContext
 
 
 @pytest.fixture
@@ -309,6 +310,98 @@ class TestFastAPILoggingIntegration:
 
         # Clean up
         test_logger.removeHandler(handler)
+
+
+class _StandInActor:
+    """Minimal actor stand-in -- RuntimeContext only needs ``.id``."""
+
+    def __init__(self, actor_id: str) -> None:
+        self.id = actor_id
+
+
+class TestFastAPIRuntimeContextTeardown:
+    """RequestContextMiddleware's ``finally`` must clear RuntimeContext too,
+    on both the success and exception paths, as defense in depth alongside
+    Starlette's per-request child task isolation (see the comment at the
+    call site in fastapi_integration.py)."""
+
+    def test_runtime_context_cleared_after_successful_request(
+        self, fastapi_app: FastAPI, fastapi_integration: FastAPIIntegration
+    ) -> None:
+        actor = _StandInActor("actor-fastapi-success")
+
+        @fastapi_app.get("/test")
+        async def test_route() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+            RuntimeContext(actor).set_mcp_context(
+                client_id="c", trust_relationship=None, peer_id="p"
+            )
+            assert RuntimeContext(actor).has_context()
+            return {"status": "OK"}
+
+        client = TestClient(fastapi_app)
+        response = client.get("/test")
+
+        assert response.status_code == 200
+        assert not RuntimeContext(actor).has_context()
+
+    def test_runtime_context_cleared_after_exception(
+        self, fastapi_app: FastAPI, fastapi_integration: FastAPIIntegration
+    ) -> None:
+        actor = _StandInActor("actor-fastapi-exception")
+
+        @fastapi_app.get("/boom")
+        async def boom_route() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+            RuntimeContext(actor).set_mcp_context(
+                client_id="c", trust_relationship=None, peer_id="p"
+            )
+            raise RuntimeError("simulated handler failure")
+
+        client = TestClient(fastapi_app, raise_server_exceptions=True)
+        with pytest.raises(RuntimeError, match="simulated handler failure"):
+            client.get("/boom")
+
+        assert not RuntimeContext(actor).has_context()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_finally_clears_context_set_in_same_task(self) -> None:
+        """Calls RequestContextMiddleware.dispatch() directly with a
+        call_next that runs in the *same* asyncio task as dispatch (unlike
+        the real Starlette pipeline, where BaseHTTPMiddleware runs call_next
+        in a child task and so already isolates naturally). This is the
+        only way to make the middleware's own ``finally`` clearing line
+        load-bearing in a test: it fails if that line is removed, even
+        though the end-to-end TestClient-based tests above would not
+        notice, since Starlette's child-task hop hides the difference.
+        """
+        from starlette.requests import Request
+        from starlette.responses import Response as StarletteResponse
+
+        from actingweb.interface.integrations.fastapi_integration import (
+            RequestContextMiddleware,
+        )
+
+        actor = _StandInActor("actor-fastapi-same-task")
+        middleware = RequestContextMiddleware(app=None)  # type: ignore[arg-type]
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/test",
+            "headers": [],
+            "query_string": b"",
+            "client": ("testclient", 123),
+        }
+        request = Request(scope)
+
+        async def call_next(_request: Request) -> StarletteResponse:
+            RuntimeContext(actor).set_mcp_context(
+                client_id="c", trust_relationship=None, peer_id="p"
+            )
+            assert RuntimeContext(actor).has_context()
+            return StarletteResponse("OK")
+
+        await middleware.dispatch(request, call_next)
+
+        assert not RuntimeContext(actor).has_context()
 
 
 class TestFastAPIMiddlewareStandalone:

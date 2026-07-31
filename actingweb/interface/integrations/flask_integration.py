@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from flask import Flask, Response, redirect, render_template, request
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from ... import request_context
+from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, mcp, services
 from .base_integration import BaseActingWebIntegration, default_templates_dir
@@ -113,6 +113,22 @@ class FlaskIntegration(BaseActingWebIntegration):
             request_context.clear_request_context()
 
             return response
+
+        @self.flask_app.teardown_request
+        def _teardown_request(
+            exc: BaseException | None,
+        ) -> None:  # pyright: ignore[reportUnusedFunction]
+            """Clear RuntimeContext (MCP/OAuth2/web) on every request exit.
+
+            Unlike ``after_request``, teardown functions run even when an
+            unhandled exception propagates out of the view. Flask worker
+            threads are reused across requests, and RuntimeContext is a
+            ContextVar keyed on that thread's own context, so a request that
+            raises before ``after_request`` runs would otherwise leave its
+            context set for whatever request the same worker thread handles
+            next.
+            """
+            runtime_context.clear_all_context()
 
     def setup_routes(self) -> None:
         """Setup all ActingWeb routes in Flask."""

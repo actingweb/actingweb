@@ -315,3 +315,34 @@ class TestNoUnguardedConfigBoundSingletons:
             "backends, writes and reads land in different stores:\n  "
             + "\n  ".join(offenders)
         )
+
+    def test_the_detector_itself_still_has_teeth(self) -> None:
+        """A tripwire that silently stops tripping is worse than none.
+
+        The check above passing is only meaningful if it would still fail on
+        the shape it is meant to catch, so feed it that shape directly.
+        """
+        bad = ast.parse(
+            "_thing = None\n"
+            "def get_thing(config):\n"
+            "    global _thing\n"
+            "    if _thing is None:\n"
+            "        _thing = Thing(config)\n"
+            "    return _thing\n"
+        )
+        fn = next(n for n in ast.walk(bad) if isinstance(n, ast.FunctionDef))
+        assert "_thing" in self._module_globals(bad)
+        assert not self._compares_against_the_config_argument(fn)
+
+        good = ast.parse(
+            "_thing = None\n"
+            "_thing_config = None\n"
+            "def get_thing(config):\n"
+            "    global _thing, _thing_config\n"
+            "    if _thing is None or _thing_config is not config:\n"
+            "        _thing = Thing(config)\n"
+            "        _thing_config = config\n"
+            "    return _thing\n"
+        )
+        fn = next(n for n in ast.walk(good) if isinstance(n, ast.FunctionDef))
+        assert self._compares_against_the_config_argument(fn)

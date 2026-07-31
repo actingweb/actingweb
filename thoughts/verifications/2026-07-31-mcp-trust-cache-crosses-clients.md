@@ -441,12 +441,15 @@ Measured effect over full parallel PostgreSQL runs: failure rate fell from
 roughly 40–50% of runs to about 12% (1 of 8), and stray `public` rows went to
 zero across 8 consecutive runs.
 
-**A residual ~12% flake remains and is not fixed.** It has its own entry with a
-full reproduction recipe, ruled-out hypotheses, and where to look next:
-`thoughts/todo/postgres-pool-schema-binding-and-mcp-trust-read-flake.md`. The
-remaining suspicion is on the write side — whether the registration-time trust
-`INSERT` is reliably committed and visible before the first MCP request — not on
-the resolver, which the diagnostic shows never receives the row.
+**A residual ~12% flake remains and is not fixed.** The remaining suspicion is
+on the write side — whether the registration-time trust `INSERT` is reliably
+committed and visible before the first MCP request — not on the resolver, which
+the diagnostic shows never receives the row.
+
+> Superseded by the second addendum below, written later the same day: the
+> flake was resolved, the suspicion above was wrong, and its `todo/` entry was
+> retired. The durable lesson lives in
+> `thoughts/reference/module-globals-assume-one-application.md`.
 
 Revised phase status: **Phase 3 is verified on DynamoDB and only partially on
 PostgreSQL.** The fail-closed behavior is correct on both; what PostgreSQL
@@ -480,3 +483,107 @@ silently on upgrade. With those in, nothing blocks the merge. What remains is
 process, not code: open and merge the PR, then cut `v3.13.0rc3` from master and
 have the consumer re-run the escalation probe against the TestPyPI artifact
 before any final `v3.13.0` is tagged.
+
+---
+
+## Second Addendum: the PostgreSQL flake is resolved, and what it was hiding
+
+Added 2026-07-31, after the body above. It **supersedes** the first addendum's
+"remaining suspicion is on the write side — whether the registration-time trust
+`INSERT` is reliably committed and visible". That suspicion was wrong. The
+`INSERT` committed correctly; it committed to the **wrong database**.
+
+### Root cause
+
+`get_actingweb_oauth2_server()` was fixed to rebuild on a new `Config`, but
+`ActingWebOAuth2Server.__init__` (`actingweb/oauth2_server/oauth2_server.py:40-42`)
+immediately constructs three further singletons — `get_mcp_client_registry()`,
+`get_actingweb_token_manager()`, `get_oauth2_state_manager()` — none of which
+consulted the config they were handed. The wrapper rebound; its children did
+not. Reproduced directly:
+
+```
+server.config.database                 -> postgresql   (wrapper rebound)
+server.client_registry.config.database -> dynamodb     (registration writes here)
+server.client_registry.config.DbTrust  -> actingweb.db.dynamodb.trust
+```
+
+That last line is the CI diagnostic's `CREATE ... db=actingweb.db.dynamodb.trust`
+reproduced in four lines of Python, with no CI push needed.
+
+An AST sweep of the package found four unguarded getters in total (the three
+above plus the `peer_profile` store pair). All four now rebuild on a different
+config. `tests/test_config_bound_singletons.py` grew from 7 tests to 12,
+including two that would have caught this specific gap: one asserting the
+OAuth2 server rebinds **everything it composes**, not just itself, and a
+structural test that walks `actingweb/` and fails on any function caching a
+module global built from a `config` argument without comparing against it.
+
+The original regression test asserted `server.config is postgres_cfg`, which
+passed the entire time the three children were DynamoDB-bound. Checking the
+wrapper and not what it composes is the exact shape of this defect.
+
+### Provenance
+
+A pytest plugin recording each singleton's first bind per xdist worker, run
+against PostgreSQL on the pre-fix code:
+
+```
+gw0  client_registry <- tests/test_oauth2_server_lazy_authenticator.py  db=dynamodb
+gw3  client_registry <- tests/test_oauth2_server_lazy_authenticator.py  db=dynamodb
+gw1  client_registry <- tests/integration/test_mcp_basic.py             db=postgresql
+```
+
+A **unit test** constructing `Config(database="dynamodb")` binds the registry
+for the life of the worker. Whether it does so before the MCP integration group
+lands on that worker is scheduling luck — the complete explanation for the
+intermittency, and for the earlier "failing runs are the slow ones" observation.
+
+### What it was hiding
+
+This is the more consequential half. Instrumenting every getter to record any
+caller served an instance bound to a different backend than it asked for, on a
+full pre-fix PostgreSQL run:
+
+```
+10 tests served a wrong-backend singleton
+   7  tests/integration/test_trust_oauth_integration.py
+   1  tests/integration/test_mcp_basic.py
+   1  tests/integration/test_mcp_client_descriptions.py
+   1  tests/integration/test_oauth2_client_manager.py
+```
+
+Post-fix the same measurement reports **0**.
+
+Every one of those ten *passed* — against **DynamoDB Local, which runs in the
+PostgreSQL CI leg too**. So on affected workers the PostgreSQL leg was not
+exercising MCP dynamic client registration, token management or OAuth2 state
+handling against PostgreSQL at all; it was re-testing DynamoDB and reporting
+green. A coverage hole that looked like coverage. The exact membership varies
+per run with scheduling; the shape — the OAuth2/MCP registration surface — does
+not.
+
+Compounding it, `AWS_DB_PREFIX` is set only in the DynamoDB branch of
+`setup_database`, so those stray DynamoDB writes landed in unprefixed tables
+shared by all four workers. That is the origin of the earlier "every worker
+reported the same 37 peers" observation: PostgreSQL-leg count assertions over
+trusts, peers, clients or tokens were reading a cross-worker-polluted table.
+
+Not affected: `_token_cache`, `_mcp_client_info_cache` and `_trust_cache` in
+`mcp.py` are keyed by token, client id and `(actor_id, client_id)` — unique per
+application, so they cannot collide the way `_actor_cache` did (keyed by actor
+id alone, with `_actingweb_oauth2` shared across apps, which is why that one
+needed config-scoping).
+
+### Verification
+
+- 14 consecutive full parallel PostgreSQL runs with `--cov` (the recipe that
+  reproduced the flake at ~1 in 6): all clean, 2496 passed / 97 skipped.
+- Ruff check, `ruff format --check` (304 files), Pyright: all clean.
+- `tests/test_config_bound_singletons.py`: 12 passed.
+
+**Revised phase status: Phase 3 is now verified on PostgreSQL as well as
+DynamoDB.** The first addendum's conclusion still holds in its essentials — the
+authorization change did not create the fault, it made a pre-existing one
+visible — but the fault was backend crossover at registration time, not a
+PostgreSQL read/write reliability problem.

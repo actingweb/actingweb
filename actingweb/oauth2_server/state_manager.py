@@ -268,11 +268,21 @@ class OAuth2StateManager:
 
 # Global state manager
 _state_manager: OAuth2StateManager | None = None
+# The config the manager was built from; a different one must rebuild it.
+_state_manager_config: config_class.Config | None = None
 
 
 def get_oauth2_state_manager(config: config_class.Config) -> OAuth2StateManager:
-    """Get or create the global OAuth2 state manager."""
-    global _state_manager
-    if _state_manager is None:
+    """Get or create the global OAuth2 state manager.
+
+    Rebuilds when handed a different ``Config``. The encryption key lives on
+    each application's own system actor, so a manager built from another
+    application's config would encrypt state with the wrong key. Rebuilding
+    re-reads the key from the store this config points at; it is a stored
+    value, not a generated one, so the key itself is stable.
+    """
+    global _state_manager, _state_manager_config
+    if _state_manager is None or _state_manager_config is not config:
         _state_manager = OAuth2StateManager(config)
+        _state_manager_config = config
     return _state_manager

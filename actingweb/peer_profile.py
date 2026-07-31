@@ -259,14 +259,21 @@ class PeerProfileStore:
 
 # Singleton instance
 _profile_store: PeerProfileStore | None = None
+# The config the store was built from; a different one must rebuild it.
+_profile_store_config: config_class.Config | None = None
 
 
 def initialize_peer_profile_store(config: config_class.Config) -> None:
-    """Initialize the peer profile store at application startup."""
-    global _profile_store
-    if _profile_store is None:
+    """Initialize the peer profile store at application startup.
+
+    Rebuilds when handed a different ``Config`` so one application's cached
+    peer profiles are never served to another.
+    """
+    global _profile_store, _profile_store_config
+    if _profile_store is None or _profile_store_config is not config:
         logger.debug("Initializing peer profile store...")
         _profile_store = PeerProfileStore(config)
+        _profile_store_config = config
         logger.debug("Peer profile store initialized")
 
 
@@ -275,10 +282,11 @@ def get_peer_profile_store(
 ) -> PeerProfileStore:
     """Get the singleton peer profile store.
 
-    Automatically initializes the store if not already initialized.
+    Automatically initializes the store if not already initialized, and
+    rebuilds it if handed a config other than the one it was built from.
     """
     global _profile_store
-    if _profile_store is None:
+    if _profile_store is None or _profile_store_config is not config:
         initialize_peer_profile_store(config)
     return _profile_store  # type: ignore[return-value]
 

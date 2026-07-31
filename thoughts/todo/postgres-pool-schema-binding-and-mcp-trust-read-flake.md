@@ -83,14 +83,74 @@ config built each `ActorInterface` (it is keyed by actor id alone, and the
 the configured schema changes instead of serving a pool with connections bound
 to different schemas.
 
-## Not fixed: residual flake
+## Root cause, found: the singleton fix did not go deep enough
+
+The first round of singleton fixes rebuilt `get_actingweb_oauth2_server()` when
+handed a new config — but `ActingWebOAuth2Server.__init__` immediately pulls
+**three further singletons** (`oauth2_server.py:40-42`):
+
+```python
+self.client_registry = get_mcp_client_registry(config)
+self.token_manager  = get_actingweb_token_manager(config)
+self.state_manager  = get_oauth2_state_manager(config)
+```
+
+None of those three consulted the config they were given. So the wrapper
+rebound and its children did not. `get_mcp_client_registry` is the **write**
+side of the crossover — it is what dynamic client registration uses to create
+the trust row — which is exactly the `CREATE ... db=dynamodb` half of the CI
+diagnostic. Reproduced in four lines:
+
+```python
+get_actingweb_oauth2_server(dynamo_cfg)
+s = get_actingweb_oauth2_server(postgres_cfg)
+s.config.database            # 'postgresql'  -- the wrapper rebound
+s.client_registry.config.database  # 'dynamodb'  <-- registration writes here
+```
+
+An AST sweep of the package found four unguarded getters in total:
+`get_mcp_client_registry`, `get_actingweb_token_manager`,
+`get_oauth2_state_manager`, and the `peer_profile` store pair. All four now
+rebuild on a different config, and `tests/test_config_bound_singletons.py`
+gained a structural test that walks `actingweb/` and fails on any future
+`global`-caching function that takes a `config` without comparing against it —
+so there cannot be a batch four.
+
+**Provenance of the DynamoDB config, answered.** A pytest plugin recording the
+first bind of each singleton per xdist worker, run against PostgreSQL:
+
+```
+gw0  client_registry <- tests/test_oauth2_server_lazy_authenticator.py::...::test_backward_compat_properties  db=dynamodb
+gw3  client_registry <- tests/test_oauth2_server_lazy_authenticator.py::...::test_caches_per_provider          db=dynamodb
+gw1  client_registry <- tests/integration/test_mcp_basic.py::...                                              db=postgresql
+```
+
+A **unit test** constructing `Config(database="dynamodb")` binds the registry
+for the life of the worker. Whether that happens before the MCP integration
+group lands on the same worker is pure scheduling luck — which is the whole
+explanation for the intermittency, and for the "failing runs are the slow ones
+with fewer warnings" observation: those are runs with a different distribution
+of tests across workers.
+
+### Two earlier leads in this document were wrong
+
+Both are struck out rather than deleted, because following them costs real time:
+
+- ~~"The remaining candidate is the **write** side: whether the trust `INSERT`
+  is reliably committed and visible."~~ The INSERT committed fine. It committed
+  to **DynamoDB**. Nothing was wrong with PostgreSQL transaction visibility.
+- ~~"Backend crossover is no longer the mechanism."~~ That observation was taken
+  at *resolve* time, where the config genuinely was PostgreSQL. Resolve was
+  always correct; the **write** was the one going to the wrong backend, so
+  instrumenting the reader could never see it.
+
+## Fixed: residual flake
 
 `tests/integration/test_mcp_resource_regression.py::TestMCPResourceRegressions`
-still fails intermittently — roughly **1 run in 6** locally after all of the
-above — with `-32003 Access denied: no trust relationship resolved for this
-client`.
+failed intermittently — roughly **1 run in 6** locally after the pool fix —
+with `-32003 Access denied: no trust relationship resolved for this client`.
 
-### The mechanism is known exactly; only its provenance is not
+### The mechanism, and its provenance
 
 A second CI diagnostic (pushed temporarily, read back from the logs, then
 reverted) pinned it down for the client that failed:
@@ -108,41 +168,18 @@ worker schema, all workers seeing an identical peer list (unprefixed, shared
 DynamoDB tables, since `AWS_DB_PREFIX` is only set in the DynamoDB branch of
 `setup_database`) — follows from that one fact.
 
-**The open question is narrow: where does the DynamoDB `Config` at CREATE come
-from?** What is already ruled out:
+The DynamoDB `Config` at CREATE comes from
+`get_mcp_client_registry()`, which was still bound to whichever config first
+reached it in that worker — see "Root cause, found" above. The three earlier
+exclusions were each individually correct and collectively misleading: the
+*wrapper* rebound per config, `ActingWebApp` does memoize its `Config`, and the
+route wiring does pass the right one. All true, and none of it reached the
+three child singletons the wrapper constructs.
 
-- It is not the singleton binding fixed above — both paths now go through
-  `get_actingweb_oauth2_server(config)`, which rebinds per config.
-- It is not `ActingWebApp` building more than one `Config`: `get_config()`
-  memoizes into `self._config`.
-- It is not the route wiring: `fastapi_integration` passes
-  `self.aw_app.get_config()` to `OAuth2EndpointsHandler`.
-
-So the two `Config` objects should belong to two different *applications* — and
-yet both requests are addressed to the regression app's own port. Resolving
-that contradiction is the whole remaining task. Concretely: log
-`id(self.config)` plus `self.config.database` in the DCR endpoint handler and
-in the MCP handler together with the app's `fqdn`, and see which app actually
-serves the registration.
-
-`Config.__init__` reads `os.getenv("DATABASE_BACKEND", "dynamodb")` at
-**construction time** (`actingweb/config.py:47`), so any `Config` built before
-the test session sets that variable is a DynamoDB config for its whole life —
-that is the most likely source and the first thing to check.
-
-Two further observations that should shorten the work:
-
-- **The failing runs are systematically the slow ones.** Passing runs land at
-  ~26s and ~1329 warnings; failing runs at ~36s and ~1273 warnings. That is not
-  random jitter — the failing runs take a materially different path through the
-  suite, and the lower warning count suggests some fixture work did not happen.
-  Start by diffing what a failing run does differently rather than by looking
-  at the resolver again.
-- **Backend crossover is no longer the mechanism.** Instrumented locally at
-  resolve time, `self.config` and the actor's config are the *same object* and
-  both bind `actingweb.db.postgresql.trust`, yet the trust list still comes back
-  empty. So whatever remains is on the PostgreSQL read/write path itself, not
-  in config or singleton scoping.
+The "failing runs are the slow ones" observation now has an explanation too:
+run-to-run timing differences come from how xdist distributes tests, and that
+distribution is exactly what decides whether a DynamoDB unit test binds
+`_client_registry` before the MCP integration group runs on the same worker.
 
 ### Reproduction recipe
 
@@ -189,14 +226,62 @@ Notes that matter for reproducing it:
 - **A stale negative cache entry.** The failing runs show the resolver executing
   twice, ~10s apart (the negative TTL), both times reading empty.
 
-### Where to look next
+### What this masked — the part that outlives the flake
 
-The remaining candidate is the **write** side rather than the read: whether the
-trust `INSERT` performed during dynamic client registration is reliably
-committed and visible before the token is issued and the first MCP request
-arrives. `create_or_update_oauth_trust` logging "Successfully created" proves
-the Python call returned, not that the transaction committed on the pooled
-connection it used.
+The flake was the *visible* symptom. The more consequential finding is what the
+crossover did to test coverage while everything was green.
+
+Measured directly, by wrapping each getter to record any caller handed an
+instance bound to a backend other than the one it asked for, on a full
+PostgreSQL run **before** the fix:
+
+```
+10 tests served a wrong-backend singleton
+   7  tests/integration/test_trust_oauth_integration.py
+   1  tests/integration/test_mcp_basic.py
+   1  tests/integration/test_mcp_client_descriptions.py
+   1  tests/integration/test_oauth2_client_manager.py
+```
+
+After the fix, the same measurement reports **0**.
+
+Named, from that run — every one of these *passed*:
+
+- `test_trust_oauth_integration.py::TestTrustCreationOnClientRegistration::test_client_registration_creates_trust_relationship`
+- `…::test_multiple_clients_create_multiple_trusts`
+- `…::test_trust_relationship_has_correct_trust_type`
+- `…::TestTrustAttributesForOAuth::test_trust_has_oauth_client_id_attribute`
+- `…::TestTrustAttributesForOAuth::test_trust_has_peer_type_mcp`
+- `…::TestPermissionChecksWithOAuth::test_oauth_client_trust_uses_mcp_client_permissions`
+- `…::TestPermissionChecksWithOAuth::test_individual_permissions_can_override_oauth_client_defaults`
+- `test_mcp_basic.py::TestMCPAuthentication::test_mcp_initialize`
+- `test_mcp_client_descriptions.py::TestClientDescriptionDetection::test_chatgpt_client_detection`
+- `test_oauth2_client_manager.py::TestOAuth2ClientRetrieval::test_get_client_wrong_actor_returns_none`
+
+**They passed against DynamoDB Local, which is running in the PostgreSQL CI leg
+too.** So the PostgreSQL leg was not exercising MCP dynamic client
+registration, token management, or OAuth2 state handling against PostgreSQL at
+all on the affected workers — it was re-testing DynamoDB and reporting green.
+That is a coverage hole that looked like passing coverage, and it is the
+"something deeper" underneath the flake.
+
+The exact membership of that set varies per run, because it depends on which
+worker binds the singleton first. The *shape* does not: it is the OAuth2/MCP
+registration surface, and it was reachable on any run.
+
+Compounding it: `AWS_DB_PREFIX` is set only in the DynamoDB branch of
+`setup_database`, so in the PostgreSQL leg those stray DynamoDB writes landed
+in **unprefixed tables shared by all four xdist workers**. That is the origin
+of the earlier "every worker reported the same 37 peers" observation — any
+count assertion over trusts, peers, clients or tokens in the PostgreSQL leg was
+reading a cross-worker-polluted shared table.
+
+Worth noting what is *not* affected: `_token_cache`, `_mcp_client_info_cache`
+and `_trust_cache` in `mcp.py` are keyed by token, client id, and
+`(actor_id, client_id)` respectively. Those keys are unique per application, so
+they cannot collide across apps the way `_actor_cache` did — `_actor_cache` was
+keyed by actor id alone and the `_actingweb_oauth2` system actor is shared,
+which is why it needed the config-scoping fix and these do not.
 
 ## Library-level footgun worth fixing separately
 

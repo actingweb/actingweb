@@ -89,8 +89,10 @@ FIXED
 
 - **Config-bound singletons no longer serve one application's state to
   another.** ``get_actingweb_oauth2_server()``,
-  ``get_permission_evaluator()``, ``get_registry()`` (trust types),
-  ``get_trust_permission_store()``, ``get_peer_permission_store()`` and
+  ``get_mcp_client_registry()``, ``get_actingweb_token_manager()``,
+  ``get_oauth2_state_manager()``, ``get_permission_evaluator()``,
+  ``get_registry()`` (trust types), ``get_trust_permission_store()``,
+  ``get_peer_permission_store()``, ``get_peer_profile_store()`` and
   ``get_cached_capabilities_store()`` each take a ``config`` argument but,
   once built, ignored it — they bound to the **first** config the process
   ever passed and returned that instance to every later caller. (One of them
@@ -105,6 +107,12 @@ FIXED
   Each getter now rebuilds when handed a different ``Config`` instance, and
   still returns the cached instance for the same one. Single-application
   deployments — the overwhelming majority — are unaffected either way.
+
+  Note that ``ActingWebOAuth2Server`` *composes* three of these, so rebinding
+  the server alone was not sufficient: ``client_registry``, ``token_manager``
+  and ``state_manager`` had to rebind too. ``get_oauth2_state_manager()``
+  re-reads its encryption key from the new config's system actor on rebind;
+  the key is stored rather than generated, so it is stable.
 
 CHANGED
 ~~~~~~~

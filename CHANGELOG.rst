@@ -84,6 +84,36 @@ SECURITY
   warm process for up to the 5-minute token cache TTL. Tracked in
   ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``.
 
+CHANGED
+~~~~~~~
+
+- **``RuntimeContext`` is now genuinely request-scoped, and
+  ``set_custom_context()`` no longer persists across requests.** Runtime
+  context (MCP/OAuth2/web) was stored as a mutable attribute on the actor
+  object, while the MCP handler deliberately hands the *same* cached
+  ``ActorInterface`` to every request for a hot actor — so context could
+  leak between requests and, under concurrency, between callers. It is now
+  stored in a ``contextvars.ContextVar`` keyed by actor id (task-local
+  under asyncio, thread-local under a WSGI worker), and the Flask and
+  FastAPI integrations clear it at the end of every request including when
+  a handler raises. The public API (``RuntimeContext(actor)`` and all its
+  getters/setters) is unchanged, and read-only use inside request-scoped
+  hooks needs no changes. **The one behavior change for application code:**
+  data written with ``set_custom_context()`` is gone by the next request,
+  even against the same actor object. If your hooks used it as a
+  cross-request cache rather than as request-scoped data, move that to
+  actor properties or the caching guide's patterns
+  (``docs/guides/caching.md``). See ``docs/guides/hooks.rst``.
+
+- **``tools/call`` permission checks now pass ``operation="use"`` on
+  FastAPI, matching Flask.** The async handler passed ``"invoke"`` while
+  the sync handler passed ``"use"``, a transport-dependent divergence. It
+  is unread by every trust type shipped with ActingWeb (they express
+  ``tools`` as allowed/denied lists, which do not consult ``operation``),
+  so this changes nothing unless your application defines a
+  patterns/operations-based tools rule — in which case a rule that
+  matched ``invoke`` on FastAPI must now match ``use``.
+
 v3.13.0rc2: July 26, 2026
 -------------------------
 

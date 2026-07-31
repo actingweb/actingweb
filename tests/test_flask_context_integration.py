@@ -304,18 +304,14 @@ class TestFlaskRuntimeContextTeardown:
 
         @flask_app.route("/second")
         def second_route() -> str:  # pyright: ignore[reportUnusedFunction]
-            observed["first_actor_leaked"] = RuntimeContext(
-                first_actor
-            ).has_context()
+            observed["first_actor_leaked"] = RuntimeContext(first_actor).has_context()
             # The second request authenticates its own, different actor --
             # confirms the thread is usable normally afterwards, not just
             # "empty".
             RuntimeContext(second_actor).set_mcp_context(
                 client_id="c2", trust_relationship=None, peer_id="p2"
             )
-            observed["second_actor_set"] = RuntimeContext(
-                second_actor
-            ).has_context()
+            observed["second_actor_set"] = RuntimeContext(second_actor).has_context()
             return "OK"
 
         client = flask_app.test_client()

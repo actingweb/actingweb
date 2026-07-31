@@ -80,7 +80,9 @@ class TestAsyncioIsolation:
         shared = SharedActor()
         gate = asyncio.Event()
 
-        async def request(client_id: str, wait_before_read: bool) -> tuple[str, str | None]:
+        async def request(
+            client_id: str, wait_before_read: bool
+        ) -> tuple[str, str | None]:
             _authenticate(shared, client_id)
             if wait_before_read:
                 await gate.wait()  # suspend with A's context set

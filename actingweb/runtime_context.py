@@ -7,6 +7,7 @@ architectural constraint where hook functions have fixed signatures but need
 access to request-specific context.
 
 Architecture Problem:
+
 - ActingWeb hook functions have fixed signatures: hook(actor, action_name, data)
 - Multiple clients can access the same actor (MCP clients, web users, API clients)
 - Each request needs context about the current client/request for proper handling
@@ -17,6 +18,7 @@ Architecture Problem:
   between requests and, under concurrency, between callers.
 
 Solution:
+
 - Store context in a module-level ``contextvars.ContextVar``, keyed by actor
   id, rather than as an attribute on the actor object.
 - ``ContextVar`` is task-local under asyncio and thread-local under a plain
@@ -50,6 +52,7 @@ Usage Example::
             # Customize behavior based on client type
 
 Concurrency notes:
+
 - A request dispatched onto a fresh ``asyncio`` task automatically inherits
   the context that was active when the task was created (a snapshot, not a
   live link — the child cannot mutate the parent's view and vice versa).

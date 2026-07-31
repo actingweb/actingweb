@@ -405,6 +405,54 @@ safe — the assert is pure type narrowing, and the preceding
 so stripping it changes nothing. Recorded only so a future reader does not
 mistake it for a load-bearing check.
 
+## Addendum (same day): PostgreSQL was not covered above, and CI found something
+
+Everything above this line was written before the PR ran CI, and its
+automated-check section covers **DynamoDB only** — that is the gap in my own
+verification, independent of what it found. `make test-all-parallel` and
+`make test-integration` both use the default backend; PostgreSQL needs the
+separate opt-in invocation documented in `CLAUDE.md`, and I did not run it.
+
+CI runs both backends. DynamoDB passed (2555/2555). **PostgreSQL failed 3 tests**
+in `tests/integration/test_mcp_resource_regression.py`, all with
+`-32003 Access denied: no trust relationship resolved for this client`.
+
+**This is not a regression introduced by this branch.** Instrumenting the
+resolver showed it receives an **empty trust list** for an actor whose trust row
+was created successfully moments earlier. Before this branch that empty read
+took the fail-open path and granted **full access**, so the tests passed. The
+authorization change did not create the fault; it made a pre-existing one
+visible. That is the behavior working as designed, and it is worth stating
+plainly: "could not read this actor's trust relationships" used to mean "allow
+everything."
+
+Root cause of the larger part, confirmed with direct database evidence: the
+PostgreSQL connection pool is a module-level global whose `configure` hook binds
+each connection's `search_path` **at connection-creation time**. A pool created
+in a test worker before `PG_DB_PREFIX` was set holds connections bound to the
+bare `public` schema; connections created later bind to the worker schema. The
+pool then serves a mix, so a write could land in `public` while the read went to
+the worker schema and returned zero rows **with no error**. A stray MCP trust row
+was found sitting in `public` as proof. Fixed in `9fb7dae` by setting the PG
+environment and calling `close_pool()` in `setup_database`, mirroring what the
+DynamoDB branch always did.
+
+Measured effect over full parallel PostgreSQL runs: failure rate fell from
+roughly 40–50% of runs to about 12% (1 of 8), and stray `public` rows went to
+zero across 8 consecutive runs.
+
+**A residual ~12% flake remains and is not fixed.** It has its own entry with a
+full reproduction recipe, ruled-out hypotheses, and where to look next:
+`thoughts/todo/postgres-pool-schema-binding-and-mcp-trust-read-flake.md`. The
+remaining suspicion is on the write side — whether the registration-time trust
+`INSERT` is reliably committed and visible before the first MCP request — not on
+the resolver, which the diagnostic shows never receives the row.
+
+Revised phase status: **Phase 3 is verified on DynamoDB and only partially on
+PostgreSQL.** The fail-closed behavior is correct on both; what PostgreSQL
+exposes is an underlying trust-read reliability problem that fail-closed
+surfaces rather than causes.
+
 ## Overall Assessment
 
 The implementation is complete, correct, and unusually well-evidenced for

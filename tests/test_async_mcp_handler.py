@@ -9,6 +9,7 @@ These tests verify that:
 """
 
 import asyncio
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -17,6 +18,35 @@ from actingweb.handlers.async_mcp import AsyncMCPHandler
 from actingweb.interface import ActingWebApp
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.mcp import mcp_prompt, mcp_tool
+from actingweb.permission_evaluator import PermissionResult
+from actingweb.runtime_context import RuntimeContext
+
+
+def _authorize(actor) -> None:
+    """Attach a resolved MCP peer id so the fail-closed tools/call and
+    prompts/get gates let requests through.
+
+    These tests exercise async execution mechanics (same-event-loop
+    dispatch, sync/async mixing, concurrency) rather than permission
+    decisions, so a synthetic peer id plus an allow-everything evaluator
+    (patched by callers) stands in for a real trust relationship.
+    """
+    RuntimeContext(actor).set_mcp_context(
+        client_id="test-client", trust_relationship=None, peer_id="test-peer"
+    )
+
+
+def _allow_all_evaluator() -> Mock:
+    evaluator = Mock()
+    evaluator.evaluate_permission = Mock(return_value=PermissionResult.ALLOWED)
+    return evaluator
+
+
+def _patch_allow_all():
+    return patch(
+        "actingweb.permission_evaluator.get_permission_evaluator",
+        side_effect=lambda *a, **k: _allow_all_evaluator(),
+    )
 
 
 class TestAsyncMCPHandler:
@@ -89,6 +119,7 @@ class TestAsyncMCPHandler:
 
         mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
+        _authorize(mock_actor)
 
         # Call the async tool
         request_data = {
@@ -98,7 +129,8 @@ class TestAsyncMCPHandler:
             "params": {"name": "test_async_tool", "arguments": {"key": "value"}},
         }
 
-        result = await handler.post_async(request_data)
+        with _patch_allow_all():
+            result = await handler.post_async(request_data)
 
         # Verify hook was called
         assert hook_called, "Hook should have been called"
@@ -137,6 +169,7 @@ class TestAsyncMCPHandler:
 
         mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
+        _authorize(mock_actor)
 
         # Call the sync tool
         request_data = {
@@ -146,7 +179,8 @@ class TestAsyncMCPHandler:
             "params": {"name": "test_sync_tool", "arguments": {"key": "value"}},
         }
 
-        result = await handler.post_async(request_data)
+        with _patch_allow_all():
+            result = await handler.post_async(request_data)
 
         # Verify hook was called
         assert hook_called, "Sync hook should have been called"
@@ -182,6 +216,7 @@ class TestAsyncMCPHandler:
 
         mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
+        _authorize(mock_actor)
 
         # Call the async prompt
         request_data = {
@@ -191,7 +226,8 @@ class TestAsyncMCPHandler:
             "params": {"name": "test_async_prompt", "arguments": {}},
         }
 
-        result = await handler.post_async(request_data)
+        with _patch_allow_all():
+            result = await handler.post_async(request_data)
 
         # Verify hook was called
         assert hook_called, "Async prompt hook should have been called"
@@ -238,26 +274,28 @@ class TestAsyncMCPHandler:
 
         mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
+        _authorize(mock_actor)
 
-        # Call sync tool
-        result1 = await handler.post_async(
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {"name": "sync_tool", "arguments": {}},
-            }
-        )
+        with _patch_allow_all():
+            # Call sync tool
+            result1 = await handler.post_async(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {"name": "sync_tool", "arguments": {}},
+                }
+            )
 
-        # Call async tool
-        result2 = await handler.post_async(
-            {
-                "jsonrpc": "2.0",
-                "id": 5,
-                "method": "tools/call",
-                "params": {"name": "async_tool", "arguments": {}},
-            }
-        )
+            # Call async tool
+            result2 = await handler.post_async(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {"name": "async_tool", "arguments": {}},
+                }
+            )
 
         # Verify both were called
         assert sync_called, "Sync tool should have been called"
@@ -345,6 +383,7 @@ class TestAsyncMCPHandler:
 
         mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
+        _authorize(mock_actor)
 
         request_data = {
             "jsonrpc": "2.0",
@@ -353,7 +392,8 @@ class TestAsyncMCPHandler:
             "params": {"name": "failing_tool", "arguments": {}},
         }
 
-        result = await handler.post_async(request_data)
+        with _patch_allow_all():
+            result = await handler.post_async(request_data)
 
         # Verify error response
         assert result["jsonrpc"] == "2.0"
@@ -388,21 +428,23 @@ class TestAsyncMCPHandler:
 
         mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
         handler.authenticate_and_get_actor_cached = lambda: mock_actor
+        _authorize(mock_actor)
 
-        # Call 3 tools concurrently
-        tasks = [
-            handler.post_async(
-                {
-                    "jsonrpc": "2.0",
-                    "id": i,
-                    "method": "tools/call",
-                    "params": {"name": "concurrent_tool", "arguments": {"id": i}},
-                }
-            )
-            for i in range(3)
-        ]
+        with _patch_allow_all():
+            # Call 3 tools concurrently
+            tasks = [
+                handler.post_async(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": i,
+                        "method": "tools/call",
+                        "params": {"name": "concurrent_tool", "arguments": {"id": i}},
+                    }
+                )
+                for i in range(3)
+            ]
 
-        results = await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
 
         # Verify all succeeded
         assert len(results) == 3

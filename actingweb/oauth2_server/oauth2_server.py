@@ -370,15 +370,15 @@ class ActingWebOAuth2Server:
                     "server_error", "Failed to create or retrieve user actor"
                 )
 
-            # Determine trust type and establishment source
+            # Determine trust type and establishment source. mcp_context came
+            # from extract_mcp_context() above, which returns None (and this
+            # method already returned) unless flow_type == "mcp_oauth2" --
+            # so every trust reaching this line is the MCP client-credentials
+            # shape. There is no "oauth2_interactive" case on this path; a
+            # trust created here can never be matched by a resolver branch
+            # gated on an interactive establishment source.
             trust_type = mcp_context.get("trust_type", "mcp_client")
-            flow_type = mcp_context.get("flow_type")
-
-            # Distinguish between OAuth2 interactive flows and client credentials flows
-            if flow_type == "mcp_oauth2":
-                established_via = "oauth2_client"  # MCP client credentials flow
-            else:
-                established_via = "oauth2_interactive"  # Regular user interactive flow
+            established_via = "oauth2_client"
 
             effective_trust_type = trust_type if trust_type else "mcp_client"
 

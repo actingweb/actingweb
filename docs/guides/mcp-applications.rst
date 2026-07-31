@@ -829,14 +829,18 @@ The MCP handler automatically logs cache statistics:
 
 - **First request**: Full authentication (~50ms) - populates cache
 - **Subsequent requests**: Cached authentication (~1ms) - serves from memory
-- **Cache TTL**: 5 minutes (automatically cleaned up)
+- **Cache TTL**: 5 minutes; expired entries are cleaned up periodically
+  (at most once every 20 seconds, checked on each authentication request)
 - **Memory efficient**: Only active sessions cached
 
 **What Gets Cached:**
 
-1. **Token validation** - OAuth2 server lookups eliminated
-2. **Actor loading** - DynamoDB actor retrieval cached
-3. **Trust relationships** - Permission context cached per actor
+1. **Token validation** - OAuth2 server lookups eliminated; keyed by token
+2. **Actor loading** - DynamoDB actor retrieval cached; keyed by actor ID
+3. **Trust relationships** - Permission context cached per
+   **(actor, client)** pair, so each MCP client's trust relationship — and
+   therefore its permission set — is isolated from other clients on the
+   same actor. Trust hit/miss statistics are per pair.
 
 This optimization is particularly beneficial for AI assistants making multiple consecutive requests, which is the typical MCP usage pattern.
 

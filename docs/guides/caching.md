@@ -9,35 +9,38 @@ This document provides guidance for implementing intelligent caching in ActingWe
 ### Core Components
 
 ```python
-# Global cache structure (per endpoint)
-_token_cache: Dict[str, Dict[str, Any]] = {}
-_actor_cache: Dict[str, Dict[str, Any]] = {}
-_trust_cache: Dict[str, Any] = {}
+# Global cache structure (as implemented in handlers/mcp.py)
+_token_cache: dict[str, dict[str, Any]] = {}  # token -> validation data
+_actor_cache: dict[str, dict[str, Any]] = {}  # actor_id -> {actor, last_accessed}
+_trust_cache: dict[tuple[str, str], dict[str, Any]] = {}  # (actor_id, client_id)
 _cache_ttl = 300  # 5 minutes
 
-# Cache entry structure
+# Trust cache entry structure
 cache_entry = {
-    'data': actual_data,
-    'timestamp': time.time(),
-    'ttl': 300
+    'trust': trust_relationship_or_none,
+    'cached_at': time.time(),
 }
 ```
 
 ### Cache Key Strategy
 
-Use composite keys for maximum cache efficiency:
+Use composite keys whenever the cached value depends on more than one
+identity. The key must match the cardinality of the data being cached: the
+MCP trust cache stores one trust relationship per (actor, client) pair, so
+its key is that tuple — an actor-only key would let one client's trust
+serve another client on the same actor (this was a real authorization
+bypass, fixed in v3.13.0rc3).
 
 ```python
-# Token cache: "token_hash:actor_id"
-token_key = f"{hashlib.sha256(token.encode()).hexdigest()[:16]}:{actor_id}"
+# Token cache: the token itself (opaque, unique per client)
+token_key = token
 
-# Actor cache: "actor_id:property_subset"
-actor_key = f"{actor_id}:basic"  # for basic actor info
-actor_key = f"{actor_id}:full"   # for full actor with properties
+# Actor cache: actor id (one shared actor instance per actor)
+actor_key = actor_id
 
-# Trust cache: "actor_id:relationship_type"
-trust_key = f"{actor_id}:peer_relationships"
-trust_key = f"{actor_id}:trust_types"
+# Trust cache: (actor_id, client_id) tuple — one trust row per client.
+# Tuples avoid delimiter-escaping problems that f"{a}:{b}" string keys have.
+trust_key = (actor_id, client_id)
 ```
 
 ## Implementation Pattern
@@ -118,30 +121,23 @@ def get_trust_relationships_cached(self, actor_id: str) -> List[Dict[str, Any]]:
 
 ### 3. Cache Invalidation
 
+Invalidate actor-wide by scanning for every key whose actor component
+matches. Always iterate a **snapshot** of the keys (`list(cache)`): module
+caches are mutated from concurrent worker threads with no lock, and
+scanning the live dict while another thread inserts raises
+`RuntimeError: dictionary changed size during iteration`. Use
+`pop(key, None)` rather than `del` so a concurrent delete cannot raise.
+
 ```python
+def _evict_trust_entries_for_actor(actor_id: str) -> None:
+    """Remove every (actor_id, client_id) trust entry for the actor."""
+    for key in [k for k in list(_trust_cache) if k[0] == actor_id]:
+        _trust_cache.pop(key, None)
+
 def invalidate_actor_cache(self, actor_id: str) -> None:
     """Invalidate all cache entries for a specific actor"""
-    
-    # Invalidate token cache entries
-    keys_to_remove = [k for k in _token_cache.keys() if k.endswith(f":{actor_id}")]
-    for key in keys_to_remove:
-        del _token_cache[key]
-    
-    # Invalidate actor cache entries  
-    keys_to_remove = [k for k in _actor_cache.keys() if k.startswith(f"{actor_id}:")]
-    for key in keys_to_remove:
-        del _actor_cache[key]
-    
-    # Invalidate trust cache entries
-    keys_to_remove = [k for k in _trust_cache.keys() if k.startswith(f"{actor_id}:")]
-    for key in keys_to_remove:
-        del _trust_cache[key]
-
-def on_trust_modified(self, actor_id: str) -> None:
-    """Call this when trust relationships change"""
-    trust_keys = [k for k in _trust_cache.keys() if k.startswith(f"{actor_id}:")]
-    for key in trust_keys:
-        del _trust_cache[key]
+    _actor_cache.pop(actor_id, None)
+    _evict_trust_entries_for_actor(actor_id)
 ```
 
 ## Endpoints to Optimize

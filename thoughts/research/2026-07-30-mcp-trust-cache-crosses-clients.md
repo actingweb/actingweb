@@ -20,6 +20,15 @@ than independently reproduced here.
 > async-suspension framing), and added **five findings** the first pass did not
 > cover: C6-C10 below. Sections marked *(validated)* were re-verified; sections
 > marked *(new)* are additions.
+>
+> **Follow-up correction, same day.** C6 originally concluded that a hot actor's
+> trust entry never refreshes. That was too strong: the token cache enforces its
+> five-minute TTL inline, and an expired token-cache entry takes the full-auth
+> path, which performs and stores a fresh trust lookup even when the actor object
+> remains hot. C6 and every conclusion depending on an unbounded exposure window
+> have been corrected below. The actor-only key remains a demonstrated
+> authorization bypass; periodic reauthentication merely changes which
+> client's trust occupies the shared slot.
 
 ## Research Question
 
@@ -46,11 +55,13 @@ trust types are a library feature (`client_registry.py:68`), the trust type is
 stored as the trust row's `relationship`, and permission evaluation resolves
 that `relationship` *from the peer id* (`permission_evaluator.py:471-478`). A
 poisoned `peer_id` therefore selects a different permission rule set. No
-application defect is in that path (C11). Two further consequences follow: the
-exposure window is not the nominal five minutes but unbounded on a
-continuously-accessed actor (C6), and the poisoned identity is written durably
-into the *other* client's trust record on every request carrying `clientInfo`
-(C12).
+application defect is in that path (C11). The wrong entry remains in force until
+a full-auth request replaces it or the cache is invalidated. Inline token-cache
+expiry forces a fresh lookup after at most five minutes of token-cache age
+(C6), but with multiple active clients that only rotates the shared slot; it
+does not restore per-client isolation. The poisoned identity can also be written
+durably into the *other* client's trust record on requests carrying
+`clientInfo` (C12).
 
 The proposed `(actor_id, client_id)` key is the correct immediate fix. It matches
 the domain identity, follows this repository's documented composite-key cache
@@ -246,8 +257,9 @@ The defect is bounded by cache state, not by the MCP session: a full-auth miss
 for a client writes that client's trust into the actor-wide slot, and subsequent
 hot-path requests for any client on the actor consume that value until another
 full-auth miss replaces it or the relevant caches are invalidated. The intended
-TTL is five minutes (`_cache_ttl = 300`), although C6 below shows expiry is far
-weaker in practice than the constant suggests.
+token-cache TTL is five minutes (`_cache_ttl = 300`). C6 clarifies that this TTL
+is enforced inline and indirectly refreshes trust; the ineffective cleanup
+scheduler does not make the active trust entry immortal.
 
 The report's end-to-end consequence was not merely wrong `you_are` output:
 client A called `agent_run_complete(last_open=true)` and closed client B's live
@@ -690,30 +702,46 @@ async/threaded tests. Conversely, the known context race must not delay landing
 the tuple key: the two defects are independently actionable, and C1's
 reproduction is entirely sequential.
 
-## Finding C6 — a hot actor's cached trust never refreshes *(new)*
+## Finding C6 — trust freshness is implicitly coupled to token revalidation *(corrected)*
 
-This is distinct from the "cleanup is inert" note the first pass filed under
-adjacent observations. The consequence is stale **authorization**, not just
-stale objects.
+`_trust_cache` has no timestamp or TTL of its own, and its only explicit
+TTL-driven eviction sits inside the expired-*actor* cleanup loop
+(`mcp.py:152-155`). `_actor_cache` uses a sliding window: `last_accessed` is
+refreshed on every hit (`mcp.py:1251`, `mcp.py:1366`), so a continuously used
+actor does not age out. The cleanup scheduler is also effectively inert because
+it is gated on `if time.time() % 20 == 0:` (`mcp.py:1221-1223`).
 
-- `_trust_cache` has no TTL of its own. Its only TTL-driven eviction sits inside
-  the expired-*actor* loop (`mcp.py:152-155`).
-- `_actor_cache` uses a **sliding** window: `last_accessed` is refreshed on every
-  hit (`mcp.py:1251`, `mcp.py:1366`). An actor under continuous traffic never
-  ages out.
-- The cleanup that drives it is called from exactly one place, gated on
-  `if time.time() % 20 == 0:` (`mcp.py:1221-1223`). `time.time()` returns a
-  float; landing on an exact representable integer boundary is effectively never.
-- No other code path clears `_trust_cache` (verified repo-wide).
+Those facts do **not** make the active trust entry permanent. The token-cache
+check separately compares `cached_at` with `_cache_ttl` on every request
+(`mcp.py:1230-1233`). Once that absolute five-minute window expires, the request
+falls through to full authentication (`mcp.py:1299-1331`), validates the token,
+performs a fresh trust lookup and overwrites the trust-cache entry even if
+`_get_or_create_actor_cached()` returns the existing hot actor.
 
-Combined: for an actor receiving MCP requests at least every five minutes, the
-trust relationship resolved on the *first* request is served for the process
-lifetime. A trust modification, permission change, `peer_approved` flip, or
-trust deletion is invisible to the MCP path indefinitely.
+Consequences:
 
-Related: `_trust_cache[actor_id]` is written at `mcp.py:1331` **before**
-`_mark_client_peer_approved` mutates `peer_approved` at `mcp.py:1334-1336`, so
-the cached object is stale on that field from the moment it is cached.
+- For one continuously used client, a trust modification, permission change,
+  `peer_approved` flip or trust deletion is normally observed on the first
+  request after that token's cache entry reaches five minutes of age. Trust
+  freshness is therefore bounded by the positive token-cache TTL, not by actor
+  expiry.
+- For multiple active clients on one actor, each token has its own `cached_at`.
+  Their periodic full-auth requests repeatedly replace the single actor-wide
+  trust slot. Reauthentication can change which client is currently represented
+  correctly, but cannot make the shared key safe; hot-path requests from every
+  other client still consume the last writer's trust.
+- `_trust_cache[actor_id]` is written at `mcp.py:1331` before
+  `_mark_client_peer_approved` runs at `mcp.py:1334-1336`, so that field can be
+  stale until the next token-driven refresh.
+- The ineffective cleanup scheduler still causes expired token/actor entries to
+  accumulate in memory. That is a real lifecycle defect, but it is not evidence
+  of process-lifetime trust staleness.
+
+**Recommendation:** do not delay the tuple-key patch for a cache redesign.
+Afterward, either document and test the intentional five-minute authorization
+freshness bound, or give trust entries their own explicit `cached_at`/version
+policy. Fix cleanup scheduling for memory hygiene, and address revocation
+separately under C7.
 
 ## Finding C7 — token revocation does not clear the cache; only logout does *(new)*
 
@@ -860,14 +888,17 @@ one-key fix closes the whole class.
 
 ### Two corrections to the audit's framing
 
-**The exposure window is not five minutes.** The audit reasons from
-"two clients touching the account within the 5-minute TTL". C6 shows worse:
-`_actor_cache` uses a sliding `last_accessed` (`mcp.py:1251`, `1366`) and the
-only cleanup is gated on `time.time() % 20 == 0` (`mcp.py:1221-1223`), which
-effectively never fires. On an actor receiving MCP traffic at least every five
-minutes, the poisoned entry **never expires** for the process lifetime. The
-audit's "any two of those touching the account within five minutes is enough"
-understates it: one crossing is enough, and it persists.
+**The audit's five-minute framing is substantially right, but the effect can
+repeat indefinitely.** An earlier version of this research incorrectly derived
+process-lifetime trust staleness from the sliding actor cache and ineffective
+cleanup scheduler. C6 corrects that: token-cache expiry is checked inline, and
+the first request after a token entry reaches five minutes performs a full trust
+lookup even when the actor stays hot. The audit's immediate trigger therefore
+does require a hot-path request to consume another client's last-written trust.
+With multiple continuously active clients, however, independently aged token
+entries keep taking turns overwriting the one actor-wide slot, so the bypass can
+recur for as long as the clients remain active. Periodic refresh changes the
+current wrong principal; it does not repair the cache cardinality.
 
 **"Cannot self-defend" is very nearly right, but not exactly.** The audit says
 the only identity a hook can see is the runtime context, and the handler
@@ -988,9 +1019,10 @@ The comment says cleanup runs about every twentieth request, but the condition i
 `time.time() % 20 == 0` (`mcp.py:1221-1223`). With a fractional wall clock this
 requires landing on an exact representable boundary and is effectively never
 true in normal traffic. Inline TTL checks prevent expired token/actor entries
-from being used, but expired objects accumulate — and, per C6, the sliding
-`last_accessed` window means the sharper consequence is stale authorization, not
-just memory growth. Use a request counter or a monotonic `next_cleanup_at`.
+from being used, and token-cache expiry drives a fresh trust lookup on the
+full-auth path (C6). Expired objects nevertheless accumulate in memory. Use a
+request counter or a monotonic `next_cleanup_at`; do not describe this scheduler
+bug as making active authorization state immortal.
 
 ### Caches and revocation are process-local
 
@@ -1029,18 +1061,20 @@ knowing before any further work builds on it.
 1. **Ship `(actor_id, client_id)` now as an isolated patch.** Six line-level
    changes (the C5 table). No signature changes, no storage changes.
    Reproducible failure, reproducible fix, unit-testable without docker. Leaves
-   C6 staleness, C7 revocation, and C4 request-scope untouched.
+   C6's implicit trust-freshness coupling, C7 revocation, and C4 request-scope
+   untouched.
 2. **Fold it into a cache redesign** (per-entry TTL, real cleanup scheduling,
-   process-scope namespacing, shared invalidation). Fixes C6 and C7 at the same
-   time. Much larger blast radius on a hot authentication path that has **zero
-   existing test coverage** (C5), so the redesign must build its own safety net
-   first.
+   process-scope namespacing, shared invalidation). Makes C6's lifecycle policy
+   explicit and can solve C7 if it includes cross-process revocation
+   invalidation. Much larger blast radius on a hot authentication path that has
+   **zero existing test coverage** (C5), so the redesign must build its own
+   safety net first.
 
 **Recommendation:** Option 1, and the justification is now much stronger than a
 correctness argument. This is a demonstrated authorization bypass (C11) with a
-working end-to-end reproduction against a live deployment, an unbounded exposure
-window on hot actors (C6), and durable corruption of trust records while it is
-active (C12). It has been shipping for ten months. Nothing about a cache
+working end-to-end reproduction against a live deployment, a defect that recurs
+throughout multi-client traffic, and durable corruption of trust records while
+it is active (C12). It has been shipping for ten months. Nothing about a cache
 redesign should delay a six-line key change.
 
 ### Decision 2: Eviction scope in the minimal patch
@@ -1211,6 +1245,7 @@ the library; they need a consumer-side audit of their own.
 | Repair already-corrupted trust rows? | **Open question — see Decision 8.** | Library-side metadata self-heals after the fix; audit-trail fields and consumer-side `created_by` grants do not. |
 | Cache key | **`(actor_id, client_id)` tuple.** | Both values are available before lookup, match persisted trust cardinality, and match the MCP spec's `<user_id>:<handle>` keying rule. |
 | Eviction scope in the minimal patch | **Actor-wide trust eviction at both current sites.** | Preserves current behavior; optimize only after tests define narrower semantics. |
+| Trust freshness | **Keep separate from the tuple fix; make the five-minute bound explicit and tested.** | Token-cache expiry already forces a fresh trust lookup even for a hot actor. A future cache abstraction may give trust entries their own TTL/version, but cleanup alone is not an authorization fix. |
 | Include exact resolver matching? | **Separate companion commit in the same security patch/release.** | C3 shows the substring compare is the *only* live matcher, not a fallback, which raises its priority relative to the first pass. |
 | Treat the `RuntimeContext` race as closed by tuple key? | **No. Track separately as high priority.** | Deterministic same-actor concurrency still leaks identity, in both the threaded and async models. |
 | Runtime context implementation | **`ContextVar`, API-compatible façade — plus a fix to `hooks.py:562-564`.** | Matches the repo's existing request-context architecture; the executor hop would otherwise silently lose context. |
@@ -1262,7 +1297,11 @@ the library; they need a consumer-side audit of their own.
 
 **Patch 5 — cache lifecycle (C6, C7)**
 
-- Real cleanup scheduling; decide whether `_actor_cache` keeps a sliding window.
+- Replace the ineffective cleanup condition with a request counter or monotonic
+  deadline so expired objects are actually removed.
+- Decide whether the existing five-minute token-driven trust refresh is the
+  intended authorization-freshness contract. Document and test it, or add an
+  explicit per-trust-entry timestamp/version.
 - Wire revocation paths to cache invalidation, or shorten/remove positive token
   caching. TTL should not exceed the token's own expiry.
 

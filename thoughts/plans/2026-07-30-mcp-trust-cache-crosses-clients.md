@@ -822,6 +822,26 @@ suite passes together.
 
 ### Implementation Status: In Progress (all steps complete except the PR)
 
+**Notes:**
+
+- Verified on 2026-07-31 —
+  `thoughts/verifications/2026-07-31-mcp-trust-cache-crosses-clients.md`.
+  That verification covers Phases 1–4 in full plus this phase's code and
+  documentation; the plan stays `status: active` (and carries no `verified:`
+  back-link) because the PR and Phase 6 are still open.
+- Three defects found during verification and fixed in place, all within this
+  phase's remit: (1) `ruff format` drift in two Phase 4 test files — root
+  cause is that every phase's checklist above lists `ruff check` but never
+  `ruff format --check`; (2) a Sphinx docstring regression introduced by
+  Phase 4's `runtime_context.py` rewrite (multi-line bullets under
+  `Architecture Problem:` / `Solution:` / `Concurrency notes:` with no blank
+  line, which docutils mis-parses — proven a regression by parsing the base
+  commit's docstring, which is clean; docs build went 10 messages → 0);
+  (3) `CHANGELOG.rst` had **no** entry for Phase 4 at all, so the
+  `set_custom_context()` behavior change — which can break application code
+  silently on upgrade — was documented only in `hooks.rst`. A `CHANGED`
+  section now covers it plus the async `tools/call` `operation` alignment.
+
 ---
 
 ## Phase 6: Cut `v3.13.0rc3` from master

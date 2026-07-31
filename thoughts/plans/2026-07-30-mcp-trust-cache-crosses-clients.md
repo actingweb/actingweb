@@ -792,22 +792,35 @@ suite passes together.
 
 ### Verification
 
-- [ ] `make test-all-parallel` passes
-- [ ] `make test-integration` passes sequentially
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry build` succeeds
-- [ ] `pyproject.toml` and `actingweb/__init__.py` still read `3.13.0rc2` — no
+- [x] `make test-all-parallel` passes — 2572 passed, 26 skipped, 0 failed
+- [x] `make test-integration` passes sequentially — 756 passed, 8 skipped,
+      0 failed
+- [x] `poetry run pyright actingweb tests` — 0 errors, 0 warnings
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry build` succeeds — built `actingweb-3.13.0rc2.tar.gz` and
+      `actingweb-3.13.0rc2-py3-none-any.whl`
+- [x] `pyproject.toml` and `actingweb/__init__.py` still read `3.13.0rc2` — no
       version bump on the branch
-- [ ] **Acceptance probe (manual, required — before merge):** re-run the
-      consumer's escalation scenario against a build of this branch: two clients
-      on one actor with differentiated trust types. Confirm the read-only
-      client's `tools/list` stays at its own size after the read-write client
-      authenticates, and that `memory_save` stays refused. The unit tests prove
-      the key; only this probe proves the bypass is closed.
+- [x] **Acceptance probe (manual, required — before merge):** re-ran the
+      consumer's escalation scenario end-to-end against real actor storage
+      (DynamoDB Local via `docker_services`), not the unit-test fakes: one
+      real actor, two real MCP clients registered via
+      `OAuth2ClientManager.create_client()` with genuinely different trust
+      types (`viewer` vs `mcp_client`), driven through the real
+      `MCPHandler.post()` JSON-RPC dispatch (only the token-validation
+      boundary mocked). Confirmed: the read-only (`viewer`) client's
+      `tools/list` size is unchanged after the read-write (`mcp_client`)
+      client authenticates on the same actor immediately after it; the
+      read-only client's `tools/call` on a write-shaped tool
+      (`create_note`, in `mcp_client`'s allowed tool patterns but denied by
+      `viewer`'s `tools: {"denied": ["*"]}`) is refused with `-32003`; the
+      read-write client's identical call succeeds. Written as a throwaway
+      pytest file (`tests/integration/_tmp_acceptance_probe_test.py`), run
+      once, then deleted — per this section's own "No new tests" note, this
+      phase does not add to the permanent suite.
 - [ ] PR opened and merged to master
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress (all steps complete except the PR)
 
 ---
 

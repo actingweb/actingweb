@@ -5,6 +5,85 @@ CHANGELOG
 Unreleased
 ----------
 
+.. note::
+
+   **Security fix — please re-run any escalation/authorization tests before
+   pinning to this release.** MCP deployments serving more than one client
+   per actor should read the ``SECURITY`` section below in full and consult
+   ``docs/migration/v3.13.rst`` before upgrading.
+
+SECURITY
+~~~~~~~~
+
+- **Fixed an MCP authorization bypass where one client's permissions could
+  be served to a different client on the same actor.** The trust-relationship
+  cache used by the MCP authentication path was keyed by actor id alone, not
+  ``(actor_id, client_id)``. On an actor with more than one registered MCP
+  client, once the cache was warm, one client's resolved trust relationship
+  — and therefore its entire permission rule set — could be silently served
+  to a different client's requests on the same actor. This has been
+  demonstrated in practice: a read-only client performed a write immediately
+  after a read-write client authenticated against the same actor. The
+  trust cache is now keyed by ``(actor_id, client_id)``, closing the bypass.
+  **Affected versions:** every release since ``v3.3`` (2025-10-04) through
+  ``v3.13.0rc2``, roughly ten months. The library cannot detect whether this
+  was exploited in your deployment; see the migration guide for what to
+  check.
+
+- **``resources/read`` had no authorization check at all on Flask (sync)
+  deployments.** The permission gate read an actor attribute
+  (``_mcp_trust_context``) that no production code ever wrote, so the check
+  silently fell through and every resource read was served regardless of the
+  requesting client's trust type or permissions. FastAPI (async) deployments
+  were not affected — the async handler already read the correct runtime
+  context. The sync path now uses the same mechanism as async and is
+  authorized identically. If your Flask deployment serves resource URIs
+  beyond the default ``mcp_client`` trust type's narrow pattern set
+  (``public/*``, ``shared/*``, ``notes://*``, ``usage://*``,
+  ``actingweb://properties/all``), see the audit step in
+  ``docs/migration/v3.13.rst`` — those requests have been working only
+  because the check was dead.
+
+- **Missing trust is now fail-closed instead of fail-open.** A valid MCP
+  access token that cannot be resolved to a trust relationship (a broken or
+  orphaned trust row, or an eventual-consistency gap right after
+  registration) previously granted full access. It now returns an empty
+  ``tools/list``/``resources/list``/``prompts/list`` and a distinct
+  ``-32003`` error naming the cause on ``tools/call``/``prompts/get``/
+  ``resources/read``, rather than silently permitting the request. A short
+  negative-TTL cache bounds transient eventual-consistency misses to
+  seconds rather than the full token cache window. Deployments relying on
+  the permission subsystem being unavailable (a genuine outage, as opposed
+  to no trust being found) are unaffected — that failure mode is still
+  fail-open, deliberately, so a permission-subsystem outage does not lock
+  out every client.
+
+- **The MCP client-id-to-trust resolver now matches exactly instead of by
+  substring.** The previous resolver checked whether the OAuth2 client id
+  appeared anywhere inside a trust row's peer id (``client_id in
+  peer_id_str``), which a peer id crafted through the ordinary ``/trust``
+  peer protocol could satisfy without ever going through MCP client
+  registration. The resolver now requires an exact ``oauth_client_id``
+  match, or — for legacy rows created before that field existed — an exact,
+  fully-reconstructed peer-id match gated on the row's ``established_via``
+  being an OAuth2-family value. See ``docs/migration/v3.13.rst`` for how to
+  find trust rows that predate ``oauth_client_id`` and may need
+  re-authorization after upgrading.
+
+- **Trust-row client metadata written during the affected window is
+  unreliable.** ``client_name``, ``client_version``, ``client_platform``,
+  ``last_accessed``, and ``last_connected_via`` may have been overwritten by
+  a different client than the one that actually holds the credential, for
+  any trust row touched while the cache-crossing bug was live. Current
+  values self-heal on that client's next request after upgrading (current
+  state, not history — the metadata is a live cache with no audit trail).
+
+- **Still open, deferred:** revoking a token or modifying a trust
+  relationship does not evict the corresponding cache entries, so a revoked
+  token or a just-changed permission can still authenticate/apply from a
+  warm process for up to the 5-minute token cache TTL. Tracked in
+  ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``.
+
 v3.13.0rc2: July 26, 2026
 -------------------------
 

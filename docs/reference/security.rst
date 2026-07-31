@@ -22,6 +22,28 @@ Access Control
 - To restrict access, use `excluded_patterns`; base `patterns` cannot be narrowed.
 - Use `merge_base=False` only when explicit full override is needed.
 
+MCP Multi-Client Trust
+------------------------
+
+- **``v3.13.0rc3`` fixed an MCP trust-cache authorization bypass** affecting
+  every release from ``v3.3`` (2025-10-04) through ``v3.13.0rc2`` (roughly
+  ten months): on an actor with more than one registered MCP client, one
+  client's resolved trust/permissions could be served to a different
+  client's requests once the cache was warm. See the ``SECURITY`` section
+  of ``CHANGELOG.rst`` and ``docs/migration/v3.13.rst`` before upgrading a
+  deployment that predates ``rc3`` and serves multiple MCP clients per
+  actor.
+- **Trust-row client metadata is not an audit trail.** ``client_name``,
+  ``client_version``, ``client_platform``, ``last_accessed``, and
+  ``last_connected_via`` are a live cache, overwritten by whichever client
+  last connected — they reflect *current* state only. For any trust row
+  touched during the affected window above, historical values of these
+  fields may reflect a different client than the one that actually holds
+  the credential; current values self-heal on that client's next request.
+- Missing/unresolvable trust is fail-closed (no access), not fail-open,
+  as of ``rc3`` — see :doc:`../guides/troubleshooting` if an MCP client
+  unexpectedly sees an empty tool list or ``-32003`` after upgrading.
+
 OAuth2
 ------
 

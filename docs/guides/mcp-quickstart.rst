@@ -123,6 +123,11 @@ token returns HTTP 401 with a ``WWW-Authenticate: Bearer`` header:
      -H 'Authorization: Bearer <token>' \
      -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_note","arguments":{"title":"Hello","content":"World"}}}'
 
+A bearer token that authenticates but does not resolve to a trust
+relationship now returns an **empty** ``tools/list`` (not an error) and a
+``-32003`` on ``tools/call``/``prompts/get``/``resources/read`` — see
+:doc:`troubleshooting` if that happens unexpectedly after upgrading.
+
 .. tip::
 
    To test tool/prompt *logic* without standing up an OAuth2 client, call the

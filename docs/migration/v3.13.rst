@@ -2,8 +2,108 @@
 Migrating to ActingWeb 3.13
 ===========================
 
+Security fix in rc3: MCP trust-cache authorization bypass
+===========================================================
+
+.. note::
+
+   This section covers the ``v3.13.0rc3`` security fix. It applies **in
+   addition to** the DynamoDB-scalability migration steps later in this
+   document (``rc1``/``rc2``) — read both if you are upgrading past either
+   boundary. If you are only running MCP with a single client per actor,
+   most of this section does not apply to you, but the ``resources/read``
+   and resolver-matching items below can still be relevant; read the
+   summary before skipping ahead.
+
+See the ``SECURITY`` section of ``CHANGELOG.rst`` for what changed and why.
+This section is the operational checklist: what to check *before*
+upgrading, and what to expect *after*.
+
+1. Find trust rows that predate exact resolver matching
+--------------------------------------------------------
+
+The MCP client-id-to-trust resolver now requires an exact
+``oauth_client_id`` match, or — for legacy rows without that field — an
+exact reconstructed peer-id match gated on ``established_via`` being an
+OAuth2-family value. A row that matched only because the old resolver did
+substring containment will stop resolving after upgrading, and that
+client's next request returns an empty ``tools/list`` or a ``-32003`` on
+``tools/call``/``prompts/get``/``resources/read`` instead of authenticating
+as before.
+
+Find at-risk rows before upgrading — any trust row where:
+
+- ``oauth_client_id`` is unset (``None``/absent), **and**
+- ``established_via`` is not ``"oauth2_client"`` (or the legacy peer id
+  does not start with ``oauth2:`` or ``oauth2_client:``), **or**
+- the peer id is not in the three-segment ``<source>:<email-or-client>:<client_id>``
+  shape trust creation constructs.
+
+These are almost always trust rows created before ``v3.3`` (2025-10-04,
+when ``oauth_client_id`` was introduced) that have not been through an
+OAuth2 re-authorization since. Rows created by either live MCP path
+(client registration, or the MCP OAuth2 authorize callback) already carry
+``oauth_client_id`` and are unaffected.
+
+2. Audit Flask (sync) resource URIs against your trust type's patterns
+------------------------------------------------------------------------
+
+``resources/read`` had **no authorization check at all** on the Flask
+(sync) transport before this release (see the ``SECURITY`` note in
+``CHANGELOG.rst``) — every resource read was served regardless of trust
+type. It is now checked identically to the FastAPI (async) transport,
+which was never affected.
+
+The default ``mcp_client`` trust type only allows reading:
+``public/*``, ``shared/*``, ``notes://*``, ``usage://*``, and
+``actingweb://properties/all`` (see ``actingweb/trust_type_registry.py``).
+If your application serves custom resource URIs outside that pattern set to
+Flask-based MCP clients, those reads have been working *only because the
+check was dead* and will start returning ``-32003`` after upgrading. Audit
+your resource hooks' URIs against the ``resources.patterns`` of every trust
+type your app registers, and widen the pattern set (or register a custom
+trust type) before upgrading if legitimate traffic depends on a URI outside
+the default allowlist.
+
+3. Understand the orphaning consequence of a resolver miss
+-------------------------------------------------------------
+
+If a client's trust row stops resolving per step 1 above, that client does
+not stay locked out forever: the next OAuth2 authorization it completes
+creates a **new** trust row with a newly constructed peer id (since the old
+row is simply never matched, not deleted). This has one consequence worth
+knowing in advance: **per-peer permission overrides are silently
+abandoned.**
+
+Per-peer permission overrides are stored keyed by
+``f"{actor_id}:{peer_id}"`` (see ``TrustPermissions.get_permission_key()``
+in ``actingweb/trust_permissions.py``). Any overrides an operator applied
+to the old peer id do not transfer to the new row's peer id — the
+re-authorized client silently reverts to its trust type's *default*
+permissions. If you have applied custom per-peer overrides to any MCP
+client, check whether that client's trust row is at risk per step 1, and
+if so, re-apply the overrides to the new peer id after it re-authorizes.
+
+4. Note the backfill timing for ``oauth_client_id``
+-------------------------------------------------------
+
+``oauth_client_id`` is backfilled onto a trust row when a client completes
+an OAuth2 **re-authorization**, not merely on its next request (see
+``actingweb/interface/trust_manager.py``). Between upgrading and a given
+client's next full re-authorization, that client's resolution rests
+entirely on the legacy peer-id fallback described in step 1 — so a row
+that fails the step-1 check does not "self-heal" on its own until the
+client goes through the OAuth2 flow again, not just makes another API call.
+
 Overview
 ========
+
+.. note::
+
+   This "Overview" and everything below it describes the ``rc1``/``rc2``
+   DynamoDB-scalability content of the 3.13 line. The ``rc3`` security fix
+   covered above is a separate, later addition to the same release line —
+   read both sections if you are upgrading from before ``rc1``.
 
 ActingWeb 3.13 is a **DynamoDB scalability release**. It fixes two measured
 superlinear cost defects (full-table scans on per-actor reads; a

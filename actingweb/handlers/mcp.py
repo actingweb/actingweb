@@ -1637,9 +1637,6 @@ class MCPHandler(BaseHandler):
         """
         try:
             trusts = actor.trust.relationships
-            from .._tmp_diag import _diag_probe as _dp
-
-            _dp("RESOLVE", str(actor.id), client_id, actor)
 
             # Arm 1: exact oauth_client_id match. Written on every trust row
             # created by either live MCP creation path (both pass

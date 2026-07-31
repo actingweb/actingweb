@@ -90,7 +90,47 @@ still fails intermittently — roughly **1 run in 6** locally after all of the
 above — with `-32003 Access denied: no trust relationship resolved for this
 client`.
 
-Two observations that should shorten the next investigation:
+### The mechanism is known exactly; only its provenance is not
+
+A second CI diagnostic (pushed temporarily, read back from the logs, then
+reverted) pinned it down for the client that failed:
+
+```
+CREATE  ... client=mcp_fd89... cfg=139984130144080 db=actingweb.db.dynamodb.trust
+RESOLVE ... client=mcp_fd89... cfg=139984128041488 db=actingweb.db.postgresql.trust
+```
+
+Same process, same actor, same client: **registration writes the trust row to
+DynamoDB while resolution reads PostgreSQL.** Two distinct `Config` objects
+with two different backends are live at once, and the trust is simply not where
+the reader looks. Everything else — the empty list, `trusts_total=0` in the
+worker schema, all workers seeing an identical peer list (unprefixed, shared
+DynamoDB tables, since `AWS_DB_PREFIX` is only set in the DynamoDB branch of
+`setup_database`) — follows from that one fact.
+
+**The open question is narrow: where does the DynamoDB `Config` at CREATE come
+from?** What is already ruled out:
+
+- It is not the singleton binding fixed above — both paths now go through
+  `get_actingweb_oauth2_server(config)`, which rebinds per config.
+- It is not `ActingWebApp` building more than one `Config`: `get_config()`
+  memoizes into `self._config`.
+- It is not the route wiring: `fastapi_integration` passes
+  `self.aw_app.get_config()` to `OAuth2EndpointsHandler`.
+
+So the two `Config` objects should belong to two different *applications* — and
+yet both requests are addressed to the regression app's own port. Resolving
+that contradiction is the whole remaining task. Concretely: log
+`id(self.config)` plus `self.config.database` in the DCR endpoint handler and
+in the MCP handler together with the app's `fqdn`, and see which app actually
+serves the registration.
+
+`Config.__init__` reads `os.getenv("DATABASE_BACKEND", "dynamodb")` at
+**construction time** (`actingweb/config.py:47`), so any `Config` built before
+the test session sets that variable is a DynamoDB config for its whole life —
+that is the most likely source and the first thing to check.
+
+Two further observations that should shorten the work:
 
 - **The failing runs are systematically the slow ones.** Passing runs land at
   ~26s and ~1329 warnings; failing runs at ~36s and ~1273 warnings. That is not

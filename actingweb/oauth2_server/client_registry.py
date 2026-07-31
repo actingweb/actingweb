@@ -418,7 +418,6 @@ class MCPClientRegistry:
         """
         try:
             from .. import actor as actor_module
-            from .._tmp_diag import _diag_probe
             from ..interface.actor_interface import ActorInterface
             from ..interface.trust_manager import TrustManager
 
@@ -452,8 +451,6 @@ class MCPClientRegistry:
                 client_id=client_id,  # Ensure unique peer ID per client
                 client_name=client_data.get("client_name"),
             )
-
-            _diag_probe("CREATE", actor_id, client_id, actor_interface)
 
             if trust_created:
                 logger.info(f"Created trust relationship for OAuth2 client {client_id}")

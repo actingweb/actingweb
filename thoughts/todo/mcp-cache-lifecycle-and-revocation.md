@@ -99,12 +99,31 @@ for pattern in expected_peer_patterns:
     if pattern in peer_id or peer_id.endswith(client_id):
 ```
 
-This is lower severity than the authentication-path bug was — deleting the
-wrong trust relationship is a data-integrity/availability problem (an
-operator deletes client A's registration and it collaterally deletes a
-trust row that merely contains A's client id as a substring of client B's
-peer id), not a permission-widening bypass — but it's the same shape of bug
-and should get the same exact-match treatment: `oauth_client_id ==
+This is lower severity than the authentication-path bug was, and the
+reason is worth recording rather than assuming: `_delete_client_trust_relationship`
+(`client_registry.py`) has exactly one caller, `ClientRegistry.delete_client()`,
+which itself has two callers — `OAuth2ClientManager.delete_client()`
+(actor-owner-initiated, via the web UI/SDK) and `Trust.delete()`
+(`actingweb/trust.py:114-122`), which triggers it only
+`if result and oauth2_client_id and self.config` — i.e. **only when the
+trust row actually being deleted already carries a server-issued
+`oauth_client_id`**. That field is written exclusively by the two live
+OAuth2 client-creation paths (confirmed during the parent plan's Phase 3
+work); a trust row created through the ordinary `/trust` peer protocol
+never has one, so it can never be the *trigger* for this cascade. An
+attacker cannot manufacture a crafted `client_id` to delete-by-substring on
+demand, because `client_id` values are server-generated
+(`f"mcp_{secrets.token_hex(16)}"`, `client_registry.py:51`) — high enough
+entropy that no client can choose or predict another's id, and the
+substring/`endswith` check can only ever match a *coincidental* collision
+between two already-legitimate, server-issued client ids (or between a
+legitimate id and an already-existing `/trust`-protocol peer id that
+happens to contain it), not an attacker-steered one. So this remains a
+data-integrity/availability problem (deleting client A can collaterally
+delete an unrelated trust row whose peer id happens to contain A's high-entropy
+client id as a substring) rather than a reachable privilege escalation.
+Still worth the same exact-match treatment for defense in depth and
+consistency with the authentication-path fix: `oauth_client_id ==
 client_id` first, falling back to the same gated full-string peer-id
 reconstruction the resolver now uses.
 

@@ -46,10 +46,14 @@ MCP client sees an empty tool list or ``-32003`` after upgrading
 - **Cause**: As of ``v3.13.0rc3``, a valid MCP access token that cannot be
   resolved to a trust relationship is fail-closed (no access) instead of
   fail-open (full access) — see the ``SECURITY`` section of
-  ``CHANGELOG.rst``. If the server log shows a ``WARNING`` naming the
-  actor id and client id ("no trust relationship resolved" / trust
-  resolution failure), that client's trust row is not resolving under the
-  new exact-match resolver.
+  ``CHANGELOG.rst``. The server log has a ``WARNING`` naming the actor id
+  and client id ("no trust found for MCP client ... requests will be
+  denied") — but it is logged only when the trust *resolver* actually runs
+  (a cache miss), not on every denied request. A negative result is cached
+  for a short window (a few seconds), so if a client keeps retrying you'll
+  see the WARNING recur roughly that often rather than on every single
+  request — check the logs over a short window, not just the exact moment
+  you reproduce the symptom.
 - **Fix**: Work through the pre-upgrade checklist in
   ``docs/migration/v3.13.rst`` ("Security fix in rc3") — it covers finding
   at-risk trust rows, auditing Flask resource URIs against your trust

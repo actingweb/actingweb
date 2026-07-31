@@ -740,28 +740,37 @@ def create_permission_override(
 
 # Singleton instance
 _permission_store: TrustPermissionStore | None = None
+# Config the singleton above was built with -- see get_trust_permission_store().
+_permission_store_config: config_class.Config | None = None
 
 
 def initialize_trust_permission_store(config: config_class.Config) -> None:
     """Initialize the trust permission store at application startup."""
-    global _permission_store
-    if _permission_store is None:
+    global _permission_store, _permission_store_config
+    if _permission_store is None or _permission_store_config is not config:
         logger.info("Initializing trust permission store...")
         _permission_store = TrustPermissionStore(config)
+        _permission_store_config = config
         logger.info("Trust permission store initialized")
 
 
 def get_trust_permission_store(
-    config: config_class.Config,  # pylint: disable=unused-argument
+    config: config_class.Config,
 ) -> TrustPermissionStore:
     """Get the singleton trust permission store (must be initialized first).
 
-    Note: config parameter kept for interface consistency but not used since
-    the store is initialized via initialize_trust_permission_store().
+    The ``config`` argument used to be documented as "kept for interface
+    consistency but not used". That made the store bind permanently to
+    whichever application initialized it first, so a second ActingWeb
+    application in the same interpreter silently got the first one's store --
+    including its database backend. It is now honored: a different config
+    rebuilds the store.
     """
     global _permission_store
     if _permission_store is None:
         raise RuntimeError(
             "Trust permission store not initialized. Call initialize_trust_permission_store() at application startup."
         )
+    if _permission_store_config is not config:
+        initialize_trust_permission_store(config)
     return _permission_store

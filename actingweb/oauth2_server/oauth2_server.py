@@ -953,11 +953,22 @@ class ActingWebOAuth2Server:
 
 # Global OAuth2 server instance
 _oauth2_server: ActingWebOAuth2Server | None = None
+# The config the singleton above was built with. These singletons are
+# module-global, so without this they would bind to the FIRST config ever
+# passed and silently ignore the `config` argument on every later call. That
+# is wrong whenever more than one ActingWeb application exists in one
+# interpreter (the test suite does this routinely): a later app would get the
+# earlier app's config -- including its *database backend* -- so writes and
+# reads could land in different stores. That is not hypothetical; it made MCP
+# client registration write trust rows to one backend while trust resolution
+# read another, which fail-closed authorization then surfaced as a denial.
+_oauth2_server_config: "config_class.Config | None" = None
 
 
 def get_actingweb_oauth2_server(config: "config_class.Config") -> ActingWebOAuth2Server:
     """Get or create the global ActingWeb OAuth2 server."""
-    global _oauth2_server
-    if _oauth2_server is None:
+    global _oauth2_server, _oauth2_server_config
+    if _oauth2_server is None or _oauth2_server_config is not config:
         _oauth2_server = ActingWebOAuth2Server(config)
+        _oauth2_server_config = config
     return _oauth2_server

@@ -56,11 +56,53 @@ and rebuilt against the worker schema.
 PostgreSQL dropped from roughly 40–50% of runs to about 12% (1 of 8), and stray
 rows in `public` went from present to **zero** across 8 consecutive full runs.
 
-## Not fixed: residual ~12% flake
+## Also fixed: config-bound singletons served one app's state to another
+
+This was the mechanism **in CI**, proven with a temporary diagnostic pushed to
+the branch and read back from the CI logs. At client-registration time the
+ActingWeb API reported 37 trust relationships for `_actingweb_oauth2` while a
+direct SQL query on the same worker's schema, in the same process, reported
+`trusts_total=0` — and every worker saw the *same* 37 peers. Two different
+stores were in play.
+
+Cause: `get_actingweb_oauth2_server(config)` (and five siblings) bound to the
+**first** config the process ever passed and ignored the argument thereafter —
+one of them documented this outright ("config parameter kept for interface
+consistency but not used"). So a PostgreSQL-configured app was handed an OAuth2
+server still bound to an earlier DynamoDB-configured one: registration wrote
+the trust row to DynamoDB while resolution read PostgreSQL. In the PostgreSQL
+CI leg DynamoDB Local is running too, and `AWS_DB_PREFIX` is only set in the
+DynamoDB branch of `setup_database`, so those writes went to unprefixed tables
+shared by all four workers — exactly the observed signature.
+
+Fixed by making all six getters rebuild when handed a different `Config`, with
+`tests/test_config_bound_singletons.py` as a regression test. Two related
+scoping fixes went in alongside: `_actor_cache` in `mcp.py` now records which
+config built each `ActorInterface` (it is keyed by actor id alone, and the
+`_actingweb_oauth2` system actor is shared), and `get_pool()` now rebuilds when
+the configured schema changes instead of serving a pool with connections bound
+to different schemas.
+
+## Not fixed: residual flake
 
 `tests/integration/test_mcp_resource_regression.py::TestMCPResourceRegressions`
-still fails intermittently (1 in 8 full runs locally) with
-`-32003 Access denied: no trust relationship resolved for this client`.
+still fails intermittently — roughly **1 run in 6** locally after all of the
+above — with `-32003 Access denied: no trust relationship resolved for this
+client`.
+
+Two observations that should shorten the next investigation:
+
+- **The failing runs are systematically the slow ones.** Passing runs land at
+  ~26s and ~1329 warnings; failing runs at ~36s and ~1273 warnings. That is not
+  random jitter — the failing runs take a materially different path through the
+  suite, and the lower warning count suggests some fixture work did not happen.
+  Start by diffing what a failing run does differently rather than by looking
+  at the resolver again.
+- **Backend crossover is no longer the mechanism.** Instrumented locally at
+  resolve time, `self.config` and the actor's config are the *same object* and
+  both bind `actingweb.db.postgresql.trust`, yet the trust list still comes back
+  empty. So whatever remains is on the PostgreSQL read/write path itself, not
+  in config or singleton scoping.
 
 ### Reproduction recipe
 

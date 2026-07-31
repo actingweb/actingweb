@@ -84,6 +84,28 @@ SECURITY
   warm process for up to the 5-minute token cache TTL. Tracked in
   ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``.
 
+FIXED
+~~~~~
+
+- **Config-bound singletons no longer serve one application's state to
+  another.** ``get_actingweb_oauth2_server()``,
+  ``get_permission_evaluator()``, ``get_registry()`` (trust types),
+  ``get_trust_permission_store()``, ``get_peer_permission_store()`` and
+  ``get_cached_capabilities_store()`` each take a ``config`` argument but,
+  once built, ignored it — they bound to the **first** config the process
+  ever passed and returned that instance to every later caller. (One of them
+  documented this explicitly: "config parameter kept for interface
+  consistency but not used".) Any process hosting more than one ActingWeb
+  application therefore had the second application silently using the
+  first's configuration, **including its database backend**. The observed
+  consequence: MCP dynamic client registration wrote a trust row to one
+  backend while trust resolution read another, so the client's trust was
+  never found. Under the old fail-open behavior that granted the client
+  *full access*; under the fail-closed behavior above it returns ``-32003``.
+  Each getter now rebuilds when handed a different ``Config`` instance, and
+  still returns the cached instance for the same one. Single-application
+  deployments — the overwhelming majority — are unaffected either way.
+
 CHANGED
 ~~~~~~~
 

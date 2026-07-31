@@ -491,9 +491,7 @@ class MCPHandler(BaseHandler):
         ``prompts/get``, ``resources/read``) so the two transports cannot
         diverge on this decision.
         """
-        runtime_context = RuntimeContext(actor)
-        mcp_context = runtime_context.get_mcp_context()
-        peer_id = mcp_context.peer_id if mcp_context else None
+        peer_id = self._current_mcp_peer_id(actor)
         if not peer_id:
             return None, self._create_jsonrpc_error(
                 request_id,
@@ -501,6 +499,38 @@ class MCPHandler(BaseHandler):
                 "Access denied: no trust relationship resolved for this client",
             )
         return peer_id, None
+
+    def _current_mcp_peer_id(self, actor: Any) -> str | None:
+        """The peer id resolved during authentication, or ``None`` if none was.
+
+        The single place the "did a trust relationship resolve for this
+        request?" question is answered. Both fail-closed shapes go through it
+        -- ``_require_mcp_peer_id`` for the single-item gates, which returns a
+        JSON-RPC error, and ``_peer_id_for_list`` for the ``*/list`` handlers,
+        which return an empty result instead -- so the two cannot drift apart
+        on the decision itself, only on how they report it.
+        """
+        mcp_context = RuntimeContext(actor).get_mcp_context()
+        peer_id = mcp_context.peer_id if mcp_context else None
+        return peer_id or None
+
+    def _peer_id_for_list(self, actor: Any, list_name: str) -> str | None:
+        """Peer id for a ``*/list`` handler, or ``None`` meaning "fail closed".
+
+        A list request from a client with no resolved trust is not a
+        protocol-level error -- the client simply sees nothing -- so callers
+        return an empty result rather than ``-32003``. Callers must evaluate
+        this **before** the fail-open evaluator ``try/except``, for the reason
+        spelled out in ``_require_mcp_peer_id``.
+        """
+        peer_id = self._current_mcp_peer_id(actor)
+        if not peer_id:
+            logger.warning(
+                f"No trust relationship resolved for actor {actor.id}; "
+                f"returning empty {list_name}"
+            )
+            return None
+        return peer_id
 
     def _handle_tools_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
         """Handle MCP tools/list request with permission filtering and client filtering."""
@@ -515,20 +545,12 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            # Resolve peer_id from runtime context (set during auth)
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-
             # No trust relationship resolved for this client -> fail-closed:
             # an empty list, not every tool. Evaluated before the fail-open
             # evaluator try/except below, so an unrelated exception there
             # cannot revert this to "show every tool".
+            peer_id = self._peer_id_for_list(actor, "tools/list")
             if not peer_id:
-                logger.warning(
-                    f"No trust relationship resolved for actor {actor.id}; "
-                    "returning empty tools/list"
-                )
                 return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": []}}
 
             # Get evaluator if the permission system is initialized
@@ -764,18 +786,11 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-
             # No trust relationship resolved for this client -> fail-closed:
             # an empty list, evaluated before the fail-open evaluator
             # try/except below.
+            peer_id = self._peer_id_for_list(actor, "resources/list")
             if not peer_id:
-                logger.warning(
-                    f"No trust relationship resolved for actor {actor.id}; "
-                    "returning empty resources/list"
-                )
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -850,18 +865,11 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-
             # No trust relationship resolved for this client -> fail-closed:
             # an empty list, evaluated before the fail-open evaluator
             # try/except below.
+            peer_id = self._peer_id_for_list(actor, "prompts/list")
             if not peer_id:
-                logger.warning(
-                    f"No trust relationship resolved for actor {actor.id}; "
-                    "returning empty prompts/list"
-                )
                 return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": []}}
 
             evaluator = None
@@ -1536,9 +1544,18 @@ class MCPHandler(BaseHandler):
     ) -> ActorInterface | None:
         """Get or create actor with caching."""
         # Check actor cache first
+        # The entry must have been built by *this* application's config:
+        # _actor_cache is a module global keyed by actor id alone, so in a
+        # process hosting more than one ActingWeb app the same actor id --
+        # notably the shared "_actingweb_oauth2" system actor -- would
+        # otherwise be served an ActorInterface wrapping the other app's
+        # config, and therefore that app's database backend.
         if actor_id in _actor_cache:
             cached_data = _actor_cache[actor_id]
-            if current_time - cached_data.get("last_accessed", 0) < _cache_ttl:
+            if (
+                current_time - cached_data.get("last_accessed", 0) < _cache_ttl
+                and cached_data.get("config") is self.config
+            ):
                 cached_data["last_accessed"] = current_time
                 return cached_data["actor"]
 
@@ -1592,6 +1609,8 @@ class MCPHandler(BaseHandler):
         _actor_cache[actor_id] = {
             "actor": actor_interface,
             "last_accessed": current_time,
+            # Which application's config built this wrapper -- see above.
+            "config": self.config,
         }
 
         return actor_interface
@@ -1618,9 +1637,6 @@ class MCPHandler(BaseHandler):
         """
         try:
             trusts = actor.trust.relationships
-            from .._tmp_diag import _diag_probe as _dp
-
-            _dp("RESOLVE", str(actor.id), client_id, actor)
 
             # Arm 1: exact oauth_client_id match. Written on every trust row
             # created by either live MCP creation path (both pass

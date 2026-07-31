@@ -258,14 +258,17 @@ class TrustTypeRegistry:
 
 # Singleton instance
 _registry: TrustTypeRegistry | None = None
+# Config the singleton above was built with -- see the getter below.
+_registry_config: config_class.Config | None = None
 
 
 def initialize_registry(config: config_class.Config) -> None:
     """Initialize the trust type registry at application startup."""
-    global _registry
-    if _registry is None:
+    global _registry, _registry_config
+    if _registry is None or _registry_config is not config:
         logger.info("Initializing trust type registry...")
         _registry = TrustTypeRegistry(config)
+        _registry_config = config
         _register_default_types(_registry)
         logger.info(
             f"Trust type registry initialized with {len(_registry.list_types())} types"
@@ -274,10 +277,12 @@ def initialize_registry(config: config_class.Config) -> None:
 
 def get_registry(config: config_class.Config) -> TrustTypeRegistry:
     """Get the singleton trust type registry, initializing lazily if needed."""
-    global _registry
-    if _registry is None:
-        # Lazy initialization to keep backward compatibility with tests and apps
+    global _registry, _registry_config
+    if _registry is None or _registry_config is not config:
+        # Lazy initialization to keep backward compatibility with tests and apps.
+        # Also rebuilds when handed a *different* application's config.
         _registry = TrustTypeRegistry(config)
+        _registry_config = config
         _register_default_types(_registry)
     return _registry
 

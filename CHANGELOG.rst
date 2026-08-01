@@ -5,6 +5,148 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc3: August 1, 2026
+--------------------------
+
+.. note::
+
+   **Security fix — please re-run any escalation/authorization tests before
+   pinning to this release.** MCP deployments serving more than one client
+   per actor should read the ``SECURITY`` section below in full and consult
+   ``docs/migration/v3.13.rst`` before upgrading.
+
+SECURITY
+~~~~~~~~
+
+- **Fixed an MCP authorization bypass where one client's permissions could
+  be served to a different client on the same actor.** The trust-relationship
+  cache used by the MCP authentication path was keyed by actor id alone, not
+  ``(actor_id, client_id)``. On an actor with more than one registered MCP
+  client, once the cache was warm, one client's resolved trust relationship
+  — and therefore its entire permission rule set — could be silently served
+  to a different client's requests on the same actor. This has been
+  demonstrated in practice: a read-only client performed a write immediately
+  after a read-write client authenticated against the same actor. The
+  trust cache is now keyed by ``(actor_id, client_id)``, closing the bypass.
+  **Affected versions:** every release since ``v3.3`` (2025-10-04) through
+  ``v3.13.0rc2``, roughly ten months. The library cannot detect whether this
+  was exploited in your deployment; see the migration guide for what to
+  check.
+
+- **``resources/read`` had no authorization check at all on Flask (sync)
+  deployments.** The permission gate read an actor attribute
+  (``_mcp_trust_context``) that no production code ever wrote, so the check
+  silently fell through and every resource read was served regardless of the
+  requesting client's trust type or permissions. FastAPI (async) deployments
+  were not affected — the async handler already read the correct runtime
+  context. The sync path now uses the same mechanism as async and is
+  authorized identically. If your Flask deployment serves resource URIs
+  beyond the default ``mcp_client`` trust type's narrow pattern set
+  (``public/*``, ``shared/*``, ``notes://*``, ``usage://*``,
+  ``actingweb://properties/all``), see the audit step in
+  ``docs/migration/v3.13.rst`` — those requests have been working only
+  because the check was dead.
+
+- **Missing trust is now fail-closed instead of fail-open.** A valid MCP
+  access token that cannot be resolved to a trust relationship (a broken or
+  orphaned trust row, or an eventual-consistency gap right after
+  registration) previously granted full access. It now returns an empty
+  ``tools/list``/``resources/list``/``prompts/list`` and a distinct
+  ``-32003`` error naming the cause on ``tools/call``/``prompts/get``/
+  ``resources/read``, rather than silently permitting the request. A short
+  negative-TTL cache bounds transient eventual-consistency misses to
+  seconds rather than the full token cache window. Deployments relying on
+  the permission subsystem being unavailable (a genuine outage, as opposed
+  to no trust being found) are unaffected — that failure mode is still
+  fail-open, deliberately, so a permission-subsystem outage does not lock
+  out every client.
+
+- **The MCP client-id-to-trust resolver now matches exactly instead of by
+  substring.** The previous resolver checked whether the OAuth2 client id
+  appeared anywhere inside a trust row's peer id (``client_id in
+  peer_id_str``), which a peer id crafted through the ordinary ``/trust``
+  peer protocol could satisfy without ever going through MCP client
+  registration. The resolver now requires an exact ``oauth_client_id``
+  match, or — for legacy rows created before that field existed — an exact,
+  fully-reconstructed peer-id match gated on the row's ``established_via``
+  being an OAuth2-family value. See ``docs/migration/v3.13.rst`` for how to
+  find trust rows that predate ``oauth_client_id`` and may need
+  re-authorization after upgrading.
+
+- **Trust-row client metadata written during the affected window is
+  unreliable.** ``client_name``, ``client_version``, ``client_platform``,
+  ``last_accessed``, and ``last_connected_via`` may have been overwritten by
+  a different client than the one that actually holds the credential, for
+  any trust row touched while the cache-crossing bug was live. Current
+  values self-heal on that client's next request after upgrading (current
+  state, not history — the metadata is a live cache with no audit trail).
+
+- **Still open, deferred:** revoking a token or modifying a trust
+  relationship does not evict the corresponding cache entries, so a revoked
+  token or a just-changed permission can still authenticate/apply from a
+  warm process for up to the 5-minute token cache TTL. Tracked in
+  ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``.
+
+FIXED
+~~~~~
+
+- **Config-bound singletons no longer serve one application's state to
+  another.** ``get_actingweb_oauth2_server()``,
+  ``get_mcp_client_registry()``, ``get_actingweb_token_manager()``,
+  ``get_oauth2_state_manager()``, ``get_permission_evaluator()``,
+  ``get_registry()`` (trust types), ``get_trust_permission_store()``,
+  ``get_peer_permission_store()``, ``get_peer_profile_store()`` and
+  ``get_cached_capabilities_store()`` each take a ``config`` argument but,
+  once built, ignored it — they bound to the **first** config the process
+  ever passed and returned that instance to every later caller. (One of them
+  documented this explicitly: "config parameter kept for interface
+  consistency but not used".) Any process hosting more than one ActingWeb
+  application therefore had the second application silently using the
+  first's configuration, **including its database backend**. The observed
+  consequence: MCP dynamic client registration wrote a trust row to one
+  backend while trust resolution read another, so the client's trust was
+  never found. Under the old fail-open behavior that granted the client
+  *full access*; under the fail-closed behavior above it returns ``-32003``.
+  Each getter now rebuilds when handed a different ``Config`` instance, and
+  still returns the cached instance for the same one. Single-application
+  deployments — the overwhelming majority — are unaffected either way.
+
+  Note that ``ActingWebOAuth2Server`` *composes* three of these, so rebinding
+  the server alone was not sufficient: ``client_registry``, ``token_manager``
+  and ``state_manager`` had to rebind too. ``get_oauth2_state_manager()``
+  re-reads its encryption key from the new config's system actor on rebind;
+  the key is stored rather than generated, so it is stable.
+
+CHANGED
+~~~~~~~
+
+- **``RuntimeContext`` is now genuinely request-scoped, and
+  ``set_custom_context()`` no longer persists across requests.** Runtime
+  context (MCP/OAuth2/web) was stored as a mutable attribute on the actor
+  object, while the MCP handler deliberately hands the *same* cached
+  ``ActorInterface`` to every request for a hot actor — so context could
+  leak between requests and, under concurrency, between callers. It is now
+  stored in a ``contextvars.ContextVar`` keyed by actor id (task-local
+  under asyncio, thread-local under a WSGI worker), and the Flask and
+  FastAPI integrations clear it at the end of every request including when
+  a handler raises. The public API (``RuntimeContext(actor)`` and all its
+  getters/setters) is unchanged, and read-only use inside request-scoped
+  hooks needs no changes. **The one behavior change for application code:**
+  data written with ``set_custom_context()`` is gone by the next request,
+  even against the same actor object. If your hooks used it as a
+  cross-request cache rather than as request-scoped data, move that to
+  actor properties or the caching guide's patterns
+  (``docs/guides/caching.md``). See ``docs/guides/hooks.rst``.
+
+- **``tools/call`` permission checks now pass ``operation="use"`` on
+  FastAPI, matching Flask.** The async handler passed ``"invoke"`` while
+  the sync handler passed ``"use"``, a transport-dependent divergence. It
+  is unread by every trust type shipped with ActingWeb (they express
+  ``tools`` as allowed/denied lists, which do not consult ``operation``),
+  so this changes nothing unless your application defines a
+  patterns/operations-based tools rule — in which case a rule that
+  matched ``invoke`` on FastAPI must now match ``use``.
+
 v3.13.0rc2: July 26, 2026
 -------------------------
 

@@ -37,6 +37,32 @@ Tools/prompts don’t appear in tools/list or prompts/list
   - Prompts: `@app.method_hook("name")` + `@mcp_prompt(...)`
 - Verify unified access control isn’t filtering them out for the current peer.
 
+MCP client sees an empty tool list or ``-32003`` after upgrading
+------------------------------------------------------------------
+
+- **Symptom**: An MCP client that worked before an upgrade now sees an empty
+  ``tools/list``/``resources/list``/``prompts/list``, or gets ``-32003``
+  ("Access denied") on ``tools/call``/``prompts/get``/``resources/read``.
+- **Cause**: As of ``v3.13.0rc3``, a valid MCP access token that cannot be
+  resolved to a trust relationship is fail-closed (no access) instead of
+  fail-open (full access) — see the ``SECURITY`` section of
+  ``CHANGELOG.rst``. The server log has a ``WARNING`` naming the actor id
+  and client id ("no trust found for MCP client ... requests will be
+  denied") — but it is logged only when the trust *resolver* actually runs
+  (a cache miss), not on every denied request. A negative result is cached
+  for a short window (a few seconds), so if a client keeps retrying you'll
+  see the WARNING recur roughly that often rather than on every single
+  request — check the logs over a short window, not just the exact moment
+  you reproduce the symptom.
+- **Fix**: Work through the pre-upgrade checklist in
+  ``docs/migration/v3.13.rst`` ("Security fix in rc3") — it covers finding
+  at-risk trust rows, auditing Flask resource URIs against your trust
+  type's allowed patterns, and what happens to per-peer permission
+  overrides when a client re-authorizes. In most cases the client simply
+  needs to complete OAuth2 authorization again (not just retry the
+  request) so its trust row is recreated with the ``oauth_client_id`` the
+  new resolver requires.
+
 Property changes not visible in Web UI
 --------------------------------------
 

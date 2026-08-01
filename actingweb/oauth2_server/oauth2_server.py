@@ -370,15 +370,15 @@ class ActingWebOAuth2Server:
                     "server_error", "Failed to create or retrieve user actor"
                 )
 
-            # Determine trust type and establishment source
+            # Determine trust type and establishment source. mcp_context came
+            # from extract_mcp_context() above, which returns None (and this
+            # method already returned) unless flow_type == "mcp_oauth2" --
+            # so every trust reaching this line is the MCP client-credentials
+            # shape. There is no "oauth2_interactive" case on this path; a
+            # trust created here can never be matched by a resolver branch
+            # gated on an interactive establishment source.
             trust_type = mcp_context.get("trust_type", "mcp_client")
-            flow_type = mcp_context.get("flow_type")
-
-            # Distinguish between OAuth2 interactive flows and client credentials flows
-            if flow_type == "mcp_oauth2":
-                established_via = "oauth2_client"  # MCP client credentials flow
-            else:
-                established_via = "oauth2_interactive"  # Regular user interactive flow
+            established_via = "oauth2_client"
 
             effective_trust_type = trust_type if trust_type else "mcp_client"
 
@@ -953,11 +953,22 @@ class ActingWebOAuth2Server:
 
 # Global OAuth2 server instance
 _oauth2_server: ActingWebOAuth2Server | None = None
+# The config the singleton above was built with. These singletons are
+# module-global, so without this they would bind to the FIRST config ever
+# passed and silently ignore the `config` argument on every later call. That
+# is wrong whenever more than one ActingWeb application exists in one
+# interpreter (the test suite does this routinely): a later app would get the
+# earlier app's config -- including its *database backend* -- so writes and
+# reads could land in different stores. That is not hypothetical; it made MCP
+# client registration write trust rows to one backend while trust resolution
+# read another, which fail-closed authorization then surfaced as a denial.
+_oauth2_server_config: "config_class.Config | None" = None
 
 
 def get_actingweb_oauth2_server(config: "config_class.Config") -> ActingWebOAuth2Server:
     """Get or create the global ActingWeb OAuth2 server."""
-    global _oauth2_server
-    if _oauth2_server is None:
+    global _oauth2_server, _oauth2_server_config
+    if _oauth2_server is None or _oauth2_server_config is not config:
         _oauth2_server = ActingWebOAuth2Server(config)
+        _oauth2_server_config = config
     return _oauth2_server

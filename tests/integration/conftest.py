@@ -334,6 +334,50 @@ def setup_database(docker_services, worker_info):
         os.environ["AWS_DB_PREFIX"] = worker_info["db_prefix"]
 
     if DATABASE_BACKEND == "postgresql":
+        # Point THIS process at the worker's schema before anything can touch
+        # PostgreSQL. The connection pool (actingweb/db/postgresql/connection.py)
+        # is a module-level global whose `configure` hook binds each physical
+        # connection's search_path *at connection-creation time*, from the env
+        # as it is right then. Individual app fixtures (test_app, www_test_app)
+        # set PG_DB_PREFIX themselves, but a fixture that does not (e.g.
+        # test_mcp_resource_regression's regression_test_app) would let the pool
+        # be created with no prefix -- binding its connections to the bare
+        # `public` schema, which CI also migrates, so queries there return zero
+        # rows with no error rather than failing loudly. The pool then holds a
+        # mix of correctly- and wrongly-bound connections and reads flake
+        # depending on which one is checked out. Setting it here, in the
+        # session-scoped database fixture, makes the worker schema authoritative
+        # for every later consumer. Mirrors the AWS_DB_PREFIX line above.
+        os.environ["PG_DB_HOST"] = TEST_POSTGRES_HOST
+        os.environ["PG_DB_PORT"] = TEST_POSTGRES_PORT
+        os.environ["PG_DB_NAME"] = TEST_POSTGRES_DB
+        os.environ["PG_DB_USER"] = TEST_POSTGRES_USER
+        os.environ["PG_DB_PASSWORD"] = TEST_POSTGRES_PASSWORD
+        os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
+        os.environ["PG_DB_SCHEMA"] = "public"
+
+        # Discard any pool built before the prefix above was in place. Setting
+        # the env is not enough on its own: a pool created earlier in this
+        # worker (unit tests do not use this fixture, and any PostgreSQL access
+        # creates the pool on first use) already holds connections bound to the
+        # bare `public` schema, and psycopg_pool never re-runs `configure` on
+        # them. The pool would then hold a MIX of public-bound and
+        # worker-schema-bound connections, and which one a query checks out is
+        # load-dependent -- so a write could land in `public` while the read
+        # went to the worker schema and came back empty, with no error. That is
+        # not hypothetical: it produced an intermittent MCP trust-resolution
+        # failure (empty trust list -> fail-closed -32003) reproducible with
+        # `-n 4 --cov` on PostgreSQL, and it left stray rows behind in `public`.
+        # Nothing else in this worker is using the database yet at this point
+        # (this is the session-scoped fixture, before any app fixture starts a
+        # server), so closing here is safe.
+        try:
+            from actingweb.db.postgresql.connection import close_pool
+
+            close_pool()
+        except Exception:  # pragma: no cover - defensive, backend may be absent
+            pass
+
         # Pre-cleanup: Drop schema from previous failed run
         schema_name = f"{worker_info['db_prefix']}public"
 

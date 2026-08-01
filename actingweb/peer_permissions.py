@@ -397,14 +397,17 @@ class PeerPermissionStore:
 
 # Singleton instance
 _permission_store: PeerPermissionStore | None = None
+# Config the singleton above was built with -- see the getter below.
+_permission_store_config: config_class.Config | None = None
 
 
 def initialize_peer_permission_store(config: config_class.Config) -> None:
     """Initialize the peer permission store at application startup."""
-    global _permission_store
-    if _permission_store is None:
+    global _permission_store, _permission_store_config
+    if _permission_store is None or _permission_store_config is not config:
         logger.debug("Initializing peer permission store...")
         _permission_store = PeerPermissionStore(config)
+        _permission_store_config = config
         logger.debug("Peer permission store initialized")
 
 
@@ -416,7 +419,7 @@ def get_peer_permission_store(
     Automatically initializes the store if not already initialized.
     """
     global _permission_store
-    if _permission_store is None:
+    if _permission_store is None or _permission_store_config is not config:
         initialize_peer_permission_store(config)
     return _permission_store  # type: ignore[return-value]
 

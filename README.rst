@@ -319,9 +319,11 @@ coding standards. In short:
 ActingWeb holds a zero-tolerance quality standard: type hints on all functions,
 Pyright clean, Ruff clean, and 100% of tests passing before merge.
 
-Releases are decoupled from PRs — PRs merge to ``master`` without version bumps,
-and maintainers cut releases by tagging (``vX.Y.Z``), which triggers CI to publish
-to PyPI. See ``CLAUDE.md`` and ``CHANGELOG.rst`` for the release process and history.
+Ordinary PRs need no version bump — just a ``CHANGELOG.rst`` entry under
+"Unreleased". A release PR carries the version bump and changelog rename itself;
+once it is merged, maintainers tag the merge commit (``vX.Y.Z``), which triggers
+CI to publish to PyPI. See ``CLAUDE.md`` and ``CHANGELOG.rst`` for the release
+process and history.
 
 License
 -------

@@ -8,6 +8,8 @@ Covers:
 - sync (MCPHandler) / async (AsyncMCPHandler) parity.
 """
 
+from unittest.mock import Mock, patch
+
 import pytest
 
 from actingweb.handlers.async_mcp import AsyncMCPHandler
@@ -15,6 +17,8 @@ from actingweb.handlers.mcp import MCPHandler, format_call_tool_result
 from actingweb.interface import ActingWebApp
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.mcp import mcp_tool
+from actingweb.permission_evaluator import PermissionResult
+from actingweb.runtime_context import RuntimeContext
 from tests.mcp_helpers import make_mcp_config, make_mcp_webobj
 
 
@@ -123,6 +127,15 @@ class TestSyncAsyncParity:
             properties: dict = {}
 
         mock_actor = ActorInterface(MockActorObj())  # type: ignore[arg-type]
+        # A resolved peer id, since Phase 3 fail-closed authorization denies
+        # tools/call outright with no trust relationship. This test is about
+        # result-shape parity, not permissions, so pair it with an
+        # allow-everything evaluator rather than a real trust relationship.
+        RuntimeContext(mock_actor).set_mcp_context(
+            client_id="test-client", trust_relationship=None, peer_id="test-peer"
+        )
+        evaluator = Mock()
+        evaluator.evaluate_permission = Mock(return_value=PermissionResult.ALLOWED)
 
         # Negotiated version that supports structuredContent.
         headers = {"MCP-Protocol-Version": "2025-06-18"}
@@ -133,17 +146,21 @@ class TestSyncAsyncParity:
             "params": {"name": "store", "arguments": {}},
         }
 
-        sync_handler = MCPHandler(
-            make_mcp_webobj(headers), make_mcp_config(), hooks=app.hooks
-        )
-        sync_handler.authenticate_and_get_actor_cached = lambda: mock_actor
-        sync_result = sync_handler.post(request_data)
+        with patch(
+            "actingweb.permission_evaluator.get_permission_evaluator",
+            return_value=evaluator,
+        ):
+            sync_handler = MCPHandler(
+                make_mcp_webobj(headers), make_mcp_config(), hooks=app.hooks
+            )
+            sync_handler.authenticate_and_get_actor_cached = lambda: mock_actor
+            sync_result = sync_handler.post(request_data)
 
-        async_handler = AsyncMCPHandler(
-            make_mcp_webobj(headers), make_mcp_config(), hooks=app.hooks
-        )
-        async_handler.authenticate_and_get_actor_cached = lambda: mock_actor
-        async_result = await async_handler.post_async(request_data)
+            async_handler = AsyncMCPHandler(
+                make_mcp_webobj(headers), make_mcp_config(), hooks=app.hooks
+            )
+            async_handler.authenticate_and_get_actor_cached = lambda: mock_actor
+            async_result = await async_handler.post_async(request_data)
 
         assert sync_result == async_result
         assert sync_result["result"]["structuredContent"] == {

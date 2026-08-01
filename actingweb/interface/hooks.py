@@ -6,6 +6,7 @@ to various ActingWeb events.
 """
 
 import asyncio
+import contextvars
 import inspect
 import logging
 import types
@@ -556,11 +557,21 @@ class HookRegistry:
                     f"Async hook {hook.__name__} called from sync method in async context. "
                     "Consider using execute_*_hooks_async() for better performance."
                 )
-                # Run in a thread pool to avoid event loop conflicts
+                # Run in a thread pool to avoid event loop conflicts.
+                # Capture the calling thread's context (e.g. the MCP
+                # RuntimeContext set for this request) and run asyncio.run
+                # under it on the worker thread: a bare ThreadPoolExecutor
+                # does not inherit ContextVars automatically, and wrapping
+                # only the coroutine would be too late -- the coroutine's
+                # Task binds its context at creation, inside the worker
+                # thread, where the caller's context is not yet visible.
                 import concurrent.futures
 
+                ctx = contextvars.copy_context()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(asyncio.run, hook(*args, **kwargs))
+                    future = executor.submit(
+                        ctx.run, asyncio.run, hook(*args, **kwargs)
+                    )
                     return future.result()
             except RuntimeError:
                 # No running loop - safe to create one

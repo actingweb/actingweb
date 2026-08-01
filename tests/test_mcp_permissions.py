@@ -36,8 +36,9 @@ def make_hooks():
 class FakeActor:
     def __init__(self, actor_id: str, peer_id: str):
         self.id = actor_id
-        # Trust context is set by authentication; simulate here
-        self._mcp_trust_context = {"peer_id": peer_id}
+        # peer_id is unused directly here; it's supplied to hook dispatch via
+        # the mocked RuntimeContext in each test, matching the real auth path.
+        self.peer_id = peer_id
 
 
 class TestMcpPermissions(unittest.TestCase):

@@ -391,8 +391,8 @@ class TestMCPRuntimeContextIntegration:
         context is properly stored on the actor instance using the RuntimeContext
         API, not through direct attribute access.
 
-        Bug fixed: SDK server was looking for actor._mcp_trust_context directly,
-        but RuntimeContext stores it in actor._actingweb_runtime_context["mcp"].
+        Bug fixed: the SDK server was looking for trust context via a direct
+        actor attribute instead of going through the RuntimeContext API.
         """
         initialize_mcp_session(oauth2_client)
 

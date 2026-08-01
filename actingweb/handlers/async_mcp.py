@@ -133,6 +133,13 @@ class AsyncMCPHandler(MCPHandler):
                 request_id, -32603, "No hooks registry available"
             )
 
+        # No trust relationship resolved for this client -> fail-closed,
+        # evaluated before the fail-open evaluator try/except below.
+        peer_id, denial = self._require_mcp_peer_id(actor, request_id)
+        if denial is not None:
+            return denial
+        assert peer_id is not None
+
         # Check permission before finding/dispatching the hook
         try:
             from ..permission_evaluator import (
@@ -140,26 +147,26 @@ class AsyncMCPHandler(MCPHandler):
                 PermissionType,
                 get_permission_evaluator,
             )
-            from ..runtime_context import RuntimeContext
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-            if peer_id:
-                evaluator = get_permission_evaluator(self.config)
-                decision = evaluator.evaluate_permission(
-                    actor.id,
-                    peer_id,
-                    PermissionType.TOOLS,
-                    tool_name,
-                    operation="invoke",
+            evaluator = get_permission_evaluator(self.config)
+            decision = evaluator.evaluate_permission(
+                actor.id,
+                peer_id,
+                PermissionType.TOOLS,
+                tool_name,
+                # "use", matching the sync tools/call gate (mcp.py) --
+                # previously "invoke" here, a Flask/FastAPI divergence that
+                # would only matter once an app defines an operations-based
+                # rule (every shipped trust type expresses tools via
+                # allowed/denied lists, which don't read operation=).
+                operation="use",
+            )
+            if decision != PermissionResult.ALLOWED:
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32003,
+                    f"Access denied: You don't have permission to use tool '{tool_name}'",
                 )
-                if decision != PermissionResult.ALLOWED:
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32003,
-                        f"Access denied: You don't have permission to use tool '{tool_name}'",
-                    )
         except Exception as e:
             # Don't block execution if permission system not initialized; log and continue
             logger.debug(f"Skipping tool permission check due to error: {e}")
@@ -215,6 +222,13 @@ class AsyncMCPHandler(MCPHandler):
                 request_id, -32603, "No hooks registry available"
             )
 
+        # No trust relationship resolved for this client -> fail-closed,
+        # evaluated before the fail-open evaluator try/except below.
+        peer_id, denial = self._require_mcp_peer_id(actor, request_id)
+        if denial is not None:
+            return denial
+        assert peer_id is not None
+
         # Check permission before finding/dispatching the hook
         try:
             from ..permission_evaluator import (
@@ -222,26 +236,21 @@ class AsyncMCPHandler(MCPHandler):
                 PermissionType,
                 get_permission_evaluator,
             )
-            from ..runtime_context import RuntimeContext
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-            if peer_id:
-                evaluator = get_permission_evaluator(self.config)
-                decision = evaluator.evaluate_permission(
-                    actor.id,
-                    peer_id,
-                    PermissionType.PROMPTS,
-                    prompt_name,
-                    operation="invoke",
+            evaluator = get_permission_evaluator(self.config)
+            decision = evaluator.evaluate_permission(
+                actor.id,
+                peer_id,
+                PermissionType.PROMPTS,
+                prompt_name,
+                operation="invoke",
+            )
+            if decision != PermissionResult.ALLOWED:
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32003,
+                    f"Access denied: You don't have permission to use prompt '{prompt_name}'",
                 )
-                if decision != PermissionResult.ALLOWED:
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32003,
-                        f"Access denied: You don't have permission to use prompt '{prompt_name}'",
-                    )
         except Exception as e:
             logger.debug(f"Skipping prompt permission check due to error: {e}")
 
@@ -320,6 +329,13 @@ class AsyncMCPHandler(MCPHandler):
                 request_id, -32603, "No hooks registry available"
             )
 
+        # No trust relationship resolved for this client -> fail-closed,
+        # evaluated before the fail-open evaluator try/except below.
+        peer_id, denial = self._require_mcp_peer_id(actor, request_id)
+        if denial is not None:
+            return denial
+        assert peer_id is not None
+
         # Check permission before finding/dispatching the hook
         try:
             from ..permission_evaluator import (
@@ -327,26 +343,21 @@ class AsyncMCPHandler(MCPHandler):
                 PermissionType,
                 get_permission_evaluator,
             )
-            from ..runtime_context import RuntimeContext
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-            if peer_id:
-                evaluator = get_permission_evaluator(self.config)
-                decision = evaluator.evaluate_permission(
-                    actor.id,
-                    peer_id,
-                    PermissionType.RESOURCES,
-                    uri,
-                    operation="read",
+            evaluator = get_permission_evaluator(self.config)
+            decision = evaluator.evaluate_permission(
+                actor.id,
+                peer_id,
+                PermissionType.RESOURCES,
+                uri,
+                operation="read",
+            )
+            if decision != PermissionResult.ALLOWED:
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32003,
+                    f"Access denied: You don't have permission to access resource '{uri}'",
                 )
-                if decision != PermissionResult.ALLOWED:
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32003,
-                        f"Access denied: You don't have permission to read resource '{uri}'",
-                    )
         except Exception as e:
             logger.debug(f"Skipping resource permission check due to error: {e}")
 

@@ -579,11 +579,20 @@ class MCPClientRegistry:
 
 # Global registry instance
 _client_registry: MCPClientRegistry | None = None
+# The config the registry was built from; a different one must rebuild it.
+_client_registry_config: config_class.Config | None = None
 
 
 def get_mcp_client_registry(config: config_class.Config) -> MCPClientRegistry:
-    """Get or create the global MCP client registry."""
-    global _client_registry
-    if _client_registry is None:
+    """Get or create the global MCP client registry.
+
+    Rebuilds when handed a different ``Config``. Serving one application's
+    registry to another crosses database backends: registration writes the
+    trust row to the first application's store while resolution reads the
+    second's, and the read comes back empty rather than erroring.
+    """
+    global _client_registry, _client_registry_config
+    if _client_registry is None or _client_registry_config is not config:
         _client_registry = MCPClientRegistry(config)
+        _client_registry_config = config
     return _client_registry

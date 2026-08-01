@@ -8,6 +8,7 @@ from flask import Flask
 from actingweb import request_context
 from actingweb.interface import ActingWebApp
 from actingweb.interface.integrations.flask_integration import FlaskIntegration
+from actingweb.runtime_context import RuntimeContext
 
 
 @pytest.fixture
@@ -228,6 +229,100 @@ class TestFlaskContextIsolation:
 
         # All request IDs should be different
         assert len(set(request_ids)) == 3
+
+
+class _StandInActor:
+    """Minimal actor stand-in -- RuntimeContext only needs ``.id``."""
+
+    def __init__(self, actor_id: str) -> None:
+        self.id = actor_id
+
+
+class TestFlaskRuntimeContextTeardown:
+    """RuntimeContext must not survive a WSGI worker thread being reused for
+    a later request -- on the success path (after_request) and, since
+    after_request does not run on an unhandled exception, on the exception
+    path too (teardown_request)."""
+
+    def test_runtime_context_cleared_after_successful_request(
+        self, flask_app: Flask, flask_integration: FlaskIntegration
+    ) -> None:
+        actor = _StandInActor("actor-flask-success")
+
+        @flask_app.route("/test")
+        def test_route() -> str:  # pyright: ignore[reportUnusedFunction]
+            RuntimeContext(actor).set_mcp_context(
+                client_id="c", trust_relationship=None, peer_id="p"
+            )
+            assert RuntimeContext(actor).has_context()
+            return "OK"
+
+        client = flask_app.test_client()
+        response = client.get("/test")
+
+        assert response.status_code == 200
+        assert not RuntimeContext(actor).has_context()
+
+    def test_runtime_context_cleared_after_exception(
+        self, flask_app: Flask, flask_integration: FlaskIntegration
+    ) -> None:
+        """after_request does not run when the view raises; teardown_request
+        must still clear the context, or a reused worker thread would carry
+        this request's identity into the next one."""
+        actor = _StandInActor("actor-flask-exception")
+        flask_app.config["PROPAGATE_EXCEPTIONS"] = True
+
+        @flask_app.route("/boom")
+        def boom_route() -> str:  # pyright: ignore[reportUnusedFunction]
+            RuntimeContext(actor).set_mcp_context(
+                client_id="c", trust_relationship=None, peer_id="p"
+            )
+            raise RuntimeError("simulated handler failure")
+
+        client = flask_app.test_client()
+        with pytest.raises(RuntimeError, match="simulated handler failure"):
+            client.get("/boom")
+
+        assert not RuntimeContext(actor).has_context()
+
+    def test_reused_worker_thread_does_not_see_prior_requests_actor(
+        self, flask_app: Flask, flask_integration: FlaskIntegration
+    ) -> None:
+        """Simulates the real risk: a worker thread that served one actor's
+        request must not leak that actor's context into a second request
+        served on the same thread."""
+        first_actor = _StandInActor("actor-flask-first")
+        second_actor = _StandInActor("actor-flask-second")
+        observed: dict[str, bool] = {}
+
+        @flask_app.route("/first")
+        def first_route() -> str:  # pyright: ignore[reportUnusedFunction]
+            RuntimeContext(first_actor).set_mcp_context(
+                client_id="c", trust_relationship=None, peer_id="p"
+            )
+            return "OK"
+
+        @flask_app.route("/second")
+        def second_route() -> str:  # pyright: ignore[reportUnusedFunction]
+            observed["first_actor_leaked"] = RuntimeContext(first_actor).has_context()
+            # The second request authenticates its own, different actor --
+            # confirms the thread is usable normally afterwards, not just
+            # "empty".
+            RuntimeContext(second_actor).set_mcp_context(
+                client_id="c2", trust_relationship=None, peer_id="p2"
+            )
+            observed["second_actor_set"] = RuntimeContext(second_actor).has_context()
+            return "OK"
+
+        client = flask_app.test_client()
+        # Flask's test client reuses the app's request-handling machinery on
+        # the calling thread across sequential calls, exactly modelling a
+        # WSGI worker thread handling requests one after another.
+        assert client.get("/first").status_code == 200
+        assert client.get("/second").status_code == 200
+
+        assert observed["first_actor_leaked"] is False
+        assert observed["second_actor_set"] is True
 
 
 class TestFlaskLoggingIntegration:

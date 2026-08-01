@@ -23,6 +23,15 @@ except ImportError as e:
 logger = logging.getLogger(__name__)
 
 _pool: ConnectionPool | None = None
+# Schema the pool above was built for. psycopg_pool runs `configure` once per
+# *physical connection, at creation time*, so each connection permanently
+# carries whatever search_path was in effect when it was opened. If the
+# configured schema changes afterwards (PG_DB_PREFIX/PG_DB_SCHEMA), the pool
+# ends up holding a MIX of connections bound to different schemas and which
+# one a query gets is load-dependent -- a write can land in one schema while
+# the read goes to another and returns zero rows *with no error*. Tracking the
+# schema here lets get_pool() rebuild instead of serving a mixed pool.
+_pool_schema: str | None = None
 _pool_lock = threading.Lock()
 
 
@@ -132,11 +141,23 @@ def get_pool() -> ConnectionPool:
     Raises:
         psycopg.OperationalError: If unable to connect to database
     """
-    global _pool
+    global _pool, _pool_schema
 
-    if _pool is None:
+    schema_now = get_schema_name()
+    if _pool is None or _pool_schema != schema_now:
         with _pool_lock:
             # Double-check locking pattern
+            if _pool is not None and _pool_schema != schema_now:
+                logger.info(
+                    "PostgreSQL schema changed (%s -> %s); rebuilding connection pool",
+                    _pool_schema,
+                    schema_now,
+                )
+                try:
+                    _pool.close()
+                except Exception:  # pragma: no cover - best effort
+                    logger.debug("Error closing stale pool", exc_info=True)
+                _pool = None
             if _pool is None:
                 conninfo = get_connection_string()
                 min_size = int(os.getenv("PG_POOL_MIN_SIZE", "2"))
@@ -159,6 +180,7 @@ def get_pool() -> ConnectionPool:
                     configure=_configure_connection,
                 )
 
+                _pool_schema = schema
                 logger.info("PostgreSQL connection pool created successfully")
 
     return _pool
@@ -194,7 +216,7 @@ def close_pool() -> None:
 
     After calling this, a new pool will be created on next get_connection() call.
     """
-    global _pool
+    global _pool, _pool_schema
 
     if _pool is not None:
         with _pool_lock:
@@ -202,6 +224,7 @@ def close_pool() -> None:
                 logger.info("Closing PostgreSQL connection pool")
                 _pool.close()
                 _pool = None
+                _pool_schema = None
                 logger.info("PostgreSQL connection pool closed")
 
 

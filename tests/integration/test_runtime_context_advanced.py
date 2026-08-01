@@ -22,10 +22,29 @@ import pytest
 from actingweb.actor import Actor as CoreActor
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
-from actingweb.runtime_context import RuntimeContext, get_client_info_from_context
+from actingweb.runtime_context import (
+    RuntimeContext,
+    clear_all_context,
+    get_client_info_from_context,
+)
 
 # Get database backend from environment (set by conftest.py)
 DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
+
+
+@pytest.fixture(autouse=True)
+def _reset_runtime_context():
+    """RuntimeContext storage is a ContextVar keyed by actor id, local to
+    the calling thread/task -- but pytest reuses that thread across many
+    test functions in this module. Without a reset, an actor id colliding
+    across tests (unlikely but not impossible given random UUID generation)
+    or a leftover entry inflating the context map would be invisible to any
+    single test. Framework integrations do this via teardown_request /
+    the middleware ``finally``; tests need the same discipline explicitly.
+    """
+    clear_all_context()
+    yield
+    clear_all_context()
 
 
 @pytest.fixture

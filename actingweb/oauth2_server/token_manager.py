@@ -1214,11 +1214,18 @@ class ActingWebTokenManager:
 
 # Global token manager
 _token_manager: ActingWebTokenManager | None = None
+# The config the manager was built from; a different one must rebuild it.
+_token_manager_config: config_class.Config | None = None
 
 
 def get_actingweb_token_manager(config: config_class.Config) -> ActingWebTokenManager:
-    """Get or create the global ActingWeb token manager."""
-    global _token_manager
-    if _token_manager is None:
+    """Get or create the global ActingWeb token manager.
+
+    Rebuilds when handed a different ``Config`` so one application's tokens
+    are never read from or written to another application's store.
+    """
+    global _token_manager, _token_manager_config
+    if _token_manager is None or _token_manager_config is not config:
         _token_manager = ActingWebTokenManager(config)
+        _token_manager_config = config
     return _token_manager

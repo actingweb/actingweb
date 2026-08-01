@@ -637,14 +637,17 @@ class CachedCapabilitiesStore:
 
 # Singleton instance for methods/actions store
 _capabilities_store: CachedCapabilitiesStore | None = None
+# Config the singleton above was built with -- see the getter below.
+_capabilities_store_config: config_class.Config | None = None
 
 
 def initialize_cached_capabilities_store(config: config_class.Config) -> None:
     """Initialize the cached capabilities store at application startup."""
-    global _capabilities_store
-    if _capabilities_store is None:
+    global _capabilities_store, _capabilities_store_config
+    if _capabilities_store is None or _capabilities_store_config is not config:
         logger.debug("Initializing cached capabilities store...")
         _capabilities_store = CachedCapabilitiesStore(config)
+        _capabilities_store_config = config
         logger.debug("Cached capabilities store initialized")
 
 
@@ -656,7 +659,7 @@ def get_cached_capabilities_store(
     Automatically initializes the store if not already initialized.
     """
     global _capabilities_store
-    if _capabilities_store is None:
+    if _capabilities_store is None or _capabilities_store_config is not config:
         initialize_cached_capabilities_store(config)
     return _capabilities_store  # type: ignore[return-value]
 

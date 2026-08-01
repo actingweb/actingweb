@@ -40,11 +40,36 @@ logger = logging.getLogger(__name__)
 
 # Global caches for MCP performance optimization
 _token_cache: dict[str, dict[str, Any]] = {}  # token -> validation data
-_actor_cache: dict[
-    str, dict[str, Any]
-] = {}  # actor_id -> {actor, trust_context, last_accessed}
-_trust_cache: dict[str, Any] = {}  # actor_id -> trust_relationship
+_actor_cache: dict[str, dict[str, Any]] = {}  # actor_id -> {actor, last_accessed}
+# (actor_id, client_id) -> {"trust": relationship-or-None, "cached_at": float}.
+# Keyed per actor/client pair: one trust row exists per client, and an
+# actor-only key let one client's resolved trust serve another client on the
+# same actor (authorization bypass). The value wraps the relationship so the
+# entry carries its own timestamp; "trust" may be None (cached negative).
+_trust_cache: dict[tuple[str, str], dict[str, Any]] = {}
 _cache_ttl = 300  # 5 minutes cache TTL
+
+# Per-entry TTLs for the trust cache, checked against each entry's
+# "cached_at". None means no per-entry bound: entries live until evicted by
+# actor expiry or logout.
+_TRUST_CACHE_TTL: float | None = None
+# Cached-None ("negative") entries get their own, short, knob. Under
+# fail-closed authorization, a cached None pins a denial for the entry's
+# TTL -- without a short bound here, a transient lookup miss (notably
+# DynamoDB eventual consistency on the very first request right after a
+# client registers) would pin that denial for the full 5-minute
+# _cache_ttl instead of resolving itself within seconds.
+_TRUST_CACHE_NEGATIVE_TTL: float | None = 10.0
+
+# Cleanup scheduling: run cache cleanup at most once every N seconds. (The
+# previous `time.time() % 20 == 0` float comparison was effectively never
+# true, so cleanup never ran and entries accumulated.) A monotonic deadline
+# rather than a request counter, because the counter would need a lock to
+# stay correct under concurrent worker threads incrementing it -- a racing
+# double-run of this deadline check is harmless (cleanup is idempotent),
+# so no lock is needed.
+_CLEANUP_INTERVAL_SECONDS = 20.0
+_next_cleanup_at = 0.0
 
 # Cache statistics for performance monitoring
 _cache_stats = {
@@ -55,6 +80,51 @@ _cache_stats = {
     "trust_hits": 0,
     "trust_misses": 0,
 }
+
+
+def _trust_cache_key(actor_id: str, client_id: str) -> tuple[str, str]:
+    """Construct the trust-cache key: one entry per (actor, client) pair.
+
+    Every read and write of ``_trust_cache`` must go through this helper so
+    the two authentication paths cannot diverge on key shape.
+    """
+    return (actor_id, client_id)
+
+
+def _trust_cache_get(trust_key: tuple[str, str]) -> tuple[bool, Any]:
+    """Look up a trust entry, honoring per-entry TTLs. Returns ``(hit, trust)``.
+
+    A hit with ``trust=None`` is a valid cached negative result, so callers
+    must branch on the hit flag, never on the truthiness of the trust value.
+    """
+    entry = _trust_cache.get(trust_key)
+    if entry is None:
+        return False, None
+    trust = entry.get("trust")
+    ttl = _TRUST_CACHE_NEGATIVE_TTL if trust is None else _TRUST_CACHE_TTL
+    if ttl is not None and time.time() - entry.get("cached_at", 0.0) > ttl:
+        _trust_cache.pop(trust_key, None)
+        return False, None
+    return True, trust
+
+
+def _trust_cache_put(trust_key: tuple[str, str], trust_relationship: Any) -> None:
+    """Store a resolved trust (or None) with its resolution timestamp."""
+    _trust_cache[trust_key] = {"trust": trust_relationship, "cached_at": time.time()}
+
+
+def _evict_trust_entries_for_actor(actor_id: str) -> None:
+    """Remove every (actor_id, client_id) trust entry for the actor.
+
+    Scans a ``.copy()`` of the cache: these module dicts are mutated from
+    concurrent worker threads with no lock, and ``.copy()`` is a single C-level
+    operation that yields an independent dict, unlike iterating the live dict
+    (or ``list(d)``, which iterates it), which can raise
+    ``RuntimeError: dictionary changed size during iteration`` if another
+    thread mutates it mid-scan.
+    """
+    for key in [k for k in _trust_cache.copy() if k[0] == actor_id]:
+        _trust_cache.pop(key, None)
 
 
 # Keys that are part of the CallToolResult wire shape and must not be swept
@@ -131,28 +201,34 @@ class MCPHandler(BaseHandler):
         self._negotiated_version: str = DEFAULT_NEGOTIATED_VERSION
 
     def _cleanup_expired_cache_entries(self) -> None:
-        """Remove expired entries from all caches."""
+        """Remove expired entries from all caches.
+
+        Scans a ``.copy()`` of each cache dict: they are mutated from
+        concurrent worker threads with no lock, and ``.copy()`` yields an
+        independent dict unaffected by later mutation (unlike iterating the
+        live dict, which can raise
+        ``RuntimeError: dictionary changed size during iteration``).
+        """
         current_time = time.time()
 
         # Clean token cache
         expired_tokens = [
             token
-            for token, data in _token_cache.items()
+            for token, data in _token_cache.copy().items()
             if current_time - data.get("cached_at", 0) > _cache_ttl
         ]
         for token in expired_tokens:
-            del _token_cache[token]
+            _token_cache.pop(token, None)
 
-        # Clean actor cache
+        # Clean actor cache, and every trust entry for each expired actor
         expired_actors = [
             actor_id
-            for actor_id, data in _actor_cache.items()
+            for actor_id, data in _actor_cache.copy().items()
             if current_time - data.get("last_accessed", 0) > _cache_ttl
         ]
         for actor_id in expired_actors:
-            del _actor_cache[actor_id]
-            if actor_id in _trust_cache:
-                del _trust_cache[actor_id]
+            _actor_cache.pop(actor_id, None)
+            _evict_trust_entries_for_actor(actor_id)
 
         if expired_tokens or expired_actors:
             logger.debug(
@@ -392,6 +468,70 @@ class MCPHandler(BaseHandler):
             "result": result,
         }
 
+    def _require_mcp_peer_id(
+        self, actor: Any, request_id: Any
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """Resolve the current request's peer id, or a ready no-trust denial.
+
+        Returns ``(peer_id, None)`` once a trust relationship resolved during
+        authentication, or ``(None, denial_response)`` when it did not -- an
+        authenticated token that resolves to no trust relationship is a
+        security condition (fail-closed), distinct from "permission
+        subsystem unavailable" (fail-open, which callers implement
+        separately around evaluator construction/use).
+
+        Callers must use the returned denial verbatim and must not evaluate
+        it inside a ``try/except`` that treats exceptions as fail-open:
+        ``RuntimeContext`` access here does not raise, but nesting the
+        denial return inside such a block would silently revert this to
+        fail-open the moment an unrelated exception is added nearby.
+
+        Shared by both the sync (``MCPHandler``) and async
+        (``AsyncMCPHandler``) single-item gates (``tools/call``,
+        ``prompts/get``, ``resources/read``) so the two transports cannot
+        diverge on this decision.
+        """
+        peer_id = self._current_mcp_peer_id(actor)
+        if not peer_id:
+            return None, self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                "Access denied: no trust relationship resolved for this client",
+            )
+        return peer_id, None
+
+    def _current_mcp_peer_id(self, actor: Any) -> str | None:
+        """The peer id resolved during authentication, or ``None`` if none was.
+
+        The single place the "did a trust relationship resolve for this
+        request?" question is answered. Both fail-closed shapes go through it
+        -- ``_require_mcp_peer_id`` for the single-item gates, which returns a
+        JSON-RPC error, and ``_peer_id_for_list`` for the ``*/list`` handlers,
+        which return an empty result instead -- so the two cannot drift apart
+        on the decision itself, only on how they report it.
+        """
+        mcp_context = RuntimeContext(actor).get_mcp_context()
+        peer_id = mcp_context.peer_id if mcp_context else None
+        return peer_id or None
+
+    def _peer_id_for_list(self, actor: Any, list_name: str) -> str | None:
+        """Peer id for a ``*/list`` handler, or ``None`` meaning "fail closed".
+
+        A list request from a client with no resolved trust is not a
+        protocol-level error -- the client simply sees nothing -- so callers
+        return an empty result rather than ``-32003``. Callers must evaluate
+        this **before** the fail-open evaluator ``try/except``, for the reason
+        spelled out in ``_require_mcp_peer_id``.
+        """
+        peer_id = self._current_mcp_peer_id(actor)
+        if not peer_id:
+            logger.warning(
+                f"No trust relationship resolved for actor {actor.id}; "
+                f"returning empty {list_name}"
+            )
+            return None
+        return peer_id
+
     def _handle_tools_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
         """Handle MCP tools/list request with permission filtering and client filtering."""
         global _mcp_client_info_cache
@@ -405,15 +545,18 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            # Resolve peer_id from runtime context (set during auth)
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
+            # No trust relationship resolved for this client -> fail-closed:
+            # an empty list, not every tool. Evaluated before the fail-open
+            # evaluator try/except below, so an unrelated exception there
+            # cannot revert this to "show every tool".
+            peer_id = self._peer_id_for_list(actor, "tools/list")
+            if not peer_id:
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": []}}
 
             # Get evaluator if the permission system is initialized
             evaluator = None
             try:
-                evaluator = get_permission_evaluator(self.config) if peer_id else None
+                evaluator = get_permission_evaluator(self.config)
             except Exception as e:
                 logger.debug(f"Permission evaluator unavailable during tools/list: {e}")
                 evaluator = None
@@ -643,13 +786,20 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
+            # No trust relationship resolved for this client -> fail-closed:
+            # an empty list, evaluated before the fail-open evaluator
+            # try/except below.
+            peer_id = self._peer_id_for_list(actor, "resources/list")
+            if not peer_id:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"resources": []},
+                }
 
             evaluator = None
             try:
-                evaluator = get_permission_evaluator(self.config) if peer_id else None
+                evaluator = get_permission_evaluator(self.config)
             except Exception as e:
                 logger.debug(
                     f"Permission evaluator unavailable during resources/list: {e}"
@@ -715,13 +865,16 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
+            # No trust relationship resolved for this client -> fail-closed:
+            # an empty list, evaluated before the fail-open evaluator
+            # try/except below.
+            peer_id = self._peer_id_for_list(actor, "prompts/list")
+            if not peer_id:
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": []}}
 
             evaluator = None
             try:
-                evaluator = get_permission_evaluator(self.config) if peer_id else None
+                evaluator = get_permission_evaluator(self.config)
             except Exception as e:
                 logger.debug(
                     f"Permission evaluator unavailable during prompts/list: {e}"
@@ -789,7 +942,17 @@ class MCPHandler(BaseHandler):
                 request_id, -32603, "No hooks registry available"
             )
 
-        # Check permission before finding/dispatching the hook
+        # No trust relationship resolved for this client -> fail-closed. This
+        # check must happen before the evaluator try/except below: placing it
+        # inside that block would let the availability fail-open swallow it.
+        peer_id, denial = self._require_mcp_peer_id(actor, request_id)
+        if denial is not None:
+            return denial
+        assert peer_id is not None
+
+        # Check permission before finding/dispatching the hook. An evaluator
+        # that raises here (permission subsystem unavailable) stays
+        # fail-open, deliberately distinct from the no-trust denial above.
         try:
             from ..permission_evaluator import (
                 PermissionResult,
@@ -797,20 +960,16 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-            if peer_id:
-                evaluator = get_permission_evaluator(self.config)
-                decision = evaluator.evaluate_permission(
-                    actor.id, peer_id, PermissionType.TOOLS, tool_name, operation="use"
+            evaluator = get_permission_evaluator(self.config)
+            decision = evaluator.evaluate_permission(
+                actor.id, peer_id, PermissionType.TOOLS, tool_name, operation="use"
+            )
+            if decision != PermissionResult.ALLOWED:
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32003,
+                    f"Access denied: You don't have permission to use tool '{tool_name}'",
                 )
-                if decision != PermissionResult.ALLOWED:
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32003,
-                        f"Access denied: You don't have permission to use tool '{tool_name}'",
-                    )
         except Exception as e:
             # Don't block execution if permission system not initialized; log and continue
             logger.debug(f"Skipping tool permission check due to error: {e}")
@@ -866,6 +1025,13 @@ class MCPHandler(BaseHandler):
                 request_id, -32603, "No hooks registry available"
             )
 
+        # No trust relationship resolved for this client -> fail-closed,
+        # evaluated before the fail-open evaluator try/except below.
+        peer_id, denial = self._require_mcp_peer_id(actor, request_id)
+        if denial is not None:
+            return denial
+        assert peer_id is not None
+
         # Check permission before finding/dispatching the hook
         try:
             from ..permission_evaluator import (
@@ -874,24 +1040,20 @@ class MCPHandler(BaseHandler):
                 get_permission_evaluator,
             )
 
-            runtime_context = RuntimeContext(actor)
-            mcp_context = runtime_context.get_mcp_context()
-            peer_id = mcp_context.peer_id if mcp_context else None
-            if peer_id:
-                evaluator = get_permission_evaluator(self.config)
-                decision = evaluator.evaluate_permission(
-                    actor.id,
-                    peer_id,
-                    PermissionType.PROMPTS,
-                    prompt_name,
-                    operation="invoke",
+            evaluator = get_permission_evaluator(self.config)
+            decision = evaluator.evaluate_permission(
+                actor.id,
+                peer_id,
+                PermissionType.PROMPTS,
+                prompt_name,
+                operation="invoke",
+            )
+            if decision != PermissionResult.ALLOWED:
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32003,
+                    f"Access denied: You don't have permission to use prompt '{prompt_name}'",
                 )
-                if decision != PermissionResult.ALLOWED:
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32003,
-                        f"Access denied: You don't have permission to use prompt '{prompt_name}'",
-                    )
         except Exception as e:
             logger.debug(f"Skipping prompt permission check due to error: {e}")
 
@@ -970,6 +1132,15 @@ class MCPHandler(BaseHandler):
                 request_id, -32603, "No hooks registry available"
             )
 
+        # No trust relationship resolved for this client -> fail-closed,
+        # evaluated before the fail-open evaluator try/except below (and
+        # before the outer try, so the general exception handler at the
+        # bottom of this method cannot intercept it either).
+        peer_id, denial = self._require_mcp_peer_id(actor, request_id)
+        if denial is not None:
+            return denial
+        assert peer_id is not None
+
         try:
             # Check permission before accessing resource
             try:
@@ -979,23 +1150,20 @@ class MCPHandler(BaseHandler):
                     get_permission_evaluator,
                 )
 
-                trust_context = getattr(actor, "_mcp_trust_context", None)
-                peer_id = trust_context.get("peer_id") if trust_context else None
-                if peer_id and uri:
-                    evaluator = get_permission_evaluator(self.config)
-                    decision = evaluator.evaluate_permission(
-                        actor.id,
-                        peer_id,
-                        PermissionType.RESOURCES,
-                        uri,
-                        operation="read",
+                evaluator = get_permission_evaluator(self.config)
+                decision = evaluator.evaluate_permission(
+                    actor.id,
+                    peer_id,
+                    PermissionType.RESOURCES,
+                    uri,
+                    operation="read",
+                )
+                if decision != PermissionResult.ALLOWED:
+                    return self._create_jsonrpc_error(
+                        request_id,
+                        -32003,
+                        f"Access denied: You don't have permission to access resource '{uri}'",
                     )
-                    if decision != PermissionResult.ALLOWED:
-                        return self._create_jsonrpc_error(
-                            request_id,
-                            -32003,
-                            f"Access denied: You don't have permission to access resource '{uri}'",
-                        )
             except Exception as e:
                 logger.debug(f"Skipping resource permission check due to error: {e}")
 
@@ -1212,14 +1380,21 @@ class MCPHandler(BaseHandler):
         This method provides authentication with intelligent caching:
         1. Token validation results are cached for 5 minutes
         2. Actor instances are cached to avoid repeated DynamoDB loads
-        3. Trust relationship lookups are cached per actor
+        3. Trust relationship lookups are cached per (actor, client) pair
         4. Automatic cache cleanup removes expired entries
 
-        Cache keys are based on tokens and actor IDs, providing significant performance
-        improvements for repeated requests from the same clients.
+        Cache keys: token validation is keyed by token, actors by actor ID,
+        and trust relationships by the (actor_id, client_id) tuple, providing
+        significant performance improvements for repeated requests from the
+        same clients.
         """
-        # Clean up expired cache entries periodically (every ~20th request)
-        if time.time() % 20 == 0:  # Simple way to occasionally clean up
+        # Clean up expired cache entries periodically. A racing double-run of
+        # this check across concurrent worker threads is harmless (cleanup is
+        # idempotent), so the deadline is read/written without a lock.
+        global _next_cleanup_at
+        now = time.time()
+        if now >= _next_cleanup_at:
+            _next_cleanup_at = now + _CLEANUP_INTERVAL_SECONDS
             self._cleanup_expired_cache_entries()
 
         auth_header = self.get_auth_header()
@@ -1251,16 +1426,24 @@ class MCPHandler(BaseHandler):
                         cached_actor_data["last_accessed"] = current_time
                         actor_interface = cached_actor_data["actor"]
 
-                        # Refresh trust context from cache or lookup
-                        if actor_id in _trust_cache:
+                        # Refresh trust context from cache or lookup, keyed
+                        # per (actor, client) pair so one client's trust can
+                        # never serve another client on the same actor. A hit
+                        # may carry trust=None (cached negative), which must
+                        # still yield an empty peer_id below.
+                        trust_key = _trust_cache_key(actor_id, client_id)
+                        trust_hit, trust_relationship = _trust_cache_get(trust_key)
+                        if trust_hit:
                             _cache_stats["trust_hits"] += 1
-                            trust_relationship = _trust_cache[actor_id]
                         else:
                             _cache_stats["trust_misses"] += 1
                             trust_relationship = self._lookup_mcp_trust_relationship(
                                 actor_interface, client_id, token_data
                             )
-                            _trust_cache[actor_id] = trust_relationship
+                            _trust_cache_put(trust_key, trust_relationship)
+                        self._check_trust_client_invariant(
+                            actor_id, client_id, trust_relationship
+                        )
 
                         # Update runtime context with MCP authentication info
                         runtime_context = RuntimeContext(actor_interface)
@@ -1324,11 +1507,12 @@ class MCPHandler(BaseHandler):
             if not actor_interface:
                 return None
 
-            # Lookup and cache trust relationship
+            # Lookup and cache trust relationship per (actor, client) pair
             trust_relationship = self._lookup_mcp_trust_relationship(
                 actor_interface, client_id, token_data
             )
-            _trust_cache[actor_id] = trust_relationship
+            _trust_cache_put(_trust_cache_key(actor_id, client_id), trust_relationship)
+            self._check_trust_client_invariant(actor_id, client_id, trust_relationship)
 
             # Mark client as peer_approved on successful authentication (if not already)
             self._mark_client_peer_approved(
@@ -1360,9 +1544,18 @@ class MCPHandler(BaseHandler):
     ) -> ActorInterface | None:
         """Get or create actor with caching."""
         # Check actor cache first
+        # The entry must have been built by *this* application's config:
+        # _actor_cache is a module global keyed by actor id alone, so in a
+        # process hosting more than one ActingWeb app the same actor id --
+        # notably the shared "_actingweb_oauth2" system actor -- would
+        # otherwise be served an ActorInterface wrapping the other app's
+        # config, and therefore that app's database backend.
         if actor_id in _actor_cache:
             cached_data = _actor_cache[actor_id]
-            if current_time - cached_data.get("last_accessed", 0) < _cache_ttl:
+            if (
+                current_time - cached_data.get("last_accessed", 0) < _cache_ttl
+                and cached_data.get("config") is self.config
+            ):
                 cached_data["last_accessed"] = current_time
                 return cached_data["actor"]
 
@@ -1416,6 +1609,8 @@ class MCPHandler(BaseHandler):
         _actor_cache[actor_id] = {
             "actor": actor_interface,
             "last_accessed": current_time,
+            # Which application's config built this wrapper -- see above.
+            "config": self.config,
         }
 
         return actor_interface
@@ -1424,10 +1619,13 @@ class MCPHandler(BaseHandler):
         self, actor: ActorInterface, client_id: str, token_data: dict[str, Any]
     ) -> Any:
         """
-        Lookup trust relationship for MCP client.
+        Lookup trust relationship for MCP client, by exact client identity.
 
         This method finds the trust relationship that was created during OAuth2
-        authentication, which links the MCP client to the actor with appropriate permissions.
+        authentication, which links the MCP client to the actor with appropriate
+        permissions. Resolution is authorization-boundary-exact: no substring or
+        prefix matching, so a peer id from an unrelated trust cannot satisfy a
+        different client's lookup.
 
         Args:
             actor: ActorInterface instance
@@ -1438,75 +1636,108 @@ class MCPHandler(BaseHandler):
             Trust relationship instance or None
         """
         try:
-            # Prefer direct lookup by normalized email-derived peer_id if available
-            user_email = token_data.get("email") or token_data.get("user_email")
-            if user_email:
-                normalized_email = user_email.replace("@", "_at_").replace(".", "_dot_")
-
-                normalized_client = (
-                    client_id.replace("@", "_at_")
-                    .replace(".", "_dot_")
-                    .replace(":", "_colon_")
-                )
-                peer_id_unique = f"oauth2:{normalized_email}:{normalized_client}"
-                direct = actor.trust.get_relationship(peer_id_unique)
-                if direct:
-                    logger.debug(f"Found MCP trust for client {client_id}")
-                    return direct
-
             trusts = actor.trust.relationships
 
-            # Fallback: scan for established_via='oauth2' or 'oauth2_client' and matching trust_type if provided
+            # Arm 1: exact oauth_client_id match. Written on every trust row
+            # created by either live MCP creation path (both pass
+            # established_via="oauth2_client" together with client_id), so
+            # this covers every row created since that field was introduced.
             for trust in trusts:
+                if getattr(trust, "oauth_client_id", None) == client_id:
+                    logger.debug(
+                        f"Found MCP trust for client {client_id} (oauth_client_id match)"
+                    )
+                    return trust
+
+            # Arm 2: exact peer-id fallback, for legacy rows predating the
+            # oauth_client_id field (oauth_client_id is None). Requires an
+            # OAuth2-family established_via -- or None with a legacy
+            # oauth2/oauth2_client peer-id prefix -- AND full-string equality
+            # against a peer id constructed the same way trust creation does
+            # (trust_manager.py normalizes and formats
+            # "{source}:{normalized_email}:{normalized_client}"). We don't
+            # have the user's real email here (MCP token records carry none),
+            # so this only reconstructs the shape produced when the dynamic
+            # client-credentials flow used client_id as the email identifier
+            # (client_registry.py passes email=client_id) -- never
+            # containment, never a bare segment compare, so a peer id crafted
+            # through the ordinary /trust peer protocol cannot occupy this
+            # slot. Legacy rows created via the interactive-authorize flow
+            # with a real email and no oauth_client_id are a known residual
+            # lockout risk, documented in the migration guide.
+            normalized_client = (
+                client_id.replace("@", "_at_")
+                .replace(".", "_dot_")
+                .replace(":", "_colon_")
+            )
+            candidates = {
+                f"oauth2_client:{normalized_client}:{normalized_client}",
+                f"oauth2:{normalized_client}:{normalized_client}",
+            }
+            for trust in trusts:
+                if getattr(trust, "oauth_client_id", None) is not None:
+                    continue  # already checked in arm 1
                 via = getattr(trust, "established_via", None)
-                rel = getattr(trust, "relationship", None)
-
-                # Match on established_via AND client_id to ensure correct client
-                if via == "oauth2":
-                    # Check if this trust is for the specific client_id
-                    peer_id_str = str(getattr(trust, "peerid", ""))
-                    if client_id in peer_id_str:
-                        logger.debug(f"Found MCP trust for client {client_id}")
-                        return trust
-
-                # Handle oauth2_client established trusts (client credentials flow)
-                elif via == "oauth2_client":
-                    # Check if this trust is for the specific client_id
-                    peer_id_str = str(getattr(trust, "peerid", ""))
-                    if client_id in peer_id_str:
-                        logger.debug(f"Found MCP trust for client {client_id}")
-                        return trust
-
-                # Fallback: If established_via is None but this looks like an OAuth2 trust
-                # (peer_id starts with 'oauth2:' or 'oauth2_client:'), assume it should be valid
                 peer_id_str = str(getattr(trust, "peerid", ""))
-                if via is None and (
+                is_oauth2_family = via in ("oauth2", "oauth2_client")
+                is_legacy_none_with_prefix = via is None and (
                     peer_id_str.startswith("oauth2:")
                     or peer_id_str.startswith("oauth2_client:")
-                ):
-                    # Check if this trust is for the specific client_id
-                    if client_id in peer_id_str:
-                        trust_type = (
-                            "oauth2_client"
-                            if peer_id_str.startswith("oauth2_client:")
-                            else "oauth2"
-                        )
-                        logger.warning(
-                            f"Found {trust_type} trust with missing established_via - assuming valid: peer={trust.peerid}, rel={rel}"
-                        )
-                        logger.warning(
-                            f"Consider updating this trust relationship to include established_via='{trust_type}'"
-                        )
-                        return trust
+                )
+                if not (is_oauth2_family or is_legacy_none_with_prefix):
+                    continue
+                if peer_id_str in candidates:
+                    logger.debug(
+                        f"Found MCP trust for client {client_id} (legacy peer-id match)"
+                    )
+                    return trust
 
             logger.warning(
-                f"No trust found for MCP client {client_id}; permissions will be empty"
+                f"No trust found for MCP client {client_id} on actor {actor.id}; "
+                "requests will be denied. Likely cause: the trust row's "
+                "established_via/oauth_client_id fields do not match this "
+                "client (see the migration guide for how to check)."
             )
             return None
 
         except Exception as e:
             logger.error(f"Error looking up MCP trust relationship: {e}")
             return None
+
+    def _check_trust_client_invariant(
+        self, actor_id: str, client_id: str, trust_relationship: Any
+    ) -> None:
+        """Log at ERROR when a resolved trust cannot be reconciled with the
+        authenticated client id.
+
+        Detection aid only — never denies. Live peer ids embed the user's
+        email (``oauth2_client:<normalized_email>:<client_id>``), so only the
+        peer id's prefix segment is logged, never the full peer id or any
+        token data. Client ids may appear normalized inside peer ids
+        (``@`` -> ``_at_``, ``.`` -> ``_dot_``, ``:`` -> ``_colon_``), so the
+        reconciliation is format-aware.
+        """
+        if trust_relationship is None:
+            return
+        try:
+            if getattr(trust_relationship, "oauth_client_id", None) == client_id:
+                return
+            peer_id = str(getattr(trust_relationship, "peerid", ""))
+            normalized_client = (
+                client_id.replace("@", "_at_")
+                .replace(".", "_dot_")
+                .replace(":", "_colon_")
+            )
+            if client_id in peer_id or normalized_client in peer_id:
+                return
+            peer_prefix = peer_id.split(":", 1)[0] if peer_id else ""
+            logger.error(
+                f"MCP trust/client identity mismatch: trust resolved for actor "
+                f"{actor_id} cannot be reconciled with authenticated client "
+                f"{client_id} (peer id prefix: '{peer_prefix}')"
+            )
+        except Exception:
+            logger.debug("MCP trust/client invariant check failed", exc_info=True)
 
     def get_auth_header(self) -> str | None:
         """Get Authorization header from request."""
@@ -1879,13 +2110,13 @@ class MCPHandler(BaseHandler):
             del _token_cache[token]
             token_found = True
 
-            # Also clear associated actor and trust caches to force re-authentication
+            # Also clear associated actor and trust caches to force
+            # re-authentication. Actor-wide by design: evicting the shared
+            # actor wrapper already affects every client on the actor, so
+            # every (actor, client) trust entry goes with it.
             if actor_id:
-                if actor_id in _actor_cache:
-                    del _actor_cache[actor_id]
-
-                if actor_id in _trust_cache:
-                    del _trust_cache[actor_id]
+                _actor_cache.pop(actor_id, None)
+                _evict_trust_entries_for_actor(actor_id)
 
         return token_found
 

@@ -736,14 +736,17 @@ def batch_check_property_access(
 
 # Singleton instance
 _permission_evaluator: PermissionEvaluator | None = None
+# Config the singleton above was built with -- see get_permission_evaluator().
+_permission_evaluator_config: config_class.Config | None = None
 
 
 def initialize_permission_evaluator(config: config_class.Config) -> None:
     """Initialize the permission evaluator at application startup."""
-    global _permission_evaluator
-    if _permission_evaluator is None:
+    global _permission_evaluator, _permission_evaluator_config
+    if _permission_evaluator is None or _permission_evaluator_config is not config:
         logger.info("Initializing permission evaluator...")
         _permission_evaluator = PermissionEvaluator(config)
+        _permission_evaluator_config = config
         logger.info("Permission evaluator initialized")
 
 
@@ -754,6 +757,10 @@ def get_permission_evaluator(config: config_class.Config) -> PermissionEvaluator
     This prevents hard failures but may cause performance issues on first use.
     """
     global _permission_evaluator
+    if _permission_evaluator is not None and _permission_evaluator_config is not config:
+        # A different application's config: rebuild rather than serve the
+        # first app's evaluator (which may even use another database backend).
+        initialize_permission_evaluator(config)
     if _permission_evaluator is None:
         logger.warning(
             "Permission evaluator not initialized at startup - falling back to lazy initialization. "

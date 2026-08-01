@@ -1,21 +1,37 @@
 """
 Runtime Context System for ActingWeb.
 
-This module provides a generic system for attaching runtime context to actor objects
-during request processing. This solves the architectural constraint where hook functions
-have fixed signatures but need access to request-specific context.
+This module provides a generic system for making request-specific context
+available to hook functions during request processing. This solves the
+architectural constraint where hook functions have fixed signatures but need
+access to request-specific context.
 
 Architecture Problem:
+
 - ActingWeb hook functions have fixed signatures: hook(actor, action_name, data)
 - Multiple clients can access the same actor (MCP clients, web users, API clients)
 - Each request needs context about the current client/request for proper handling
 - Can't modify hook signatures without breaking framework compatibility
+- The actor object handed to hooks is frequently the *same* cached object
+  reused across many requests (MCP's per-actor cache is the primary example),
+  so context cannot live as mutable state on the actor without leaking
+  between requests and, under concurrency, between callers.
 
 Solution:
-- Attach runtime context to actor objects during request processing
+
+- Store context in a module-level ``contextvars.ContextVar``, keyed by actor
+  id, rather than as an attribute on the actor object.
+- ``ContextVar`` is task-local under asyncio and thread-local under a plain
+  WSGI worker thread, so context set for one request is invisible to a
+  concurrently running request even when both share the same actor object.
 - Provide type-safe access methods with clear documentation
 - Support multiple context types (MCP, OAuth2, web sessions, etc.)
-- Clean up context after request completion
+- Framework integrations (Flask, FastAPI) clear the ContextVar at the end of
+  each request, via the module-level ``clear_all_context()``, so nothing
+  survives onto a reused worker thread. ``clear_all_context()`` is
+  framework/test plumbing -- application hooks should use
+  ``RuntimeContext(actor).clear_context()`` if they need to clear a specific
+  actor's context mid-request.
 
 Usage Example::
 
@@ -34,16 +50,72 @@ Usage Example::
         if mcp_context:
             client_name = mcp_context.trust_relationship.client_name
             # Customize behavior based on client type
+
+Concurrency notes:
+
+- A request dispatched onto a fresh ``asyncio`` task automatically inherits
+  the context that was active when the task was created (a snapshot, not a
+  live link — the child cannot mutate the parent's view and vice versa).
+- A request dispatched onto a *new thread* (e.g. ``ThreadPoolExecutor``)
+  does **not** automatically inherit the caller's context; the submitting
+  code must capture ``contextvars.copy_context()`` and run the callable via
+  ``ctx.run(...)`` for context to cross the hop. See
+  ``actingweb/interface/hooks.py`` for the one place ActingWeb does this.
 """
 
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Runtime context attribute name on actor objects
-_RUNTIME_CONTEXT_ATTR = "_actingweb_runtime_context"
+# Maps actor id -> that actor's context dict (e.g. {"mcp": MCPContext(...)}).
+# The value is treated as immutable once set: every write builds a *new*
+# outer dict and a *new* per-actor dict rather than mutating in place, because
+# a context snapshot captured by `copy_context()` (e.g. across an asyncio task
+# boundary or an executor hop) shares the same dict objects as its parent —
+# in-place mutation would be visible on both sides of that boundary.
+# Default is `None`, not `{}`: a mutable default object would be the single
+# shared sentinel returned by every context that never called `.set()`, so
+# `_all_contexts()` normalizes it to a fresh empty dict on every read instead.
+_runtime_context_var: ContextVar[dict[str, dict[str, Any]] | None] = ContextVar(
+    "actingweb_runtime_context", default=None
+)
+
+
+def _all_contexts() -> dict[str, dict[str, Any]]:
+    """Current thread's/task's view of the per-actor context map."""
+    return _runtime_context_var.get() or {}
+
+
+def _actor_key(actor: Any) -> str:
+    """Stable per-actor key for the context map.
+
+    Keyed by ``actor.id`` so that ``RuntimeContext(a)`` and
+    ``RuntimeContext(b)`` observe the same context whenever ``a.id == b.id``
+    -- including when one is an ``ActorInterface`` and the other is the
+    ``CoreActor`` it wraps, which previously (attribute-based storage) stored
+    on whichever object was actually passed and therefore missed reads
+    through the other wrapper.
+
+    Every production call site constructs ``RuntimeContext`` on an actor
+    already resolved by id (post-authentication, from the actor cache or a
+    direct ``CoreActor(actor_id, ...)`` lookup), so ``actor.id`` is never
+    falsy there. The ``_no_id_`` fallback below exists only so lightweight
+    test doubles with no ``id`` attribute at all (see
+    ``tests/test_runtime_context_unit.py``'s ``_Bag``) still get an object
+    identity to key on rather than colliding on a shared key. It is a
+    correctness convenience for tests, not a defended production path: if a
+    real actor with a falsy id ever reached here, this key would be prone to
+    reuse across objects (CPython can reallocate a garbage-collected
+    object's address), so this branch must not be relied on for isolation
+    guarantees in production code.
+    """
+    actor_id = getattr(actor, "id", None)
+    if actor_id:
+        return str(actor_id)
+    return f"_no_id_{id(actor)}"
 
 
 @dataclass
@@ -106,11 +178,15 @@ class RuntimeContext:
     """
     Generic runtime context manager for ActingWeb actors.
 
-    Provides type-safe access to request-specific context that gets attached
-    to actor objects during request processing. This solves the architectural
-    constraint where hook functions can't receive additional parameters.
+    Provides type-safe access to request-specific context, stored in a
+    ``ContextVar`` keyed by actor id rather than as state on the actor
+    object. This solves the architectural constraint where hook functions
+    can't receive additional parameters, without letting context leak across
+    requests that happen to share a cached actor object.
 
-    The context is request-scoped and should be cleaned up after processing.
+    The context is request-scoped (task-local under asyncio, thread-local
+    under a plain worker thread) and is cleared by the framework integration
+    at the end of each request.
     """
 
     def __init__(self, actor: Any):
@@ -118,15 +194,27 @@ class RuntimeContext:
         Initialize runtime context for an actor.
 
         Args:
-            actor: ActorInterface or Actor object to attach context to
+            actor: ActorInterface or Actor object whose context to read/write.
+                Only ``actor.id`` (and, for unsaved actors, object identity)
+                is used to key the underlying storage -- no state is written
+                onto the actor object itself.
         """
         self.actor = actor
 
     def _get_context_data(self) -> dict[str, Any]:
-        """Get the runtime context data dict, creating if needed."""
-        if not hasattr(self.actor, _RUNTIME_CONTEXT_ATTR):
-            setattr(self.actor, _RUNTIME_CONTEXT_ATTR, {})
-        return getattr(self.actor, _RUNTIME_CONTEXT_ATTR)
+        """Get this actor's runtime context data dict (read-only view)."""
+        return _all_contexts().get(_actor_key(self.actor), {})
+
+    def _set_context_data(self, context_data: dict[str, Any]) -> None:
+        """Replace this actor's runtime context data dict.
+
+        Builds a new outer mapping rather than mutating the existing one in
+        place, so a context snapshot held elsewhere (a parent asyncio task,
+        the caller of an executor hop) is unaffected by this write.
+        """
+        new_all_contexts = dict(_all_contexts())
+        new_all_contexts[_actor_key(self.actor)] = context_data
+        _runtime_context_var.set(new_all_contexts)
 
     def set_mcp_context(
         self,
@@ -152,7 +240,7 @@ class RuntimeContext:
                 active session's ``initialize`` call (see
                 ``MCPContext.client_info``).
         """
-        context_data = self._get_context_data()
+        context_data = dict(self._get_context_data())
         context_data["mcp"] = MCPContext(
             client_id=client_id,
             trust_relationship=trust_relationship,
@@ -161,6 +249,7 @@ class RuntimeContext:
             transport_session_id=transport_session_id,
             client_info=client_info,
         )
+        self._set_context_data(context_data)
         # MCP context set successfully (no logging needed for routine operation)
 
     def get_mcp_context(self) -> MCPContext | None:
@@ -189,13 +278,14 @@ class RuntimeContext:
             scopes: Granted OAuth2 scopes
             token_data: Optional token metadata
         """
-        context_data = self._get_context_data()
+        context_data = dict(self._get_context_data())
         context_data["oauth2"] = OAuth2Context(
             client_id=client_id,
             user_email=user_email,
             scopes=scopes,
             token_data=token_data,
         )
+        self._set_context_data(context_data)
         logger.debug(
             f"Set OAuth2 context for client {client_id} on actor {self.actor.id}"
         )
@@ -226,13 +316,14 @@ class RuntimeContext:
             ip_address: Client IP address
             authenticated_user: Authenticated user identifier
         """
-        context_data = self._get_context_data()
+        context_data = dict(self._get_context_data())
         context_data["web"] = WebContext(
             session_id=session_id,
             user_agent=user_agent,
             ip_address=ip_address,
             authenticated_user=authenticated_user,
         )
+        self._set_context_data(context_data)
         logger.debug(
             f"Set web context for session {session_id} on actor {self.actor.id}"
         )
@@ -265,13 +356,17 @@ class RuntimeContext:
 
     def clear_context(self) -> None:
         """
-        Clear all runtime context from the actor.
+        Clear all runtime context for this actor.
 
         This should be called after request processing is complete
         to avoid context leaking between requests.
         """
-        if hasattr(self.actor, _RUNTIME_CONTEXT_ATTR):
-            delattr(self.actor, _RUNTIME_CONTEXT_ATTR)
+        actor_key = _actor_key(self.actor)
+        all_contexts = _all_contexts()
+        if actor_key in all_contexts:
+            new_all_contexts = dict(all_contexts)
+            del new_all_contexts[actor_key]
+            _runtime_context_var.set(new_all_contexts)
             logger.debug(f"Cleared runtime context from actor {self.actor.id}")
 
     def has_context(self) -> bool:
@@ -279,9 +374,9 @@ class RuntimeContext:
         Check if any runtime context is set.
 
         Returns:
-            True if any context is attached to the actor
+            True if any context is set for this actor
         """
-        return hasattr(self.actor, _RUNTIME_CONTEXT_ATTR)
+        return _actor_key(self.actor) in _all_contexts()
 
     def set_custom_context(self, key: str, value: Any) -> None:
         """
@@ -296,8 +391,9 @@ class RuntimeContext:
                 f"Context key '{key}' is reserved, use specific setter methods"
             )
 
-        context_data = self._get_context_data()
+        context_data = dict(self._get_context_data())
         context_data[key] = value
+        self._set_context_data(context_data)
         logger.debug(f"Set custom context '{key}' on actor {self.actor.id}")
 
     def get_custom_context(self, key: str) -> Any:
@@ -312,6 +408,23 @@ class RuntimeContext:
         """
         context_data = self._get_context_data()
         return context_data.get(key)
+
+
+def clear_all_context() -> None:
+    """Clear runtime context for every actor tracked in the calling
+    thread's/task's own context.
+
+    Framework integrations call this once at the end of a request/response
+    cycle (Flask ``teardown_request``, FastAPI middleware ``finally``) as a
+    blanket reset, since a request handler does not always know in advance
+    which actor id(s) it touched. Test fixtures use it to reset state
+    between tests that share a thread or event loop.
+
+    This resets only the calling thread's/task's own view of
+    ``_runtime_context_var`` -- it has no effect on a concurrently running
+    request's context, which lives in its own copied ``Context``.
+    """
+    _runtime_context_var.set({})
 
 
 def get_client_info_from_context(actor: Any) -> dict[str, str] | None:

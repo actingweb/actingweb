@@ -65,6 +65,11 @@ bump on master after merging. Tag the merge commit.
 Both version files must match the tag exactly, and step 6 is why the tag can
 only be created after the merge: tags are only released from commits on master.
 
+**`master` is a protected branch.** Direct commit pushes are rejected, so every
+change — including the version bump — must arrive through a PR. Tag pushes are
+not affected, which is exactly why the bump rides in the release PR and only the
+tag is pushed to master afterwards.
+
 **Pre-release version patterns** (published to TestPyPI):
 - Alpha: `X.Y.ZaN` (e.g., `3.10.0a1`, `3.10.0a2`)
 - Beta: `X.Y.ZbN` (e.g., `3.10.0b1`, `3.10.0b2`)

@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc3: August 1, 2026
+--------------------------
+
 .. note::
 
    **Security fix — please re-run any escalation/authorization tests before

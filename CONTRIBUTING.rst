@@ -168,20 +168,24 @@ CI/CD Testing
 Release Process
 ===============
 
-Releases are decoupled from PRs. PRs merge to master without version bumps; releases are triggered by git tags.
+Releases are triggered by git tags. The version bump and changelog rename go in
+the release PR itself — there is no separate release PR, and no bump on master
+after merging.
 
 **For contributors:** Add CHANGELOG.rst entries to the "Unreleased" section. No version bumps needed in PRs.
 
-**For maintainers (stable release):**
+**For maintainers (stable or pre-release):**
 
-1. Update version in ``pyproject.toml`` and ``actingweb/__init__.py``
+1. On the PR branch, update version in ``pyproject.toml`` and ``actingweb/__init__.py``
 2. Rename "Unreleased" to ``vX.Y.Z: Date`` in ``CHANGELOG.rst``
 3. Add new empty "Unreleased" section at top
 4. Commit: ``git commit -am "Release vX.Y.Z"``
-5. Tag: ``git tag vX.Y.Z``
-6. Push: ``git push && git push --tags``
+5. Push and merge the PR once CI is green
+6. On master: ``git pull``, then ``git tag vX.Y.Z``
+7. Push: ``git push --tags``
 
-GitHub Actions validates the tag is on master, runs tests, publishes to PyPI, and creates a GitHub Release.
+GitHub Actions validates the tag is on master and that both version files match
+the tag, runs tests, publishes to PyPI, and creates a GitHub Release.
 
 Pre-Release Versions
 --------------------

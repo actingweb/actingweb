@@ -23,10 +23,14 @@ project = 'ActingWeb'
 copyright = '2020, Greger Teigre Wedel'
 author = 'Greger Teigre Wedel'
 
-# The short X.Y version
-version = ''
+# Read from the package so the published docs cannot drift from the release.
+# It sat at '2.6.1' through every 3.x release because it was maintained by hand.
+from actingweb import __version__ as _aw_version  # noqa: E402
+
 # The full version, including alpha/beta/rc tags
-release = '2.6.1'
+release = _aw_version
+# The short X.Y version
+version = ".".join(_aw_version.split(".")[:2])
 
 
 # -- General configuration ---------------------------------------------------

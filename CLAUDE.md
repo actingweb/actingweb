@@ -39,30 +39,31 @@ poetry build                      # Build package
 
 ### Release Process
 
-Releases are decoupled from PRs. PRs merge to master without version bumps; releases are triggered by git tags.
+Releases are triggered by git tags. **The version bump and changelog rename go
+in the release PR itself** — we do not use a separate release PR, and we do not
+bump on master after merging. Tag the merge commit.
 
-**For contributors (PRs):**
+**For contributors (PRs that are not a release):**
 1. Make changes
 2. Add entry to "Unreleased" section in `CHANGELOG.rst`
 3. Create PR, merge when approved
 4. No version bump needed
 
-**For maintainers (stable release):**
-1. Update version in `pyproject.toml` and `actingweb/__init__.py`
-2. Rename "Unreleased" to `vX.Y.Z: Date` in `CHANGELOG.rst`
+**For maintainers (releasing, stable or pre-release):**
+1. On the PR branch, update version in `pyproject.toml` and `actingweb/__init__.py`
+2. Rename "Unreleased" to `vX.Y.Z: Date` in `CHANGELOG.rst` (or `vX.Y.ZrcN: Date`)
 3. Add new empty "Unreleased" section at top
-4. Commit: `git commit -am "Release vX.Y.Z"`
-5. Tag: `git tag vX.Y.Z`
-6. Push: `git push && git push --tags`
-7. GitHub Actions validates version, runs tests, publishes to PyPI, creates GitHub Release
+4. Commit: `git commit -am "Release vX.Y.Z"` (or `"Pre-release vX.Y.ZrcN"`)
+5. Push and merge the PR — CI must be green on both database backends
+6. On master: `git pull`, then `git tag vX.Y.Z` on the merge commit
+7. Push: `git push --tags`
+8. GitHub Actions validates the tag matches the version files, runs tests, then
+   publishes — production PyPI for a stable version, **TestPyPI** for a
+   pre-release — and creates a GitHub Release (marked pre-release where
+   applicable)
 
-**For maintainers (pre-release):**
-1. Update version in `pyproject.toml` and `actingweb/__init__.py` to pre-release version
-2. Commit: `git commit -am "Pre-release vX.Y.ZaN"` (or bN, rcN, .devN)
-3. Tag: `git tag vX.Y.ZaN`
-4. Push: `git push && git push --tags`
-5. GitHub Actions publishes to **TestPyPI** (not production PyPI)
-6. Creates GitHub Release marked as pre-release
+Both version files must match the tag exactly, and step 6 is why the tag can
+only be created after the merge: tags are only released from commits on master.
 
 **Pre-release version patterns** (published to TestPyPI):
 - Alpha: `X.Y.ZaN` (e.g., `3.10.0a1`, `3.10.0a2`)

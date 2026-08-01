@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: MCP trust cache client crossing (authorization bypass)
@@ -818,9 +818,9 @@ suite passes together.
       pytest file (`tests/integration/_tmp_acceptance_probe_test.py`), run
       once, then deleted — per this section's own "No new tests" note, this
       phase does not add to the permanent suite.
-- [ ] PR opened and merged to master
+- [x] PR opened and merged to master (squashed, `9221766`)
 
-### Implementation Status: In Progress (all steps complete except the PR)
+### Implementation Status: Complete (PR #117 merged 2026-08-01)
 
 **Notes:**
 
@@ -865,15 +865,45 @@ None — release mechanics.
 
 ### Verification
 
-- [ ] On master, working tree clean, all prior phases merged
-- [ ] Version strings in `pyproject.toml`, `actingweb/__init__.py`, and the tag
+- [x] On master, working tree clean, all prior phases merged
+- [x] Version strings in `pyproject.toml`, `actingweb/__init__.py`, and the tag
       all read `3.13.0rc3`
-- [ ] `make test-all-parallel` passes on master before tagging
-- [ ] GitHub Actions run is green and the TestPyPI upload succeeded
+- [x] `make test-all-parallel` passes on master before tagging
+- [x] GitHub Actions run is green and the TestPyPI upload succeeded
 - [ ] Manual: consumer installs from TestPyPI and re-runs the escalation probe
       against the published artifact before any final `v3.13.0` is cut
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (2026-08-01)
+
+- [x] Version strings in `pyproject.toml`, `actingweb/__init__.py`, and the tag
+      all read `3.13.0rc3`; `poetry build` produced
+      `actingweb-3.13.0rc3-py3-none-any.whl`
+- [x] `CHANGELOG.rst` closes `v3.13.0rc3: August 1, 2026` with a fresh empty
+      `Unreleased` above it
+- [x] PR #117 merged to master (squashed, `9221766`), branch deleted
+- [x] `v3.13.0rc3` tagged on the merge commit and pushed
+- [ ] Manual, for the consumer: install from TestPyPI and re-run the escalation
+      probe against the published artifact before any final `v3.13.0` is cut
+
+**Deviation from the plan, and a correction to the documented process.** This
+phase was written as "maintainer step, on master after the PR merges … it must
+not happen on the feature branch", following what `CLAUDE.md` said at the time.
+That was wrong about how releases are actually cut here: the version bump and
+changelog rename go **in the release PR itself**, and only the tag is placed on
+master afterwards (on the merge commit). There is no separate release PR. The
+release commit `Pre-release v3.13.0rc3` therefore landed on
+`bug/trust_mcp_cache` and came to master through the merge.
+
+`CLAUDE.md`, `CONTRIBUTING.rst` and `README.rst` all carried the incorrect
+wording and were corrected in the same commit. The publish workflow already
+encoded the true constraint — it verifies the tag is an ancestor of
+`origin/master` *and* that both version files match the tag — so only the tag,
+never the bump, was ever required to come after the merge.
+
+One unrelated defect fixed while checking version consistency: `conf.py` had
+`release = '2.6.1'`, hand-maintained and never updated, so the published docs
+advertised a version four majors old. It now derives from
+`actingweb.__version__`.
 
 ---
 

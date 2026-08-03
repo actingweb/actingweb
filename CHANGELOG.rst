@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc4: August 3, 2026
+--------------------------
+
 .. note::
 
    This release changes documented MCP behaviour that shipped in the stable

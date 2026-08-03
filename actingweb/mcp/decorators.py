@@ -77,6 +77,8 @@ def mcp_tool(
         present, so only sending both reaches every client.
 
     Example:
+        import json
+
         @action_hook("delete_note")
         @mcp_tool(
             description="Delete a note permanently",

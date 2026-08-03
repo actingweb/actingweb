@@ -243,10 +243,12 @@ class HookMetadata:
         description: Human-readable description of what the hook does
         input_schema: JSON schema describing expected input parameters
         output_schema: JSON schema describing the expected return value.
-            For a hook exposed as an MCP tool this is advertised as
-            ``outputSchema``, but it does NOT cause ``structuredContent``
-            to be emitted -- only a ``structuredContent`` key in the
-            returned dict does that.
+            This describes the ActingWeb ``/actions`` / ``/methods``
+            discovery surface only. It is NOT forwarded to MCP: a tool's
+            ``outputSchema`` comes solely from
+            ``@mcp_tool(output_schema=...)``. And neither one causes
+            ``structuredContent`` to be emitted -- only a
+            ``structuredContent`` key in the returned dict does that.
         annotations: Safety/behavior hints (e.g., readOnlyHint, destructiveHint)
     """
 
@@ -1397,10 +1399,12 @@ def method_hook(
         description: Human-readable description of what the method does
         input_schema: JSON schema describing expected input parameters
         output_schema: JSON schema describing the expected return value.
-            For a hook exposed as an MCP tool this is advertised as
-            ``outputSchema``, but it does NOT cause ``structuredContent``
-            to be emitted -- only a ``structuredContent`` key in the
-            returned dict does that.
+            This describes the ActingWeb ``/actions`` / ``/methods``
+            discovery surface only. It is NOT forwarded to MCP: a tool's
+            ``outputSchema`` comes solely from
+            ``@mcp_tool(output_schema=...)``. And neither one causes
+            ``structuredContent`` to be emitted -- only a
+            ``structuredContent`` key in the returned dict does that.
         annotations: Safety/behavior hints (e.g., readOnlyHint, idempotentHint)
 
     Example:
@@ -1453,10 +1457,12 @@ def action_hook(
         description: Human-readable description of what the action does
         input_schema: JSON schema describing expected input parameters
         output_schema: JSON schema describing the expected return value.
-            For a hook exposed as an MCP tool this is advertised as
-            ``outputSchema``, but it does NOT cause ``structuredContent``
-            to be emitted -- only a ``structuredContent`` key in the
-            returned dict does that.
+            This describes the ActingWeb ``/actions`` / ``/methods``
+            discovery surface only. It is NOT forwarded to MCP: a tool's
+            ``outputSchema`` comes solely from
+            ``@mcp_tool(output_schema=...)``. And neither one causes
+            ``structuredContent`` to be emitted -- only a
+            ``structuredContent`` key in the returned dict does that.
         annotations: Safety/behavior hints (e.g., destructiveHint, readOnlyHint)
 
     Example:

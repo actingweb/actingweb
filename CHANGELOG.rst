@@ -75,7 +75,12 @@ ADDED
   schema has never caused structured output to be emitted, and the library still
   does not validate ``structuredContent`` against a declared schema.
 - **MCP: a warning when ``structuredContent`` is set to a non-object.** MCP
-  requires a JSON object there; a list or string was previously dropped silently.
+  requires a JSON object there; a list, string or number was previously dropped
+  silently. ``None`` is exempt and stays silent — it carries no payload, both
+  reference clients read a null ``structuredContent`` as absent, and
+  ``{"structuredContent": value or None}`` is a legitimate way to express
+  "nothing structured this time". In that case the key is omitted from the
+  response rather than emitted as ``null``.
 
 v3.13.0rc3: August 1, 2026
 --------------------------

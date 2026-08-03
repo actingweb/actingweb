@@ -199,7 +199,14 @@ def format_call_tool_result(
       ``isError`` are forwarded, and a hook-supplied ``_meta`` is preserved.
       ``structuredContent`` is emitted **only** when the hook sets that key
       explicitly, and only when it is a JSON object (a dict) — MCP requires an
-      object there. Extra top-level keys are never promoted: a hook that wants
+      object there. A non-object value is dropped with a warning, except
+      ``None``, which is treated as equivalent to omitting the key: it carries
+      no payload, both reference clients read a null ``structuredContent`` as
+      absent, and ``{"structuredContent": x or None}`` is a legitimate way to
+      express "nothing structured this time". The key is left off the response
+      entirely rather than emitted as ``null`` — some clients discard text
+      blocks whenever the key is *present*, null included.
+      Extra top-level keys are never promoted: a hook that wants
       structured output must name it. Per the spec's backwards-compatibility
       guidance, a hook emitting ``structuredContent`` should also serialize the
       same data into a text ``content`` block, since some clients ignore

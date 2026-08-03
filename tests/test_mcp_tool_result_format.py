@@ -100,6 +100,30 @@ class TestFormatCallToolResult:
         assert "MCP requires a JSON object" in caplog.text
         assert type(bad_value).__name__ in caplog.text
 
+    def test_explicit_none_structured_content_is_absent_and_silent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``structuredContent: None`` means "nothing structured", not an error.
+
+        Unlike a list or string, ``None`` carries no payload, so nothing is
+        lost by dropping it, and ``{"structuredContent": x or None}`` is a
+        legitimate way to express an absent value. Both reference clients read
+        a null ``structuredContent`` as absent. Warning here would be a false
+        positive, so this is deliberate — but the key must be omitted entirely
+        rather than emitted as ``null``, because some clients discard text
+        blocks whenever the key is present at all.
+        """
+        caplog.set_level(logging.WARNING, logger="actingweb.handlers.mcp")
+        result = {
+            "content": [{"type": "text", "text": "ok"}],
+            "structuredContent": None,
+            "extra": 1,
+        }
+        out = format_call_tool_result(result, "2025-11-25")
+        assert "structuredContent" not in out
+        assert out["content"] == [{"type": "text", "text": "ok"}]
+        assert caplog.text == ""
+
     def test_explicit_structured_content_suppressed_on_old_version(self) -> None:
         """The version gate suppresses even an explicitly-set structuredContent."""
         result = {

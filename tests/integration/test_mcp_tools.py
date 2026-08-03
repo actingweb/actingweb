@@ -488,18 +488,24 @@ class TestMCPToolResponseFormatRegression:
     """
     Regression tests for tool response format handling.
 
-    These tests ensure critical response metadata (isError, structured payload)
-    is preserved through ActingWeb's live ``format_call_tool_result`` — the
-    shared formatter used by both the sync and async ``tools/call`` paths.
+    These tests ensure critical response metadata (isError) is preserved
+    through ActingWeb's live ``format_call_tool_result`` — the shared formatter
+    used by both the sync and async ``tools/call`` paths — and that extra
+    top-level keys are **not** turned into ``structuredContent``.
+
+    ``structuredContent`` is opt-in: only a hook that names the key gets it.
+    Promoting extras silently replaced the prose payload on clients that drop
+    text blocks whenever ``structuredContent`` is present.
     """
 
     def test_preserves_is_error_field_success(self):
         """
-        isError=false must survive formatting.
+        isError=false must survive formatting, and extras must not be promoted.
 
         Regression: a storage-confirmation tool returning ``isError: false``
         plus extra keys must keep ``isError`` (so clients like ChatGPT don't
-        misread success as error) and surface the extras as structuredContent.
+        misread success as error) while its prose ``content`` survives intact
+        and the extras are dropped rather than promoted.
         """
         from actingweb.handlers.mcp import format_call_tool_result
 
@@ -514,10 +520,7 @@ class TestMCPToolResponseFormatRegression:
 
         assert out["isError"] is False
         assert out["content"][0]["text"] == "✅ Successfully stored: test data"
-        assert out["structuredContent"] == {
-            "success": True,
-            "memory_type": "memory_test",
-        }
+        assert "structuredContent" not in out
 
     def test_preserves_is_error_field_failure(self):
         """isError=true must survive formatting (companion to the success case)."""
@@ -536,10 +539,23 @@ class TestMCPToolResponseFormatRegression:
 
         assert out["isError"] is True
         assert "❌" in out["content"][0]["text"]
-        assert out["structuredContent"] == {
-            "success": False,
-            "error": "Validation failed",
+        assert "structuredContent" not in out
+
+    def test_explicit_structured_content_still_emitted(self):
+        """A hook that names ``structuredContent`` still gets it on the wire."""
+        from actingweb.handlers.mcp import format_call_tool_result
+
+        tool_response = {
+            "content": [{"type": "text", "text": '{"success": true}'}],
+            "isError": False,
+            "structuredContent": {"success": True},
+            "dropped_extra": "not promoted",
         }
+
+        out = format_call_tool_result(tool_response, "2025-06-18")
+
+        assert out["structuredContent"] == {"success": True}
+        assert out["content"][0]["text"] == '{"success": true}'
 
     def test_tool_response_without_is_error_field(self):
         """A content-only response gets isError defaulted to False, no structuredContent."""

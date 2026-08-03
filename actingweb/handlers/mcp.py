@@ -127,28 +127,98 @@ def _evict_trust_entries_for_actor(actor_id: str) -> None:
         _trust_cache.pop(key, None)
 
 
-# Keys that are part of the CallToolResult wire shape and must not be swept
-# into structuredContent. The MCP wire field is ``_meta`` (the SDK maps
-# ``_meta`` <-> ``.meta``), so reserve ``_meta`` rather than ``meta``.
-_CALL_TOOL_RESERVED_KEYS = frozenset(
-    {"content", "isError", "_meta", "structuredContent"}
-)
+# Tools already warned about a declared output_schema with no structuredContent,
+# so the warning fires once per tool per process rather than on every call.
+_output_schema_warned: set[str] = set()
 
 
-def format_call_tool_result(result: Any, negotiated_version: str) -> dict[str, Any]:
+def _warn_missing_structured_content_once(tool_name: str | None) -> None:
+    """Warn once per tool that it declares an output schema but returns none.
+
+    Spec-conforming clients reject such a result outright with
+    ``Tool X has an output schema but did not return structured content``, so
+    this is an unambiguous author error rather than a style preference.
+    """
+    key = tool_name or "<unknown>"
+    if key in _output_schema_warned:
+        return
+    _output_schema_warned.add(key)
+    logger.warning(
+        "Tool '%s' declares an output_schema but returned no 'structuredContent'. "
+        "Strict MCP clients reject this result. Return an explicit "
+        "'structuredContent' key from the hook (and serialize the same object "
+        "into a text content block for clients that ignore it).",
+        key,
+    )
+
+
+def _warn_if_output_schema_unsatisfied(
+    out: dict[str, Any],
+    negotiated_version: str,
+    output_schema: dict[str, Any] | None,
+    tool_name: str | None,
+) -> None:
+    """Warn when a schema-declaring tool produced a result a client will reject.
+
+    The ``supports_structured_content`` clause is load-bearing. Below
+    2025-06-18 the version gate suppresses ``structuredContent`` even when the
+    hook sets it explicitly, so without this clause every *correctly written*
+    tool would warn on every call from every old client — training authors to
+    ignore the warning, which is exactly why it lives at call time rather than
+    at ``tools/list``. Below that revision there is nothing the author can fix
+    and nothing the client will reject.
+
+    Errors are exempt because both reference clients skip output-schema
+    validation entirely when ``isError`` is set.
+    """
+    if (
+        output_schema
+        and supports_structured_content(negotiated_version)
+        and not out.get("isError")
+        and "structuredContent" not in out
+    ):
+        _warn_missing_structured_content_once(tool_name)
+
+
+def format_call_tool_result(
+    result: Any,
+    negotiated_version: str,
+    output_schema: dict[str, Any] | None = None,
+    tool_name: str | None = None,
+) -> dict[str, Any]:
     """Normalize a tool hook's return value into a ``CallToolResult`` shape.
 
     Shared by the sync (Flask) and async (FastAPI) handlers so both format
     ``tools/call`` responses identically.
 
+    ``output_schema`` and ``tool_name`` are optional and used only to warn when
+    a tool declares a schema but returns no ``structuredContent``. They default
+    to ``None`` so existing two-argument calls keep working unchanged.
+
     - A dict containing ``content`` is treated as MCP-formatted: ``content`` and
       ``isError`` are forwarded, and a hook-supplied ``_meta`` is preserved.
-      When the negotiated protocol version supports structured output
-      (>= 2025-06-18), an explicit ``structuredContent`` is passed through;
-      otherwise any extra top-level keys are promoted into ``structuredContent``.
-      For older negotiated versions ``structuredContent`` is omitted (the
-      payload is already carried by ``content``).
+      ``structuredContent`` is emitted **only** when the hook sets that key
+      explicitly, and only when it is a JSON object (a dict) — MCP requires an
+      object there. Extra top-level keys are never promoted: a hook that wants
+      structured output must name it. Per the spec's backwards-compatibility
+      guidance, a hook emitting ``structuredContent`` should also serialize the
+      same data into a text ``content`` block, since some clients ignore
+      ``structuredContent`` entirely and others discard text blocks when it is
+      present.
+    - The version gate suppresses ``structuredContent`` entirely below
+      2025-06-18 — **including an explicit one**. A request with no
+      ``MCP-Protocol-Version`` header negotiates 2025-03-26, so the text
+      ``content`` block is the only payload that always arrives.
     - Anything else is wrapped as a single text content item (legacy behavior).
+      This branch honours exactly one wire field: an ``isError`` the hook set
+      explicitly. It is never *inferred* — a dict carrying an ``"error"`` key
+      but no ``"isError"`` is still reported as a success, because inferring it
+      would silently change the shape of every app that returns
+      ``{"error": ...}`` on its normal error path. Note two asymmetries with the
+      content branch, both deliberate: ``_meta`` is **not** preserved here, and
+      the text is ``str(result)`` of the *whole* dict, so an honoured ``isError``
+      also appears inside that text. The text serialization is deliberately left
+      byte-identical to previous releases.
     """
     if isinstance(result, dict) and "content" in result:
         out: dict[str, Any] = {
@@ -163,18 +233,34 @@ def format_call_tool_result(result: Any, negotiated_version: str) -> dict[str, A
             explicit_struct = result.get("structuredContent")
             if isinstance(explicit_struct, dict):
                 out["structuredContent"] = explicit_struct
-            else:
-                extras = {
-                    k: v for k, v in result.items() if k not in _CALL_TOOL_RESERVED_KEYS
-                }
-                if extras:
-                    out["structuredContent"] = extras
+            elif explicit_struct is not None:
+                logger.warning(
+                    "Tool result set 'structuredContent' to %s, but MCP requires a JSON "
+                    "object; the field was dropped.",
+                    type(explicit_struct).__name__,
+                )
+        _warn_if_output_schema_unsatisfied(
+            out, negotiated_version, output_schema, tool_name
+        )
         return out
 
     # Legacy handling: wrap non-MCP results in a text content item.
+    # Read isError before the rebind below, which replaces a non-dict result
+    # with a wrapper dict that has no isError key.
+    is_error = (
+        result["isError"] if isinstance(result, dict) and "isError" in result else None
+    )
     if not isinstance(result, dict):
         result = {"result": result}
-    return {"content": [{"type": "text", "text": str(result)}]}
+    # str(result) is unchanged from previous releases on purpose; consumers wrap
+    # batch responses around this exact serialization.
+    out = {"content": [{"type": "text", "text": str(result)}]}
+    if is_error is not None:
+        out["isError"] = bool(is_error)
+    _warn_if_output_schema_unsatisfied(
+        out, negotiated_version, output_schema, tool_name
+    )
+    return out
 
 
 class MCPHandler(BaseHandler):
@@ -995,7 +1081,10 @@ class MCPHandler(BaseHandler):
                                     "jsonrpc": "2.0",
                                     "id": request_id,
                                     "result": format_call_tool_result(
-                                        result, self._negotiated_version
+                                        result,
+                                        self._negotiated_version,
+                                        output_schema=metadata.get("output_schema"),
+                                        tool_name=tool_name,
                                     ),
                                 }
                             except Exception as e:

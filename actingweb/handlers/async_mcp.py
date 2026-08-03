@@ -192,7 +192,10 @@ class AsyncMCPHandler(MCPHandler):
                                     "jsonrpc": "2.0",
                                     "id": request_id,
                                     "result": format_call_tool_result(
-                                        result, self._negotiated_version
+                                        result,
+                                        self._negotiated_version,
+                                        output_schema=metadata.get("output_schema"),
+                                        tool_name=tool_name,
                                     ),
                                 }
                             except Exception as e:

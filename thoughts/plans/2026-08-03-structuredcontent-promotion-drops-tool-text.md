@@ -181,13 +181,16 @@ already the only test of the new contract), `:77`, `:83`, `:91`, `:97`.
 - Added `test_explicit_structured_content_still_emitted` to the integration
   regression class — the inverted tests there would otherwise leave that file
   with no positive assertion that explicit `structuredContent` survives.
-- **Environment note (applies to every phase):** `make test-all-parallel` reports
-  ~114 failures in this environment (`test_trust_flow`, `test_www_templates`,
-  `test_devtest_attributes`, …) that cascade from `actor_url = None` — shared
-  state across parallel workers, exactly the isolation issue CLAUDE.md warns
-  about. The same suite run **sequentially** is fully green (2585 passed, 26
-  skipped) on the unmodified branch point. Sequential is therefore the gate used
-  between phases here; the parallel failures are pre-existing and unrelated.
+- **Testing note (applies to every phase): always run the parallel suite via
+  `make test-all-parallel`, never a hand-rolled `pytest -n auto`.** The Makefile
+  target passes `--dist loadgroup`, and 29 test files depend on it — they carry
+  `@pytest.mark.xdist_group` so that ordered classes sharing actor state land on
+  one worker. Drop that flag and `-n auto` falls back to `--dist load`, which
+  round-robins individual tests, splits every group, and produces ~114 cascading
+  failures from `actor_url = None` in `test_trust_flow`, `test_www_templates`
+  and `test_devtest_attributes`. That is a broken invocation, **not** a broken
+  suite: with the flag, `2617 passed, 26 skipped in 58s`. See
+  `tests/integration/XDIST_GROUPS.md`.
 
 ---
 
@@ -627,11 +630,8 @@ None — release mechanics. The full suite is the gate.
 
 **Local (run before pushing):**
 
-- [x] Full suite, DynamoDB backend: **2617 passed, 26 skipped** — run
-      *sequentially*, not `make test-all-parallel`. See the Phase 1 note: the
-      parallel run reports ~114 pre-existing failures in this environment that
-      cascade from shared state across xdist workers, and the same suite is
-      fully green sequentially both before and after this change.
+- [x] `make test-all-parallel` — **2617 passed, 26 skipped in 58s** (DynamoDB).
+      Also verified sequentially: same 2617 passed, 26 skipped.
 - [x] PostgreSQL backend run: **747 passed, 18 skipped**
       (`DATABASE_BACKEND=postgresql PG_DB_PORT=5433 … pytest tests/integration/`)
 - [x] `poetry run pyright actingweb tests` — 0 errors
@@ -703,14 +703,17 @@ docs build 0 warnings.
 
 ### Learnings
 
-- **The parallel test suite is not a usable gate in this environment.**
-  `pytest -n auto` reports ~114 failures that cascade from `actor_url = None` —
-  ordered integration classes sharing state across xdist workers. The identical
-  suite is fully green sequentially, on the unmodified branch point as well as
-  after every phase. CLAUDE.md's "run `make test-all-parallel` before
-  committing" produces a red result that means nothing here; sequential is the
-  real signal. Worth fixing separately — a gate that is always red is a gate
-  nobody reads.
+- **`--dist loadgroup` is load-bearing; never substitute a hand-rolled
+  `pytest -n auto` for `make test-all-parallel`.** I did, and read the resulting
+  ~114 cascading failures as a broken suite. They were a broken *invocation*:
+  29 test files carry `@pytest.mark.xdist_group` so ordered classes sharing
+  actor state stay on one worker, and without the flag xdist round-robins
+  individual tests and splits every group, leaving later tests with
+  `actor_url = None`. With the Makefile target the suite is green in 58s —
+  faster *and* correct. The failure mode is nasty because it looks exactly like
+  a genuine isolation bug and it reproduces consistently, so "re-run it and see"
+  confirms the wrong conclusion. `tests/integration/XDIST_GROUPS.md` documents
+  the scheme.
 - **The Sphinx root is the repository root, not `docs/`.** `conf.py` and
   `index.rst` are top-level and `.readthedocs.yaml` points at `conf.py`; there
   is no `docs/conf.py`. Build with `poetry run sphinx-build -b html . <out>`.

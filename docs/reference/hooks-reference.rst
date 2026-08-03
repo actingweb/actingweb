@@ -375,6 +375,14 @@ Explicit schemas always take precedence over auto-generated ones. Supported type
 include ``str``, ``int``, ``float``, ``bool``, ``list``, ``dict``, ``None``,
 ``Optional[...]``, and nested TypedDict classes.
 
+.. note::
+
+   For a hook also exposed as an MCP tool, an ``output_schema`` — whether you
+   write it or it is auto-generated from a TypedDict return annotation — does
+   **not** make the tool emit ``structuredContent``. Only a
+   ``structuredContent`` key in the returned dict does that. See
+   :ref:`Structured Tool Output <mcp-structured-tool-output>`.
+
 Action Hooks
 ============
 
@@ -389,7 +397,10 @@ Signature: ``func(actor, action_name: str, data: dict) -> Any``
 
 - ``description``: Human-readable description of what the action does
 - ``input_schema``: JSON schema describing expected input parameters
-- ``output_schema``: JSON schema describing the expected return value
+- ``output_schema``: JSON schema describing the expected return value. For an
+  action also exposed via ``@mcp_tool``, this is advertised as ``outputSchema``
+  but does **not** cause ``structuredContent`` to be emitted — see
+  :ref:`Structured Tool Output <mcp-structured-tool-output>`.
 - ``annotations``: Safety/behavior hints (e.g., ``destructiveHint``, ``readOnlyHint``)
 
 **Example with Metadata**:

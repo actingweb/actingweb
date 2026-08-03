@@ -118,9 +118,12 @@ token returns HTTP 401 with a ``WWW-Authenticate: Bearer`` header:
      -H 'Authorization: Bearer <token>' \
      -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 
+   # Send MCP-Protocol-Version, or the request negotiates 2025-03-26 and the
+   # response carries no structuredContent even when your hook sets it.
    curl -s http://localhost:5000/mcp \
      -H 'Content-Type: application/json' \
      -H 'Authorization: Bearer <token>' \
+     -H 'MCP-Protocol-Version: 2025-06-18' \
      -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_note","arguments":{"title":"Hello","content":"World"}}}'
 
 A bearer token that authenticates but does not resolve to a trust
@@ -135,6 +138,13 @@ relationship now returns an **empty** ``tools/list`` (not an error) and a
    ``app.hooks.execute_action_hooks("create_note", actor, {...})``. Real MCP
    clients (ChatGPT, Claude) perform the OAuth2 flow and send the bearer token
    automatically.
+
+   Note that this checks your hook's **return value**, not the JSON the client
+   receives: it bypasses ``format_call_tool_result``, so it cannot see whether
+   ``structuredContent`` is emitted or suppressed. To assert on the wire shape,
+   test the formatter as well — see
+   :ref:`testing-the-wire-shape <testing-the-wire-shape>` in
+   :doc:`mcp-applications`.
 
 Tool Safety Annotations
 -----------------------

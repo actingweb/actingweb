@@ -345,6 +345,8 @@ present differently per actor:
    time inside the hook (as ``beta_export`` does above) — do not rely on
    visibility filtering for authorization.
 
+.. _mcp-structured-tool-output:
+
 Structured Tool Output
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -355,31 +357,62 @@ follows:
 
 - A dict containing ``content`` is treated as MCP-formatted. ``content`` and
   ``isError`` are forwarded, and a hook-supplied ``_meta`` is preserved.
-- On a version that supports structured output, an explicit
-  ``structuredContent`` key is passed through unchanged; otherwise any *extra*
-  top-level keys (anything besides ``content``, ``isError``, ``_meta`` and
-  ``structuredContent``) are promoted into ``structuredContent``.
-- On older negotiated versions ``structuredContent`` is omitted entirely (the
-  payload is already carried by ``content``).
+- ``structuredContent`` is **opt-in**: it is emitted only when your hook sets
+  that key explicitly, and only when the value is a JSON object (a dict).
+  Extra top-level keys are **not** promoted — they are dropped.
+- On older negotiated versions ``structuredContent`` is omitted entirely, even
+  when you set it explicitly.
+
+.. important::
+
+   Declaring ``output_schema`` does **not** cause ``structuredContent`` to be
+   emitted. The two are independent: ``output_schema`` is advertised in
+   ``tools/list``, while ``structuredContent`` comes only from the key your hook
+   returns. A tool that declares a schema and returns no ``structuredContent``
+   is rejected outright by spec-conforming clients, so ActingWeb logs a warning
+   when it sees that combination.
+
+Return both representations of the same object — the structured value under
+``structuredContent``, and its serialization in a text ``content`` block. The
+MCP specification asks for this for backwards compatibility, and it is what
+makes a tool work everywhere: some clients ignore ``structuredContent``
+entirely, and others discard text blocks whenever it is present.
 
 .. code-block:: python
 
-    @app.action_hook("search")
+    import json
+
+    @app.action_hook("get_weather")
     @mcp_tool(
-        description="Search your notes",
+        description="Get current weather",
         output_schema={
             "type": "object",
-            "properties": {"results": {"type": "array"}, "count": {"type": "integer"}},
+            "properties": {
+                "temperature": {"type": "number"},
+                "conditions": {"type": "string"},
+                "humidity": {"type": "integer"},
+            },
+            "required": ["temperature", "conditions", "humidity"],
         },
     )
-    def search(actor, action_name, params):
-        results = [...]
+    def get_weather(actor, action_name, params):
+        payload = {"temperature": 22.5, "conditions": "Partly cloudy", "humidity": 65}
         return {
-            "content": [{"type": "text", "text": f"Found {len(results)} results"}],
-            # Promoted into structuredContent on >= 2025-06-18:
-            "results": results,
-            "count": len(results),
+            # Named explicitly — nothing is promoted for you.
+            "structuredContent": payload,
+            # The same object serialized, so clients that ignore
+            # structuredContent still receive the data.
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+            "isError": False,
         }
+
+.. warning::
+
+   Do not put prose in ``content`` and *different* data in
+   ``structuredContent``. Clients that drop text blocks when
+   ``structuredContent`` is present will show the model only the structured
+   value, and your prose is lost with no error on either side. If a tool's real
+   payload is prose, return prose alone and set no ``structuredContent``.
 
 The ``title`` and ``output_schema`` set on ``@mcp_tool`` also surface in the
 ``tools/list`` response as the ``title`` and ``outputSchema`` fields.
@@ -401,6 +434,15 @@ On requests after ``initialize``, the handler honors the
 - Header present but unsupported: respond with HTTP 400.
 - Header present and supported: use that version for version-gated response
   fields such as ``structuredContent``.
+
+.. warning::
+
+   A request with **no** ``MCP-Protocol-Version`` header negotiates
+   ``2025-03-26``, which suppresses ``structuredContent`` — *including one your
+   hook set explicitly*. This trips up manual verification with ``curl``: send
+   ``-H 'MCP-Protocol-Version: 2025-06-18'`` or you will see no
+   ``structuredContent`` and conclude your hook is broken when it is not. The
+   text ``content`` block is the only payload that always arrives.
 
 Negotiation is backward compatible with clients that speak only
 ``2024-11-05``.
@@ -738,6 +780,53 @@ Unit Testing Tools and Prompts
             # Check that note was stored
             notes = [k for k in self.actor.properties.keys() if k.startswith("note_")]
             self.assertTrue(len(notes) > 0)
+
+.. _testing-the-wire-shape:
+
+Testing the Wire Shape
+~~~~~~~~~~~~~~~~~~~~~~
+
+``execute_action_hooks`` returns your hook's value **before** ActingWeb
+normalizes it. It therefore cannot tell you whether ``structuredContent``
+reaches the client — a suite built only on it stays green while the wire output
+regresses.
+
+Assert on ``format_call_tool_result`` as well. It is the single formatter shared
+by the sync and async ``tools/call`` paths, and it takes the negotiated protocol
+version, so you can pin the version-gated behaviour too:
+
+.. code-block:: python
+
+    import json
+    from actingweb.handlers.mcp import format_call_tool_result
+
+    def test_weather_tool_wire_shape():
+        result = get_weather(actor, "get_weather", {})
+
+        out = format_call_tool_result(result, "2025-06-18")
+        assert out["structuredContent"] == {
+            "temperature": 22.5,
+            "conditions": "Partly cloudy",
+            "humidity": 65,
+        }
+        # The text block carries the same object, for clients that ignore
+        # structuredContent.
+        assert json.loads(out["content"][0]["text"]) == out["structuredContent"]
+
+    def test_prose_tool_keeps_its_text():
+        out = format_call_tool_result(
+            {"content": [{"type": "text", "text": "A long report."}], "run_id": "r1"},
+            "2025-06-18",
+        )
+        # Extras are not promoted, so the prose is what the client receives.
+        assert "structuredContent" not in out
+        assert out["content"] == [{"type": "text", "text": "A long report."}]
+
+    def test_old_client_gets_no_structured_content():
+        out = format_call_tool_result(
+            {"content": [...], "structuredContent": {"a": 1}}, "2025-03-26"
+        )
+        assert "structuredContent" not in out
 
 Integration Testing with FastAPI
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

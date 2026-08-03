@@ -122,9 +122,13 @@ Behavioral Changes to Verify
   ``"actingweb"`` (was ``"actingweb-{actor_id}"``). Each MCP connection is already
   per-actor. Clients keyed on the old name or relying on actor-specific tool
   prefixes should be re-checked. Override with ``with_mcp(server_name=...)``.
-- **MCP ``tools/call`` results always include ``isError``** (default ``false``)
-  per spec. Clients doing strict-equality comparison on the result object will see
-  the added field.
+- **MCP ``tools/call`` results include ``isError``** (default ``false``) per
+  spec **when the hook returns a dict containing ``content``**. Clients doing
+  strict-equality comparison on the result object will see the added field.
+  Results that take the legacy text-wrap path (a hook returning a dict with no
+  ``content`` key, or a bare value) carry no ``isError`` field; from
+  ``v3.13.0rc4`` that path emits one when — and only when — the hook sets
+  ``isError`` explicitly.
 - **Logout no longer revokes the upstream identity-provider grant.** ``/oauth/logout``
   (and the SPA session-token revoke) now clears the stored provider token *locally*
   instead of calling the provider's revocation endpoint. This is correct for
@@ -164,6 +168,14 @@ Adopt these only if you want them; none change existing behavior:
 - **MCP enhancements** — protocol version negotiation, ``structuredContent`` tool
   output, per-actor tool visibility/descriptions, and
   ``with_mcp(server_name=..., instructions=...)``.
+
+  .. note::
+
+     ``structuredContent`` behaviour **changed in v3.13.0rc4**. In this release
+     extra top-level keys returned by a tool hook were promoted into
+     ``structuredContent`` automatically; from ``v3.13.0rc4`` it is opt-in and
+     only an explicit ``structuredContent`` key is emitted. See
+     :doc:`v3.13` before upgrading past that boundary.
 
 Backward Compatibility
 ======================

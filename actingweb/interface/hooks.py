@@ -242,7 +242,11 @@ class HookMetadata:
     Attributes:
         description: Human-readable description of what the hook does
         input_schema: JSON schema describing expected input parameters
-        output_schema: JSON schema describing the expected return value
+        output_schema: JSON schema describing the expected return value.
+            For a hook exposed as an MCP tool this is advertised as
+            ``outputSchema``, but it does NOT cause ``structuredContent``
+            to be emitted -- only a ``structuredContent`` key in the
+            returned dict does that.
         annotations: Safety/behavior hints (e.g., readOnlyHint, destructiveHint)
     """
 
@@ -1392,7 +1396,11 @@ def method_hook(
         method_name: Name of method to hook ("*" for all methods)
         description: Human-readable description of what the method does
         input_schema: JSON schema describing expected input parameters
-        output_schema: JSON schema describing the expected return value
+        output_schema: JSON schema describing the expected return value.
+            For a hook exposed as an MCP tool this is advertised as
+            ``outputSchema``, but it does NOT cause ``structuredContent``
+            to be emitted -- only a ``structuredContent`` key in the
+            returned dict does that.
         annotations: Safety/behavior hints (e.g., readOnlyHint, idempotentHint)
 
     Example:
@@ -1444,7 +1452,11 @@ def action_hook(
         action_name: Name of action to hook ("*" for all actions)
         description: Human-readable description of what the action does
         input_schema: JSON schema describing expected input parameters
-        output_schema: JSON schema describing the expected return value
+        output_schema: JSON schema describing the expected return value.
+            For a hook exposed as an MCP tool this is advertised as
+            ``outputSchema``, but it does NOT cause ``structuredContent``
+            to be emitted -- only a ``structuredContent`` key in the
+            returned dict does that.
         annotations: Safety/behavior hints (e.g., destructiveHint, readOnlyHint)
 
     Example:

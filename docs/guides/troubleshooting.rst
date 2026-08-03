@@ -63,6 +63,46 @@ MCP client sees an empty tool list or ``-32003`` after upgrading
   request) so its trust row is recreated with the ``oauth_client_id`` the
   new resolver requires.
 
+MCP tool's structured data disappeared after upgrading
+--------------------------------------------------------
+
+- **Symptom**: After upgrading to ``v3.13.0rc4`` or newer, a tool that used to
+  deliver structured fields to the model now delivers only its text, and
+  ``structuredContent`` is absent from the ``tools/call`` response.
+- **Cause**: ``structuredContent`` is now opt-in. Extra top-level keys returned
+  alongside ``content`` used to be promoted into ``structuredContent``
+  automatically; that promotion was removed because clients that discard text
+  blocks when ``structuredContent`` is present were silently dropping the tool's
+  entire prose payload. Dropped extras are **not** logged — they are a
+  deliberate migration, not an error.
+- **Fix**: Nest the data under an explicit ``structuredContent`` key, and keep
+  the same object serialized in a text ``content`` block so clients that ignore
+  ``structuredContent`` still receive it. See the ``rc4`` section of
+  ``docs/migration/v3.13.rst``. If the tool's real payload is prose, returning
+  prose alone is now the correct shape.
+- **Note when verifying with ``curl``**: a request with no
+  ``MCP-Protocol-Version`` header negotiates ``2025-03-26``, which suppresses
+  ``structuredContent`` *even when set explicitly*. Send
+  ``-H 'MCP-Protocol-Version: 2025-06-18'`` or you will misread a working hook
+  as broken.
+
+MCP client rejects a tool with "has an output schema but did not return structured content"
+---------------------------------------------------------------------------------------------
+
+- **Symptom**: A spec-conforming client (Claude Code, the reference Python
+  client) errors on every call to one tool with ``Tool X has an output schema
+  but did not return structured content``. The server log carries a matching
+  ``WARNING`` naming the tool.
+- **Cause**: The tool declares ``output_schema`` on ``@mcp_tool`` — so
+  ``outputSchema`` is advertised in ``tools/list`` — but its hook returns no
+  ``structuredContent``. Declaring a schema does **not** cause structured output
+  to be emitted; the two are independent. Once a schema is advertised, clients
+  treat structured output as mandatory on every non-error result.
+- **Fix**: Either return an explicit ``structuredContent`` conforming to the
+  declared schema, or remove ``output_schema`` from the decorator. The warning
+  is logged once per tool per process, so check the log from around process
+  start rather than only the moment you reproduce it.
+
 Property changes not visible in Web UI
 --------------------------------------
 

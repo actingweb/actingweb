@@ -627,15 +627,20 @@ None — release mechanics. The full suite is the gate.
 
 **Local (run before pushing):**
 
-- [ ] `make test-all-parallel` — all tests pass (DynamoDB backend)
-- [ ] PostgreSQL backend run: `docker compose -f docker-compose.test.yml up
-      postgres-test -d`, then `DATABASE_BACKEND=postgresql PG_DB_HOST=localhost
-      PG_DB_PORT=5433 PG_DB_NAME=actingweb_test PG_DB_USER=actingweb
-      PG_DB_PASSWORD=testpassword make test-integration`
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run ruff format --check actingweb tests` passes
-- [ ] Both version files match `3.13.0rc4` exactly
+- [x] Full suite, DynamoDB backend: **2617 passed, 26 skipped** — run
+      *sequentially*, not `make test-all-parallel`. See the Phase 1 note: the
+      parallel run reports ~114 pre-existing failures in this environment that
+      cascade from shared state across xdist workers, and the same suite is
+      fully green sequentially both before and after this change.
+- [x] PostgreSQL backend run: **747 passed, 18 skipped**
+      (`DATABASE_BACKEND=postgresql PG_DB_PORT=5433 … pytest tests/integration/`)
+- [x] `poetry run pyright actingweb tests` — 0 errors
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run ruff format --check actingweb tests` passes
+- [x] Both version files match `3.13.0rc4` exactly
+- [x] Docs build clean (0 warnings, same as baseline)
+- [x] `CHANGELOG.rst` has exactly one `Unreleased` (empty) and exactly one
+      `v3.13.0rc4` section
 
 **CI-only (cannot be satisfied locally — do not tag until these are green):**
 
@@ -651,9 +656,77 @@ Note the local Postgres run is a *pre-check*, not a substitute for the CI
 matrix — a locally green single-backend run is not evidence the merge gate is
 satisfied.
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress — local half complete, release pending
+
+Committed on branch `structuredcontent-opt-in`:
+
+- `4985b84` Make MCP structuredContent opt-in, and close two adjacent defects
+- `acf1717` Document structuredContent as opt-in, and correct two older claims
+- `febb6e6` Pre-release v3.13.0rc4
+
+**Remaining, and deliberately not done without the maintainer:** push the
+branch, open the PR, merge it once CI is green on **both** backends, then
+`git tag v3.13.0rc4` on the merge commit and `git push --tags`. These are
+outward-facing and gated on a CI result that cannot be observed from here, so
+the plan stays `active` until the tag ships.
 
 ---
+
+## Implementation Summary
+
+**Completed:** 2026-08-03 (phases 1–5; phase 6 local half)
+**All phases:** 1–5 Complete; 6 In Progress (release mechanics pending)
+**Test status:** All passing — 2617 passed / 26 skipped (DynamoDB, sequential);
+747 passed / 18 skipped (PostgreSQL integration); pyright 0 errors; ruff clean;
+docs build 0 warnings.
+
+### Deviations from Plan
+
+- **No second `dict[str, Any]` annotation on the legacy branch** (Phase 3). The
+  existing declaration at the top of the content branch governs the whole
+  function scope in pyright, so the plan's stated constraint is satisfied
+  without new syntax. Verified: 0 errors.
+- **`docs/quickstart/configuration.rst:790` deliberately left alone** (Phase 5).
+  It documents `CachedCapability` for peer-capability caching, not MCP tool
+  output; the plan reached it through a bare `output_schema` grep. An MCP note
+  there would mislead.
+- **Phase 5 does not write the `v3.13.0rc4` changelog heading**, only the body
+  under `Unreleased`. Phase 6 renames the heading. The plan had both phases
+  writing it, which would have produced two rc4 sections.
+- **Extra tests beyond the plan's list**, in three places where the plan's
+  coverage would have passed while the thing it was meant to prove was broken:
+  two dispatch-level tests for the `output_schema` plumbing (the unit tests pass
+  the schema as an explicit kwarg, so they cannot catch a wrong metadata key);
+  `test_error_key_alone_does_not_infer_is_error` (the regression guard for
+  "honour, never infer"); and a test pinning the legacy branch's `_meta`
+  asymmetry.
+
+### Learnings
+
+- **The parallel test suite is not a usable gate in this environment.**
+  `pytest -n auto` reports ~114 failures that cascade from `actor_url = None` —
+  ordered integration classes sharing state across xdist workers. The identical
+  suite is fully green sequentially, on the unmodified branch point as well as
+  after every phase. CLAUDE.md's "run `make test-all-parallel` before
+  committing" produces a red result that means nothing here; sequential is the
+  real signal. Worth fixing separately — a gate that is always red is a gate
+  nobody reads.
+- **The Sphinx root is the repository root, not `docs/`.** `conf.py` and
+  `index.rst` are top-level and `.readthedocs.yaml` points at `conf.py`; there
+  is no `docs/conf.py`. Build with `poetry run sphinx-build -b html . <out>`.
+  The baseline is **0 warnings**, which makes "no new warnings" a real gate
+  rather than a formality.
+- **A doc example can only be trusted if a test executes it.** The example this
+  change had to fix was itself the reason Phase 4's warning exists: it declared
+  `output_schema` and relied on promotion, so copy-pasting the library's own
+  documentation produced a tool that strict clients reject. The replacement
+  lives in `tests/test_mcp_tools_call_wire_shape.py` as `canonical_weather_hook`
+  and the guide copies it, so it cannot drift silently again.
+- **`_output_schema_warned` is process-global state that leaks across tests.**
+  Without an autouse fixture clearing it plus distinct tool names per test, the
+  "warns" and "warns once" tests pass or fail on execution order — which would
+  have surfaced as an intermittent parallel-only failure, the hardest kind to
+  attribute.
 
 ## Evaluation Notes
 

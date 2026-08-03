@@ -324,6 +324,30 @@ class TestOutputSchemaWarning:
         )
         assert caplog.text == ""
 
+    def test_explicit_none_with_declared_schema_still_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The ``None`` exemption is scoped to the *non-object* warning only.
+
+        ``structuredContent: None`` is silently treated as absent (see
+        ``test_explicit_none_structured_content_is_absent_and_silent``) — but
+        when the tool also *declares* an ``output_schema`` there is a real
+        contract being violated, and a strict client will reject the result.
+        This pins that the two warnings stay independent, so silencing one
+        never silences the other.
+        """
+        result = {
+            "content": [{"type": "text", "text": "ok"}],
+            "structuredContent": None,
+        }
+        format_call_tool_result(
+            result, "2025-06-18", output_schema=self.SCHEMA, tool_name="null_schema"
+        )
+        assert "declares an output_schema" in caplog.text
+        assert "null_schema" in caplog.text
+        # The non-object warning must NOT have fired.
+        assert "MCP requires a JSON object" not in caplog.text
+
     def test_two_argument_call_still_works(self) -> None:
         """Existing call sites that pass only two arguments are unaffected."""
         out = format_call_tool_result(

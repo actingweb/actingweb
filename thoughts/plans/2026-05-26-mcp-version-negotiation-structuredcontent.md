@@ -10,6 +10,18 @@ status: done
 
 ## Update Log
 
+- **2026-08-03 — The "MVP = promote all extras" decision below (and open
+  question O3) was reversed.** `structuredContent` is now opt-in: extra
+  top-level keys are no longer promoted, and only an explicit
+  `structuredContent` key is emitted. The promotion was measured to delete a
+  tool's entire prose payload on clients that discard text blocks when
+  `structuredContent` is present. The decision text below is left intact as the
+  record of what was decided on 2026-05-26 and why; see
+  `thoughts/plans/2026-08-03-structuredcontent-promotion-drops-tool-text.md` and
+  `thoughts/research/2026-08-03-structuredcontent-promotion-drops-tool-text.md`
+  for the reversal. Note `actingweb/mcp/protocol.py` cites this file from
+  shipping code, which is why the correction is recorded here.
+
 - **2026-05-27 — Dropped the `mcp` SDK dependency entirely (option A), folded into PR #100.**
   Review of SDK usage showed the live path had no functional dependency on `mcp` (only two
   version constants with a fallback, plus the vestigial server). Actions taken: made

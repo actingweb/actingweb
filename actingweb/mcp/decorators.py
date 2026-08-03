@@ -36,7 +36,13 @@ def mcp_tool(
         client_descriptions: Client-specific descriptions for safety/clarity.
                            Example: {"chatgpt": "Search your personal notes", "claude": "Search and store information"}
         title: Human-readable title for the tool (optional)
-        output_schema: JSON schema describing the tool's output (optional)
+        output_schema: JSON schema describing the tool's output (optional).
+                    Advertised as ``outputSchema`` in tools/list. It does **not**
+                    cause ``structuredContent`` to be emitted — only a
+                    ``structuredContent`` key in the hook's return value does
+                    that. Declaring a schema and returning no
+                    ``structuredContent`` is rejected by spec-conforming
+                    clients, so ActingWeb logs a warning when it sees that.
         annotations: Safety and behavior annotations for the tool.
                     IMPORTANT: ChatGPT uses these for safety evaluation.
                     Example: {
@@ -59,14 +65,30 @@ def mcp_tool(
                     information leakage to actors without the feature. Predicate
                     exceptions are logged and treated as None (fall back to default).
 
+    Return shape:
+        The canonical return value is a dict with a ``content`` list, plus an
+        optional ``isError`` and an optional ``structuredContent``. Anything
+        else is wrapped as a single text block containing ``str(result)``,
+        which is rarely what you want.
+
+        When you return ``structuredContent``, also serialize the same object
+        into a text ``content`` block: some clients ignore
+        ``structuredContent``, and others discard text blocks whenever it is
+        present, so only sending both reaches every client.
+
     Example:
+        import json
+
         @action_hook("delete_note")
         @mcp_tool(
             description="Delete a note permanently",
             annotations={"destructiveHint": True, "readOnlyHint": False}
         )
         def handle_delete(actor, action_name, data):
-            return {"status": "deleted"}
+            return {
+                "content": [{"type": "text", "text": "Note deleted."}],
+                "isError": False,
+            }
 
         @action_hook("search")
         @mcp_tool(
@@ -74,7 +96,12 @@ def mcp_tool(
             annotations={"readOnlyHint": True, "destructiveHint": False}
         )
         def handle_search(actor, action_name, data):
-            return {"results": [...]}
+            payload = {"results": [...]}
+            return {
+                "structuredContent": payload,
+                "content": [{"type": "text", "text": json.dumps(payload)}],
+                "isError": False,
+            }
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:

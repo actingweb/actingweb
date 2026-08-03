@@ -2,6 +2,105 @@
 Migrating to ActingWeb 3.13
 ===========================
 
+Behaviour change in rc4: MCP ``structuredContent`` is now opt-in
+=================================================================
+
+.. note::
+
+   This section covers the ``v3.13.0rc4`` behaviour change. It is independent
+   of the ``rc3`` security fix and the ``rc1``/``rc2`` DynamoDB-scalability
+   steps below — read every section that falls between the version you are on
+   and the version you are upgrading to. It applies only if you expose MCP
+   tools; if you do not, skip to the next section.
+
+What changed
+------------
+
+Previously, a tool hook returning a dict with ``content`` plus extra top-level
+keys had those extras **promoted** into ``structuredContent`` automatically.
+That promotion is removed. ``structuredContent`` is now emitted only when your
+hook sets that key explicitly, and only when its value is a JSON object.
+
+Why: at least one major MCP client discards **every** text content block when
+``structuredContent`` is present. Under the old behaviour, adding a single
+scalar key to a hook's return value silently deleted that tool's entire prose
+payload — the model received only the promoted keys, with no error on either
+side. Neither reference server implementation promotes keys this way.
+
+Are you affected?
+-----------------
+
+You are affected if any tool hook returns a dict with a ``content`` key **and**
+other top-level keys besides ``isError``, ``_meta`` and ``structuredContent``.
+Those extras were being serialized into ``structuredContent``; now they are
+dropped.
+
+You are **not** affected if your hooks already set ``structuredContent``
+explicitly, return ``content`` alone, or return dicts with no ``content`` key
+(those take the legacy text-wrap path, which never emitted
+``structuredContent``).
+
+How to migrate
+--------------
+
+The migration is a no-op against the old release, so you can **migrate first
+and upgrade afterwards** — no coordinated deploy window. The explicit
+passthrough already exists in ``v3.11.0``/``v3.12.0``, so a hook updated as
+below produces byte-identical output on both.
+
+For a tool whose payload is genuinely structured, name the key and serialize
+the same object into the text block:
+
+.. code-block:: python
+
+    # Before — relied on promotion
+    return {
+        "content": [{"type": "text", "text": f"Found {len(results)} results"}],
+        "results": results,
+        "count": len(results),
+    }
+
+    # After — explicit, and the text carries the same object
+    payload = {"results": results, "count": len(results)}
+    return {
+        "structuredContent": payload,
+        "content": [{"type": "text", "text": json.dumps(payload)}],
+    }
+
+For a tool whose payload is **prose**, drop the extras instead of promoting
+them. That is the case the old behaviour broke, and returning prose alone is
+now correct.
+
+Two caveats the library cannot enforce for you
+-----------------------------------------------
+
+1. **Some clients ignore ``structuredContent`` entirely** (see
+   ``modelcontextprotocol#1411``). Always keep the same data serialized in a
+   text content block, per the specification's backwards-compatibility
+   guidance. The text block is the only thing that always arrives.
+2. **A request with no ``MCP-Protocol-Version`` header negotiates
+   ``2025-03-26``**, where ``structuredContent`` is suppressed *even when set
+   explicitly*. If you verify with ``curl``, send
+   ``-H 'MCP-Protocol-Version: 2025-06-18'`` or you will wrongly conclude your
+   migrated hook is broken.
+
+Two related fixes in the same release
+--------------------------------------
+
+- **An explicit ``isError`` is now honoured on the legacy text-wrap path.** A
+  hook returning ``{"isError": True, ...}`` with no ``content`` key previously
+  reached the wire with no ``isError`` field at all, so the failure was
+  reported to the client as a success. ``isError`` is honoured only when you
+  set it — it is never inferred from an ``"error"`` key or any other heuristic,
+  so apps that return ``{"error": ...}`` on their normal error path see no
+  change. The text serialization is unchanged.
+- **A warning now fires when a tool declares ``output_schema`` but returns no
+  ``structuredContent``.** Spec-conforming clients reject that result outright
+  (``Tool X has an output schema but did not return structured content``). This
+  was already broken before this release; it is now visible in your logs. Note
+  that ``output_schema`` and ``structuredContent`` are independent — declaring
+  a schema has never caused structured output to be emitted.
+
 Security fix in rc3: MCP trust-cache authorization bypass
 ===========================================================
 
@@ -9,8 +108,9 @@ Security fix in rc3: MCP trust-cache authorization bypass
 
    This section covers the ``v3.13.0rc3`` security fix. It applies **in
    addition to** the DynamoDB-scalability migration steps later in this
-   document (``rc1``/``rc2``) — read both if you are upgrading past either
-   boundary. If you are only running MCP with a single client per actor,
+   document (``rc1``/``rc2``) and the ``rc4`` MCP change above — read every
+   section between the version you are on and the version you are upgrading
+   to. If you are only running MCP with a single client per actor,
    most of this section does not apply to you, but the ``resources/read``
    and resolver-matching items below can still be relevant; read the
    summary before skipping ahead.
@@ -101,9 +201,10 @@ Overview
 .. note::
 
    This "Overview" and everything below it describes the ``rc1``/``rc2``
-   DynamoDB-scalability content of the 3.13 line. The ``rc3`` security fix
-   covered above is a separate, later addition to the same release line —
-   read both sections if you are upgrading from before ``rc1``.
+   DynamoDB-scalability content of the 3.13 line. The ``rc3`` security fix and
+   the ``rc4`` MCP ``structuredContent`` change covered above are separate,
+   later additions to the same release line — read all three sections if you
+   are upgrading from before ``rc1``.
 
 ActingWeb 3.13 is a **DynamoDB scalability release**. It fixes two measured
 superlinear cost defects (full-table scans on per-actor reads; a

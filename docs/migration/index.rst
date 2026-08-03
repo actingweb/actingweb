@@ -22,6 +22,12 @@ Contents
 Version Migrations
 ==================
 
+**v3.13 Migration**
+   Guide for upgrading to ActingWeb 3.13, covering the DynamoDB scalability
+   work (``rc1``/``rc2``), the MCP trust-cache authorization fix (``rc3``), and
+   the MCP ``structuredContent`` behaviour change in ``rc4`` — tool hooks no
+   longer have extra top-level keys promoted into ``structuredContent``.
+
 **v3.11 Migration**
    Guide for upgrading to ActingWeb 3.11, covering the one new PostgreSQL
    migration (chain_id index), DynamoDB TTL for token cleanup, SPA/mobile

@@ -5,6 +5,83 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc4: August 3, 2026
+--------------------------
+
+.. note::
+
+   This release changes documented MCP behaviour that shipped in the stable
+   ``v3.11.0`` and ``v3.12.0`` releases. If you expose MCP tools, read
+   ``docs/migration/v3.13.rst`` before upgrading. The migration is a no-op
+   against the older releases, so you can update your hooks first and upgrade
+   afterwards.
+
+CHANGED
+~~~~~~~
+
+- **MCP ``structuredContent`` is now opt-in.** ``tools/call`` results emit
+  ``structuredContent`` only when a tool hook sets that key explicitly, and only
+  when its value is a JSON object. Extra top-level keys are **no longer promoted**
+  into ``structuredContent``.
+
+  Why this changed: at least one major MCP client discards **every** text content
+  block when ``structuredContent`` is present on a result. Under the previous
+  behaviour, adding a single scalar key to a hook's return value silently deleted
+  that tool's entire prose payload — the model received only the promoted keys,
+  and nothing in the protocol reported the loss to either side. Neither reference
+  server implementation promotes individual keys: the SDK's low-level server emits
+  ``structuredContent`` only when ``content`` is its exact serialization, and
+  FastMCP only for a declared return model.
+
+  This is also a hardening improvement. A hook doing
+  ``return {"content": [...], **rel.to_dict()}`` was shipping the trust row's
+  ``secret`` to the model; ``properties.to_dict()`` can likewise carry
+  ``oauth_token`` / ``oauth_refresh_token``. Only an explicitly named
+  ``structuredContent`` now leaves the process. Note the win is scoped to the
+  ``content`` branch — the legacy text-wrap path still stringifies the whole dict.
+
+  Migration: nest the data you want structured under an explicit
+  ``structuredContent`` key, and keep the same object serialized in a text
+  ``content`` block (the spec's backwards-compatibility guidance — some clients
+  ignore ``structuredContent`` entirely). For tools whose payload is prose, drop
+  the extras instead. The explicit passthrough already exists in ``v3.11.0`` and
+  ``v3.12.0``, so migrated hooks produce identical output on both, and no
+  coordinated deploy is needed.
+
+FIXED
+~~~~~
+
+- **MCP: an explicit ``isError`` is now honoured on the legacy text-wrap path.**
+  A hook returning ``{"isError": True, "error": "boom"}`` with no ``content`` key
+  previously reached the wire with no ``isError`` field at all, so the failure was
+  reported to the client as a **success**. ``isError`` is honoured only when the
+  hook sets it — it is never inferred from an ``"error"`` key or any other shape
+  heuristic, so applications that return ``{"error": ...}`` on their normal error
+  path see no change. The ``str(result)`` text serialization is unchanged, so
+  ``isError`` appears both inside that text and as a wire field.
+
+ADDED
+~~~~~
+
+- **MCP: a warning when a tool declares ``output_schema`` but returns no
+  ``structuredContent``.** Spec-conforming clients reject such a result outright
+  (``Tool X has an output schema but did not return structured content``), which
+  was already broken before this release for anyone declaring a schema — the
+  library advertises ``outputSchema`` in ``tools/list`` but never consulted it at
+  call time. The warning fires once per tool per process, at call time, and only
+  when the negotiated protocol version supports structured content, so a
+  correctly-written hook talking to an older client never trips it.
+  ``output_schema`` and ``structuredContent`` remain independent: declaring a
+  schema has never caused structured output to be emitted, and the library still
+  does not validate ``structuredContent`` against a declared schema.
+- **MCP: a warning when ``structuredContent`` is set to a non-object.** MCP
+  requires a JSON object there; a list, string or number was previously dropped
+  silently. ``None`` is exempt and stays silent — it carries no payload, both
+  reference clients read a null ``structuredContent`` as absent, and
+  ``{"structuredContent": value or None}`` is a legitimate way to express
+  "nothing structured this time". In that case the key is omitted from the
+  response rather than emitted as ``null``.
+
 v3.13.0rc3: August 1, 2026
 --------------------------
 
@@ -746,6 +823,13 @@ MCP:
   an explicit ``structuredContent`` from the hook is passed through, and a
   hook-supplied ``_meta`` is preserved. For older negotiated versions
   ``structuredContent`` is omitted (the payload is still carried by ``content``).
+
+  .. warning::
+
+     **The promotion described above was removed in v3.13.0rc4.**
+     ``structuredContent`` is now emitted only when a hook sets that key
+     explicitly; extra top-level keys are no longer promoted. See the
+     ``v3.13.0rc4`` entry and ``docs/migration/v3.13.rst``.
 - **MCP tool per-actor visibility**: ``@mcp_tool`` accepts a
   ``visibility_predicate(actor) -> bool`` to omit tools from ``tools/list`` for
   actors that should not see them (fail-closed on predicate errors). Note:
@@ -809,10 +893,14 @@ CHANGED
 - Token-exchange, token-refresh, token-revocation, and userinfo error logs now
   redact ``client_secret`` / ``assertion`` / ``id_token`` / ``client_assertion``
   and truncate the response body.
-- **MCP ``tools/call`` results always include ``isError``** (defaulting to
-  ``false``) per the MCP spec, where previously a hook returning
-  ``{"content": [...]}`` without ``isError`` was passed through verbatim. Clients
-  doing strict equality on the result object may observe the added field.
+- **MCP ``tools/call`` results include ``isError``** (defaulting to ``false``)
+  per the MCP spec **when the hook returns a dict containing ``content``**,
+  where previously such a hook returning ``{"content": [...]}`` without
+  ``isError`` was passed through verbatim. Clients doing strict equality on the
+  result object may observe the added field. This does not apply to the legacy
+  text-wrap path (a hook returning a dict with no ``content`` key, or a bare
+  value), which emits no ``isError`` at all; see the ``v3.13.0rc4`` entry,
+  which makes that path honour an explicitly set ``isError``.
 - **MCP server name no longer includes ``actor_id``**: the announced server name
   defaults to ``"actingweb"`` instead of ``"actingweb-{actor_id}"``. Each MCP
   connection is already per-actor, so disambiguation in the name was unnecessary

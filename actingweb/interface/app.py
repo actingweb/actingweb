@@ -1091,7 +1091,13 @@ class ActingWebApp:
             method_name: Name of method to hook ("*" for all methods)
             description: Human-readable description of what the method does
             input_schema: JSON schema describing expected input parameters
-            output_schema: JSON schema describing the expected return value
+            output_schema: JSON schema describing the expected return value.
+                This describes the ActingWeb ``/actions`` / ``/methods``
+                discovery surface only. It is NOT forwarded to MCP: a tool's
+                ``outputSchema`` comes solely from
+                ``@mcp_tool(output_schema=...)``. And neither one causes
+                ``structuredContent`` to be emitted -- only a
+                ``structuredContent`` key in the returned dict does that.
             annotations: Safety/behavior hints (e.g., readOnlyHint, idempotentHint)
         """
 
@@ -1124,7 +1130,13 @@ class ActingWebApp:
             action_name: Name of action to hook ("*" for all actions)
             description: Human-readable description of what the action does
             input_schema: JSON schema describing expected input parameters
-            output_schema: JSON schema describing the expected return value
+            output_schema: JSON schema describing the expected return value.
+                This describes the ActingWeb ``/actions`` / ``/methods``
+                discovery surface only. It is NOT forwarded to MCP: a tool's
+                ``outputSchema`` comes solely from
+                ``@mcp_tool(output_schema=...)``. And neither one causes
+                ``structuredContent`` to be emitted -- only a
+                ``structuredContent`` key in the returned dict does that.
             annotations: Safety/behavior hints (e.g., destructiveHint, readOnlyHint)
         """
 

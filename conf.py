@@ -202,11 +202,20 @@ epub_exclude_files = ['search.html']
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
 
-# Intersphinx mappings for richer cross-references
+# Intersphinx mappings for richer cross-references.
+#
+# Every entry here is a network fetch at build time, and the docs job runs with
+# ``-W``, so an unreachable inventory fails the build. Sphinx emits that failure
+# with no warning type, so ``suppress_warnings`` cannot target it — an entry
+# either works or breaks CI. Only add one that actually resolves references.
+#
+# boto3 was removed on 2026-08-04: its inventory URL redirects to
+# ``docs.aws.amazon.com``, which returns 403 to GitHub Actions runners (it
+# serves fine from most other networks, so this fails only in CI). It generated
+# zero links across the whole built site, so it was pure breakage risk.
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),
     'flask': ('https://flask.palletsprojects.com/en/latest/', None),
-    'boto3': ('https://boto3.amazonaws.com/v1/documentation/api/latest/', None),
     'pynamodb': ('https://pynamodb.readthedocs.io/en/latest/', None),
     'pydantic': ('https://docs.pydantic.dev/latest/', None),
 }

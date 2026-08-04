@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: Make MCP `structuredContent` opt-in
@@ -642,43 +642,63 @@ None — release mechanics. The full suite is the gate.
 - [x] `CHANGELOG.rst` has exactly one `Unreleased` (empty) and exactly one
       `v3.13.0rc4` section
 
-**CI-only (cannot be satisfied locally — do not tag until these are green):**
+**CI-only (cannot be satisfied locally):**
 
-- [ ] CI green on **both** database backends on the PR
-- [ ] Tag-time version validation passes (CI checks the tag against both files)
-
-**Post-tag (observed, not run):**
-
-- [ ] CI publishes to **TestPyPI** (pre-release), GitHub Release marked
-      pre-release
+- [x] CI green on **both** database backends on PR #119 (Tests Python 3.11
+      dynamodb + postgresql, type-check, Documentation Build, codecov — 0
+      failures on the final commit `0a786e8`)
+- [x] Tag-time version validation passes
 
 Note the local Postgres run is a *pre-check*, not a substitute for the CI
 matrix — a locally green single-backend run is not evidence the merge gate is
 satisfied.
 
-### Implementation Status: In Progress — local half complete, release pending
+### Implementation Status: Complete
 
-Committed on branch `structuredcontent-opt-in`:
+Shipped as PR #119, squash-merged to `master` as `5e00392`, tagged
+`v3.13.0rc4` on that merge commit.
 
-- `4985b84` Make MCP structuredContent opt-in, and close two adjacent defects
-- `acf1717` Document structuredContent as opt-in, and correct two older claims
-- `febb6e6` Pre-release v3.13.0rc4
+### Review round (PR #119)
 
-**Remaining, and deliberately not done without the maintainer:** push the
-branch, open the PR, merge it once CI is green on **both** backends, then
-`git tag v3.13.0rc4` on the merge commit and `git push --tags`. These are
-outward-facing and gated on a CI result that cannot be observed from here, so
-the plan stays `active` until the tag ships.
+Two P2 findings from `chatgpt-codex-connector`, both actioned:
+
+1. **A false claim this plan's own Phase 5 introduced.** The docs sweep stated
+   that an `output_schema` passed to `action_hook`/`method_hook` "is advertised
+   as `outputSchema`" for a hook exposed via `@mcp_tool`. It is not.
+   `tools/list` and `tools/call` both read `get_mcp_metadata()` →
+   `_mcp_metadata`, written only by `@mcp_tool`, while `action_hook` writes a
+   separate `HookMetadata` to `_hook_metadata` and the TypedDict derivation
+   happens inside `get_hook_metadata`. Nothing bridges them. Verified
+   empirically across all three supply routes, corrected in six places plus the
+   TypedDict note. The underlying asymmetry is **not** fixed here — merging the
+   stores would newly advertise `outputSchema` for every TypedDict-annotated MCP
+   tool, breaking each one that returns no `structuredContent`, which is the
+   exact failure this release warns about. Filed as
+   `thoughts/todo/action-hook-output-schema-not-visible-to-mcp.md`.
+2. **`structuredContent: None` is indistinguishable from an absent key.** True,
+   and kept that way deliberately: null carries no payload, both reference
+   clients read it as absent, and `{"structuredContent": x or None}` is a
+   legitimate "nothing this time", so warning would false-positive against the
+   bar set for these warnings. Now pinned by a test and stated in the docstring
+   and CHANGELOG instead of being an artifact of `.get()`. The key is *omitted*
+   rather than emitted as `null` — emitting null would have reintroduced the
+   original bug, since the client normaliser branches on key presence.
+
+A follow-up `@claude` review independently re-traced both and found no remaining
+incorrect claims. It surfaced one untested interaction — the null exemption
+silences the *non-object* warning but must not silence the *declared-but-missing*
+warning — now pinned by `test_explicit_none_with_declared_schema_still_warns`.
 
 ---
 
 ## Implementation Summary
 
-**Completed:** 2026-08-03 (phases 1–5; phase 6 local half)
-**All phases:** 1–5 Complete; 6 In Progress (release mechanics pending)
-**Test status:** All passing — 2617 passed / 26 skipped (DynamoDB, sequential);
-747 passed / 18 skipped (PostgreSQL integration); pyright 0 errors; ruff clean;
-docs build 0 warnings.
+**Completed:** 2026-08-03
+**All phases:** Complete
+**Shipped as:** PR #119 → `master` `5e00392`, tagged `v3.13.0rc4`
+**Test status:** All passing — 2619 passed / 26 skipped (DynamoDB, parallel via
+`make test-all-parallel`); 747 passed / 18 skipped (PostgreSQL integration);
+pyright 0 errors; ruff clean; docs build 0 warnings. CI green on both backends.
 
 ### Deviations from Plan
 
@@ -725,6 +745,26 @@ docs build 0 warnings.
   documentation produced a tool that strict clients reject. The replacement
   lives in `tests/test_mcp_tools_call_wire_shape.py` as `canonical_weather_hook`
   and the guide copies it, so it cannot drift silently again.
+- **A docs sweep is code, and needs the same verification.** The one real defect
+  review found was a claim *this plan told me to write* — that `output_schema`
+  on a hook decorator is advertised as MCP `outputSchema`. Every code change here
+  was proven by a test; the doc claims were proven by a grep for my own phrasing,
+  which cannot catch a statement that is well-formed and false. The cheap fix, in
+  hindsight: for any doc claim of the form "X causes Y", run X in a REPL before
+  writing it. Three lines of `get_mcp_metadata()` would have caught this.
+- **Run the *CI* command, not your own approximation of it.** My docs gate was
+  `sphinx-build -b html . <out>`; CI's is
+  `sphinx-build -W --keep-going -D suppress_warnings=...`. Mine could not fail on
+  a warning, so "0 warnings locally" was a weaker claim than it sounded, and the
+  docs job later failed on a warning my command would have printed and ignored.
+  Same shape as the doc-claim lesson above: a gate that cannot fail is not a
+  gate. The docs build command lives in `.github/workflows/tests.yml`; copy it
+  verbatim.
+- **`claude-code-review.yml` triggers on `pull_request: types: [opened]` only.**
+  It never re-reviews a push, so any commit after PR-open is unreviewed unless
+  someone `@claude`s it — which is exactly where the review-fix commit landed.
+  Adding `synchronize` to the trigger would close that gap; worth considering
+  repo-wide.
 - **`_output_schema_warned` is process-global state that leaks across tests.**
   Without an autouse fixture clearing it plus distinct tool names per test, the
   "warns" and "warns once" tests pass or fail on execution order — which would

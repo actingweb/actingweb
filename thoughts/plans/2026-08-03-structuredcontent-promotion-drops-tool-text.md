@@ -752,6 +752,14 @@ pyright 0 errors; ruff clean; docs build 0 warnings. CI green on both backends.
   which cannot catch a statement that is well-formed and false. The cheap fix, in
   hindsight: for any doc claim of the form "X causes Y", run X in a REPL before
   writing it. Three lines of `get_mcp_metadata()` would have caught this.
+- **Run the *CI* command, not your own approximation of it.** My docs gate was
+  `sphinx-build -b html . <out>`; CI's is
+  `sphinx-build -W --keep-going -D suppress_warnings=...`. Mine could not fail on
+  a warning, so "0 warnings locally" was a weaker claim than it sounded, and the
+  docs job later failed on a warning my command would have printed and ignored.
+  Same shape as the doc-claim lesson above: a gate that cannot fail is not a
+  gate. The docs build command lives in `.github/workflows/tests.yml`; copy it
+  verbatim.
 - **`claude-code-review.yml` triggers on `pull_request: types: [opened]` only.**
   It never re-reviews a push, so any commit after PR-open is unreviewed unless
   someone `@claude`s it — which is exactly where the review-fix commit landed.

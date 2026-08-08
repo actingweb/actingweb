@@ -504,7 +504,7 @@ single conditional writes; order is derived from key sort; length is counted.
 - [ ] Manual: performance sanity vs v1 — `to_list()` on a 200-item list against
       dynamodb-local (expect one query, not 200 GetItems)
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
 
 **Deviations / notes (sub-step 1 of 4 — `get_range()`/`create_if_not_exists()`):**
 
@@ -564,6 +564,119 @@ single conditional writes; order is derived from key sort; length is counted.
   `\d properties` confirms `name` is `text`; `alembic downgrade -1` reverts
   it to `character varying(255)`; `alembic upgrade head` re-applies cleanly.
   `ruff`/`pyright` clean on the new file and `schema.py`.
+
+**Deviations / notes (sub-step 3 of 4 — `property_list.py` v2 rewrite):**
+
+- **Format decision:** every brand-new list (no existing meta row) is now
+  created as v2. This is what "New lists stop using dense integers" in the
+  plan means concretely — there is no opt-in flag. Existing v1 lists are
+  completely unaffected and keep using the hardened v1 code paths from
+  Phases 1-3 indefinitely (migration is Phase 5). This had a real
+  consequence: every Phase 1-3 test that built a fresh list via `.append()`
+  and then punched a v1-shaped hole (`list:{name}-{index}`) into it now
+  needed to seed a v1 list explicitly first (a small `_seed_v1_list()`
+  helper writing the meta row + dense-integer item rows directly) — those
+  bug classes are structurally v1-only, so the tests are still valid and
+  necessary, they just can no longer rely on "any freshly created list is
+  v1." Updated: `tests/integration/test_property_list_repair.py`,
+  `tests/integration/test_verify_property_lists_script.py`,
+  `tests/integration/test_www_list_corruption.py`,
+  `tests/integration/test_property_list_http_contract.py`'s corruption
+  test, and one unit assertion in `tests/test_property_list.py` that
+  checked the v1-shaped `length` key in fresh metadata.
+- **Real bug caught by that same test run, not by design review:** v2
+  mutations (append/insert/setitem/delitem) initially never persisted the
+  metadata row — v1 gets this "for free" because every v1 mutation writes
+  `length` into metadata as a side effect, but v2 has no length to write,
+  so nothing forced the meta row to exist. `PropertyListStore.exists()`,
+  property/list name-collision detection, and `list_all()` all key off
+  that row, so a list that was only ever appended to (never
+  `set_description()`ed) was invisible to all three. Fixed with
+  `_v2_touch_metadata()`, called from all four v2 mutation entry points —
+  costs one extra write per mutation, same profile as v1's per-mutation
+  metadata write, not the effectively-free operation I'd originally
+  assumed. Caught by `tests/integration/test_property_list_collision.py`
+  and `test_property_lists_advanced.py` failing on the first real-backend
+  run, not anticipated during design.
+- **`get_range()` bound semantics** (established in sub-step 1) hold up
+  the whole isolation argument: verified by direct test
+  (`test_range_excludes_sibling_list_with_shared_prefix` in
+  `test_db_property_range.py`, sub-step 1) that a list literally named
+  `foo-x` doesn't leak into list `foo`'s range query, which is exactly why
+  `#` has to be banned in list names (a list named `foo-#x` WOULD leak into
+  `foo`'s range, since `#` sorts below the `$` upper-bound sentinel
+  regardless of what follows it).
+- **Conditional-write retry uses fresh-reread, not random jitter.** The
+  plan says "regenerate the rank with jitter and retry"; the actual
+  implementation re-reads the current rank-key state on each retry
+  (`force=True`) and generates a new candidate from that fresh state —
+  deterministic, not randomized. A second writer's completed write is
+  exactly what a fresh read reveals, so this resolves the plan's target
+  race (two writers computing the same candidate from the same stale read)
+  without introducing nondeterminism into what's otherwise a fully
+  deterministic algorithm. Pinned by
+  `TestV2ConditionalWriteCollision` in `tests/test_property_list_integrity.py`
+  (a `StaleReadPropertyDb` fake that returns a stale snapshot on exactly
+  the first `get_range()` call, forcing a real collision to exercise the
+  retry path deterministically).
+- **`_v2_compact()`'s rebalance-retry bug, found by its own integration
+  test, not by design review:** the first implementation retried a
+  collision by bisecting between the *last successfully written rank* and
+  the next target boundary — both fixed for the duration of one item's
+  retry loop, so `generate_key_between()` regenerated the exact same
+  (still-colliding) candidate every attempt and exhausted retries into a
+  "rank collision storm" error. Fixed by bisecting between the
+  *just-failed candidate* and the same upper boundary each retry, which
+  strictly converges toward the boundary instead of repeating. Caught by
+  `TestV2RankRebalanceIntegration::test_compact_after_many_inserts_shrinks_ranks`
+  (62-item list, one item's target rank collides with another item's
+  not-yet-renamed row — a real, not contrived, collision during rebalance).
+- **`to_indexed_list()`** needed no code change — its existing
+  `list(enumerate(self.to_list()))` implementation was already written
+  anticipating exactly this divergence (storage identity vs. position),
+  per its Phase 3 docstring. Updated only the docstring to describe the
+  now-real v1/v2 split instead of a hypothetical future one.
+- **List-name validation lives solely in `ListProperty._load_metadata()`**,
+  not "mirrored in `interface/property_store.py`" as the plan's Changes
+  section suggested — traced both `NotifyingListProperty` and
+  `interface/property_store.py::PropertyListStore.__getattr__` and
+  confirmed they're pure delegating wrappers with no independent
+  name-handling logic that could bypass the check in `ListProperty`, so a
+  second enforcement point would be redundant, not defense-in-depth.
+- **`handlers/properties.py`** needed no dispatch-related changes at all —
+  every call site that holds a `list_prop` across multiple `len()`/mutation
+  calls already does so via ONE local variable per request (not
+  reconstructed per loop iteration), and the `format=full`/`format=short`/
+  `metadata=true` listall branches already call `prime_from_rows(all_rows)`
+  before `len()`/`to_list_from_rows()` — both of which the plan flagged as
+  at-risk call sites turned out to already satisfy the "no query blowup"
+  invariant once `prime_from_rows()` and `__len__`/`to_list()` were made
+  v2-aware. Only removed one `len()` call from a debug log line (per the
+  plan's explicit callout) since it eagerly warmed the query cache purely
+  for logging.
+- New tests: `tests/integration/test_property_list_v2.py` (new — full
+  behavioral parity against a plain Python list, negative indexing,
+  `verify()` shape, name validation, interleaved-mutation stale-cache
+  self-healing, rank-rebalance-after-many-inserts, run against both
+  backends via the existing `DATABASE_BACKEND` convention — running the
+  same file per-backend IS the cross-backend-ordering pin, rather than a
+  single test comparing both backends side by side); new classes in
+  `tests/test_property_list_integrity.py` (`TestV2NewListDefaultsAndValidation`,
+  `TestV2QueryCountGuard`, `TestV2ConditionalWriteCollision`,
+  `TestV2RankCapAndCompact` — unit-level, dict-backed fake extended with
+  `get_range()`/`create_if_not_exists()`); `tests/test_hot_path_n_plus_one.py`
+  extended (not replaced) with a real query-count assertion for priming
+  (patches `DbProperty.get_range`/`.get` to raise if called after
+  `prime_from_rows()`) and a dedicated one-range-query-per-`to_list()`
+  guard on a 20-item list.
+- Verified: `ruff`, `ruff format`, `pyright` (0 errors) on `actingweb/`
+  and `tests/`; full `pytest tests/ -m "not slow"` on DynamoDB (2673
+  passed, 26 skipped); `tests/integration/` on PostgreSQL (784 passed, 18
+  skipped) — PostgreSQL run scoped to `tests/integration/` per CLAUDE.md's
+  documented procedure (the top-level `tests/*.py` files with
+  `[postgresql]` parametrization depend on migration setup that isn't
+  triggered outside that scope; this is pre-existing test-harness scoping,
+  not something Phase 4 changed).
 
 ---
 

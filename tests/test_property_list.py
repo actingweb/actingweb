@@ -116,8 +116,9 @@ class TestPropertyListCollisionDetection:
         # Access metadata to trigger check - should succeed
         metadata = prop_list._load_metadata()
 
-        # Verify metadata was created with defaults
-        assert metadata["length"] == 0
+        # Verify metadata was created with v2 (format 2) defaults -- new
+        # lists no longer track a "length" field, it's always counted.
+        assert metadata["format"] == 2
         assert "created_at" in metadata
 
     def test_property_set_raises_error_when_list_exists(self):

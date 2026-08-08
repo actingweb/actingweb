@@ -8,12 +8,32 @@ properties in DynamoDB, bypassing the 400KB limit while maintaining API compatib
 import json
 import logging
 import re
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
+
+import fractional_indexing as fi
 
 from actingweb.db import get_property, get_property_list
 
 logger = logging.getLogger(__name__)
+
+# v2 storage format (fractional rank keys) -- see "Phase 4" of
+# thoughts/plans/2026-08-08-property-list-index-integrity.md.
+#
+# Item rows are named "list:{name}-#{rank}" where {rank} is a
+# fractional-indexing key (base62: '0'-'9','A'-'Z','a'-'z', ASCII 0x30-0x7A).
+# The '#' marker (0x23) is what isolates a list's v2 rows from everything
+# else sharing the "list:{name}-" prefix:
+#   - v1 item rows "list:{name}-N" start with a digit (0x30-0x39) > '$'
+#   - the meta row "list:{name}-meta" starts with 'm' (0x6D) > '$'
+#   - a SIBLING list "list:{name}-x-#..." starts with 'x' (or any non-'#'
+#     char) > '#', so it's excluded by the '<= upper' bound
+# This is also why new list names may never contain '#': a list literally
+# named "{name}-#suffix" would put its own v2 rows inside {name}'s range.
+_V2_RANK_MARKER = "#"
+_V2_RANK_MAX_LEN = 180
+_V2_MAX_RANK_RETRIES = 8
 
 
 class ListCorruptionError(IndexError):
@@ -65,8 +85,16 @@ class ListProperty:
     """
     Distributed list storage implementation for ActingWeb properties.
 
-    Stores list items as individual properties with pattern: {name}-{index}
-    Maintains metadata in {name}-meta property for efficient operations.
+    Metadata lives at ``list:{name}-meta``; its ``format`` field selects
+    the item-row storage layout (dispatched throughout this class via
+    ``_is_v2()``):
+
+    - format 1 (absent/1, "v1"): items at ``list:{name}-{index}``, dense
+      integers 0..length-1, authoritative ``length`` in metadata. Every
+      list created before Phase 4 shipped.
+    - format 2 ("v2"): items at ``list:{name}-#{rank}``, fractional
+      ("rank") keys that sort into item order -- length is always counted
+      from the rank-key range, never stored. Every NEW list as of Phase 4.
     """
 
     def __init__(self, actor_id: str, name: str, config: Any) -> None:
@@ -75,14 +103,106 @@ class ListProperty:
         self.config = config
         self._meta_cache: dict[str, Any] | None = None
         self._db = get_property(self.config) if self.config else None
+        # v2 only: sorted list of rank-key suffixes (without the
+        # "list:{name}-#" prefix), lazily loaded. None means "not loaded
+        # yet"; [] is a valid loaded-and-empty state.
+        self._v2_rank_cache: list[str] | None = None
 
     def _get_meta_property_name(self) -> str:
         """Get the metadata property name."""
         return f"list:{self.name}-meta"
 
     def _get_item_property_name(self, index: int) -> str:
-        """Get the property name for a list item at given index."""
+        """Get the property name for a list item at given index (v1 only)."""
         return f"list:{self.name}-{index}"
+
+    def _format(self) -> int:
+        """The storage format this list uses: 1 (dense integers, the
+        original format) or 2 (fractional rank keys). Absent/unparsable
+        `format` in metadata means 1 -- every list created before Phase 4
+        shipped."""
+        meta = self._load_metadata()
+        try:
+            return int(meta.get("format", 1) or 1)
+        except (TypeError, ValueError):
+            return 1
+
+    def _is_v2(self) -> bool:
+        return self._format() == 2
+
+    def _decode_item(self, item_str: str) -> Any:
+        try:
+            return json.loads(item_str)
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to parse list item for '{self.name}': {e}")
+            return item_str
+
+    def _encode_item(self, item: Any) -> str:
+        try:
+            return json.dumps(item)
+        except (TypeError, ValueError):
+            return str(item)
+
+    # -- v2 (fractional rank key) helpers -----------------------------
+
+    def _v2_item_prefix(self) -> str:
+        return f"list:{self.name}-{_V2_RANK_MARKER}"
+
+    def _v2_item_name(self, rank: str) -> str:
+        return f"{self._v2_item_prefix()}{rank}"
+
+    def _v2_bounds(self) -> tuple[str, str]:
+        """Inclusive [lower, upper] bounds for get_range() that cover
+        exactly this list's v2 item rows -- see the module docstring."""
+        return (self._v2_item_prefix(), f"list:{self.name}-$")
+
+    def _v2_ensure_rank_cache(self, force: bool = False) -> list[str]:
+        """Return the sorted rank-key cache, loading it (one keys-only
+        range query) if absent or `force`d. The returned list is the SAME
+        object held in `self._v2_rank_cache` -- callers that insert/delete
+        a single entry may mutate it in place instead of forcing a reload."""
+        if self._v2_rank_cache is not None and not force:
+            return self._v2_rank_cache
+        lower, upper = self._v2_bounds()
+        db = get_property(self.config)
+        rows = db.get_range(
+            actor_id=self.actor_id, lower=lower, upper=upper, keys_only=True
+        )
+        prefix_len = len(self._v2_item_prefix())
+        self._v2_rank_cache = sorted(name[prefix_len:] for name in rows)
+        return self._v2_rank_cache
+
+    def _v2_load_full(self) -> list[tuple[str, str]]:
+        """One full range query -> sorted (rank, raw_value) pairs. Also
+        refreshes the rank-key cache as a side effect (the invariant that
+        to_list()/__iter__/slice() cost exactly one query, and warm the
+        cache for any __getitem__ calls that follow)."""
+        lower, upper = self._v2_bounds()
+        db = get_property(self.config)
+        rows = db.get_range(actor_id=self.actor_id, lower=lower, upper=upper)
+        prefix_len = len(self._v2_item_prefix())
+        pairs = sorted((name[prefix_len:], value) for name, value in rows.items())
+        self._v2_rank_cache = [rank for rank, _ in pairs]
+        return pairs
+
+    def _v2_to_list(self) -> list[Any]:
+        return [self._decode_item(value) for _, value in self._v2_load_full()]
+
+    def _create_default_metadata_v2(self) -> dict[str, Any]:
+        """Default metadata for a brand-new (v2) list. No `length` key --
+        v2 has no authoritative stored length, it's always counted from the
+        rank-key range."""
+        now = datetime.now().isoformat()
+        return {
+            "format": 2,
+            "created_at": now,
+            "updated_at": now,
+            "item_type": "json",
+            "chunk_size": 1,
+            "version": "1.0",
+            "description": "",
+            "explanation": "",
+        }
 
     def _load_metadata(self) -> dict[str, Any]:
         """Load metadata from database, with caching."""
@@ -99,7 +219,17 @@ class ListProperty:
         )
 
         if meta_str is None:
-            # No metadata exists - this is a new list
+            # No metadata exists - this is a new list, created directly in
+            # the v2 (fractional rank key) format.
+            if _V2_RANK_MARKER in self.name:
+                raise ValueError(
+                    f"List name '{self.name}' cannot contain "
+                    f"'{_V2_RANK_MARKER}' -- reserved for internal storage "
+                    f"keys (a list named '...{_V2_RANK_MARKER}...' would "
+                    f"put its item rows inside another list's storage "
+                    f"range)"
+                )
+
             # Check for property collision - error if property exists
             prop_db = get_property(self.config)
             existing_prop = prop_db.get(actor_id=self.actor_id, name=self.name)
@@ -111,7 +241,7 @@ class ListProperty:
 
             # No metadata exists, create default
             # Don't save yet - let the caller save via set_description/set_explanation
-            meta = self._create_default_metadata()
+            meta = self._create_default_metadata_v2()
             self._meta_cache = (
                 meta  # Cache it for subsequent calls within this instance
             )
@@ -169,12 +299,14 @@ class ListProperty:
         self._meta_cache = None
 
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
-        """Hydrate the metadata cache from a pre-fetched name->value mapping.
+        """Hydrate the metadata cache (and, for v2, the rank-key cache)
+        from a pre-fetched name->value mapping.
 
         `rows` is the result of a bulk fetch_all_including_lists() read.
         Priming avoids re-reading the `list:<name>-meta` row that the bulk
-        read already returned. Ignores missing or unparsable metadata (the
-        normal lazy path then applies).
+        read already returned, and for v2 lists also avoids a separate
+        range query for length/positional lookups. Ignores missing or
+        unparsable metadata (the normal lazy path then applies).
         """
         meta_str = rows.get(self._get_meta_property_name())
         if meta_str is None:
@@ -183,20 +315,41 @@ class ListProperty:
             parsed = json.loads(meta_str)
         except (json.JSONDecodeError, TypeError):
             return
-        if isinstance(parsed, dict):
-            self._meta_cache = parsed
+        if not isinstance(parsed, dict):
+            return
+        self._meta_cache = parsed
+        if int(parsed.get("format", 1) or 1) == 2:
+            prefix = self._v2_item_prefix()
+            prefix_len = len(prefix)
+            self._v2_rank_cache = sorted(
+                name[prefix_len:] for name in rows if name.startswith(prefix)
+            )
 
     def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
         """Like to_list(), but served from a pre-fetched name->value mapping.
 
-        Falls back to a per-item database read (via __getitem__) for any
-        row missing from the mapping. Item decoding matches __getitem__:
-        JSON with a raw-string fallback.
+        v1: falls back to a per-item database read (via __getitem__) for
+        any row missing from the mapping. Item decoding matches
+        __getitem__: JSON with a raw-string fallback.
+
+        v2: derived entirely from `rows` (no fallback reads -- there is no
+        separate "recorded length" a v2 list could disagree with).
 
         Raises:
-            ListCorruptionError: a row is missing from BOTH the mapping and
-                storage.
+            ListCorruptionError: v1 only -- a row is missing from BOTH the
+                mapping and storage.
         """
+        if self._is_v2():
+            prefix = self._v2_item_prefix()
+            prefix_len = len(prefix)
+            pairs = sorted(
+                (name[prefix_len:], value)
+                for name, value in rows.items()
+                if name.startswith(prefix)
+            )
+            self._v2_rank_cache = [rank for rank, _ in pairs]
+            return [self._decode_item(value) for _, value in pairs]
+
         length = len(self)
         result: list[Any] = []
         for i in range(length):
@@ -269,19 +422,60 @@ class ListProperty:
         }
 
     def __len__(self) -> int:
-        """Get list length from metadata only (no item loading)."""
+        """Get list length. v1: from metadata (no item loading). v2:
+        counted from the (cached) rank-key range."""
+        if self._is_v2():
+            return len(self._v2_ensure_rank_cache())
         meta = self._load_metadata()
         length = meta.get("length", 0)
         return int(length) if length is not None else 0
+
+    def _v2_getitem(self, index: int) -> Any:
+        ranks = self._v2_ensure_rank_cache()
+        length = len(ranks)
+        orig_index = index
+        if index < 0:
+            index = length + index
+        if index < 0 or index >= length:
+            raise IndexError(f"List index {orig_index} out of range (length: {length})")
+
+        rank = ranks[index]
+        item_db = get_property(self.config)
+        item_str = item_db.get(actor_id=self.actor_id, name=self._v2_item_name(rank))
+
+        if item_str is None:
+            # The cached rank list is stale (another instance mutated the
+            # list between our cache load and this read) -- reload once
+            # before concluding corruption. A concurrent mutation is a
+            # normal race, not damaged storage.
+            ranks = self._v2_ensure_rank_cache(force=True)
+            if index < 0 or index >= len(ranks):
+                raise IndexError(
+                    f"List index {orig_index} out of range (length: {len(ranks)})"
+                )
+            rank = ranks[index]
+            item_db = get_property(self.config)
+            item_str = item_db.get(
+                actor_id=self.actor_id, name=self._v2_item_name(rank)
+            )
+            if item_str is None:
+                raise ListCorruptionError(self.name, index)
+
+        return self._decode_item(item_str)
 
     def __getitem__(self, index: int) -> Any:
         """Get item by index, loading from database.
 
         Raises:
             IndexError: ``index`` is outside ``[0, len(self))``.
-            ListCorruptionError: ``index`` is in range but the row is
-                missing from storage.
+            ListCorruptionError: v1 only -- ``index`` is in range but the
+                row is missing from storage. Under v2 this can only happen
+                transiently under concurrent mutation, and is resolved by
+                one cache reload (see ``_v2_getitem``) rather than raised.
         """
+        if self._is_v2():
+            return self._v2_getitem(index)
+
         length = len(self)
 
         if index < 0:
@@ -307,8 +501,46 @@ class ListProperty:
             logger.error(f"Failed to parse list item at index {index}: {e}")
             return item_str  # Return raw string if JSON parsing fails
 
+    def _v2_touch_metadata(self) -> None:
+        """Persist the metadata row after a v2 item mutation.
+
+        v2 doesn't store an authoritative length, so unlike v1 (where every
+        mutation writes ``length`` into metadata as a side effect) nothing
+        else forces the ``list:{name}-meta`` row to exist. But its
+        existence IS load-bearing: ``PropertyListStore.exists()``,
+        property/list name-collision detection, and ``list_all()`` all key
+        off it. A list whose only mutations were append()/insert()/etc,
+        with ``set_description()``/``set_explanation()`` never called,
+        must still be discoverable -- so every v2 mutation persists
+        metadata (matching v1's per-mutation write, just without a
+        `length` field to update).
+        """
+        self._save_metadata(self._load_metadata())
+
+    def _v2_setitem(self, index: int, value: Any) -> None:
+        ranks = self._v2_ensure_rank_cache()
+        length = len(ranks)
+        orig_index = index
+        if index < 0:
+            index = length + index
+        if index < 0 or index >= length:
+            raise IndexError(f"List index {orig_index} out of range (length: {length})")
+
+        rank = ranks[index]
+        value_str = self._encode_item(value)
+        item_db = get_property(self.config)
+        if not item_db.set(
+            actor_id=self.actor_id, name=self._v2_item_name(rank), value=value_str
+        ):
+            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
+        self._v2_touch_metadata()
+
     def __setitem__(self, index: int, value: Any) -> None:
         """Set item at index."""
+        if self._is_v2():
+            self._v2_setitem(index, value)
+            return
+
         length = len(self)
 
         if index < 0:
@@ -339,8 +571,34 @@ class ListProperty:
         meta = self._load_metadata()
         self._save_metadata(meta)
 
+    def _v2_delitem(self, index: int) -> None:
+        ranks = self._v2_ensure_rank_cache()
+        length = len(ranks)
+        orig_index = index
+        if index < 0:
+            index = length + index
+        if index < 0 or index >= length:
+            raise IndexError(f"List index {orig_index} out of range (length: {length})")
+
+        rank = ranks[index]
+        item_db = get_property(self.config)
+        if not item_db.set(
+            actor_id=self.actor_id, name=self._v2_item_name(rank), value=None
+        ):
+            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
+
+        # A single row delete IS the whole operation under v2 -- no shift
+        # loop. Keep the cache consistent with the write we just made
+        # (mutating the same list object _v2_ensure_rank_cache() returned).
+        del ranks[index]
+        self._v2_touch_metadata()
+
     def __delitem__(self, index: int) -> None:
         """Delete item at index and shift remaining items."""
+        if self._is_v2():
+            self._v2_delitem(index)
+            return
+
         length = len(self)
 
         if index < 0:
@@ -395,14 +653,53 @@ class ListProperty:
         meta["length"] = length - 1
         self._save_metadata(meta)
 
-    def __iter__(self) -> ListPropertyIterator:
-        """Return iterator for lazy loading."""
+    def __iter__(self) -> "ListPropertyIterator | Iterator[Any]":
+        """Return an iterator over the list.
+
+        v1: lazy, per-item loading (ListPropertyIterator). v2: one full
+        range query up front (_v2_to_list()), then a plain list iterator --
+        per-item __getitem__ calls in a loop would cost one query per item,
+        which the range-read design exists specifically to avoid.
+        """
+        if self._is_v2():
+            return iter(self._v2_to_list())
         return ListPropertyIterator(self)
+
+    def _v2_append(self, item: Any) -> None:
+        value_str = self._encode_item(item)
+        for attempt in range(_V2_MAX_RANK_RETRIES):
+            ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
+            last = ranks[-1] if ranks else None
+            candidate = fi.generate_key_between(last, None)
+            if len(candidate) > _V2_RANK_MAX_LEN:
+                raise RuntimeError(
+                    f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
+                    f"chars -- run compact() to rebalance"
+                )
+            item_db = get_property(self.config)
+            if item_db.create_if_not_exists(
+                actor_id=self.actor_id,
+                name=self._v2_item_name(candidate),
+                value=value_str,
+            ):
+                ranks.append(candidate)
+                self._v2_touch_metadata()
+                return
+            # Collision: another writer took this rank between our cache
+            # load and the write. Force-reread on the next attempt so the
+            # regenerated key is based on the current actual last rank.
+        raise RuntimeError(
+            f"list '{self.name}' append: too many rank collisions, retry later"
+        )
 
     def append(self, item: Any) -> None:
         """Add item to end of list."""
         if not self._db:
             raise RuntimeError("No database connection available")
+
+        if self._is_v2():
+            self._v2_append(item)
+            return
 
         length = len(self)
 
@@ -433,10 +730,29 @@ class ListProperty:
         for item in items:
             self.append(item)
 
+    def _v2_item_names_in_range(self) -> list[str]:
+        lower, upper = self._v2_bounds()
+        db = get_property(self.config)
+        rows = db.get_range(
+            actor_id=self.actor_id, lower=lower, upper=upper, keys_only=True
+        )
+        return list(rows)
+
     def clear(self) -> None:
         """Remove all items from list."""
         if not self._db:
             raise RuntimeError("No database connection available")
+
+        if self._is_v2():
+            for item_name in self._v2_item_names_in_range():
+                item_db = get_property(self.config)
+                if not item_db.set(actor_id=self.actor_id, name=item_name, value=None):
+                    raise RuntimeError(
+                        f"list item write failed for '{self.name}' during clear()"
+                    )
+            self._save_metadata(self._create_default_metadata_v2())
+            self._v2_rank_cache = []
+            return
 
         length = len(self)
 
@@ -456,6 +772,22 @@ class ListProperty:
         """Delete the entire list including metadata."""
         if not self._db:
             raise RuntimeError("No database connection available")
+
+        if self._is_v2():
+            for item_name in self._v2_item_names_in_range():
+                item_db = get_property(self.config)
+                if not item_db.set(actor_id=self.actor_id, name=item_name, value=None):
+                    raise RuntimeError(
+                        f"list item write failed for '{self.name}' during delete()"
+                    )
+            meta_db = get_property(self.config)
+            if not meta_db.set(
+                actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
+            ):
+                raise RuntimeError(f"list metadata write failed for '{self.name}'")
+            self._meta_cache = None
+            self._v2_rank_cache = None
+            return
 
         length = len(self)
 
@@ -480,11 +812,18 @@ class ListProperty:
     def to_list(self) -> list[Any]:
         """Load entire list into memory.
 
+        v2: exactly one range query, regardless of length.
+
         Raises:
-            ListCorruptionError: a row within ``[0, len(self))`` is missing
-                from storage. Run ``compact()`` (or the caller's remedy) to
-                repair, then retry.
+            ListCorruptionError: v1 only -- a row within ``[0, len(self))``
+                is missing from storage. Run ``compact()`` (or the caller's
+                remedy) to repair, then retry. Not possible under v2 --
+                there is no separate "recorded length" a v2 list's rows
+                could disagree with.
         """
+        if self._is_v2():
+            return self._v2_to_list()
+
         length = len(self)
         result = []
 
@@ -496,10 +835,24 @@ class ListProperty:
     def slice(self, start: int, end: int) -> list[Any]:
         """Load a range of items efficiently.
 
+        v2: exactly one range query (the full list), sliced in memory --
+        still one query, not one per requested item.
+
         Raises:
-            ListCorruptionError: a row within the requested range is
-                missing from storage.
+            ListCorruptionError: v1 only -- a row within the requested
+                range is missing from storage.
         """
+        if self._is_v2():
+            values = self._v2_to_list()
+            length = len(values)
+            if start < 0:
+                start = max(0, length + start)
+            if end < 0:
+                end = max(0, length + end)
+            start = max(0, min(start, length))
+            end = max(start, min(end, length))
+            return values[start:end]
+
         length = len(self)
 
         # Handle negative indices
@@ -519,17 +872,24 @@ class ListProperty:
         return result
 
     def to_indexed_list(self) -> list[tuple[int, Any]]:
-        """Load the list as ``(storage_index, item)`` pairs.
+        """Load the list as ``(index, item)`` pairs.
 
-        Under the current (v1) storage format this is exactly
-        ``list(enumerate(self.to_list()))`` -- storage indices and
-        positions coincide. It exists as its own method because it is the
-        contract the ``/items`` REST accessor documents: a future storage
-        format where positions and storage keys diverge keeps this correct
-        while ``enumerate(to_list())`` would not be.
+        This is the contract the ``/items`` REST accessor documents:
+        ``index`` is whatever ``__getitem__``/``__setitem__``/
+        ``__delitem__`` accept for this same list, so GET and
+        update/delete actions always agree.
+
+        v1: ``index`` IS the storage row's numeric suffix -- storage
+        identity and position coincide.
+
+        v2: storage identity is the row's rank key, NOT its position --
+        ``index`` here is purely positional (``0..len-1``, derived from
+        rank sort order), and every mutation method translates position ->
+        rank internally. This is exactly the divergence this method's
+        contract was written to keep correct.
 
         Raises:
-            ListCorruptionError: see ``to_list()``.
+            ListCorruptionError: v1 only -- see ``to_list()``.
         """
         return list(enumerate(self.to_list()))
 
@@ -545,17 +905,55 @@ class ListProperty:
         del self[index]
         return item
 
+    def _v2_insert(self, index: int, item: Any) -> None:
+        value_str = self._encode_item(item)
+        for attempt in range(_V2_MAX_RANK_RETRIES):
+            ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
+            length = len(ranks)
+            pos = index
+            if pos < 0:
+                pos = max(0, length + pos)
+            if pos > length:
+                pos = length
+
+            lower = ranks[pos - 1] if pos > 0 else None
+            upper = ranks[pos] if pos < length else None
+            candidate = fi.generate_key_between(lower, upper)
+            if len(candidate) > _V2_RANK_MAX_LEN:
+                raise RuntimeError(
+                    f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
+                    f"chars -- run compact() to rebalance"
+                )
+            item_db = get_property(self.config)
+            if item_db.create_if_not_exists(
+                actor_id=self.actor_id,
+                name=self._v2_item_name(candidate),
+                value=value_str,
+            ):
+                ranks.insert(pos, candidate)
+                self._v2_touch_metadata()
+                return
+            # Collision: force a fresh read (recomputing neighbours at this
+            # position) on the next attempt.
+        raise RuntimeError(
+            f"list '{self.name}' insert: too many rank collisions, retry later"
+        )
+
     def insert(self, index: int, item: Any) -> None:
         """Insert item at given index."""
+        if not self._db:
+            raise RuntimeError("No database connection available")
+
+        if self._is_v2():
+            self._v2_insert(index, item)
+            return
+
         length = len(self)
 
         if index < 0:
             index = max(0, length + index)
         if index > length:
             index = length
-
-        if not self._db:
-            raise RuntimeError("No database connection available")
 
         # Shift all items from index onwards up by one. Fresh DB instance
         # per call (like every other mutation method) — reusing self._db
@@ -626,13 +1024,55 @@ class ListProperty:
                 count += 1
         return count
 
+    def _v2_verify(self) -> dict[str, Any]:
+        """Read-only integrity check for v2 lists.
+
+        Structurally, v2 cannot have holes or orphans -- there is no
+        separate "recorded length" a row could disagree with; every
+        present row IS a position. The only thing worth reporting is rank
+        keys approaching the length cap (a signal to compact()/rebalance
+        before insert()/append() start failing) and the same
+        adjacent-duplicate heuristic v1 reports (informational, not part
+        of ``healthy`` -- a duplicate value is never itself corruption
+        under v2).
+
+        Returns:
+            Dict with:
+            - format: 2
+            - length: item count (one range query)
+            - max_rank_length: the longest rank key currently in use
+            - adjacent_duplicates: same heuristic as v1's verify(), but
+              position-indexed pairs -- informational only
+            - healthy: True iff no rank key is within the rebalance
+              warning zone of the cap
+        """
+        pairs = self._v2_load_full()
+        max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
+
+        adjacent_duplicates: list[tuple[int, int]] = []
+        for i in range(len(pairs) - 1):
+            if pairs[i][1] == pairs[i + 1][1]:
+                adjacent_duplicates.append((i, i + 1))
+
+        return {
+            "format": 2,
+            "length": len(pairs),
+            "max_rank_length": max_rank_length,
+            "adjacent_duplicates": adjacent_duplicates,
+            "healthy": max_rank_length < _V2_RANK_MAX_LEN - 40,
+        }
+
     def verify(self) -> dict[str, Any]:
         """Read-only integrity check against stored rows.
 
-        Fetches the actor's full property partition once and compares the
-        metadata's ``length`` against which ``list:{name}-N`` rows actually
-        exist, in the range ``[0, length)``. Reports index numbers only --
-        never item values.
+        v2: see ``_v2_verify()`` -- a structurally different report shape
+        (no ``stored_length``/``missing_indices``/``orphan_indices``; those
+        concepts don't exist when position IS the row's identity).
+
+        v1 (below): fetches the actor's full property partition once and
+        compares the metadata's ``length`` against which ``list:{name}-N``
+        rows actually exist, in the range ``[0, length)``. Reports index
+        numbers only -- never item values.
 
         Returns:
             Dict with:
@@ -648,6 +1088,9 @@ class ListProperty:
             - healthy: True iff there are no holes, no orphans, and no
               adjacent-duplicate hits
         """
+        if self._is_v2():
+            return self._v2_verify()
+
         meta = self._load_metadata()
         stored_length = int(meta.get("length", 0) or 0)
 
@@ -686,15 +1129,99 @@ class ListProperty:
             and not adjacent_duplicates,
         }
 
+    def _v2_compact(self) -> dict[str, Any]:
+        """Rebalance a v2 list's rank keys back to short, evenly-spaced
+        values.
+
+        Regenerates ``n`` evenly distributed ranks with
+        ``fractional_indexing.generate_n_keys_between(None, None, n)`` --
+        deterministic for a given ``n``, so re-running compact() without
+        the list changing in between converges to the same result. Rows
+        whose target rank already matches their current rank are left
+        untouched. For rows that need renaming, the write uses a plain
+        ``set()`` only when the target name is unoccupied or is this same
+        item's own current row; if the target collides with a DIFFERENT
+        item's not-yet-renamed row, a nudged rank is generated between the
+        last successfully written rank and the next target instead of
+        overwriting it -- compact() never clobbers a row it hasn't gotten
+        to yet. Old rows that didn't survive under their original name are
+        deleted last, so a crash mid-compact leaves every item readable
+        under either its old or new name, never neither.
+        """
+        report = self._v2_verify()
+
+        if not self._db:
+            raise RuntimeError("No database connection available")
+
+        pairs = self._v2_load_full()
+        n = len(pairs)
+        old_ranks = [rank for rank, _ in pairs]
+        old_names = {self._v2_item_name(rank) for rank in old_ranks}
+        target_ranks = fi.generate_n_keys_between(None, None, n)
+
+        written_ranks: list[str] = []
+        for i, ((old_rank, value), target_rank) in enumerate(
+            zip(pairs, target_ranks, strict=True)
+        ):
+            if target_rank == old_rank:
+                written_ranks.append(old_rank)
+                continue
+
+            rank = target_rank
+            for attempt in range(_V2_MAX_RANK_RETRIES + 1):
+                new_name = self._v2_item_name(rank)
+                if new_name not in old_names or rank == old_rank:
+                    item_db = get_property(self.config)
+                    if not item_db.set(
+                        actor_id=self.actor_id, name=new_name, value=value
+                    ):
+                        raise RuntimeError(
+                            f"list item write failed for '{self.name}' during compact()"
+                        )
+                    written_ranks.append(rank)
+                    break
+                if attempt == _V2_MAX_RANK_RETRIES:
+                    raise RuntimeError(
+                        f"compact() could not rebalance '{self.name}' -- "
+                        f"rank collision storm"
+                    )
+                # Bisect between the rank that JUST collided and the next
+                # unclaimed target boundary -- using the failed candidate
+                # (not the last-written rank) as the new lower bound is
+                # what makes each retry generate a genuinely different,
+                # still-monotonic value instead of regenerating the same
+                # collision forever.
+                upper_idx = i + 1
+                upper = target_ranks[upper_idx] if upper_idx < n else None
+                rank = fi.generate_key_between(rank, upper)
+
+        survivors = set(written_ranks)
+        for old_rank in old_ranks:
+            if old_rank not in survivors:
+                del_db = get_property(self.config)
+                if not del_db.set(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(old_rank),
+                    value=None,
+                ):
+                    raise RuntimeError(
+                        f"list item write failed for '{self.name}' during compact() cleanup"
+                    )
+
+        self._v2_rank_cache = sorted(written_ranks)
+        return report
+
     def compact(self) -> dict[str, Any]:
         """Repair holes and orphans by rewriting the list densely.
 
-        Reads every row in ``[0, stored_length)`` that is actually present,
-        in order, and rewrites them at ``0..n-1``; deletes every row from
-        the new length through the highest index the list had (closing
-        holes and removing orphans in one pass). ``description``,
-        ``explanation`` and ``created_at`` are preserved -- unlike
-        ``clear()`` + ``extend()``, which resets them via
+        v2: rebalances rank keys -- see ``_v2_compact()``.
+
+        v1 (below): reads every row in ``[0, stored_length)`` that is
+        actually present, in order, and rewrites them at ``0..n-1``;
+        deletes every row from the new length through the highest index
+        the list had (closing holes and removing orphans in one pass).
+        ``description``, ``explanation`` and ``created_at`` are preserved
+        -- unlike ``clear()`` + ``extend()``, which resets them via
         ``_create_default_metadata()``.
 
         Adjacent-duplicate residue (see ``verify()``) is left INTACT and
@@ -706,6 +1233,9 @@ class ListProperty:
             The ``verify()`` report this call acted on (taken before any
             write).
         """
+        if self._is_v2():
+            return self._v2_compact()
+
         report = self.verify()
 
         if not self._db:

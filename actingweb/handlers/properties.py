@@ -212,9 +212,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             try:
                 logger.info(f"Getting list property object for '{name}'")
                 list_prop = getattr(myself.property_lists, name)
-                logger.info(
-                    f"Got list_prop: {type(list_prop).__name__}, length={len(list_prop) if list_prop else 'N/A'}"
-                )
+                logger.info(f"Got list_prop: {type(list_prop).__name__}")
                 logger.info(f"index_param={index_param}, format_param={format_param}")
 
                 if index_param is not None:

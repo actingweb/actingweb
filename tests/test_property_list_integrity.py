@@ -63,6 +63,23 @@ class FakePropertyDb:
     def delete(self):
         return True
 
+    def get_range(self, actor_id=None, lower=None, upper=None, keys_only=False):
+        result = {}
+        for (aid, name), value in self.store.items():
+            if aid != actor_id:
+                continue
+            if lower <= name <= upper:
+                result[name] = "" if keys_only else value
+        return result
+
+    def create_if_not_exists(self, actor_id=None, name=None, value=None):
+        if name in self.fail_set_on:
+            return False
+        if (actor_id, name) in self.store:
+            return False
+        self.store[(actor_id, name)] = value
+        return True
+
 
 class CrashInjectingPropertyDb(FakePropertyDb):
     """Simulates a hard interruption (process death, timeout) after a fixed
@@ -405,3 +422,185 @@ class TestFailFastReads:
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
 
         assert prop_list.to_indexed_list() == [(0, "a"), (1, "b"), (2, "c")]
+
+
+class CountingPropertyDb(FakePropertyDb):
+    """Counts get_range() calls -- the query-count guard's instrument."""
+
+    def __init__(self, store):
+        super().__init__(store)
+        self.range_call_count = 0
+
+    def get_range(self, actor_id=None, lower=None, upper=None, keys_only=False):
+        self.range_call_count += 1
+        return super().get_range(
+            actor_id=actor_id, lower=lower, upper=upper, keys_only=keys_only
+        )
+
+
+class StaleReadPropertyDb(FakePropertyDb):
+    """Simulates a genuine rank-key race: get_range() returns a stale
+    (pre-write) snapshot on its FIRST call only, but create_if_not_exists()
+    always sees the real, already-written store -- modeling two writers
+    whose read happened before the other's write landed."""
+
+    def __init__(self, store, stale_missing_name):
+        super().__init__(store)
+        self.stale_missing_name = stale_missing_name
+        self.get_range_calls = 0
+
+    def get_range(self, actor_id=None, lower=None, upper=None, keys_only=False):
+        self.get_range_calls += 1
+        result = super().get_range(
+            actor_id=actor_id, lower=lower, upper=upper, keys_only=keys_only
+        )
+        if self.get_range_calls == 1:
+            result.pop(self.stale_missing_name, None)
+        return result
+
+
+class TestV2NewListDefaultsAndValidation:
+    """New (format-2) lists are the default as of Phase 4; '#' is reserved
+    and rejected in NEW list names, but an existing (seeded) v1 or v2 list
+    already named with a '#' stays readable -- Phase 4 only blocks NEW
+    offenders, it doesn't touch legacy data."""
+
+    def test_new_list_is_format_2(self, monkeypatch, fake_store):
+        actor_id = "actor-v2-new"
+        name = "brandnew"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        prop_list.append("first")
+
+        assert prop_list.verify()["format"] == 2
+        meta = json.loads(fake_store[(actor_id, f"list:{name}-meta")])
+        assert meta["format"] == 2
+        assert "length" not in meta
+
+    def test_hash_in_new_list_name_raises(self, monkeypatch, fake_store):
+        actor_id = "actor-v2-hash"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name="foo#bar", config=object())
+
+        with pytest.raises(ValueError, match="cannot contain"):
+            prop_list.append("x")
+
+    def test_existing_v1_list_with_hash_in_name_stays_readable(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-v2-hash-legacy"
+        name = "legacy#list"
+        # Seeded directly, bypassing the name-validation check ListProperty
+        # only applies to brand-new lists -- this is what an already-migrated
+        # or pre-Phase-4 list named this way looks like.
+        _seed_list(fake_store, actor_id, name, ["a", "b"])
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        assert prop_list.to_list() == ["a", "b"]
+
+
+class TestV2QueryCountGuard:
+    def test_to_list_after_append_is_one_range_query(self, monkeypatch, fake_store):
+        actor_id = "actor-v2-qc"
+        name = "qc"
+        fake_db = CountingPropertyDb(fake_store)
+        _patch_get_property(monkeypatch, lambda config: fake_db)
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        for item in ["a", "b", "c"]:
+            prop_list.append(item)
+
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        fake_db.range_call_count = 0
+        assert fresh.to_list() == ["a", "b", "c"]
+        assert fake_db.range_call_count == 1
+
+
+class TestV2ConditionalWriteCollision:
+    def test_append_retries_on_rank_collision(self, monkeypatch, fake_store):
+        actor_id = "actor-v2-collision"
+        name = "mylist"
+        # Pre-occupy the rank the very first append() on an empty list
+        # would naturally generate.
+        fake_store[(actor_id, "list:mylist-#a0")] = json.dumps("existing-item")
+
+        fake_db = StaleReadPropertyDb(fake_store, stale_missing_name="list:mylist-#a0")
+        _patch_get_property(monkeypatch, lambda config: fake_db)
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        prop_list.append("new-item")
+
+        # The stale first read didn't see "a0", so the first candidate
+        # collided; a fresh reread on retry found it and generated past it.
+        assert fake_db.get_range_calls >= 2
+        assert prop_list.to_list() == ["existing-item", "new-item"]
+        assert fake_store[(actor_id, "list:mylist-#a0")] == json.dumps("existing-item")
+
+    def test_insert_retries_on_rank_collision(self, monkeypatch, fake_store):
+        actor_id = "actor-v2-collision-2"
+        name = "mylist"
+        fake_store[(actor_id, "list:mylist-#a0")] = json.dumps("first")
+        fake_store[(actor_id, "list:mylist-#a1")] = json.dumps("last")
+
+        import fractional_indexing as fi
+
+        between = fi.generate_key_between("a0", "a1")
+        fake_store[(actor_id, f"list:mylist-#{between}")] = json.dumps("already-there")
+
+        fake_db = StaleReadPropertyDb(
+            fake_store, stale_missing_name=f"list:mylist-#{between}"
+        )
+        _patch_get_property(monkeypatch, lambda config: fake_db)
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        prop_list.insert(1, "inserted")
+
+        assert fake_db.get_range_calls >= 2
+        assert prop_list.to_list() == ["first", "inserted", "already-there", "last"]
+
+
+class TestV2RankCapAndCompact:
+    def test_insert_between_raises_past_cap_and_compact_rebalances(
+        self, monkeypatch, fake_store
+    ):
+        import fractional_indexing as fi
+
+        actor_id = "actor-v2-cap"
+        name = "capped"
+
+        # Build a lo/hi pair via real bisection until a further bisection
+        # between them would exceed the 180-char cap.
+        lo, hi = "a0", "a1"
+        k = lo
+        while len(k) <= 180:
+            k = fi.generate_key_between(lo, hi)
+            lo = k
+        assert len(fi.generate_key_between(lo, hi)) > 180  # sanity on the setup
+
+        fake_store[(actor_id, f"list:{name}-#{lo}")] = json.dumps("left")
+        fake_store[(actor_id, f"list:{name}-#{hi}")] = json.dumps("right")
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        assert prop_list.to_list() == ["left", "right"]
+
+        with pytest.raises(RuntimeError, match="rank key exceeded"):
+            prop_list.insert(1, "overflow")
+
+        # Not written -- the list is unchanged.
+        assert prop_list.to_list() == ["left", "right"]
+
+        report = prop_list.compact()
+        assert report["format"] == 2
+
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == ["left", "right"]
+        assert fresh.verify()["max_rank_length"] < 10
+
+        # Ranks are short again -- insert-between works now.
+        fresh.insert(1, "middle")
+        assert fresh.to_list() == ["left", "middle", "right"]

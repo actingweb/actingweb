@@ -5,6 +5,8 @@ shelling out to main() -- exercises the same verify()/compact() codepath
 against a seeded actor with a punched hole, and pins the report shape.
 """
 
+import datetime
+import json
 import os
 import sys
 from pathlib import Path
@@ -20,6 +22,30 @@ DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 SCRIPTS_DIR = str(Path(__file__).resolve().parents[2] / "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
+
+
+def _seed_v1_list(config, actor_id, name, items):
+    """Directly write a v1-format list (meta + dense-integer item rows) --
+    ListProperty.append() now creates v2 (fractional rank key) lists by
+    default (Phase 4), which have no dense-integer rows to punch a hole
+    into. The sweep script must keep detecting/repairing v1 lists."""
+    db = get_property(config)
+    now = datetime.datetime.now().isoformat()
+    meta = {
+        "length": len(items),
+        "created_at": now,
+        "updated_at": now,
+        "item_type": "json",
+        "chunk_size": 1,
+        "version": "1.0",
+        "description": "",
+        "explanation": "",
+    }
+    assert db.set(actor_id=actor_id, name=f"list:{name}-meta", value=json.dumps(meta))
+    for i, item in enumerate(items):
+        assert db.set(
+            actor_id=actor_id, name=f"list:{name}-{i}", value=json.dumps(item)
+        )
 
 
 @pytest.fixture
@@ -56,9 +82,10 @@ class TestSweepActor:
     def test_dry_run_reports_unhealthy_without_repairing(self, test_actor):
         import verify_property_lists as script  # type: ignore[import-not-found]
 
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "sweep_test_list", ["a", "b", "c"]
+        )
         prop_list = test_actor.property_lists.sweep_test_list
-        for item in ["a", "b", "c"]:
-            prop_list.append(item)
 
         db = get_property(test_actor.config)
         assert db.set(actor_id=test_actor.id, name="list:sweep_test_list-1", value=None)
@@ -80,9 +107,9 @@ class TestSweepActor:
     def test_repair_fixes_the_hole(self, test_actor):
         import verify_property_lists as script  # type: ignore[import-not-found]
 
-        prop_list = test_actor.property_lists.sweep_test_list_2
-        for item in ["a", "b", "c"]:
-            prop_list.append(item)
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "sweep_test_list_2", ["a", "b", "c"]
+        )
 
         db = get_property(test_actor.config)
         assert db.set(

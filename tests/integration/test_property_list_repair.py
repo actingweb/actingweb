@@ -56,6 +56,34 @@ def test_actor(aw_app):
         pass
 
 
+def _seed_v1_list(config, actor_id, name, items):
+    """Directly write a v1-format list (meta + dense-integer item rows),
+    bypassing ListProperty.append() -- which now creates v2 (fractional
+    rank key) lists by default (Phase 4). These tests exercise a bug class
+    -- holes/orphans from an interrupted delete/insert shift -- that is
+    structurally specific to v1's dense-integer + stored-length format, so
+    they need an actual v1 list to seed corruption into."""
+    import datetime
+
+    db = get_property(config)
+    now = datetime.datetime.now().isoformat()
+    meta = {
+        "length": len(items),
+        "created_at": now,
+        "updated_at": now,
+        "item_type": "json",
+        "chunk_size": 1,
+        "version": "1.0",
+        "description": "",
+        "explanation": "",
+    }
+    assert db.set(actor_id=actor_id, name=f"list:{name}-meta", value=json.dumps(meta))
+    for i, item in enumerate(items):
+        assert db.set(
+            actor_id=actor_id, name=f"list:{name}-{i}", value=json.dumps(item)
+        )
+
+
 def _punch_hole(config, actor_id, name, index):
     """Directly delete a list item row, bypassing ListProperty -- the
     residue an interrupted delete/insert shift leaves behind."""
@@ -78,9 +106,10 @@ def _raw_item(config, actor_id, name, index):
 
 class TestVerifyDetectsCorruption:
     def test_reports_missing_and_orphan_indices(self, test_actor):
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "repair_list_a", ["a", "b", "c", "d"]
+        )
         prop_list = test_actor.property_lists.repair_list_a
-        for item in ["a", "b", "c", "d"]:
-            prop_list.append(item)
 
         _punch_hole(test_actor.config, test_actor.id, "repair_list_a", 1)
         _write_orphan(test_actor.config, test_actor.id, "repair_list_a", 10, "orphan")
@@ -97,11 +126,12 @@ class TestVerifyDetectsCorruption:
 
 class TestCompactRepairsHoles:
     def test_compact_closes_holes_preserves_metadata_removes_orphans(self, test_actor):
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "repair_list_b", ["a", "b", "c", "d"]
+        )
         prop_list = test_actor.property_lists.repair_list_b
         prop_list.set_description("my description")
         prop_list.set_explanation("my explanation")
-        for item in ["a", "b", "c", "d"]:
-            prop_list.append(item)
 
         created_at_before = prop_list._list_prop.get_metadata()["created_at"]
 
@@ -129,9 +159,10 @@ class TestCompactRepairsHoles:
     def test_compact_on_duplicate_residue_leaves_both_rows_and_reports(
         self, test_actor
     ):
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "repair_list_c", ["a", "b", "c", "d"]
+        )
         prop_list = test_actor.property_lists.repair_list_c
-        for item in ["a", "b", "c", "d"]:
-            prop_list.append(item)
 
         # Simulate the exact-duplicate residue a crash between a shift's
         # move-write and delete-of-old-position leaves: index 2 now holds
@@ -158,9 +189,10 @@ class TestCompactRepairsHoles:
         assert post["healthy"] is False
 
     def test_pop_works_again_after_compact_on_trailing_hole_list(self, test_actor):
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "repair_list_d", ["a", "b", "c"]
+        )
         prop_list = test_actor.property_lists.repair_list_d
-        for item in ["a", "b", "c"]:
-            prop_list.append(item)
 
         # Trailing hole: the permanent-wedge case from the research --
         # pop() always targets the last index, which is the hole.
@@ -188,9 +220,9 @@ class TestResyncSkipsCorruptedListsOnly:
         for item in ["a", "b"]:
             healthy.append(item)
 
-        holed = test_actor.property_lists.resync_holed
-        for item in ["x", "y", "z"]:
-            holed.append(item)
+        # v1-seeded: punching a hole targets a dense-integer row, which
+        # only exists in the v1 format.
+        _seed_v1_list(test_actor.config, test_actor.id, "resync_holed", ["x", "y", "z"])
         _punch_hole(test_actor.config, test_actor.id, "resync_holed", 1)
 
         test_actor.properties.scalar_prop = "scalar-value"
@@ -208,9 +240,9 @@ class TestResyncSkipsCorruptedListsOnly:
         assert "resync_holed" not in state
 
     def test_specific_subtarget_resync_on_holed_list_returns_empty(self, test_actor):
-        holed = test_actor.property_lists.resync_holed_2
-        for item in ["x", "y", "z"]:
-            holed.append(item)
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "resync_holed_2", ["x", "y", "z"]
+        )
         _punch_hole(test_actor.config, test_actor.id, "resync_holed_2", 1)
 
         state = test_actor._core_actor._get_full_state_for_subscription(

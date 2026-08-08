@@ -9,12 +9,29 @@ Unreleased
 
    This release changes the ``/properties/<name>/items`` GET response shape,
    makes list-property reads fail fast on corruption (409 instead of a
-   silently compacted result), and enforces the spec's PUT bounds rule. See
-   the CHANGED entries below.
+   silently compacted result), enforces the spec's PUT bounds rule, and
+   changes the on-disk storage format for NEW list properties (v2,
+   fractional rank keys). See the CHANGED entries below.
 
 CHANGED
 ~~~~~~~
 
+- **New list properties now use a v2 storage format (fractional rank
+  keys) instead of dense integer indices.** Delete and insert are now a
+  single conditional write each instead of a shift loop over every
+  following item -- the interrupted-shift corruption class Phases 1-3
+  hardened against structurally cannot occur in a v2 list, because there
+  is no separate stored ``length`` a row could disagree with; position is
+  always derived by sorting present rows. ``to_list()``/``slice()``/
+  iteration remain a single query regardless of list size. Existing lists
+  are untouched and keep working exactly as before (the v1 format,
+  including everything Phases 1-3 hardened, is fully supported
+  indefinitely); migrating them to v2 is Phase 5. New list names may no
+  longer contain ``#`` (reserved for internal storage keys) --
+  ``ListProperty`` raises ``ValueError`` immediately on first use of such a
+  name; existing v1 lists already named this way are unaffected.
+  ``list:``-prefixed property names are now also structurally excluded
+  from the property-lookup table sync, regardless of configuration.
 - **Breaking: list-property reads now fail fast on corruption instead of
   silently compacting past it.** ``ListProperty.to_list()``, ``.slice()``
   and ``.to_list_from_rows()`` raise ``ListCorruptionError`` (an

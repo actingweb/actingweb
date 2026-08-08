@@ -13,6 +13,8 @@ HTTP-level tests for the Phase 3 property-list REST contract
   old unbounded append(None) padding.
 """
 
+import datetime
+import json
 import uuid
 
 import pytest
@@ -65,6 +67,33 @@ def _punch_hole(actor_id, list_name, index):
     config = Config()
     db = get_property(config)
     assert db.set(actor_id=actor_id, name=f"list:{list_name}-{index}", value=None)
+
+
+def _seed_v1_list(actor_id, list_name, items):
+    """Directly write a v1-format list (meta + dense-integer item rows).
+    Creating a list via the HTTP API now creates v2 (fractional rank key)
+    lists by default (Phase 4), which have no dense-integer rows to punch
+    a hole into -- this corruption test needs an actual v1 list."""
+    config = Config()
+    db = get_property(config)
+    now = datetime.datetime.now().isoformat()
+    meta = {
+        "length": len(items),
+        "created_at": now,
+        "updated_at": now,
+        "item_type": "json",
+        "chunk_size": 1,
+        "version": "1.0",
+        "description": "",
+        "explanation": "",
+    }
+    assert db.set(
+        actor_id=actor_id, name=f"list:{list_name}-meta", value=json.dumps(meta)
+    )
+    for i, item in enumerate(items):
+        assert db.set(
+            actor_id=actor_id, name=f"list:{list_name}-{i}", value=json.dumps(item)
+        )
 
 
 @pytest.fixture
@@ -140,8 +169,7 @@ class TestCorruptionReturns409:
         self, test_app, actor
     ):
         actor_id, auth = actor
-        _create_list(test_app, actor_id, auth, "notes")
-        _append_items(test_app, actor_id, auth, "notes", ["a", "b", "c"])
+        _seed_v1_list(actor_id, "notes", ["a", "b", "c"])
         _punch_hole(actor_id, "notes", 1)
 
         expected_body_keys = {"error", "list", "detail", "remedy"}

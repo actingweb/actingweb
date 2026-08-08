@@ -7,10 +7,40 @@ Uses www_test_app (basic auth, no OAuth) -- same fixture as
 test_www_templates.py.
 """
 
+import datetime
+import json
+
 import requests
 
 from actingweb.config import Config
 from actingweb.db import get_property
+
+
+def _seed_v1_list(actor_id, list_name, items):
+    """Directly write a v1-format list (meta + dense-integer item rows).
+    ListProperty.append()/PUT-index-append now create v2 (fractional rank
+    key) lists by default (Phase 4); this test needs an actual v1 list to
+    punch a hole into (dense-integer rows a v2 list doesn't have)."""
+    config = Config()
+    db = get_property(config)
+    now = datetime.datetime.now().isoformat()
+    meta = {
+        "length": len(items),
+        "created_at": now,
+        "updated_at": now,
+        "item_type": "json",
+        "chunk_size": 1,
+        "version": "1.0",
+        "description": "",
+        "explanation": "",
+    }
+    assert db.set(
+        actor_id=actor_id, name=f"list:{list_name}-meta", value=json.dumps(meta)
+    )
+    for i, item in enumerate(items):
+        assert db.set(
+            actor_id=actor_id, name=f"list:{list_name}-{i}", value=json.dumps(item)
+        )
 
 
 def _punch_hole(actor_id, list_name, index):
@@ -34,21 +64,7 @@ class TestWwwHoledListRendersNotice:
         actor_url = f"{www_test_app}/{actor_id}"
 
         try:
-            response = requests.post(
-                f"{actor_url}/properties",
-                json={"corrupt_list": {"_type": "list"}},
-                auth=auth,
-            )
-            assert response.status_code == 201
-
-            for i in range(3):
-                response = requests.put(
-                    f"{actor_url}/properties/corrupt_list?index={i}",
-                    json=f"item-{i}",
-                    auth=auth,
-                )
-                assert response.status_code == 204
-
+            _seed_v1_list(actor_id, "corrupt_list", ["item-0", "item-1", "item-2"])
             _punch_hole(actor_id, "corrupt_list", 1)
 
             response = requests.get(

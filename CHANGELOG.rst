@@ -31,6 +31,25 @@ FIXED
   list-property handlers (``PUT``/POST/DELETE on ``/properties/<name>`` and
   ``/properties/<name>/items``) — the client sees a generic message; the
   original exception is still logged server-side.
+- Unparsable list metadata no longer self-heals into a fresh empty list
+  (which orphaned every existing item row with no way back to them) —
+  ``ListProperty`` now raises ``ValueError`` instead, and the row is left
+  untouched for repair.
+
+ADDED
+~~~~~
+
+- **Property-list repair primitives.** ``ListProperty.verify()`` reports a
+  list's health (holes, orphan rows, a duplicate-value heuristic) without
+  modifying anything; ``ListProperty.compact()`` closes holes and removes
+  orphans in one pass while preserving ``description``/``explanation``/
+  ``created_at`` (unlike the previous ``clear()`` + ``extend()`` workaround,
+  which reset them). Duplicate residue is reported but never rewritten — a
+  duplicate value always means a destroyed item, and silently collapsing
+  one copy would bless the data loss as intentional. Both are also
+  available through ``actor.property_lists.<name>.verify()``/``.compact()``.
+  New operator script: ``scripts/verify_property_lists.py`` (dry-run by
+  default; ``--repair`` invokes ``compact()`` on unhealthy lists).
 
 v3.13.0rc4: August 3, 2026
 --------------------------

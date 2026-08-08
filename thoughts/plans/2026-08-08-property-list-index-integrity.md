@@ -254,7 +254,33 @@ Repair must exist before reads fail fast (Phase 3) and before migration
       seeded with a punched hole; confirm detection, then `--repair`, then a
       clean re-run
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations / notes:**
+- `verify()`/`compact()` operate on v1-format lists only (the only format
+  that exists before Phase 4 introduces v2). No format dispatch was needed
+  yet.
+- `scripts/verify_property_lists.py` sweeps actors via `get_actor_list(config).fetch()`
+  (an unpaginated full scan, same limitation `DbActorList.fetch()` already
+  has on both backends) rather than the segmented/paginated scan machinery
+  `backfill_property_lookup.py` uses for the *properties* table — there is
+  no equivalent segmented-scan primitive for the actor list on either
+  backend. Rate limiting and a resumable actor-id checkpoint were kept
+  (simpler shape: a persisted "done" set rather than per-segment
+  `last_evaluated_key`, since the outer loop here is over actors, not
+  DynamoDB partitions).
+- New tests: `tests/test_property_list_integrity.py` (unit, unparsable-metadata
+  cases added to the existing Phase 1 file), `tests/integration/test_property_list_repair.py`
+  (verify/compact behavioural coverage), `tests/integration/test_verify_property_lists_script.py`
+  (script smoke test, imports the script module directly rather than
+  shelling out — same pattern `tests/test_lookup_migration.py` uses for
+  `backfill_property_lookup.py`).
+- Verified: full suite green on both backends (2639 passed / 26 skipped on
+  DynamoDB; 2551 passed / 97 skipped on PostgreSQL excluding
+  `tests/performance/`). `pyright` and `ruff` clean. Manual verification
+  against dynamodb-local: seeded a list, punched a hole, confirmed
+  `verify()` reports it, `--repair` fixed it, and a clean re-run reported
+  nothing further.
 
 ---
 

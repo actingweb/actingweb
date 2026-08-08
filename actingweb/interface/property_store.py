@@ -320,6 +320,11 @@ class NotifyingListProperty:
     def count(self, value: Any) -> int:
         return self._list_prop.count(value)
 
+    def verify(self) -> dict[str, Any]:
+        """Read-only integrity check -- see ListProperty.verify(). No diff
+        is registered; nothing changes."""
+        return self._list_prop.verify()
+
     # Mutation operations - register diffs after completion
     def __setitem__(self, index: int, value: Any) -> None:
         self._list_prop[index] = value
@@ -368,6 +373,15 @@ class NotifyingListProperty:
     def remove(self, value: Any) -> None:
         self._list_prop.remove(value)
         self._register_diff("remove")
+
+    def compact(self) -> dict[str, Any]:
+        """Repair holes/orphans -- see ListProperty.compact(). Registers a
+        "metadata" diff (the closed operation vocabulary has no dedicated
+        "compact" entry) so subscribers re-read the list rather than trust
+        a positional diff for what is a storage-layer rewrite."""
+        report = self._list_prop.compact()
+        self._register_diff("metadata")
+        return report
 
 
 class PropertyListStore:

@@ -269,3 +269,40 @@ class TestCrashInjectionResidue:
         # Rows the loop never reached are untouched.
         assert fake_store[(actor_id, f"list:{name}-2")] == json.dumps("c")
         assert fake_store[(actor_id, f"list:{name}-3")] == json.dumps("d")
+
+
+class TestUnparsableMetadataRaises:
+    """Unparsable/non-dict metadata must raise ValueError, not self-heal by
+    overwriting it with a fresh `length: 0` default -- the old behaviour
+    orphaned every existing item row with no way back to them."""
+
+    def test_invalid_json_raises_and_row_untouched(self, monkeypatch, fake_store):
+        actor_id = "actor-badmeta"
+        name = "mylist"
+        fake_store[(actor_id, f"list:{name}-meta")] = "{not valid json"
+        fake_store[(actor_id, f"list:{name}-0")] = json.dumps("a")
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        with pytest.raises(ValueError, match="Unparsable metadata"):
+            len(prop_list)
+
+        # The bad row was never rewritten with a fresh default.
+        assert fake_store[(actor_id, f"list:{name}-meta")] == "{not valid json"
+        assert fake_store[(actor_id, f"list:{name}-0")] == json.dumps("a")
+
+    def test_non_dict_json_raises_and_row_untouched(self, monkeypatch, fake_store):
+        actor_id = "actor-badmeta2"
+        name = "mylist"
+        fake_store[(actor_id, f"list:{name}-meta")] = json.dumps([1, 2, 3])
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        with pytest.raises(ValueError, match="not a JSON object"):
+            len(prop_list)
+
+        assert fake_store[(actor_id, f"list:{name}-meta")] == json.dumps([1, 2, 3])

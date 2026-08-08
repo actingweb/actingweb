@@ -7,10 +7,11 @@ properties in DynamoDB, bypassing the 400KB limit while maintaining API compatib
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
-from actingweb.db import get_property
+from actingweb.db import get_property, get_property_list
 
 logger = logging.getLogger(__name__)
 
@@ -96,20 +97,20 @@ class ListProperty:
 
         try:
             parsed_meta = json.loads(meta_str)
-            if isinstance(parsed_meta, dict):
-                self._meta_cache = parsed_meta
-                return self._meta_cache
-            else:
-                # Invalid metadata format, return default
-                meta = self._create_default_metadata()
-                self._save_metadata(meta)
-                return meta
         except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Failed to parse list metadata for {self.name}: {e}")
-            # Return default metadata if parsing fails
-            meta = self._create_default_metadata()
-            self._save_metadata(meta)
-            return meta
+            # Do NOT self-heal by writing a fresh default: that orphans
+            # every existing item row (length: 0 with no way back to them).
+            # An unparsable metadata row means real corruption -- raise so
+            # the caller can run verify()/compact() (or the operator can
+            # inspect the row directly) instead of silently losing data.
+            raise ValueError(f"Unparsable metadata for list '{self.name}': {e}") from e
+        if not isinstance(parsed_meta, dict):
+            raise ValueError(
+                f"Metadata for list '{self.name}' is not a JSON object "
+                f"(got {type(parsed_meta).__name__})"
+            )
+        self._meta_cache = parsed_meta
+        return self._meta_cache
 
     def _create_default_metadata(self) -> dict[str, Any]:
         """Create default metadata structure."""
@@ -573,3 +574,125 @@ class ListProperty:
             if item == value:
                 count += 1
         return count
+
+    def verify(self) -> dict[str, Any]:
+        """Read-only integrity check against stored rows.
+
+        Fetches the actor's full property partition once and compares the
+        metadata's ``length`` against which ``list:{name}-N`` rows actually
+        exist, in the range ``[0, length)``. Reports index numbers only --
+        never item values.
+
+        Returns:
+            Dict with:
+            - stored_length: the metadata's recorded length
+            - readable_count: how many of ``[0, stored_length)`` are present
+            - missing_indices: indices in ``[0, stored_length)`` with no row
+              (holes)
+            - orphan_indices: rows present at or past ``stored_length``
+            - adjacent_duplicates: list of ``(a, b)`` readable-index pairs
+              where ``b == a + 1`` and both rows hold byte-identical stored
+              content -- a heuristic; a legitimate list can hold two equal
+              adjacent items, so this is a hint, not proof of corruption
+            - healthy: True iff there are no holes, no orphans, and no
+              adjacent-duplicate hits
+        """
+        meta = self._load_metadata()
+        stored_length = int(meta.get("length", 0) or 0)
+
+        db_list = get_property_list(self.config)
+        rows = db_list.fetch_all_including_lists(actor_id=self.actor_id) or {}
+
+        pattern = re.compile(rf"^list:{re.escape(self.name)}-(\d+)$")
+        present: set[int] = set()
+        for key in rows:
+            m = pattern.match(key)
+            if m:
+                present.add(int(m.group(1)))
+
+        missing_indices = [i for i in range(stored_length) if i not in present]
+        orphan_indices = sorted(i for i in present if i >= stored_length)
+        readable_count = stored_length - len(missing_indices)
+
+        ordered_present = [i for i in range(stored_length) if i in present]
+        adjacent_duplicates: list[tuple[int, int]] = []
+        for a, b in zip(ordered_present, ordered_present[1:], strict=False):
+            if b != a + 1:
+                continue
+            va = rows.get(self._get_item_property_name(a))
+            vb = rows.get(self._get_item_property_name(b))
+            if va is not None and va == vb:
+                adjacent_duplicates.append((a, b))
+
+        return {
+            "stored_length": stored_length,
+            "readable_count": readable_count,
+            "missing_indices": missing_indices,
+            "orphan_indices": orphan_indices,
+            "adjacent_duplicates": adjacent_duplicates,
+            "healthy": not missing_indices
+            and not orphan_indices
+            and not adjacent_duplicates,
+        }
+
+    def compact(self) -> dict[str, Any]:
+        """Repair holes and orphans by rewriting the list densely.
+
+        Reads every row in ``[0, stored_length)`` that is actually present,
+        in order, and rewrites them at ``0..n-1``; deletes every row from
+        the new length through the highest index the list had (closing
+        holes and removing orphans in one pass). ``description``,
+        ``explanation`` and ``created_at`` are preserved -- unlike
+        ``clear()`` + ``extend()``, which resets them via
+        ``_create_default_metadata()``.
+
+        Adjacent-duplicate residue (see ``verify()``) is left INTACT and
+        reported, never rewritten: a duplicate always means a destroyed
+        item, and silently collapsing one copy would bless the data loss
+        as intentional rather than surface it.
+
+        Returns:
+            The ``verify()`` report this call acted on (taken before any
+            write).
+        """
+        report = self.verify()
+
+        if not self._db:
+            raise RuntimeError("No database connection available")
+
+        stored_length = report["stored_length"]
+
+        db_list = get_property_list(self.config)
+        rows = db_list.fetch_all_including_lists(actor_id=self.actor_id) or {}
+
+        ordered_values: list[str] = [
+            rows[self._get_item_property_name(i)]
+            for i in range(stored_length)
+            if self._get_item_property_name(i) in rows
+        ]
+
+        for new_index, raw_value in enumerate(ordered_values):
+            target_name = self._get_item_property_name(new_index)
+            if rows.get(target_name) == raw_value:
+                continue  # already correct -- skip the write
+            item_db = get_property(self.config)
+            if not item_db.set(
+                actor_id=self.actor_id, name=target_name, value=raw_value
+            ):
+                raise RuntimeError(
+                    f"list item write failed for '{self.name}'[{new_index}]"
+                )
+
+        highest_seen = max([stored_length - 1, *report["orphan_indices"]], default=-1)
+        for i in range(len(ordered_values), highest_seen + 1):
+            del_db = get_property(self.config)
+            if not del_db.set(
+                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
+            ):
+                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
+
+        meta = self._load_metadata()
+        meta["length"] = len(ordered_values)
+        self._save_metadata(meta)
+
+        return report

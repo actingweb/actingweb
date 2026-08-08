@@ -545,6 +545,26 @@ single conditional writes; order is derived from key sort; length is counted.
   (DynamoDB, 786 passed) and the PostgreSQL equivalent (776 passed) both
   green.
 
+**Deviations / notes (sub-step 2 of 4 — Alembic migration):**
+
+- New revision `e5f6a7b8c9d0` (head: `d4e5f6a7b8c9` → `e5f6a7b8c9d0`) widens
+  `properties.name` `VARCHAR(255)` → `TEXT` via a metadata-only
+  `ALTER COLUMN ... TYPE TEXT` (no table rewrite). `downgrade()` reverses to
+  `VARCHAR(255)` and will fail loudly (Postgres raises on the implicit
+  truncation check) if any row's name exceeds 255 chars at downgrade time —
+  by design, an operator downgrading a schema underneath live v2 rank keys
+  needs that failure, not silent truncation.
+- Also updated `actingweb/db/postgresql/schema.py`'s SQLAlchemy `Property.name`
+  column to `Text` (was `String(255)`) — this model is autogenerate-comparison
+  metadata only (raw psycopg3 is the real read/write path), but leaving it
+  stale would make a future `alembic revision --autogenerate` propose
+  reverting this migration.
+- Verified manually against the `postgres-test` container: fresh
+  `alembic upgrade head` runs the full chain including this revision;
+  `\d properties` confirms `name` is `text`; `alembic downgrade -1` reverts
+  it to `character varying(255)`; `alembic upgrade head` re-applies cleanly.
+  `ruff`/`pyright` clean on the new file and `schema.py`.
+
 ---
 
 ## Phase 5: Migration v1→v2, docs, release

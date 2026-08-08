@@ -124,17 +124,29 @@ List properties integrate with the standard ``/properties`` endpoints:
   GET /{actor_id}/properties?metadata=true
   # Returns: {"simple": {"properties": [...], "total_bytes": N}, "lists": {...}}
 
-**POST new item** (append to end)::
+**GET/POST items** (an implementation extension, not part of the ActingWeb
+spec -- the spec addresses items by path index,
+``/properties/{list_name}/{index}``)::
+
+  GET /{actor_id}/properties/{list_name}/items
+  # Returns: {"items": [{"index": 0, "item": item0}, {"index": 1, "item": item1}, ...], "count": N}
+  # "index" is the STORAGE index -- the same index accepted by the
+  # update/delete actions below, so the two are always consistent.
 
   POST /{actor_id}/properties/{list_name}/items
   Content-Type: application/json
-  {"action": "add", "item_value": {...}}
+  {"action": "add", "item_value": {...}}          # append to end
+  {"action": "update", "item_index": N, "item_value": {...}}
+  {"action": "delete", "item_index": N}
 
 **PUT item at index**::
 
   PUT /{actor_id}/properties/{list_name}?index=0
   Content-Type: application/json
   {...item data...}
+
+  # index == current list length: creates (appends) the item.
+  # index > current list length: 404 Not Found (no padding is created).
 
 **DELETE entire list**::
 
@@ -146,6 +158,19 @@ List properties integrate with the standard ``/properties`` endpoints:
   PUT /{actor_id}/properties/{list_name}/metadata
   Content-Type: application/json
   {"description": "...", "explanation": "..."}
+
+**Corrupted list (409 Conflict)**
+
+Every list-serving path above (GET on the list, ``/items``, ``format=full``
+and ``metadata=true`` on the properties root) returns structured 409 if it
+finds an item missing from storage within the list's recorded length --
+the residue an interrupted delete/insert can leave::
+
+  {"error": "list_corrupted", "list": "notes", "detail": "...", "remedy": "compact"}
+
+There is no HTTP repair endpoint. Repair through the library API --
+``actor.property_lists.notes.verify()`` to inspect, ``.compact()`` to fix
+-- or the operator sweep script, ``scripts/verify_property_lists.py``.
 
 See the ActingWeb specification and Properties handler documentation for complete API details.
 

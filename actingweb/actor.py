@@ -13,6 +13,7 @@ from actingweb.constants import (
 )
 from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
+from actingweb.property_list import ListCorruptionError
 
 logger = logging.getLogger(__name__)
 
@@ -2524,7 +2525,14 @@ class Actor:
                     if self.property_lists.exists(subtarget):
                         # It's a list - return all items
                         list_attr = getattr(self.property_lists, subtarget)
-                        items = list(list_attr)
+                        try:
+                            items = list(list_attr)
+                        except ListCorruptionError as e:
+                            logger.error(
+                                f"List '{subtarget}' is corrupted, cannot build "
+                                f"full-state resync for it: {e}"
+                            )
+                            return {}
                         logger.debug(
                             f"Getting full state for list '{subtarget}': {len(items)} items"
                         )
@@ -2555,7 +2563,15 @@ class Actor:
                 if hasattr(self, "property_lists") and self.property_lists:
                     for list_name in self.property_lists.list_all():
                         list_attr = getattr(self.property_lists, list_name)
-                        items = list(list_attr)
+                        try:
+                            items = list(list_attr)
+                        except ListCorruptionError as e:
+                            logger.error(
+                                f"List '{list_name}' is corrupted, skipping it "
+                                f"in full-state resync (other lists still "
+                                f"included): {e}"
+                            )
+                            continue
                         result[list_name] = {
                             "list": list_name,
                             "operation": "extend",

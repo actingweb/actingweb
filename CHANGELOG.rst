@@ -5,6 +5,48 @@ CHANGELOG
 Unreleased
 ----------
 
+.. note::
+
+   This release changes the ``/properties/<name>/items`` GET response shape,
+   makes list-property reads fail fast on corruption (409 instead of a
+   silently compacted result), and enforces the spec's PUT bounds rule. See
+   the CHANGED entries below.
+
+CHANGED
+~~~~~~~
+
+- **Breaking: list-property reads now fail fast on corruption instead of
+  silently compacting past it.** ``ListProperty.to_list()``, ``.slice()``
+  and ``.to_list_from_rows()`` raise ``ListCorruptionError`` (an
+  ``IndexError`` subclass) when an item within the list's recorded length
+  is missing from storage, matching ``AttributeList``'s existing contract.
+  Every HTTP path that serves list content (``GET /properties/<name>``,
+  ``?format=full``, ``?metadata=true``, ``GET/POST /properties/<name>/items``,
+  the bulk list-item POST, list DELETE) now returns **409 Conflict** with
+  ``{"error": "list_corrupted", "list": ..., "detail": ..., "remedy": "compact"}``
+  instead of a 500 or a quietly-wrong compacted response. Repair with
+  ``ListProperty.compact()`` (see ADDED below) before retrying.
+- **Breaking: ``GET /properties/<name>/items`` response shape changed.**
+  Was a bare JSON array (identical to ``GET /properties/<name>``); is now
+  ``{"items": [{"index": i, "item": ...}, ...], "count": n}``. ``index`` is
+  the storage index, matching what ``action=update``/``action=delete``
+  already expect in ``item_index`` — GET and POST are now consistent with
+  each other. Flask gained this route for the first time (parity with
+  FastAPI, which already had it).
+- **Breaking: ``PUT /properties/<name>?index=N`` beyond the list length now
+  returns 404** instead of silently padding the list with ``None`` up to
+  ``N`` (an unbounded-write DoS vector as well as a spec violation — the
+  spec requires 404 for ``index > length``; ``index == length`` still MAY
+  append). ``docs/protocol/actingweb-spec.rst`` "List Property PUT".
+- The bulk list-item POST (``POST /properties`` with a
+  ``{"items": [{"index": N, ...}]}``-shaped list value) now applies every
+  update before any delete, regardless of the order items appear in the
+  request, then applies deletes in descending index order. Previously,
+  processing in request order meant a delete appearing before an update in
+  the same batch could shift the update onto the wrong item. All indices
+  in a batch are now interpreted against the list as it stood before the
+  batch, consistently.
+
 FIXED
 ~~~~~
 

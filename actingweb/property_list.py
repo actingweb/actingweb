@@ -16,6 +16,28 @@ from actingweb.db import get_property, get_property_list
 logger = logging.getLogger(__name__)
 
 
+class ListCorruptionError(IndexError):
+    """A list item within the recorded length is missing from storage.
+
+    Distinct from a genuine out-of-range ``IndexError``: this means the row
+    at ``index`` should exist (``0 <= index < length``) but does not -- the
+    signature an interrupted delete/insert shift leaves (see
+    thoughts/research/2026-08-07-property-list-index-integrity.md). Being an
+    ``IndexError`` subclass, existing ``except IndexError`` call sites keep
+    working; new code can catch this specifically to offer a repair path.
+    The message carries only the list name and index, never item values.
+    """
+
+    def __init__(self, list_name: str, index: int) -> None:
+        self.list_name = list_name
+        self.index = index
+        super().__init__(
+            f"List '{list_name}' item at index {index} is missing from "
+            f"storage (recorded length claims it should exist); run "
+            f"compact() to repair"
+        )
+
+
 class ListPropertyIterator:
     """
     Lazy-loading iterator for ListProperty.
@@ -167,19 +189,24 @@ class ListProperty:
     def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
         """Like to_list(), but served from a pre-fetched name->value mapping.
 
-        Falls back to a per-item database read for any row missing from the
-        mapping. Item decoding matches __getitem__: JSON with a raw-string
-        fallback.
+        Falls back to a per-item database read (via __getitem__) for any
+        row missing from the mapping. Item decoding matches __getitem__:
+        JSON with a raw-string fallback.
+
+        Raises:
+            ListCorruptionError: a row is missing from BOTH the mapping and
+                storage.
         """
         length = len(self)
         result: list[Any] = []
         for i in range(length):
             item_str = rows.get(self._get_item_property_name(i))
             if item_str is None:
-                try:
-                    result.append(self[i])
-                except (IndexError, json.JSONDecodeError) as e:
-                    logger.error(f"Error loading list item {i}: {e}")
+                # Not in the pre-fetched partition dump -- fall back to a
+                # per-item read. __getitem__ raises ListCorruptionError if
+                # the row is genuinely missing, not merely absent from
+                # `rows`.
+                result.append(self[i])
                 continue
             try:
                 result.append(json.loads(item_str))
@@ -248,7 +275,13 @@ class ListProperty:
         return int(length) if length is not None else 0
 
     def __getitem__(self, index: int) -> Any:
-        """Get item by index, loading from database."""
+        """Get item by index, loading from database.
+
+        Raises:
+            IndexError: ``index`` is outside ``[0, len(self))``.
+            ListCorruptionError: ``index`` is in range but the row is
+                missing from storage.
+        """
         length = len(self)
 
         if index < 0:
@@ -266,7 +299,7 @@ class ListProperty:
         item_str = item_db.get(actor_id=self.actor_id, name=item_property_name)
 
         if item_str is None:
-            raise IndexError(f"List item at index {index} not found in database")
+            raise ListCorruptionError(self.name, index)
 
         try:
             return json.loads(item_str)
@@ -445,21 +478,28 @@ class ListProperty:
         self._meta_cache = None
 
     def to_list(self) -> list[Any]:
-        """Load entire list into memory."""
+        """Load entire list into memory.
+
+        Raises:
+            ListCorruptionError: a row within ``[0, len(self))`` is missing
+                from storage. Run ``compact()`` (or the caller's remedy) to
+                repair, then retry.
+        """
         length = len(self)
         result = []
 
         for i in range(length):
-            try:
-                result.append(self[i])
-            except (IndexError, json.JSONDecodeError) as e:
-                logger.error(f"Error loading list item {i}: {e}")
-                continue
+            result.append(self[i])
 
         return result
 
     def slice(self, start: int, end: int) -> list[Any]:
-        """Load a range of items efficiently."""
+        """Load a range of items efficiently.
+
+        Raises:
+            ListCorruptionError: a row within the requested range is
+                missing from storage.
+        """
         length = len(self)
 
         # Handle negative indices
@@ -474,13 +514,24 @@ class ListProperty:
 
         result = []
         for i in range(start, end):
-            try:
-                result.append(self[i])
-            except (IndexError, json.JSONDecodeError) as e:
-                logger.error(f"Error loading list item {i}: {e}")
-                continue
+            result.append(self[i])
 
         return result
+
+    def to_indexed_list(self) -> list[tuple[int, Any]]:
+        """Load the list as ``(storage_index, item)`` pairs.
+
+        Under the current (v1) storage format this is exactly
+        ``list(enumerate(self.to_list()))`` -- storage indices and
+        positions coincide. It exists as its own method because it is the
+        contract the ``/items`` REST accessor documents: a future storage
+        format where positions and storage keys diverge keeps this correct
+        while ``enumerate(to_list())`` would not be.
+
+        Raises:
+            ListCorruptionError: see ``to_list()``.
+        """
+        return list(enumerate(self.to_list()))
 
     def pop(self, index: int = -1) -> Any:
         """Remove and return item at index (default last)."""

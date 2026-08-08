@@ -25,7 +25,7 @@ import json
 import pytest
 
 from actingweb.db.exceptions import DbError
-from actingweb.property_list import ListProperty
+from actingweb.property_list import ListCorruptionError, ListProperty
 
 
 class FakePropertyDb:
@@ -306,3 +306,102 @@ class TestUnparsableMetadataRaises:
             len(prop_list)
 
         assert fake_store[(actor_id, f"list:{name}-meta")] == json.dumps([1, 2, 3])
+
+
+class TestFailFastReads:
+    """to_list()/slice()/to_list_from_rows() raise ListCorruptionError on a
+    hole instead of silently compacting past it (Phase 3). __getitem__
+    distinguishes a genuine out-of-range IndexError from a
+    ListCorruptionError (in-range but missing) -- these tests pin that
+    distinction too."""
+
+    def test_getitem_in_range_hole_raises_list_corruption_error(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-ff-1"
+        name = "mylist"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        del fake_store[(actor_id, f"list:{name}-1")]
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        with pytest.raises(ListCorruptionError):
+            _ = prop_list[1]
+
+    def test_getitem_out_of_range_raises_plain_index_error_not_corruption(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-ff-2"
+        name = "mylist"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        with pytest.raises(IndexError) as exc_info:
+            _ = prop_list[5]
+        assert not isinstance(exc_info.value, ListCorruptionError)
+
+    def test_to_list_raises_on_hole(self, monkeypatch, fake_store):
+        actor_id = "actor-ff-3"
+        name = "mylist"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        del fake_store[(actor_id, f"list:{name}-1")]
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        with pytest.raises(ListCorruptionError):
+            prop_list.to_list()
+
+    def test_slice_raises_on_hole_within_range(self, monkeypatch, fake_store):
+        actor_id = "actor-ff-4"
+        name = "mylist"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c", "d"])
+        del fake_store[(actor_id, f"list:{name}-2")]
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        # The hole is outside this slice -- must succeed.
+        assert prop_list.slice(0, 2) == ["a", "b"]
+
+        # The hole is inside this slice -- must raise.
+        with pytest.raises(ListCorruptionError):
+            prop_list.slice(1, 4)
+
+    def test_to_list_from_rows_raises_on_hole_missing_from_both(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-ff-5"
+        name = "mylist"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        del fake_store[(actor_id, f"list:{name}-1")]
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        # A row present in the pre-fetched mapping is served from it even
+        # if storage itself has since diverged.
+        rows = {
+            f"list:{name}-0": json.dumps("a"),
+            f"list:{name}-1": json.dumps("b"),
+            f"list:{name}-2": json.dumps("c"),
+        }
+        assert prop_list.to_list_from_rows(rows) == ["a", "b", "c"]
+
+        # Missing from the mapping AND from storage -- falls back to
+        # __getitem__, which raises.
+        with pytest.raises(ListCorruptionError):
+            prop_list.to_list_from_rows({f"list:{name}-0": json.dumps("a")})
+
+    def test_to_indexed_list_shape(self, monkeypatch, fake_store):
+        actor_id = "actor-ff-6"
+        name = "mylist"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        assert prop_list.to_indexed_list() == [(0, "a"), (1, "b"), (2, "c")]

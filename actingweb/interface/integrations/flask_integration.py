@@ -383,6 +383,22 @@ class FlaskIntegration(BaseActingWebIntegration):
                 actor_id, "properties", name=name, metadata=True
             )
 
+        # Property list items endpoint (must come before catch-all path:name)
+        # -- parity with the FastAPI integration's app_property_items.
+        @self.flask_app.route(
+            "/<actor_id>/properties/<name>/items",
+            methods=["GET", "POST"],
+        )
+        def app_property_items(
+            actor_id: str, name: str
+        ) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            auth_redirect = self._check_authentication_and_redirect()
+            if auth_redirect:
+                return auth_redirect
+            return self._handle_actor_request(
+                actor_id, "properties", name=name, items=True
+            )
+
         @self.flask_app.route(
             "/<actor_id>/properties/<path:name>",
             methods=["GET", "POST", "DELETE", "PUT"],

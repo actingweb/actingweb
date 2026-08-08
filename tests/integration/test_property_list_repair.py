@@ -175,3 +175,46 @@ class TestCompactRepairsHoles:
         result = prop_list.pop()
         assert result == "b"
         assert prop_list.to_list() == ["a"]
+
+
+class TestResyncSkipsCorruptedListsOnly:
+    """Phase 3: a holed list must not abort a subscription full-state
+    resync -- actor.py:_get_full_state_for_subscription() logs and skips
+    only the corrupted list, other lists (and scalar properties) are still
+    included."""
+
+    def test_full_resync_skips_only_the_holed_list(self, test_actor):
+        healthy = test_actor.property_lists.resync_healthy
+        for item in ["a", "b"]:
+            healthy.append(item)
+
+        holed = test_actor.property_lists.resync_holed
+        for item in ["x", "y", "z"]:
+            holed.append(item)
+        _punch_hole(test_actor.config, test_actor.id, "resync_holed", 1)
+
+        test_actor.properties.scalar_prop = "scalar-value"
+
+        state = test_actor._core_actor._get_full_state_for_subscription(
+            "properties", None
+        )
+
+        assert "resync_healthy" in state
+        assert state["resync_healthy"]["items"] == ["a", "b"]
+        assert "scalar_prop" in state
+        assert state["scalar_prop"] == "scalar-value"
+
+        # The corrupted list is skipped, not raised through.
+        assert "resync_holed" not in state
+
+    def test_specific_subtarget_resync_on_holed_list_returns_empty(self, test_actor):
+        holed = test_actor.property_lists.resync_holed_2
+        for item in ["x", "y", "z"]:
+            holed.append(item)
+        _punch_hole(test_actor.config, test_actor.id, "resync_holed_2", 1)
+
+        state = test_actor._core_actor._get_full_state_for_subscription(
+            "properties", "resync_holed_2"
+        )
+
+        assert state == {}

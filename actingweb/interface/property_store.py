@@ -305,6 +305,9 @@ class NotifyingListProperty:
     def to_list(self) -> list[Any]:
         return self._list_prop.to_list()
 
+    def to_indexed_list(self) -> list[tuple[int, Any]]:
+        return self._list_prop.to_indexed_list()
+
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
         self._list_prop.prime_from_rows(rows)
 

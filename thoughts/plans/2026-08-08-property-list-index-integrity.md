@@ -358,7 +358,57 @@ actionable error, and makes the REST contract self-consistent.
 - [ ] Manual: `docs/guides/property-lists.rst` examples exercised by hand
       against a running dev app (FastAPI and Flask)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations / notes:**
+- Confirmed against `docs/protocol/actingweb-spec.rst` ("List Property PUT",
+  line 1040): `index > length` returns **404**, not the 400 the New Tests
+  bullet said — that line was residue from the abandoned cap-at-len+1000
+  design (advisor caught this before writing the test).
+- `__getitem__` is the one method not named in the plan's Changes list that
+  needed to change: it now raises `ListCorruptionError` (an `IndexError`
+  subclass) specifically when an in-range row is missing from storage, vs
+  plain `IndexError` for genuine out-of-range access. `to_list()`/`slice()`/
+  `to_list_from_rows()` simply stopped catching `IndexError` around
+  `self[i]` (mirroring `attribute_list.py:473-492`'s existing pattern) —
+  they inherit the right exception type from `__getitem__` rather than
+  needing their own corruption detection.
+- `_write_list_corrupted_response()` is a module-level function in
+  `handlers/properties.py`, not a single method — `PropertiesHandler` and
+  `PropertyListItemsHandler` are separate classes with no shared base for
+  this, so each gets a thin instance-method wrapper delegating to it.
+- Bulk POST intra-batch fix implemented as classify-then-two-pass
+  (`pending_updates`/`pending_deletes` lists, updates applied first in
+  given order, deletes applied last in descending index order) rather than
+  literal partitioning — same effect, avoids a second list comprehension.
+- Added a `ListCorruptionError` catch (409) to the list-DELETE hook path
+  and the fifth already-sanitized handler site from Phase 1 — not
+  explicitly named in the plan's list-serving-paths enumeration, but same
+  rationale (a corrupted list must not surface as a raw 500).
+- Flask route parity (`/items` GET/POST) required only the route
+  registration — `base_integration.py`'s `get_handler_class()` already
+  dispatched `items=True` to `PropertyListItemsHandler`; only FastAPI had
+  the route wired.
+- New tests: unit fail-fast/`ListCorruptionError` coverage and
+  `to_indexed_list()` shape added to `tests/test_property_list_integrity.py`;
+  HTTP contract tests (`/items` shape, update/delete round-trips, 409
+  everywhere, bulk-POST skew regression, PUT 404) in the new
+  `tests/integration/test_property_list_http_contract.py`; Flask route
+  parity in `tests/integration/test_flask_items_route_parity.py` (Flask's
+  in-process `test_client()`, not a live server thread — no such harness
+  existed for Flask, and building one to match the FastAPI
+  uvicorn-in-a-thread fixture was out of scope for a parity smoke test);
+  www corruption notice in `tests/integration/test_www_list_corruption.py`;
+  resync skip-only-the-corrupted-list coverage added to
+  `tests/integration/test_property_list_repair.py`.
+- `docs/guides/property-lists.rst` updated now (GET `/items` shape, the
+  404-vs-append PUT rule, the 409 corruption contract) rather than
+  deferred to Phase 5 — the REST contract changed in this phase, so the
+  docs would otherwise describe behavior that no longer exists.
+- Verified: full suite green on both backends (2656 passed / 26 skipped on
+  DynamoDB; 2568 passed / 97 skipped on PostgreSQL excluding
+  `tests/performance/`). `pyright` and `ruff` clean. `tests/test_hot_path_n_plus_one.py`
+  (the primed-list query-count pin) still passes unchanged.
 
 ---
 

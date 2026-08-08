@@ -5,6 +5,33 @@ CHANGELOG
 Unreleased
 ----------
 
+FIXED
+~~~~~
+
+- **``ListProperty.insert()`` destroyed data on every call into a non-empty
+  list on DynamoDB.** ``insert()`` reused one cached ``DbProperty`` handle
+  across its whole shift loop instead of taking a fresh handle per
+  get()/set() like every other list method; on DynamoDB this caused each
+  shifted row to be overwritten with the last value read instead of its
+  own. Fixed both at the call site (fresh handles, matching the rest of the
+  class) and in the DynamoDB and PostgreSQL backends' ``DbProperty.get()``/
+  ``set()`` (a cached handle for a different ``(actor_id, name)`` is now
+  always discarded rather than reused).
+- **Backend read/write failures on property (and property-list item) storage
+  were silently swallowed as absence or as a no-op.** ``DbProperty.get()``
+  now raises ``actingweb.db.exceptions.DbError`` on a genuine backend fault
+  instead of returning ``None`` (``None`` means the row does not exist, and
+  only that, on both backends). Every ``ListProperty`` mutation
+  (``append``, ``__setitem__``, ``__delitem__``, ``insert``, ``clear``,
+  ``delete``, metadata writes) now checks ``set()``'s return value and
+  raises ``RuntimeError`` instead of continuing past a failed write. This is
+  a breaking change for any code that relied on a backend fault degrading
+  to ``None``/no-op on a property read/write.
+- Backend exception text no longer reaches HTTP error responses from the
+  list-property handlers (``PUT``/POST/DELETE on ``/properties/<name>`` and
+  ``/properties/<name>/items``) — the client sees a generic message; the
+  original exception is still logged server-side.
+
 v3.13.0rc4: August 3, 2026
 --------------------------
 

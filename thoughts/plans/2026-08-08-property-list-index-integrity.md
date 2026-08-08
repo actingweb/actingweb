@@ -152,7 +152,39 @@ stale handle.
 - [ ] `poetry run ruff check actingweb tests && poetry run ruff format --check actingweb tests`
 - [ ] Manual: re-run the research repro (`reverify_real_dynamo.py` scenarios 1-2) against the fixed code — insert must produce the correct list; injected read error must raise, not corrupt
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations / notes:**
+- `get()`'s `DoesNotExist` catch uses the PynamoDB base
+  `pynamodb.exceptions.DoesNotExist` rather than `Property.DoesNotExist`
+  specifically — PynamoDB generates a distinct `DoesNotExist` subclass per
+  `Model`, and `self.handle` can hold a `PropertyLegacy` instance (set by
+  `get_actor_id_from_property()`'s legacy-GSI fallback), so catching only
+  `Property.DoesNotExist` would let a legitimate absence on a
+  `PropertyLegacy` handle get wrapped as `DbError` instead of returning
+  `None`. Catching the shared base is strictly more correct and covers the
+  same cases the plan's citation intended.
+- A fifth `str(e)` site (`handlers/properties.py`, list-property DELETE,
+  originally `:1192`) was sanitized alongside the four the plan named — same
+  pattern, same rationale ("backend internals must not reach HTTP bodies"),
+  evidently a plan omission rather than a deliberate exclusion.
+- `RuntimeError` messages for the `_save_metadata`/`delete()` meta-row write
+  checks use `"list metadata write failed for '{name}'"` rather than
+  reusing the `[{index}]` suffix verbatim from the plan's quoted item-write
+  message — an index isn't meaningful for the metadata row.
+- New tests landed as `tests/test_property_list_integrity.py` (unit, dict-backed
+  fake) and `tests/integration/test_db_property_handle.py` (integration, not
+  `tests/test_db_property_handle.py` as drafted) — PostgreSQL needs its
+  migrated schema, which only the `tests/integration/` session fixtures
+  provision; DynamoDB self-creates its table on construction so the
+  asymmetry only shows up under PostgreSQL. The insert()-into-non-empty-list
+  regression was added to the existing
+  `tests/integration/test_property_lists_advanced.py` instead of a new file.
+- Verified: full suite green on both backends (2630 passed / 26 skipped on
+  DynamoDB via `make test-all-parallel`; 2542 passed / 97 skipped on
+  PostgreSQL excluding `tests/performance/`, whose 5 failures were confirmed
+  pre-existing on master via `git stash` — unrelated to this phase).
+  `pyright` and `ruff` clean.
 
 ---
 

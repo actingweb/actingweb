@@ -134,9 +134,10 @@ class ListProperty:
             meta_json = json.dumps(meta)
             # Use fresh DB instance to avoid handle conflicts
             meta_db = get_property(self.config)
-            meta_db.set(
+            if not meta_db.set(
                 actor_id=self.actor_id, name=meta_property_name, value=meta_json
-            )
+            ):
+                raise RuntimeError(f"list metadata write failed for '{self.name}'")
 
         self._meta_cache = meta
 
@@ -293,11 +294,12 @@ class ListProperty:
 
         # Use fresh DB instance to avoid handle conflicts
         item_db = get_property(self.config)
-        item_db.set(
+        if not item_db.set(
             actor_id=self.actor_id,
             name=self._get_item_property_name(index),
             value=value_str,
-        )
+        ):
+            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
 
         # Update metadata timestamp
         meta = self._load_metadata()
@@ -318,11 +320,12 @@ class ListProperty:
 
         # Delete the item at index
         prop = get_property(self.config)
-        prop.set(
+        if not prop.set(
             actor_id=self.actor_id,
             name=self._get_item_property_name(index),
             value=None,  # This will delete the property
-        )
+        ):
+            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
 
         # Shift all items after index down by one
         for i in range(index + 1, length):
@@ -335,19 +338,23 @@ class ListProperty:
             if item_value is not None:
                 # Move item from position i to position i-1
                 move_db = get_property(self.config)
-                move_db.set(
+                if not move_db.set(
                     actor_id=self.actor_id,
                     name=self._get_item_property_name(i - 1),
                     value=item_value,
-                )
+                ):
+                    raise RuntimeError(
+                        f"list item write failed for '{self.name}'[{i - 1}]"
+                    )
 
                 # Delete the old position
                 delete_db = get_property(self.config)
-                delete_db.set(
+                if not delete_db.set(
                     actor_id=self.actor_id,
                     name=self._get_item_property_name(i),
                     value=None,
-                )
+                ):
+                    raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
 
         # Update metadata length
         meta = self._load_metadata()
@@ -374,7 +381,10 @@ class ListProperty:
         # Store the new item - use fresh DB instance to avoid handle conflicts
         item_property_name = self._get_item_property_name(length)
         item_db = get_property(self.config)
-        item_db.set(actor_id=self.actor_id, name=item_property_name, value=item_str)
+        if not item_db.set(
+            actor_id=self.actor_id, name=item_property_name, value=item_str
+        ):
+            raise RuntimeError(f"list item write failed for '{self.name}'[{length}]")
         logger.debug(
             f"append(): Stored item at '{item_property_name}' with value: {item_str}"
         )
@@ -399,9 +409,10 @@ class ListProperty:
         # Delete all item properties
         for i in range(length):
             item_db = get_property(self.config)
-            item_db.set(
+            if not item_db.set(
                 actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
-            )
+            ):
+                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
 
         # Reset metadata
         meta = self._create_default_metadata()
@@ -417,15 +428,17 @@ class ListProperty:
         # Delete all item properties
         for i in range(length):
             item_db = get_property(self.config)
-            item_db.set(
+            if not item_db.set(
                 actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
-            )
+            ):
+                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
 
         # Delete metadata
         meta_db = get_property(self.config)
-        meta_db.set(
+        if not meta_db.set(
             actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
-        )
+        ):
+            raise RuntimeError(f"list metadata write failed for '{self.name}'")
 
         # Clear cache
         self._meta_cache = None
@@ -492,18 +505,27 @@ class ListProperty:
         if not self._db:
             raise RuntimeError("No database connection available")
 
-        # Shift all items from index onwards up by one
+        # Shift all items from index onwards up by one. Fresh DB instance
+        # per call (like every other mutation method) — reusing self._db
+        # across get()/set() calls for different item names left a stale
+        # handle that, on DynamoDB, overwrote every shifted row with the
+        # last-read value instead of its own.
         for i in range(length - 1, index - 1, -1):
-            item_value = self._db.get(
+            item_db = get_property(self.config)
+            item_value = item_db.get(
                 actor_id=self.actor_id, name=self._get_item_property_name(i)
             )
 
             if item_value is not None:
-                self._db.set(
+                move_db = get_property(self.config)
+                if not move_db.set(
                     actor_id=self.actor_id,
                     name=self._get_item_property_name(i + 1),
                     value=item_value,
-                )
+                ):
+                    raise RuntimeError(
+                        f"list item write failed for '{self.name}'[{i + 1}]"
+                    )
 
         # Insert the new item
         try:
@@ -511,11 +533,13 @@ class ListProperty:
         except (TypeError, ValueError):
             item_str = str(item)
 
-        self._db.set(
+        insert_db = get_property(self.config)
+        if not insert_db.set(
             actor_id=self.actor_id,
             name=self._get_item_property_name(index),
             value=item_str,
-        )
+        ):
+            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
 
         # Update metadata
         meta = self._load_metadata()

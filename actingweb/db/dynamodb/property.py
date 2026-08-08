@@ -5,10 +5,12 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
+from pynamodb.exceptions import DoesNotExist
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -142,19 +144,35 @@ class DbProperty:
         return self._use_lookup_table and name in self._indexed_properties
 
     def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
-        """Retrieves the property from the database"""
+        """Retrieves the property from the database.
+
+        Returns ``None`` only when the row is absent. A backend fault
+        (throttle, timeout, connection error) raises ``DbError`` instead of
+        being reported as absence.
+        """
         if not actor_id or not name:
             return None
+        if self.handle is not None and (
+            str(self.handle.id) != actor_id or str(self.handle.name) != name
+        ):
+            # A handle cached from a previous get()/set() call for a
+            # different (actor_id, name) must never be reused — discard it
+            # and take the fresh-fetch path below.
+            self.handle = None
         if self.handle:
             try:
                 self.handle.refresh()
-            except Exception:  # PynamoDB DoesNotExist exception
+            except DoesNotExist:
                 return None
+            except Exception as e:
+                raise DbError("property read", actor_id) from e
             return str(self.handle.value) if self.handle.value else None
         try:
             self.handle = Property.get(actor_id, name, consistent_read=True)
-        except Exception:  # PynamoDB DoesNotExist exception
+        except DoesNotExist:
             return None
+        except Exception as e:
+            raise DbError("property read", actor_id) from e
         return str(self.handle.value) if self.handle.value else None
 
     def get_actor_id_from_property(
@@ -309,6 +327,15 @@ class DbProperty:
                 self.delete()  # This will also delete lookup entry
             return True
 
+        if (
+            actor_id
+            and self.handle is not None
+            and (str(self.handle.id) != actor_id or str(self.handle.name) != name)
+        ):
+            # Same rule as get(): a handle cached for a different
+            # (actor_id, name) must never be reused.
+            self.handle = None
+
         # Get old value before updating (for lookup sync)
         old_value = None
         if self._should_index_property(name):
@@ -330,7 +357,10 @@ class DbProperty:
         else:
             self.handle.value = value
 
-        self.handle.save()
+        try:
+            self.handle.save()
+        except Exception as e:
+            raise DbError("property write", actor_id) from e
 
         # Update lookup table if property is indexed
         if self._should_index_property(name):

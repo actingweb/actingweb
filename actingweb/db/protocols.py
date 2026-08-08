@@ -126,7 +126,11 @@ class DbPropertyProtocol(Protocol):
             name: The property name
 
         Returns:
-            Property value as string, or None if not found
+            Property value as string, or ``None`` if the row does not exist.
+            ``None`` means absence ONLY — a backend fault (throttle, timeout,
+            connection error) raises ``DbError``
+            (``actingweb.db.exceptions.DbError``), it is never reported as
+            absence.
         """
         ...
 
@@ -157,7 +161,15 @@ class DbPropertyProtocol(Protocol):
             value: Property value (None or empty string deletes)
 
         Returns:
-            True on success, False on failure
+            True on success, False only on failure — callers MUST check the
+            return value; a write is not confirmed until this is True.
+
+        Note:
+            A ``handle`` cached by a prior ``get()``/``set()`` call for a
+            different ``(actor_id, name)`` MUST NOT be reused — implementations
+            discard a stale handle and take the fresh-fetch/create path
+            whenever the arguments disagree with what the handle was built
+            for.
         """
         ...
 

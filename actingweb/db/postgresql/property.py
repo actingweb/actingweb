@@ -5,6 +5,7 @@ import logging
 import os
 from typing import Any
 
+from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,9 @@ class DbProperty:
 
         Returns:
             Property value as string, or None if not found
+
+        Raises:
+            DbError: On a backend fault. Only row absence returns None.
         """
         if not actor_id or not name:
             return None
@@ -98,7 +102,7 @@ class DbProperty:
                         return None
         except Exception as e:
             logger.error(f"Error retrieving property {actor_id}/{name}: {e}")
-            return None
+            raise DbError("property read", actor_id) from e
 
     def get_actor_id_from_property(
         self, name: str | None = None, value: str | None = None
@@ -239,7 +243,9 @@ class DbProperty:
             value: Property value (None or empty string deletes)
 
         Returns:
-            True on success, False on failure
+            True on success, False on failure. Unlike ``get()``, backend
+            faults are reported through this boolean (logged, not raised) —
+            callers MUST check the return value.
         """
         if not name:
             return False

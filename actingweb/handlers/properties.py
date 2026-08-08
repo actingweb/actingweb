@@ -634,7 +634,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")
                 if self.response:
-                    self.response.set_status(400, f"Error setting list item: {str(e)}")
+                    self.response.set_status(400, "Error setting list item")
                 return
 
         # Use unified access control system for permission checking
@@ -1023,7 +1023,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                         if self.response:
                                             self.response.set_status(
                                                 500,
-                                                f"Error updating item at index {index}: {str(e)}",
+                                                f"Error updating item at index {index}",
                                             )
                                         return
 
@@ -1061,9 +1061,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 f"Error in bulk update for list property '{key}': {e}"
                             )
                             if self.response:
-                                self.response.set_status(
-                                    500, f"Error in bulk update: {str(e)}"
-                                )
+                                self.response.set_status(500, "Error in bulk update")
                             return
                     else:
                         # Not a list property or doesn't exist
@@ -1188,9 +1186,7 @@ class PropertiesHandler(base_handler.BaseHandler):
 
                 except Exception as e:
                     logger.error(f"Error deleting list property '{name}': {e}")
-                    self.response.set_status(
-                        500, f"Error deleting list property: {str(e)}"
-                    )
+                    self.response.set_status(500, "Error deleting list property")
                     return
 
             # Regular property handling
@@ -1694,4 +1690,4 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
         except Exception as e:
             logger.error(f"Error in list item operation '{action}' for '{name}': {e}")
             if self.response:
-                self.response.set_status(500, f"Error processing list item: {str(e)}")
+                self.response.set_status(500, "Error processing list item")

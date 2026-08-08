@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist
+from pynamodb.exceptions import DoesNotExist, PutError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -89,6 +89,31 @@ class PropertyLegacy(Model):
     property_index = PropertyIndex()
 
 
+def _serialize_property_value(value: Any) -> str | None:
+    """Serialize a property value the same way ``DbProperty.set()`` does.
+
+    Returns ``None`` if the serialized value is empty (nothing to write —
+    callers treat this as "would delete", which conditional-create callers
+    must reject rather than silently no-op).
+    """
+    import json
+
+    from actingweb.db.utils import sanitize_json_data
+
+    if value is not None and not isinstance(value, str):
+        try:
+            sanitized_value = sanitize_json_data(value, log_source="property")
+            value = json.dumps(sanitized_value)
+        except (TypeError, ValueError):
+            value = str(value)
+    elif isinstance(value, str):
+        value = sanitize_json_data(value, log_source="property")
+
+    if not value or (hasattr(value, "__len__") and len(value) == 0):
+        return None
+    return value
+
+
 class DbProperty:
     """
     DbProperty does all the db operations for property objects
@@ -140,8 +165,16 @@ class DbProperty:
         Returns True if:
         1. Lookup table mode is enabled
         2. Property name is in configured indexed_properties list
+        3. Property is not a list-property item/meta row (belt-and-braces —
+           list names are never configured as indexed properties, but this
+           makes it structurally impossible for lookup-table sync to touch
+           list storage rows)
         """
-        return self._use_lookup_table and name in self._indexed_properties
+        return (
+            self._use_lookup_table
+            and name in self._indexed_properties
+            and not name.startswith("list:")
+        )
 
     def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
         """Retrieves the property from the database.
@@ -445,6 +478,66 @@ class DbProperty:
         if name and value and self._should_index_property(name):
             self._delete_lookup_entry(actor_id, name, value)
 
+        return True
+
+    def get_range(
+        self,
+        actor_id: str | None = None,
+        lower: str | None = None,
+        upper: str | None = None,
+        keys_only: bool = False,
+    ) -> dict[str, str]:
+        """Range-read rows whose name is in ``[lower, upper]``.
+
+        See ``DbPropertyProtocol.get_range`` for the contract. DynamoDB's
+        KeyConditionExpression rejects two separate comparisons on the same
+        key (``>=`` AND ``<`` is invalid), so this uses ``between()``,
+        which is INCLUSIVE on both ends — the caller MUST choose ``upper``
+        as a sentinel value that can never equal a real row name (e.g. a
+        delimiter character no real key contains), so inclusive-vs-exclusive
+        at the boundary is unobservable. DynamoDB already returns range-key
+        query results in ascending sort-key order, but this is NOT relied
+        upon — the caller re-sorts.
+        """
+        if not actor_id or lower is None or upper is None:
+            return {}
+
+        condition = Property.name.between(lower, upper)
+        attributes_to_get = ["name"] if keys_only else ["name", "value"]
+
+        try:
+            results: dict[str, str] = {}
+            for item in Property.query(
+                actor_id,
+                range_key_condition=condition,
+                consistent_read=True,
+                attributes_to_get=attributes_to_get,
+            ):
+                results[str(item.name)] = "" if keys_only else str(item.value or "")
+            return results
+        except Exception as e:
+            raise DbError("property range read", actor_id) from e
+
+    def create_if_not_exists(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """Conditionally create a row — see ``DbPropertyProtocol.create_if_not_exists``."""
+        if not actor_id or not name:
+            return False
+
+        serialized = _serialize_property_value(value)
+        if serialized is None:
+            return False
+
+        item = Property(id=actor_id, name=name, value=serialized)
+        try:
+            item.save(condition=Property.id.does_not_exist())
+        except PutError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                return False
+            raise DbError("property conditional create", actor_id) from e
+        except Exception as e:
+            raise DbError("property conditional create", actor_id) from e
         return True
 
 

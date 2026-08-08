@@ -11,6 +11,29 @@ from actingweb.db.postgresql.connection import get_connection
 logger = logging.getLogger(__name__)
 
 
+def _serialize_property_value(value: Any) -> str | None:
+    """Serialize a property value the same way ``DbProperty.set()`` does.
+
+    Returns ``None`` if the serialized value is empty (nothing to write —
+    callers treat this as "would delete", which conditional-create callers
+    must reject rather than silently no-op).
+    """
+    from actingweb.db.utils import sanitize_json_data
+
+    if value is not None and not isinstance(value, str):
+        try:
+            sanitized_value = sanitize_json_data(value, log_source="property")
+            value = json.dumps(sanitized_value)
+        except (TypeError, ValueError):
+            value = str(value)
+    elif isinstance(value, str):
+        value = sanitize_json_data(value, log_source="property")
+
+    if not value or (hasattr(value, "__len__") and len(value) == 0):
+        return None
+    return value
+
+
 class DbProperty:
     """
     DbProperty does all the db operations for property objects.
@@ -58,8 +81,16 @@ class DbProperty:
         Returns True if:
         1. Lookup table mode is enabled
         2. Property name is in configured indexed_properties list
+        3. Property is not a list-property item/meta row (belt-and-braces —
+           list names are never configured as indexed properties, but this
+           makes it structurally impossible for lookup-table sync to touch
+           list storage rows)
         """
-        return self._use_lookup_table and name in self._indexed_properties
+        return (
+            self._use_lookup_table
+            and name in self._indexed_properties
+            and not name.startswith("list:")
+        )
 
     def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
         """
@@ -439,6 +470,84 @@ class DbProperty:
         except Exception as e:
             logger.error(f"Error deleting property {actor_id}/{name}: {e}")
             return False
+
+    def get_range(
+        self,
+        actor_id: str | None = None,
+        lower: str | None = None,
+        upper: str | None = None,
+        keys_only: bool = False,
+    ) -> dict[str, str]:
+        """Range-read rows whose name is in ``[lower, upper]`` (inclusive).
+
+        See ``DbPropertyProtocol.get_range`` for the contract. Uses a range
+        comparison (``>=``/``<=``), never ``LIKE`` — no escaping surface.
+        """
+        if not actor_id or lower is None or upper is None:
+            return {}
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    if keys_only:
+                        cur.execute(
+                            """
+                            SELECT name
+                            FROM properties
+                            WHERE id = %s
+                              AND name COLLATE "C" >= %s
+                              AND name COLLATE "C" <= %s
+                            """,
+                            (actor_id, lower, upper),
+                        )
+                        return {row[0]: "" for row in cur.fetchall()}
+                    cur.execute(
+                        """
+                        SELECT name, value
+                        FROM properties
+                        WHERE id = %s
+                          AND name COLLATE "C" >= %s
+                          AND name COLLATE "C" <= %s
+                        """,
+                        (actor_id, lower, upper),
+                    )
+                    return {row[0]: row[1] for row in cur.fetchall()}
+        except Exception as e:
+            logger.error(f"Error range-reading properties for actor {actor_id}: {e}")
+            raise DbError("property range read", actor_id) from e
+
+    def create_if_not_exists(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """Conditionally create a row — see ``DbPropertyProtocol.create_if_not_exists``."""
+        if not actor_id or not name:
+            return False
+
+        serialized = _serialize_property_value(value)
+        if serialized is None:
+            return False
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO properties (id, name, value)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (id, name) DO NOTHING
+                        """,
+                        (actor_id, name, serialized),
+                    )
+                    created = cur.rowcount == 1
+                conn.commit()
+            if created:
+                self.handle = {"id": actor_id, "name": name, "value": serialized}
+            return created
+        except Exception as e:
+            logger.error(
+                f"Error conditionally creating property {actor_id}/{name}: {e}"
+            )
+            raise DbError("property conditional create", actor_id) from e
 
 
 class DbPropertyList:

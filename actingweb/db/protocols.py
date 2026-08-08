@@ -182,6 +182,77 @@ class DbPropertyProtocol(Protocol):
         """
         ...
 
+    def get_range(
+        self,
+        actor_id: str | None = None,
+        lower: str | None = None,
+        upper: str | None = None,
+        keys_only: bool = False,
+    ) -> dict[str, str]:
+        """
+        Range-read property rows whose name falls in ``[lower, upper]``
+        (bytewise comparison, INCLUSIVE on both ends).
+
+        Used by v2 list-property storage to read a list's item rows in one
+        query instead of one per item. ``upper`` is inclusive because
+        DynamoDB's KeyConditionExpression rejects two separate comparisons
+        on the same key (no ``>=`` AND ``<``) — callers MUST choose
+        ``upper`` as a sentinel value that can never equal a real row name
+        (e.g. a delimiter character no real key contains), so the
+        inclusive boundary is unobservable in practice.
+
+        Ordering is NOT guaranteed by this method — backends may return
+        results in different orders (DynamoDB's natural range-key sort vs.
+        an unordered scan), so a caller that needs a specific order MUST
+        sort the returned dict's items itself. This is deliberate: it keeps
+        ordering behavior identical across backends instead of depending on
+        a per-backend implementation detail.
+
+        Args:
+            actor_id: The actor ID
+            lower: Inclusive lower bound on name
+            upper: Inclusive upper bound on name (see above — use a
+                sentinel value)
+            keys_only: If True, returned values are ``""`` (a cheaper
+                projection read used when only presence/count/order is
+                needed); if False, values are the actual property values.
+
+        Returns:
+            Dict of ``{name: value}`` (or ``{name: ""}`` when
+            ``keys_only``) for rows in the range. Empty dict if none found.
+
+        Raises:
+            DbError: On a backend fault.
+        """
+        ...
+
+    def create_if_not_exists(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """
+        Conditionally create a property row — succeeds only if no row for
+        this ``(actor_id, name)`` exists yet.
+
+        Used by v2 list-property storage for collision-free rank-key
+        inserts: two writers racing to use the same generated rank produce
+        one winner and one ``False``, never a silent overwrite of one
+        writer's item by the other's.
+
+        Args:
+            actor_id: The actor ID
+            name: Property name
+            value: Property value (serialized the same way as ``set()``)
+
+        Returns:
+            True if the row was created. False if a row already existed at
+            this name — a normal outcome (the caller should regenerate the
+            key and retry), not a failure.
+
+        Raises:
+            DbError: On a backend fault (not a conflict).
+        """
+        ...
+
 
 @runtime_checkable
 class DbPropertyListProtocol(Protocol):

@@ -504,7 +504,46 @@ single conditional writes; order is derived from key sort; length is counted.
 - [ ] Manual: performance sanity vs v1 — `to_list()` on a 200-item list against
       dynamodb-local (expect one query, not 200 GetItems)
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress
+
+**Deviations / notes (sub-step 1 of 4 — `get_range()`/`create_if_not_exists()`):**
+
+- Landing Phase 4 as 4 separate commits within this phase (protocol +
+  backends → Alembic migration → `property_list.py` v2 rewrite → full
+  verification), each independently green, rather than one large commit —
+  the storage-format rewrite has enough surface area that per-step
+  verification catches problems closer to their cause.
+- `get_range()`'s bound semantics changed from the plan's `[lower, upper)`
+  (exclusive upper) to `[lower, upper]` (**inclusive** upper). DynamoDB's
+  `KeyConditionExpression` rejects two separate comparisons on the same key
+  (`>=` AND `<` errors with "KeyConditionExpressions must only contain one
+  condition per key") — only `between()` (inclusive-inclusive),
+  `begins_with`, or a single comparison are legal. Callers (the v2 list
+  format) choose `upper` as a delimiter sentinel (`$`) that can never equal
+  a real row name, so inclusive-vs-exclusive at that boundary is
+  unobservable. PostgreSQL uses `<=` to match, plus `COLLATE "C"` on BOTH
+  sides of the range comparison (not just `ORDER BY`, which the plan
+  mentioned) — a non-C database default collation affects the `>=`/`<=`
+  comparison operators too, not only result ordering, so without it the
+  WHERE clause itself could silently return the wrong rows on a
+  non-C-collation deployment.
+- Added `DbPropertyProtocol.create_if_not_exists()` as a distinct method
+  rather than a `set()` kwarg — `set()` is an upsert on PostgreSQL
+  (`ON CONFLICT DO UPDATE`) and is called from 15+ sites; a conditional-only
+  variant needed a separate method rather than a behavior-changing flag on
+  the existing one.
+- `_should_index_property()` on both backends now also excludes any name
+  starting with `list:` (belt-and-braces; list names were already never
+  configured as indexed properties, but this makes it structurally
+  impossible for lookup-table sync to touch list storage rows regardless of
+  configuration).
+- New tests: `tests/integration/test_db_property_range.py` (both backends) —
+  range bounds, sibling-list-prefix isolation (`list:foo-#...` vs
+  `list:foo-x-#...`), keys-only mode, and conditional-create collision
+  behavior.
+- Verified: `ruff`, `pyright` (0 errors), `make test-integration-fast`
+  (DynamoDB, 786 passed) and the PostgreSQL equivalent (776 passed) both
+  green.
 
 ---
 

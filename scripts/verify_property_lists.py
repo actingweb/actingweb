@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 Sweep all actors' property lists for index corruption (holes, orphans,
-duplicate residue) and optionally repair.
+duplicate residue) or rank-key bloat, and optionally repair.
 
-Targets the v1 (dense-integer-key) list storage format described in
-thoughts/plans/2026-08-08-property-list-index-integrity.md. A list can
-become unhealthy when a delete/insert shift loop is interrupted mid-way
-(process death, throttle, timeout) -- see
-thoughts/research/2026-08-07-property-list-index-integrity.md for the
-mechanism.
+Handles both list storage formats described in
+thoughts/plans/2026-08-08-property-list-index-integrity.md:
+- v1 (dense-integer-key): can develop holes/orphans when a delete/insert
+  shift loop is interrupted mid-way (process death, throttle, timeout) --
+  see thoughts/research/2026-08-07-property-list-index-integrity.md.
+- v2 (fractional rank key): cannot have holes/orphans by construction;
+  "unhealthy" here means rank keys have grown long from repeated
+  insert-between operations and are approaching the length cap.
 
 Run with the SAME environment as the application (DATABASE_BACKEND and its
 backend-specific connection settings), e.g.::
@@ -19,10 +21,11 @@ backend-specific connection settings), e.g.::
         --checkpoint-file .verify.checkpoint.json
 
 Dry-run (report only) by default. --repair invokes ListProperty.compact()
-on every unhealthy list that has holes or orphans; it never touches a list
-whose only finding is adjacent_duplicates -- compact() itself leaves
-duplicate residue intact (a duplicate always means a destroyed item, and
-silently collapsing one copy would bless the data loss as intentional).
+on every unhealthy v1 list that has holes or orphans, and on every
+unhealthy v2 list (rank rebalance); it never touches a list whose only
+finding is adjacent_duplicates -- compact() itself leaves duplicate
+residue intact (a duplicate always means a destroyed item, and silently
+collapsing one copy would bless the data loss as intentional).
 
 Exit code 0 if every list is healthy (or was repaired to healthy) by the
 end of the run, 1 if any list is still unhealthy or errored.
@@ -129,14 +132,29 @@ def sweep_actor(
         if report["healthy"]:
             continue
 
-        logger.warning(
-            f"actor={actor_id} list={name}: UNHEALTHY "
-            f"stored_length={report['stored_length']} "
-            f"readable_count={report['readable_count']} "
-            f"missing_indices={report['missing_indices']} "
-            f"orphan_indices={report['orphan_indices']} "
-            f"adjacent_duplicates={report['adjacent_duplicates']}"
-        )
+        # Report shape depends on storage format -- v1 lists can have
+        # holes/orphans (a stored length disagreeing with what's actually
+        # present); v2 lists structurally cannot (position is always
+        # derived from what's present), so their report carries rank-length
+        # info instead. See ListProperty.verify()/._v2_verify().
+        is_v2 = report.get("format") == 2
+
+        if is_v2:
+            logger.warning(
+                f"actor={actor_id} list={name}: UNHEALTHY (v2) "
+                f"length={report['length']} "
+                f"max_rank_length={report['max_rank_length']} "
+                f"adjacent_duplicates={report['adjacent_duplicates']}"
+            )
+        else:
+            logger.warning(
+                f"actor={actor_id} list={name}: UNHEALTHY "
+                f"stored_length={report['stored_length']} "
+                f"readable_count={report['readable_count']} "
+                f"missing_indices={report['missing_indices']} "
+                f"orphan_indices={report['orphan_indices']} "
+                f"adjacent_duplicates={report['adjacent_duplicates']}"
+            )
         if report["adjacent_duplicates"]:
             logger.warning(
                 f"actor={actor_id} list={name}: duplicate residue reported "
@@ -147,8 +165,17 @@ def sweep_actor(
             unhealthy_after += 1
             continue
 
-        if not report["missing_indices"] and not report["orphan_indices"]:
-            # Only adjacent_duplicates: compact() would rewrite nothing.
+        if is_v2:
+            # v2's only "unhealthy" signal IS rank keys approaching the
+            # length cap -- compact()'s rebalance is exactly the fix, so it
+            # always applies here (unlike v1, where a duplicate-only
+            # finding means compact() would rewrite nothing).
+            needs_repair = True
+        else:
+            needs_repair = bool(report["missing_indices"] or report["orphan_indices"])
+
+        if not needs_repair:
+            # v1, only adjacent_duplicates: compact() would rewrite nothing.
             unhealthy_after += 1
             continue
 

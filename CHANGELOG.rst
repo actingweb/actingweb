@@ -32,6 +32,10 @@ CHANGED
   name; existing v1 lists already named this way are unaffected.
   ``list:``-prefixed property names are now also structurally excluded
   from the property-lookup table sync, regardless of configuration.
+  ``scripts/verify_property_lists.py`` now understands both formats --
+  v2's "unhealthy" signal is rank keys approaching the length cap
+  (``compact()`` rebalances them), not holes/orphans, which are
+  structurally impossible under v2.
 - **Breaking: list-property reads now fail fast on corruption instead of
   silently compacting past it.** ``ListProperty.to_list()``, ``.slice()``
   and ``.to_list_from_rows()`` raise ``ListCorruptionError`` (an

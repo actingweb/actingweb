@@ -678,6 +678,37 @@ single conditional writes; order is derived from key sort; length is counted.
   triggered outside that scope; this is pre-existing test-harness scoping,
   not something Phase 4 changed).
 
+**Deviations / notes (sub-step 4 of 4 — post-commit review fix):**
+
+- **`scripts/verify_property_lists.py` had a real bug the sub-step 3 test
+  suite didn't catch:** it indexed v1-shaped keys
+  (`report['stored_length']`, `report['missing_indices']`,
+  `report['orphan_indices']`) directly in its unhealthy-list logging,
+  outside the `try/except` that wraps only `verify()` itself -- an
+  unhealthy v2 list (whose report has no such keys) would raise an
+  uncaught `KeyError` and crash the sweep. The gap existed because the
+  sub-step 3 test suite retrofitted `test_verify_property_lists_script.py`
+  to seed v1 lists (matching the "any freshly created list is v1" fix
+  described in sub-step 3's notes) without ever adding a v2 list back in
+  -- every test actor in that file had zero v2 lists, so the blind spot
+  was structural, not incidental. Caught by a fresh advisor review after
+  the sub-step 3 commit, not by CI. Fixed: `sweep_actor()` now dispatches
+  logging and the repair gate on `report.get("format") == 2`; v2's repair
+  gate is "not healthy" (rank length in the warning zone) rather than
+  v1's "has missing_indices or orphan_indices" (a concept that doesn't
+  exist under v2 -- structurally, a v2 list cannot have holes or orphans).
+  New tests: `test_v2_lists_swept_alongside_v1_without_crashing` (mixed
+  v1+v2 actor, proves no cross-format crash and the v1 repair outcome is
+  unaffected) and `test_v2_unhealthy_list_repaired_by_rank_rebalance`
+  (seeds a 141-char rank directly -- computed once via
+  `fractional_indexing.generate_key_between()` outside any `ListProperty`
+  calls, since reaching that length through real `insert()` calls would
+  take ~700 sequential DB round-trips -- then confirms the sweep detects
+  it as unhealthy and `--repair` rebalances it).
+- Re-verified after the fix: `ruff`/`pyright` clean;
+  `tests/integration/` full pass on both DynamoDB (796 passed) and
+  PostgreSQL (786 passed).
+
 ---
 
 ## Phase 5: Migration v1→v2, docs, release

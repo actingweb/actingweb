@@ -134,6 +134,108 @@ class TestSweepActor:
         assert fresh.verify()["healthy"] is True
         assert fresh.to_list() == ["a", "c"]
 
+    def test_v2_lists_swept_alongside_v1_without_crashing(self, test_actor):
+        """A v2 list's verify() report has a different shape than v1's
+        (format/length/max_rank_length vs. stored_length/missing_indices/
+        orphan_indices) -- sweep_actor() must not KeyError on it, and a
+        healthy v2 list mixed into the same actor as an unhealthy v1 list
+        must not affect the v1 repair outcome."""
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        healthy_v2 = test_actor.property_lists.sweep_v2_healthy
+        for item in ["a", "b"]:
+            healthy_v2.append(item)
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "sweep_v1_holed", ["x", "y", "z"]
+        )
+        db = get_property(test_actor.config)
+        assert db.set(actor_id=test_actor.id, name="list:sweep_v1_holed-1", value=None)
+
+        checked, unhealthy, errored = script.sweep_actor(
+            test_actor.id,
+            test_actor.config,
+            repair=True,
+            limiter=script.RateLimiter(0),
+        )
+
+        assert checked >= 2
+        assert errored == 0
+        assert unhealthy == 0
+
+        fresh_v2 = test_actor.property_lists.sweep_v2_healthy
+        assert fresh_v2.to_list() == ["a", "b"]
+        fresh_v1 = test_actor.property_lists.sweep_v1_holed
+        assert fresh_v1.verify()["healthy"] is True
+        assert fresh_v1.to_list() == ["x", "z"]
+
+    def test_v2_unhealthy_list_repaired_by_rank_rebalance(self, test_actor):
+        """An unhealthy v2 list (rank keys grown long from repeated
+        insert-between) has no missing_indices/orphan_indices to gate on --
+        the repair must fire anyway, unlike v1's duplicate-only case."""
+        import fractional_indexing as fi
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        name = "sweep_v2_rebalance"
+        # A real 140+-char rank takes hundreds of real insert() calls to
+        # grow via repeated bisection -- too slow for a test. Precompute
+        # one directly (pure library calls, no DB) and seed it, which is
+        # equivalent to what those inserts would have produced.
+        lo, hi = "a0", "a1"
+        k = lo
+        while len(k) < 141:
+            k = fi.generate_key_between(lo, hi)
+            lo = k
+
+        db = get_property(test_actor.config)
+        now = datetime.datetime.now().isoformat()
+        meta = {
+            "format": 2,
+            "created_at": now,
+            "updated_at": now,
+            "item_type": "json",
+            "chunk_size": 1,
+            "version": "1.0",
+            "description": "",
+            "explanation": "",
+        }
+        assert db.set(
+            actor_id=test_actor.id, name=f"list:{name}-meta", value=json.dumps(meta)
+        )
+        assert db.set(
+            actor_id=test_actor.id,
+            name=f"list:{name}-#{lo}",
+            value=json.dumps("left"),
+        )
+        assert db.set(
+            actor_id=test_actor.id,
+            name=f"list:{name}-#{hi}",
+            value=json.dumps("right"),
+        )
+
+        lst = test_actor.property_lists.sweep_v2_rebalance
+        before = lst.verify()
+        assert before["healthy"] is False
+        assert before["max_rank_length"] >= 141
+
+        checked, unhealthy, errored = script.sweep_actor(
+            test_actor.id,
+            test_actor.config,
+            repair=True,
+            limiter=script.RateLimiter(0),
+        )
+
+        assert checked >= 1
+        assert errored == 0
+        assert unhealthy == 0
+
+        fresh = test_actor.property_lists.sweep_v2_rebalance
+        after = fresh.verify()
+        assert after["healthy"] is True
+        assert after["max_rank_length"] < 10
+        assert after["length"] == 2
+        assert fresh.to_list() == ["left", "right"]
+
     def test_checkpoint_round_trips(self, tmp_path):
         import verify_property_lists as script  # type: ignore[import-not-found]
 

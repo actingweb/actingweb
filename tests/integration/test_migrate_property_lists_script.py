@@ -139,11 +139,138 @@ class TestMigrateActor:
         assert checked == 1
         assert migrated == 0
         assert errored == 0
-        assert refused == [f"{test_actor.id}/bad-#name"]
+        assert refused == [(f"{test_actor.id}/bad-#name", "rename required")]
 
         fresh = getattr(test_actor.property_lists, "bad-#name")
         assert fresh.verify().get("format") != 2
         assert fresh.to_list() == ["a"]
+
+    def test_dry_run_names_a_holed_list_instead_of_saying_would_migrate(
+        self, test_actor
+    ):
+        """The dry run's whole job is to tell an operator what --migrate
+        will do. A holed list must come back as a refusal, not as a bare
+        "would migrate".
+
+        This is the defect this test exists for: the dry run warned about
+        duplicate residue and said nothing whatsoever about holes, so a
+        sweep over a fleet containing one reported "0 refused, 0 errors"
+        and the operator went ahead. Migration then closed the hole, and
+        because a migrated list verifies healthy, that was the last moment
+        anyone could have found out.
+        """
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "dry_run_holed", ["a", "b", "c"]
+        )
+        db = get_property(test_actor.config)
+        assert db.set(actor_id=test_actor.id, name="list:dry_run_holed-1", value=None)
+
+        checked, migrated, errored, refused = script.migrate_actor(
+            test_actor.id,
+            test_actor.config,
+            migrate=False,
+            limiter=script.RateLimiter(0),
+        )
+
+        assert checked == 1
+        assert migrated == 0, "a list that would be refused is not 'would migrate'"
+        assert errored == 0
+        assert refused == [(f"{test_actor.id}/dry_run_holed", "repair required")]
+
+    def test_migrate_refuses_a_holed_list_and_leaves_it_v1(self, test_actor):
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "migrate_holed_script", ["a", "b", "c"]
+        )
+        db = get_property(test_actor.config)
+        assert db.set(
+            actor_id=test_actor.id, name="list:migrate_holed_script-1", value=None
+        )
+
+        checked, migrated, errored, refused = script.migrate_actor(
+            test_actor.id,
+            test_actor.config,
+            migrate=True,
+            limiter=script.RateLimiter(0),
+        )
+
+        assert checked == 1
+        assert migrated == 0
+        assert errored == 0
+        assert refused == [(f"{test_actor.id}/migrate_holed_script", "repair required")]
+
+        fresh = ListProperty(test_actor.id, "migrate_holed_script", test_actor.config)
+        assert fresh.verify().get("format") != 2
+        assert fresh.verify()["missing_indices"] == [1]
+
+    def test_migrate_damaged_flag_migrates_the_holed_list(self, test_actor):
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "migrate_damaged_ok", ["a", "b", "c"]
+        )
+        db = get_property(test_actor.config)
+        assert db.set(
+            actor_id=test_actor.id, name="list:migrate_damaged_ok-1", value=None
+        )
+
+        checked, migrated, errored, refused = script.migrate_actor(
+            test_actor.id,
+            test_actor.config,
+            migrate=True,
+            limiter=script.RateLimiter(0),
+            allow_damaged=True,
+        )
+
+        assert checked == 1
+        assert migrated == 1
+        assert errored == 0
+        assert refused == []
+
+        fresh = ListProperty(test_actor.id, "migrate_damaged_ok", test_actor.config)
+        assert fresh.verify()["format"] == 2
+        assert fresh.to_list() == ["a", "c"]
+
+    def test_dry_run_with_migrate_damaged_predicts_the_migration(self, test_actor):
+        """A dry run must predict the run it is a dry run OF.
+
+        With --migrate-damaged, the real run migrates the holed list -- so
+        the dry run has to say "would migrate" and come back clean. Having
+        it refuse instead would report a refusal that will not happen,
+        tell the operator to pass the flag they already passed, and make
+        the exit code the docs nominate as the gate unreachable for anyone
+        who has looked at their damage and decided to proceed.
+        """
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "dry_run_damaged_ok", ["a", "b", "c"]
+        )
+        db = get_property(test_actor.config)
+        assert db.set(
+            actor_id=test_actor.id, name="list:dry_run_damaged_ok-1", value=None
+        )
+
+        checked, migrated, errored, refused = script.migrate_actor(
+            test_actor.id,
+            test_actor.config,
+            migrate=False,
+            limiter=script.RateLimiter(0),
+            allow_damaged=True,
+        )
+
+        assert checked == 1
+        assert migrated == 1
+        assert errored == 0
+        assert refused == []
+
+        # Still a dry run -- nothing was written.
+        fresh = ListProperty(test_actor.id, "dry_run_damaged_ok", test_actor.config)
+        assert fresh.verify().get("format") != 2
+        assert fresh.verify()["missing_indices"] == [1]
 
     def test_already_v2_lists_are_skipped(self, test_actor):
         import migrate_property_lists as script  # type: ignore[import-not-found]
@@ -235,6 +362,31 @@ class TestMainCommandLineWorkflow:
         assert migrated.verify()["format"] == 2
         assert migrated.to_list() == ["a", "b"]
 
+    def test_dry_run_exits_nonzero_when_a_list_needs_repair(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        """ "Dry run came back 0" is what an operator checks before
+        committing to the migration, so a fleet with a damaged list in it
+        must not produce one."""
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _only_this_actor(monkeypatch, test_actor.id)
+
+        _seed_v1_list(test_actor.config, test_actor.id, "dry_exit_holed", ["a", "b"])
+        db = get_property(test_actor.config)
+        assert db.set(actor_id=test_actor.id, name="list:dry_exit_holed-0", value=None)
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "migrate_property_lists.py",
+                "--checkpoint-file",
+                str(tmp_path / "checkpoint.json"),
+            ],
+        )
+        assert script.main() == 1
+
     def test_concurrently_migrated_list_is_not_reported_as_refused(self, test_actor):
         """A list that another writer migrates between the sweep's verify()
         and migrate_to_v2()'s own fresh format re-read comes back as
@@ -253,14 +405,14 @@ class TestMainCommandLineWorkflow:
 
         real_migrate = ListProperty.migrate_to_v2
 
-        def _migrate_after_someone_else_did(self):
+        def _migrate_after_someone_else_did(self, allow_damaged=False):
             # Stand in for a concurrent lazy migration landing in the gap.
             if self.name == "raced_list":
                 other = ListProperty(
                     actor_id=self.actor_id, name=self.name, config=self.config
                 )
                 real_migrate(other)
-            return real_migrate(self)
+            return real_migrate(self, allow_damaged=allow_damaged)
 
         with mock.patch.object(
             ListProperty, "migrate_to_v2", _migrate_after_someone_else_did

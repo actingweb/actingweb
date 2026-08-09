@@ -1705,6 +1705,27 @@ class ListProperty:
         item, and silently collapsing one copy would bless the data loss
         as intentional rather than surface it.
 
+        NOT CRASH-SAFE (v1, same shape as ``_v2_compact()``). Survivors are
+        rewritten at their new positions BEFORE the tail rows are deleted,
+        so an interruption between the two leaves a copy at both the old
+        and the new position. Measured on a 4-slot list with one hole,
+        interrupting at successive writes:
+
+        - after the first move: rows ``[a, c, c, d]``, length still 4
+        - after the second:     rows ``[a, c, d, d]``, length still 4
+
+        Both are readable with **no error** -- length matches the rows
+        present, so nothing looks wrong to a caller. ``verify()`` does
+        catch them, via the adjacent byte-identical heuristic, so a
+        follow-up sweep reports the list unhealthy.
+
+        The sharp part: re-running ``compact()`` does NOT clean this up.
+        Duplicates are preserved by design (above), so the repair tool
+        will not remove the copy its own interruption created, and the
+        list stays one item too long until someone resolves it by hand.
+        Prefer running repair when the actor is not taking writes, and
+        re-run ``verify()`` afterwards rather than assuming success.
+
         Returns:
             The ``verify()`` report this call acted on (taken before any
             write).
@@ -1754,7 +1775,7 @@ class ListProperty:
 
         return report
 
-    def migrate_to_v2(self) -> dict[str, Any]:
+    def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:
         """Migrate this list from v1 (dense integers) to v2 (fractional
         rank keys) storage, in place.
 
@@ -1765,8 +1786,8 @@ class ListProperty:
            v1) if the name contains ``#``, or if metadata is unparsable
            (``verify()`` -> ``_load_metadata()`` raises ``ValueError``,
            which propagates -- Phase 2's existing fail-fast behavior).
-        2. ``verify()`` the v1 list. Holes are closed in-flight (only
-           surviving rows migrate, in their existing order); duplicate
+        2. ``verify()`` the v1 list, and refuse a list with holes or
+           orphans unless ``allow_damaged=True`` (see below). Duplicate
            residue migrates as both copies, as-is, and is reported.
         3. Clear any v2-range rows a PREVIOUS interrupted attempt left
            behind. This is what makes re-running safe even if the v1 list
@@ -1793,10 +1814,34 @@ class ListProperty:
         idempotent, so a re-run (or the bulk migration script) finishes
         the cleanup safely.
 
+        Args:
+            allow_damaged: migrate a list that ``verify()`` reports holes
+                or orphans in, accepting that migration CLOSES them --
+                the surviving rows are renumbered and the missing ones
+                stop being missing. The lost item stays lost, but nothing
+                reports it any more: the migrated list verifies healthy
+                and there is no record left of what index went absent.
+                That is the right trade for an operator who has looked at
+                the damage and decided to move on, and the wrong one as a
+                default, so it is off by default and this method refuses
+                instead. Repair first (``compact()``, or
+                ``actingweb-verify-property-lists --repair``) and the
+                question does not arise.
+
+                Only holes and orphans gate on this. Duplicate residue
+                migrates freely, because it stays visible afterwards --
+                ``_v2_verify()`` reports duplicates the same way
+                ``verify()`` does, so migrating it destroys no evidence.
+                ``_maybe_lazy_migrate()`` is deliberately stricter and
+                skips any unhealthy list, duplicates included: it runs
+                inside a user's write with nobody reading its output, so
+                it declines anything it cannot handle silently.
+
         Returns:
             Dict with ``migrated`` (bool) and either ``reason`` (str, only
             when not migrated) or ``item_count``/``had_holes``/
-            ``duplicate_count`` (when migrated).
+            ``duplicate_count`` (when migrated). A ``"damaged"`` reason
+            also carries ``missing_indices`` and ``orphan_indices``.
         """
         if _V2_RANK_MARKER in self.name:
             logger.error(
@@ -1819,6 +1864,32 @@ class ListProperty:
             return {"migrated": False, "reason": "already_v2"}
 
         report = self.verify()
+
+        # Refuse a damaged list. Migration renumbers survivors, so a hole
+        # does not survive it -- and neither does the evidence: the
+        # migrated list verifies healthy, and the report naming what was
+        # closed is this method's return value, which a bulk sweep over
+        # hundreds of lists reduces to one line in a log. An operator who
+        # repairs first gets to see the damage; one who migrates first
+        # never finds out it was there.
+        missing = report["missing_indices"]
+        orphans = report["orphan_indices"]
+        if (missing or orphans) and not allow_damaged:
+            logger.error(
+                f"List '{self.name}' not migrated to v2: verify() reports "
+                f"missing_indices={missing} orphan_indices={orphans}. "
+                f"Migration closes holes in flight, so the damage would "
+                f"stop being reportable -- repair it first (compact(), or "
+                f"actingweb-verify-property-lists --repair), or pass "
+                f"allow_damaged=True to migrate and accept the loss. The "
+                f"list keeps working as v1 in the meantime"
+            )
+            return {
+                "migrated": False,
+                "reason": "damaged",
+                "missing_indices": missing,
+                "orphan_indices": orphans,
+            }
 
         if not self._db:
             raise RuntimeError("No database connection available")

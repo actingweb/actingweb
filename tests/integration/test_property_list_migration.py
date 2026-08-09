@@ -137,7 +137,14 @@ class TestMigrateToV2Direct:
         assert fresh.to_list() == before_items
         assert fresh.to_indexed_list() == before_indexed
 
-    def test_holed_list_migrates_with_hole_closed(self, test_actor):
+    def test_holed_list_is_refused_and_keeps_serving_v1(self, test_actor):
+        """A hole must block migration by default.
+
+        Migrating a holed list is not merely lossy -- it is UNREPORTABLY
+        lossy. The survivors are renumbered, the hole is gone, and the
+        migrated list verifies healthy, so nothing afterwards can tell
+        that an item went missing. Refusing keeps the damage on the books
+        until an operator decides what to do about it."""
         _seed_v1_list(
             test_actor.config, test_actor.id, "migrate_holed", ["a", "b", "c", "d"]
         )
@@ -146,14 +153,59 @@ class TestMigrateToV2Direct:
         prop_list = ListProperty(test_actor.id, "migrate_holed", test_actor.config)
         result = prop_list.migrate_to_v2()
 
+        assert result["migrated"] is False
+        assert result["reason"] == "damaged"
+        assert result["missing_indices"] == [1]
+
+        fresh = ListProperty(test_actor.id, "migrate_holed", test_actor.config)
+        assert fresh.verify().get("format") != 2
+        # Still v1, still damaged, still saying so.
+        assert fresh.verify()["missing_indices"] == [1]
+
+    def test_holed_list_migrates_with_hole_closed_when_allowed(self, test_actor):
+        """--migrate-damaged's library equivalent: the operator asked, so
+        the hole is closed -- and note what the assertions below pin, which
+        is exactly why the default is a refusal. After this call there is
+        no way left to discover that ``b`` was ever there."""
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "migrate_holed_ok", ["a", "b", "c", "d"]
+        )
+        _punch_hole(test_actor.config, test_actor.id, "migrate_holed_ok", 1)
+
+        prop_list = ListProperty(test_actor.id, "migrate_holed_ok", test_actor.config)
+        result = prop_list.migrate_to_v2(allow_damaged=True)
+
         assert result["had_holes"] is True
         assert result["item_count"] == 3
 
-        fresh = ListProperty(test_actor.id, "migrate_holed", test_actor.config)
+        fresh = ListProperty(test_actor.id, "migrate_holed_ok", test_actor.config)
         assert fresh.to_list() == ["a", "c", "d"]
         assert fresh.verify()["healthy"] is True
 
+    def test_orphan_row_is_refused_too(self, test_actor):
+        """Orphans (rows past the recorded length) gate the same way holes
+        do -- migration drops them silently, since it only reads
+        ``[0, stored_length)``."""
+        _seed_v1_list(test_actor.config, test_actor.id, "migrate_orphan", ["a", "b"])
+        db = get_property(test_actor.config)
+        assert db.set(
+            actor_id=test_actor.id,
+            name="list:migrate_orphan-2",
+            value=json.dumps("stranded"),
+        )
+
+        prop_list = ListProperty(test_actor.id, "migrate_orphan", test_actor.config)
+        result = prop_list.migrate_to_v2()
+
+        assert result["migrated"] is False
+        assert result["reason"] == "damaged"
+        assert result["orphan_indices"] == [2]
+
     def test_duplicate_residue_migrates_preserved_and_reported(self, test_actor):
+        """Duplicates migrate freely, unlike holes, and this test says why:
+        the last assertion shows the duplicate is STILL reported after the
+        migration. Nothing is hidden by converting it, so there is nothing
+        for a refusal to protect."""
         _seed_v1_list(test_actor.config, test_actor.id, "migrate_dup", ["a", "b", "c"])
         db = get_property(test_actor.config)
         # Duplicate residue: index 2 holds the same value as index 1.
@@ -166,9 +218,11 @@ class TestMigrateToV2Direct:
         prop_list = ListProperty(test_actor.id, "migrate_dup", test_actor.config)
         result = prop_list.migrate_to_v2()
 
+        assert result["migrated"] is True
         assert result["duplicate_count"] == 1
         fresh = ListProperty(test_actor.id, "migrate_dup", test_actor.config)
         assert fresh.to_list() == ["a", "b", "b"]
+        assert fresh.verify()["adjacent_duplicates"]
 
     def test_refuses_name_with_hash_and_keeps_serving_v1(self, test_actor):
         _seed_v1_list(test_actor.config, test_actor.id, "a-#x", ["a", "b"])

@@ -390,11 +390,12 @@ class NotifyingListProperty:
         self._register_diff("metadata")
         return report
 
-    def migrate_to_v2(self) -> dict[str, Any]:
+    def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:
         """Migrate this list from v1 to v2 storage -- see
-        ListProperty.migrate_to_v2(). Registers a "metadata" diff (same
-        rationale as compact()) only when a migration actually happened."""
-        report = self._list_prop.migrate_to_v2()
+        ListProperty.migrate_to_v2(), including what ``allow_damaged``
+        gives up. Registers a "metadata" diff (same rationale as
+        compact()) only when a migration actually happened."""
+        report = self._list_prop.migrate_to_v2(allow_damaged=allow_damaged)
         if report.get("migrated"):
             self._register_diff("metadata")
         return report

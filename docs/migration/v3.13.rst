@@ -2,6 +2,42 @@
 Migrating to ActingWeb 3.13
 ===========================
 
+Behaviour change in rc6: migration refuses damaged lists
+========================================================
+
+.. note::
+
+   This is a refinement of the ``rc5`` property-list work below, and only
+   affects you if you run ``actingweb-migrate-property-lists`` (step 4). If
+   you are upgrading from a release older than ``rc5``, read the ``rc5``
+   section first — it is the one with the pre-upgrade steps.
+
+``actingweb-migrate-property-lists --migrate`` and
+``ListProperty.migrate_to_v2()`` now **refuse a list with holes or orphans**,
+and the dry run reports those lists as needing repair instead of counting
+them as "would migrate". A dry run that finds any exits ``1``.
+
+The reason is that migrating damaged data is not just lossy, it is
+*unreportably* lossy. Migration renumbers the surviving rows, so the hole is
+gone afterwards — and so is the evidence. The migrated list verifies healthy,
+and nothing remains to say an item ever went missing. In ``rc5`` the dry run
+said nothing about holes at all, so a sweep over a fleet containing one could
+report "0 refused, 0 errors" and an operator would proceed in good faith,
+past the last moment at which the damage was still visible.
+
+Lazy migration already refused damaged lists in ``rc5``, for exactly this
+reason. ``rc6`` applies the same rule to the deliberate path.
+
+What to do: **repair first** (step 2), then migrate. If you have looked at
+the damage and decided to migrate anyway, ``--migrate-damaged`` (or
+``migrate_to_v2(allow_damaged=True)``) does it, and says clearly in the log
+what it is giving up.
+
+Duplicate residue is **not** affected — it never blocked migration and still
+does not. A duplicate stays visible after conversion, because v2's
+``verify()`` reports duplicates just as v1's does, so migrating it destroys
+no evidence. Only holes and orphans gate.
+
 Behaviour change in rc5: property-list storage, repair, and fail-fast reads
 ===========================================================================
 
@@ -82,6 +118,28 @@ item was destroyed; collapsing one copy would bless that loss as intentional
 rather than surface it. Duplicates are reported and left for you to decide
 about. Repair does not recover a destroyed item — nothing can; the row is
 gone.
+
+.. warning::
+
+   **Repair is not crash-safe, and an interrupted repair leaves damage it
+   will not itself fix.** ``compact()`` rewrites surviving rows at their new
+   positions before deleting the tail, so an interruption between the two
+   leaves a copy at both the old and the new position. Measured on a 4-slot
+   list with one hole: interrupting after the first move leaves
+   ``[a, c, c, d]``, after the second ``[a, c, d, d]`` — both with the
+   length still reading 4, so **the list reads back with no error at all**.
+
+   ``verify()`` does catch it (the duplicate is adjacent and byte-identical,
+   which is exactly what its heuristic looks for), so a follow-up sweep
+   reports the list unhealthy. But re-running ``--repair`` will not remove
+   the copy: duplicates are preserved by design, so the tool declines to
+   touch the residue its own interruption created, and the list stays one
+   item too long until you resolve it by hand.
+
+   In practice: run repair when the actor is not taking writes, and **run
+   the sweep again afterwards** rather than assuming it worked. The same
+   shape applies to ``compact()`` on a v2 list, where it is a rank rebalance
+   — see the guide's warning box.
 
 Step 3: expect these breaking changes after upgrading
 -----------------------------------------------------
@@ -168,6 +226,13 @@ as a deliberate operator action::
     actingweb-migrate-property-lists              # dry run
     actingweb-migrate-property-lists --migrate
 
+**Repair (step 2) before you migrate, and treat the dry run's exit code as
+the gate.** Migration refuses a list with holes or orphans, and the dry run
+names them and exits ``1``; a dry run that exits ``0`` is telling you the
+migration has nothing to trip over. This matters more than it sounds:
+migration renumbers survivors, so a hole that goes through it stops existing
+*and* stops being reportable. See the rc6 section at the top.
+
 Step 5: understand the new storage format
 -----------------------------------------
 
@@ -204,9 +269,10 @@ whole-list rewrite migrates a list of any original size, because the first
 "nothing migrates without me" true.
 
 **Bulk migration** (step 4 above) is for lists too large or too idle to
-migrate lazily, and is the only route for damaged lists once you have
-repaired them. ``migrate_to_v2()`` is idempotent and safe to interrupt and
-re-run.
+migrate lazily, and — with lazy migration off by default — for everything
+else too. It refuses damaged lists on the same grounds lazy migration does;
+repair them first. ``migrate_to_v2()`` is idempotent and safe to interrupt
+and re-run.
 
 **List names containing ``#`` are refused.** ``#`` is reserved for internal
 v2 storage keys. New lists cannot be created with it; existing lists that
@@ -224,7 +290,9 @@ your latency numbers.
 
 **Downgrade is unsupported.** ``migrate_property_lists.py --downgrade`` exists
 as an emergency converter only. If you use it, roll the application back to a
-pre-v2 release *first*: a downgraded list of 50 items or fewer is a
+pre-v2 release *first*. With lazy migration at its default of 0 this is
+"only" the ordinary rule that the reader must precede the data; if you have
+raised the limit, it is sharper — a downgraded list at or under it is a
 lazy-migration candidate again, so a still-running v2-aware application
 migrates it straight back on its next write.
 

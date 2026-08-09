@@ -4,22 +4,27 @@ Bulk-migrate v1 (dense-integer) property lists to v2 (fractional rank key)
 storage -- see thoughts/plans/2026-08-08-property-list-index-integrity.md,
 Phase 5.
 
-Small lists (<= 50 items by default) already migrate lazily on their next
-mutation (append/insert/__setitem__/__delitem__) -- this script is for
-lists too large or too idle to reach that trigger on their own, and for a
-one-time upgrade sweep across an existing deployment.
+Lazy migration is OFF by default (ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0),
+so out of the box this script is the only thing that converts an existing
+list. Where an operator has turned it on, it still only covers lists at or
+under that item count that get mutated -- this script is for the rest, and
+for a one-time upgrade sweep across an existing deployment at a rate and a
+time of the operator's choosing (migration is inline and synchronous, so
+one append() to a 40-item v1 list would otherwise do the whole migration
+inside a user's request).
 
-Two things this script is the ONLY route for:
+**Damaged lists are refused, by this script and by migrate_to_v2()
+itself.** Migration renumbers the surviving rows, so a hole does not
+survive it -- and neither does the evidence: the migrated list verifies
+healthy afterwards with no record of what went missing. Repair first
+(actingweb-verify-property-lists --repair, or ListProperty.compact()),
+then migrate. --migrate-damaged overrides this for an operator who has
+looked at the damage and decided to move on; the dry run names the lists
+that need it either way.
 
-- **Damaged lists.** Lazy migration refuses a list that verify() reports as
-  unhealthy, because migrating closes holes in flight and would make the
-  damage unreportable. Repair first (compact(), or
-  scripts/verify_property_lists.py --repair), then migrate.
-- **Deployments with lazy migration turned off.** Migration is inline and
-  synchronous -- one append() to a 40-item v1 list does the whole migration
-  inside that request. Set ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0 to keep it
-  out of user traffic entirely and rely on this script's rate limiter
-  instead.
+Duplicate residue does NOT block migration: it stays visible afterwards
+(v2's verify() reports duplicates just as v1's does), so migrating it
+destroys no evidence. It is reported, not refused.
 
 Run with the SAME environment as the application (DATABASE_BACKEND and its
 backend-specific connection settings), e.g.::
@@ -30,10 +35,12 @@ backend-specific connection settings), e.g.::
         --checkpoint-file .migrate.checkpoint.json
     poetry run python scripts/migrate_property_lists.py --downgrade ACTOR_ID/list_name
 
-Dry-run (report only) by default -- reports what WOULD be migrated,
-including refused names (containing '#') and duplicate residue, without
-writing anything. --migrate performs the migration via
-ListProperty.migrate_to_v2() (idempotent, safe to interrupt and re-run).
+Dry-run (report only) by default -- reports what WOULD be migrated, what
+would be refused (names containing '#', and lists with holes or orphans),
+and duplicate residue, without writing anything. It exits 1 when anything
+would be refused, so "exit 0" means the migration has nothing to trip
+over. --migrate performs the migration via ListProperty.migrate_to_v2()
+(idempotent, safe to interrupt and re-run).
 
 Unlike scripts/backfill_property_lookup.py, this uses a single
 per-actor-at-a-time model (matching scripts/verify_property_lists.py)
@@ -49,11 +56,13 @@ locking is taken), and only as a last resort -- there is no forward path
 back to v2 other than a fresh migration.
 
 ORDER MATTERS: roll the application back to the pre-v2 release FIRST, then
-run --downgrade against the database. A list with <= 50 items is a lazy-
-migration candidate again the instant it's v1 -- if the current (v2-aware)
+run --downgrade against the database. Where lazy migration has been turned
+on, a downgraded list at or under its item limit is a lazy-migration
+candidate again the instant it's v1 -- if the current (v2-aware)
 application is still running against it, its very next append/insert/
 setitem/delitem migrates it straight back to v2, silently undoing the
-downgrade.
+downgrade. Rolling the application back first also removes that race,
+which is the other reason to do it in that order.
 
 Exit code 0 if every eligible list was migrated (or already was) by the
 end of the run, 1 if any list was refused or errored.
@@ -167,11 +176,14 @@ def migrate_actor(
     migrate: bool,
     limiter: RateLimiter,
     identity_key: str | None = None,
-) -> tuple[int, int, int, list[str]]:
+    allow_damaged: bool = False,
+) -> tuple[int, int, int, list[tuple[str, str]]]:
     """Migrate (or dry-run report on) every v1 list belonging to one actor.
 
     Returns (lists_checked, lists_migrated_or_would_migrate, lists_errored,
-    refused_names).
+    refusals), where each refusal is a ``(actor_id/list_name, reason)``
+    pair -- ``"rename required"`` for a '#'-named list, ``"repair
+    required"`` for one with holes or orphans.
     """
     from actingweb.property import PropertyListStore
     from actingweb.property_list import ListProperty
@@ -182,7 +194,7 @@ def migrate_actor(
     checked = 0
     migrated = 0
     errored = 0
-    refused: list[str] = []
+    refused: list[tuple[str, str]] = []
 
     for name in list_names:
         limiter.wait()
@@ -203,7 +215,7 @@ def migrate_actor(
         checked += 1
 
         if "#" in name:
-            refused.append(f"{actor_id}/{name}")
+            refused.append((f"{actor_id}/{name}", "rename required"))
             logger.warning(
                 f"actor={actor_id} list={name}: REFUSED -- name contains "
                 f"'#', rename before migrating; keeps working as v1"
@@ -212,6 +224,35 @@ def migrate_actor(
 
         if not migrate:
             report = list_prop.verify(identity_key=identity_key)
+            # Holes and orphans first: migration closes them, and unlike
+            # duplicates they leave nothing behind for a later verify() to
+            # find. A dry run that mentions only duplicates is how an
+            # operator gets a clean-looking report over damaged data and
+            # migrates it away without ever seeing it.
+            if report["missing_indices"] or report["orphan_indices"]:
+                if not allow_damaged:
+                    refused.append((f"{actor_id}/{name}", "repair required"))
+                    logger.warning(
+                        f"actor={actor_id} list={name}: WOULD REFUSE -- "
+                        f"missing_indices={report['missing_indices']} "
+                        f"orphan_indices={report['orphan_indices']}. "
+                        f"Migration closes holes in flight and the damage "
+                        f"stops being reportable; repair first with "
+                        f"actingweb-verify-property-lists --repair, or pass "
+                        f"--migrate-damaged to migrate and accept the loss"
+                    )
+                    continue
+                # --migrate-damaged was passed, so predict what the real
+                # run will do rather than refusing: a dry run that reports
+                # a refusal the actual migration would not perform is
+                # useless as the gate the docs tell operators to use.
+                logger.warning(
+                    f"actor={actor_id} list={name}: would migrate and CLOSE "
+                    f"missing_indices={report['missing_indices']} "
+                    f"orphan_indices={report['orphan_indices']} "
+                    f"(--migrate-damaged) -- the damage stops being "
+                    f"reportable once this runs"
+                )
             if report["adjacent_duplicates"]:
                 logger.warning(
                     f"actor={actor_id} list={name}: would migrate "
@@ -232,7 +273,7 @@ def migrate_actor(
             continue
 
         try:
-            result = list_prop.migrate_to_v2()
+            result = list_prop.migrate_to_v2(allow_damaged=allow_damaged)
         except Exception as e:
             logger.error(f"actor={actor_id} list={name}: migrate_to_v2() failed: {e}")
             errored += 1
@@ -240,12 +281,19 @@ def migrate_actor(
 
         if result["migrated"]:
             migrated += 1
-            logger.info(
+            level = logger.warning if result["had_holes"] else logger.info
+            level(
                 f"actor={actor_id} list={name}: migrated "
                 f"({result['item_count']} items, "
                 f"had_holes={result['had_holes']}, "
                 f"duplicates={result['duplicate_count']})"
             )
+        elif result.get("reason") == "damaged":
+            # Only reachable without --migrate-damaged. migrate_to_v2()
+            # has already logged the detail; record it as a refusal so the
+            # run exits non-zero and the actor stays out of the
+            # checkpoint, exactly like a '#'-named list.
+            refused.append((f"{actor_id}/{name}", "repair required"))
         elif result.get("reason") == "already_v2":
             # Not a refusal: migrate_to_v2() re-reads the stored format
             # itself, so a list that another request lazily migrated between
@@ -257,7 +305,7 @@ def migrate_actor(
         else:
             # "name_contains_hash" -- needs an operator rename before this
             # list can ever migrate.
-            refused.append(f"{actor_id}/{name}")
+            refused.append((f"{actor_id}/{name}", "rename required"))
 
     return checked, migrated, errored, refused
 
@@ -340,6 +388,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--migrate-damaged",
+        action="store_true",
+        help=(
+            "also migrate lists with holes or orphans, CLOSING them: the "
+            "lost items stay lost and stop being reported (default: refuse "
+            "them and report a repair is needed)"
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-file",
         default=".migrate_property_lists.checkpoint.json",
         help="resume state file (default .migrate_property_lists.checkpoint.json)",
@@ -373,6 +430,14 @@ def main() -> int:
 
     _log_target(config, "MIGRATE" if args.migrate else "dry-run", args.rps)
 
+    if args.migrate_damaged:
+        logger.warning(
+            "--migrate-damaged: lists with holes or orphans WILL be "
+            "migrated. Migration renumbers the survivors, so the damage is "
+            "closed and stops being reportable -- the migrated lists verify "
+            "healthy afterwards with no record of what went missing."
+        )
+
     actors = get_actor_list(config).fetch()
     if not actors:
         logger.info("No actors found")
@@ -385,7 +450,7 @@ def main() -> int:
     total_checked = 0
     total_migrated = 0
     total_errored = 0
-    total_refused: list[str] = []
+    total_refused: list[tuple[str, str]] = []
     actors_swept = 0
 
     for actor in actors:
@@ -393,7 +458,12 @@ def main() -> int:
         if not actor_id or checkpoint.is_done(actor_id):
             continue
         checked, migrated, errored, refused = migrate_actor(
-            actor_id, config, args.migrate, limiter, args.identity_key
+            actor_id,
+            config,
+            args.migrate,
+            limiter,
+            args.identity_key,
+            args.migrate_damaged,
         )
         total_checked += checked
         total_migrated += migrated
@@ -414,8 +484,10 @@ def main() -> int:
         f"{'migrated' if args.migrate else 'would_migrate'}={total_migrated} "
         f"refused={len(total_refused)} errors={total_errored}"
     )
-    for name in total_refused:
-        logger.warning(f"REFUSED (rename required): {name}")
+    for name, reason in total_refused:
+        logger.warning(
+            f"{'REFUSED' if args.migrate else 'WOULD REFUSE'} ({reason}): {name}"
+        )
     if not args.migrate and total_checked:
         logger.info("Re-run with --migrate to perform the migration.")
     if args.migrate and not total_refused and not total_errored:

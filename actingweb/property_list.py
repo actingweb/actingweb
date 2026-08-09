@@ -44,6 +44,9 @@ logger = logging.getLogger(__name__)
 # legacy sibling's suffix is what gives it away.
 _V2_RANK_MARKER = "#"
 _V2_RANK_MAX_LEN = 180
+# Rank keys this long or longer mean compact() should rebalance them before
+# insert()/append() start failing at the cap.
+_V2_RANK_WARNING_LENGTH = 140
 _V2_MAX_RANK_RETRIES = 8
 _V2_LAZY_MIGRATION_MAX_LENGTH = 0
 _V2_RANK_ALPHABET = frozenset(fi.BASE_62_DIGITS)
@@ -1362,12 +1365,16 @@ class ListProperty:
             # Unhashable identity (list/dict); compare on a stable
             # serialization instead of refusing to check it.
             return ("json", json.dumps(value, sort_keys=True, default=str))
-        return value
+        # Type-tag even hashable values. Python considers True == 1 and
+        # hashes them identically, so an untagged dict key would merge
+        # {"id": true} with {"id": 1} and report a duplicate that does not
+        # exist -- enough to mark a list unhealthy and fail a sweep.
+        return (type(value).__name__, value)
 
     @staticmethod
     def _identity_duplicates(
         identities: list[tuple[int, Any]],
-    ) -> dict[Any, list[int]]:
+    ) -> tuple[dict[Any, list[int]], int]:
         """Group positions by identity, keeping only identities that appear
         more than once -- ANYWHERE in the list, not merely adjacently.
 
@@ -1383,7 +1390,14 @@ class ListProperty:
             if identity is None:
                 continue
             by_identity.setdefault(identity, []).append(index)
-        return {k: v for k, v in by_identity.items() if len(v) > 1}
+        checked = sum(len(v) for v in by_identity.values())
+        duplicates = {
+            # Report the identity itself, not the internal type tag.
+            k[1] if isinstance(k, tuple) and len(k) == 2 else k: v
+            for k, v in by_identity.items()
+            if len(v) > 1
+        }
+        return duplicates, checked
 
     def _v2_verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check for v2 lists.
@@ -1404,8 +1418,13 @@ class ListProperty:
             - max_rank_length: the longest rank key currently in use
             - adjacent_duplicates: same heuristic as v1's verify(), but
               position-indexed pairs -- informational only
+            - needs_rebalance: True iff a rank key has reached the warning
+              zone -- the ONLY v2 condition ``compact()`` can fix. Repair
+              tooling should gate on this, not on ``healthy``, which also
+              goes false for duplicate identities that ``compact()`` will
+              not touch
             - healthy: True iff no rank key is within the rebalance
-              warning zone of the cap
+              warning zone of the cap and no identity is repeated
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
@@ -1420,19 +1439,20 @@ class ListProperty:
             "length": len(pairs),
             "max_rank_length": max_rank_length,
             "adjacent_duplicates": adjacent_duplicates,
-            "healthy": max_rank_length < _V2_RANK_MAX_LEN - 40,
+            "needs_rebalance": max_rank_length >= _V2_RANK_WARNING_LENGTH,
+            "healthy": max_rank_length < _V2_RANK_WARNING_LENGTH,
         }
-        duplicates = (
-            None
-            if identity_key is None
-            else self._identity_duplicates(
+        duplicates: dict[Any, list[int]] | None = None
+        identity_checked_count: int | None = None
+        if identity_key is not None:
+            duplicates, identity_checked_count = self._identity_duplicates(
                 [
                     (i, self._identity_of(raw, identity_key))
                     for i, (_, raw) in enumerate(pairs)
                 ]
             )
-        )
         report["duplicate_identities"] = duplicates
+        report["identity_checked_count"] = identity_checked_count
         if duplicates:
             report["healthy"] = False
         return report
@@ -1473,6 +1493,12 @@ class ListProperty:
               because ``verify()``'s report shape already varies by storage
               format and a second silently-optional key would be one sharp
               edge too many for callers that index it directly
+            - identity_checked_count: ``None`` when no ``identity_key`` was
+              supplied, otherwise how many rows actually carried that field.
+              **Check this before trusting an empty ``duplicate_identities``.**
+              Rows without the field are excluded from the comparison, so a
+              mistyped key produces a clean-looking report that compared
+              nothing at all
             - healthy: True iff there are no holes, no orphans, no
               adjacent-duplicate hits, and no repeated identities
 
@@ -1531,17 +1557,16 @@ class ListProperty:
             if va is not None and va == vb:
                 adjacent_duplicates.append((a, b))
 
-        duplicate_identities: dict[Any, list[int]] | None = (
-            None
-            if identity_key is None
-            else self._identity_duplicates(
+        duplicate_identities: dict[Any, list[int]] | None = None
+        identity_checked_count: int | None = None
+        if identity_key is not None:
+            duplicate_identities, identity_checked_count = self._identity_duplicates(
                 [
                     (i, self._identity_of(raw, identity_key))
                     for i in ordered_present
                     if (raw := rows.get(self._get_item_property_name(i))) is not None
                 ]
             )
-        )
 
         report: dict[str, Any] = {
             "stored_length": stored_length,
@@ -1554,6 +1579,7 @@ class ListProperty:
             and not adjacent_duplicates,
         }
         report["duplicate_identities"] = duplicate_identities
+        report["identity_checked_count"] = identity_checked_count
         if duplicate_identities:
             report["healthy"] = False
         return report

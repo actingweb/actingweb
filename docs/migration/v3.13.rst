@@ -39,7 +39,7 @@ Step 1: sweep for existing damage BEFORE upgrading
 Any list damaged by the old code is still damaged. rc4 hid that; rc5 will
 not. Find out what you have first::
 
-    poetry run python scripts/verify_property_lists.py
+    actingweb-verify-property-lists
 
 Read-only. It reports, per list, the recorded length, how many rows are
 actually readable, which indices are missing, which are orphaned, and any
@@ -58,7 +58,7 @@ adjacent duplicate residue.
 
 If your items carry an identifying field, pass it::
 
-    poetry run python scripts/verify_property_lists.py --identity-key id
+    actingweb-verify-property-lists --identity-key id
 
 Duplicate detection otherwise compares raw stored bytes, which finds the
 duplicate an interrupted shift leaves — but stops finding it the moment
@@ -71,7 +71,7 @@ Step 2: repair what it found
 
 ::
 
-    poetry run python scripts/verify_property_lists.py --repair
+    actingweb-verify-property-lists --repair
 
 ``--repair`` calls ``compact()``, which rewrites the surviving rows densely,
 removes orphans, corrects the recorded length, and preserves
@@ -165,8 +165,8 @@ Step 4: decide when lists are allowed to change format
 Once rc5 has been live long enough that rollback is off the table, migrate
 as a deliberate operator action::
 
-    poetry run python scripts/migrate_property_lists.py            # dry run
-    poetry run python scripts/migrate_property_lists.py --migrate
+    actingweb-migrate-property-lists              # dry run
+    actingweb-migrate-property-lists --migrate
 
 Step 5: understand the new storage format
 -----------------------------------------

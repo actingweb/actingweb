@@ -1426,3 +1426,62 @@ class TestDuplicateDetectionAfterAnEdit:
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         duplicates = prop_list.verify(identity_key="id")["duplicate_identities"]
         assert list(duplicates.values()) == [[0, 2]]
+
+    def test_wrong_identity_key_is_distinguishable_from_clean(
+        self, monkeypatch, fake_store
+    ):
+        """`duplicate_identities == {}` means "checked, clean" only if
+        something was actually checked.
+
+        Rows without the field are excluded from the comparison -- correct,
+        since bucketing them together would make every one a duplicate of
+        every other -- but that makes a mistyped key produce a report shaped
+        exactly like a healthy one. `identity_checked_count` is how an
+        operator tells the two apart.
+        """
+        actor_id = "actor-wrong-key"
+        name = "outputs"
+        _seed_list(
+            fake_store,
+            actor_id,
+            name,
+            [{"itemId": 1, "t": "a"}, {"itemId": 1, "t": "b"}],
+        )
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        wrong = prop_list.verify(identity_key="id")
+        assert wrong["duplicate_identities"] == {}
+        assert wrong["identity_checked_count"] == 0  # compared nothing
+
+        right = prop_list.verify(identity_key="itemId")
+        assert right["duplicate_identities"] == {1: [0, 1]}
+        assert right["identity_checked_count"] == 2
+
+        unchecked = prop_list.verify()
+        assert unchecked["duplicate_identities"] is None
+        assert unchecked["identity_checked_count"] is None
+
+    def test_true_and_one_are_not_the_same_identity(self, monkeypatch, fake_store):
+        """Python considers True == 1 and hashes them alike, so an untagged
+        dict key would report a duplicate that does not exist."""
+        actor_id = "actor-bool-int"
+        name = "outputs"
+        _seed_list(fake_store, actor_id, name, [{"id": True}, {"id": 1}])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        report = ListProperty(actor_id=actor_id, name=name, config=object()).verify(
+            identity_key="id"
+        )
+        assert report["duplicate_identities"] == {}
+        assert report["identity_checked_count"] == 2
+        assert report["healthy"] is True

@@ -193,8 +193,8 @@ gradual, never required for a list to keep functioning:
   the only setting that makes "no list migrates without me" true.
 - **Bulk**: larger or idle lists are migrated with the operator script::
 
-    poetry run python scripts/migrate_property_lists.py            # dry run
-    poetry run python scripts/migrate_property_lists.py --migrate
+    actingweb-migrate-property-lists              # dry run
+    actingweb-migrate-property-lists --migrate
 
   The script reports lists it refuses to migrate (names containing
   ``#`` -- rename first) and any duplicate-value residue it preserves
@@ -349,7 +349,15 @@ this failure mode is structurally impossible there::
    list: it survives later edits, and it does not assume the copies stayed
    neighbours. Duplicates from a different mechanism -- a failed read turning
    an upsert into an append, say -- are under no obligation to be adjacent.
-   Both sweep scripts take ``--identity-key``.
+   Both sweep tools take ``--identity-key``. Check
+   ``identity_checked_count`` in the report before trusting an empty
+   result: rows without the field are excluded from the comparison, so a
+   mistyped key produces a report shaped exactly like a clean one having
+   compared nothing.
+
+   The tools ship with the library as ``actingweb-verify-property-lists``
+   and ``actingweb-migrate-property-lists``, so they are available from an
+   installed wheel; ``scripts/`` keeps thin wrappers for repo checkouts.
 
 There is no HTTP repair endpoint. Repair through the library API --
 ``actor.property_lists.notes.verify()`` to inspect, ``.compact()`` to fix

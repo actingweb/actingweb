@@ -26,6 +26,10 @@ include = [
     { path = "actingweb/templates/**/*", format = ["sdist", "wheel"] },
 ]
 
+[tool.poetry.scripts]
+actingweb-verify-property-lists = "actingweb.maintenance.verify_property_lists:main"
+actingweb-migrate-property-lists = "actingweb.maintenance.migrate_property_lists:main"
+
 [tool.poetry.dependencies]
 python = "^3.11"
 pynamodb = "^6.0"

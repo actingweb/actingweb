@@ -98,9 +98,18 @@ CHANGED
   been used since the damage), and it only looks at neighbouring rows (so it
   missed the same ``id`` at positions 31 and 36 and called the list healthy).
   ``duplicate_identities`` compares the identifying field across the whole
-  list and survives later edits. Both sweep scripts gained
-  ``--identity-key``; ``migrate_property_lists.py``'s dry-run duplicate
-  warning previously used only the unreliable comparison.
+  list and survives later edits, and the report carries
+  ``identity_checked_count`` so an empty result is distinguishable from a
+  mistyped key that compared nothing. Both sweep tools gained
+  ``--identity-key``; the migrate tool's dry-run duplicate warning
+  previously used only the unreliable comparison.
+- **The operator tools now ship with the library** as the console commands
+  ``actingweb-verify-property-lists`` and
+  ``actingweb-migrate-property-lists`` (implementation moved to
+  ``actingweb.maintenance``; ``scripts/`` keeps thin wrappers). They were
+  previously absent from the wheel, which mattered once converting existing
+  lists became an explicit operator step rather than something that
+  happened on its own.
 - **Both sweep scripts now print the backend, region/host and table prefix
   they are about to operate on**, and warn when ``AWS_DB_PREFIX`` is an unset
   default. The library defaults it to ``demo_actingweb``; running a sweep

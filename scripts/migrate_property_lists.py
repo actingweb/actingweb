@@ -185,10 +185,17 @@ def migrate_actor(
                 f"had_holes={result['had_holes']}, "
                 f"duplicates={result['duplicate_count']})"
             )
+        elif result.get("reason") == "already_v2":
+            # Not a refusal: migrate_to_v2() re-reads the stored format
+            # itself, so a list that another request lazily migrated between
+            # our verify() above and that read lands here. The list IS in the
+            # requested format, which is success -- counting it as refused
+            # would fail the run and (since only clean actors are
+            # checkpointed) make the sweep re-do this actor forever.
+            logger.info(f"actor={actor_id} list={name}: already migrated concurrently")
         else:
-            # Only "name_contains_hash" reaches here (already_v2 was
-            # filtered above) -- defensive, since the "#" check above
-            # already refuses before calling migrate_to_v2().
+            # "name_contains_hash" -- needs an operator rename before this
+            # list can ever migrate.
             refused.append(f"{actor_id}/{name}")
 
     return checked, migrated, errored, refused

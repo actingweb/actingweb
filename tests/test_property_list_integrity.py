@@ -839,3 +839,68 @@ class TestV2StaleRankCacheOnPositionalMutation:
         assert ListProperty(
             actor_id=actor_id, name=name, config=object()
         ).to_list() == ["x", "REPLACED", "b", "c"]
+
+
+class TestV2StaleRankCacheOnPositionalRead:
+    """Positional READS must not resolve through a stale rank map either.
+
+    The cached rank at position i still exists after another writer inserts
+    earlier in the list, so `_v2_getitem`'s missing-row fallback never fires
+    and the read silently returns the item that used to be at that position.
+    v1's positional read is always current, and v2 should not be weaker.
+    Regression for the second-round P1 on PR #121.
+    """
+
+    def test_getitem_returns_the_item_currently_at_that_position(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-stale-read-get"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        stale.extend(["a", "b", "c"])
+        assert stale.to_list() == ["a", "b", "c"]  # rank cache warm
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).insert(0, "x")
+
+        # Position 1 is "a" now, not the cached "b".
+        assert stale[1] == "a"
+
+    def test_pop_returns_exactly_what_it_removed(self, monkeypatch, fake_store):
+        """pop() resolved the rank twice -- once for the read, once for the
+        delete -- so a concurrent mutation in between made it return one item
+        and delete a different one."""
+        actor_id = "actor-stale-read-pop"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        stale.extend(["a", "b", "c"])
+        assert stale.to_list() == ["a", "b", "c"]
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).insert(0, "x")
+        # Storage is now ["x", "a", "b", "c"].
+
+        popped = stale.pop(1)
+
+        remaining = ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list()
+        assert popped == "a"
+        assert remaining == ["x", "b", "c"]
+        assert popped not in remaining, "pop() must remove exactly the item it returned"
+
+    def test_index_finds_the_current_position(self, monkeypatch, fake_store):
+        actor_id = "actor-stale-read-index"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        stale.extend(["a", "b", "c"])
+        assert stale.to_list() == ["a", "b", "c"]
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).insert(0, "x")
+
+        assert stale.index("a") == 1
+        assert stale.index("x") == 0

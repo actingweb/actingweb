@@ -468,7 +468,13 @@ class ListProperty:
         return int(length) if length is not None else 0
 
     def _v2_getitem(self, index: int) -> Any:
-        ranks = self._v2_ensure_rank_cache()
+        # Force a fresh rank read, for the same reason the positional writes
+        # do: the cached rank at position i still EXISTS after another writer
+        # inserts earlier in the list, so the missing-row fallback below never
+        # fires and a stale read returns the item that used to be here. v1's
+        # positional read is always current (it addresses the row by index
+        # directly), and v2 should not be weaker.
+        ranks = self._v2_ensure_rank_cache(force=True)
         length = len(ranks)
         orig_index = index
         if index < 0:
@@ -952,10 +958,53 @@ class ListProperty:
         """
         return list(enumerate(self.to_list()))
 
+    def _v2_pop(self, index: int) -> Any:
+        """Read and remove the item at ``index``, resolving its rank ONCE.
+
+        ``self[index]`` followed by ``del self[index]`` is not good enough
+        under v2: each refreshes the rank map independently, so a concurrent
+        mutation landing between them makes pop() return one item and delete
+        a different one. Resolving the rank a single time and using it for
+        both the read and the delete keeps the pair consistent — whatever it
+        returns is exactly what it removed.
+        """
+        ranks = self._v2_ensure_rank_cache(force=True)
+        length = len(ranks)
+        orig_index = index
+        if index < 0:
+            index = length + index
+        if index < 0 or index >= length:
+            raise IndexError(f"List index {orig_index} out of range (length: {length})")
+
+        rank = ranks[index]
+        name = self._v2_item_name(rank)
+
+        item_db = get_property(self.config)
+        item_str = item_db.get(actor_id=self.actor_id, name=name)
+        if item_str is None:
+            raise ListCorruptionError(self.name, index)
+        item = self._decode_item(item_str)
+
+        del_db = get_property(self.config)
+        if not del_db.set(actor_id=self.actor_id, name=name, value=None):
+            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
+
+        del ranks[index]
+        self._v2_touch_metadata()
+        return item
+
     def pop(self, index: int = -1) -> Any:
         """Remove and return item at index (default last)."""
         if len(self) == 0:
             raise IndexError("pop from empty list")
+
+        # Deliberately NOT calling _maybe_lazy_migrate() here: migration
+        # closes holes in flight, so triggering it from pop() would make a
+        # corrupted v1 list silently self-repair instead of raising, which
+        # is the Phase 2/3 contract. The v1 branch below reaches
+        # __delitem__, which triggers migration exactly as it always has.
+        if self._is_v2():
+            return self._v2_pop(index)
 
         if index == -1:
             index = len(self) - 1
@@ -1066,6 +1115,19 @@ class ListProperty:
 
     def index(self, value: Any, start: int = 0, stop: int | None = None) -> int:
         """Return index of first occurrence of value."""
+        if self._is_v2():
+            # One range query for the whole list, then scan in memory. Going
+            # through self[i] would cost two queries PER ITEM now that
+            # positional reads refresh the rank map, and it would compare
+            # against a list that can shift under the loop.
+            values = self._v2_to_list()
+            if stop is None:
+                stop = len(values)
+            for i in range(max(0, start), min(stop, len(values))):
+                if values[i] == value:
+                    return i
+            raise ValueError(f"{value} is not in list")
+
         length = len(self)
         if stop is None:
             stop = length

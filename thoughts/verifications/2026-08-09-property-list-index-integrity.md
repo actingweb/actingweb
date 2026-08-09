@@ -704,3 +704,57 @@ than the adjacent-duplicate heuristic, since an item's old and new ranks need
 not sort adjacently.
 
 Codex had not re-reviewed at the time of writing.
+
+### Codex re-review: four more, two of them regressions from the first round's fixes
+
+Codex re-reviewed `e888c2d`. It independently found the same
+`downgrade_to_v1()` gap (already fixed in `6b7b7b2`) plus three others. Two
+are defects the first round's own fixes introduced — worth recording plainly,
+because "the fix created the next bug" is the most useful thing this round
+produced.
+
+**Stale positional reads, and a `pop()` that returned one item and deleted
+another (P1, fixed).** Forcing a rank re-read in `_v2_setitem`/`_v2_delitem`
+but not in `_v2_getitem` left reads resolving through the cache — and since
+the cached rank still *exists* after another writer inserts earlier in the
+list, the missing-row fallback never fires and the read silently returns the
+item that used to be at that position. v1's positional read is always current
+(it addresses the row by index), so v2 was strictly weaker. Worse, `pop()` is
+`self[index]` followed by `del self[index]`: after the first round, those two
+resolved the rank map *independently*, so a concurrent mutation between them
+made `pop()` return one item and delete a different one. That inconsistency
+did not exist before the fix.
+
+Fixed by forcing the refresh in `_v2_getitem` too, and by giving `pop()` a v2
+path that resolves the rank once and uses it for both the read and the
+delete. `index()` now serves v2 from a single range query rather than looping
+`self[i]`, which would otherwise have become two queries per item.
+
+Adding `_maybe_lazy_migrate()` to `pop()` while doing this broke
+`test_pop_works_again_after_compact_on_trailing_hole_list` — migration closes
+holes in flight, so a corrupted v1 list started silently self-repairing on
+`pop()` instead of raising. Reverted that part: the v1 branch reaches
+`__delitem__`, which triggers migration exactly as it always did. A good catch
+by a test written two phases earlier for an unrelated reason.
+
+**A concurrently-migrated list reported as "refused" (P2, fixed).** Once
+`migrate_to_v2()` began re-reading the stored format itself, it gained a new
+return: `{"migrated": False, "reason": "already_v2"}` when another request
+migrated the list in the gap. `migrate_actor()` classified every
+non-migrated result as a refusal, so that success failed the run — and,
+combined with the first round's checkpoint fix, left the actor uncheckpointed
+so the sweep would redo it forever. Two fixes from the same round interacting
+to produce a third bug. Only `name_contains_hash` is a refusal now.
+
+**The remaining migration TOCTOU (P1, filed not fixed).** Correct: two
+ordinary reads are not a lock, and another instance can still complete a
+migration and append inside the gap between the second format read and the
+clear. The window is materially narrower than what the first round fixed —
+from "unbounded, a cached format from any time in the past" to "between two
+adjacent queries" — but it is not zero, and the lazy trigger makes concurrent
+attempts on one list a real scenario. Closing it needs a claim row, a CAS, or
+a staged commit; all three are costed in
+`thoughts/todo/migrate-to-v2-needs-a-claim.md`.
+
+Every fix in this round was confirmed to fail against the pre-fix code before
+being kept.

@@ -11,12 +11,14 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from actingweb.db import get_property
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
+from actingweb.property_list import ListProperty
 
 DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 
@@ -232,6 +234,48 @@ class TestMainCommandLineWorkflow:
         migrated = test_actor.property_lists.main_workflow_target
         assert migrated.verify()["format"] == 2
         assert migrated.to_list() == ["a", "b"]
+
+    def test_concurrently_migrated_list_is_not_reported_as_refused(self, test_actor):
+        """A list that another writer migrates between the sweep's verify()
+        and migrate_to_v2()'s own fresh format re-read comes back as
+        {"migrated": False, "reason": "already_v2"}.
+
+        That is success -- the list IS in the requested format. Counting it
+        as a refusal fails the run and, since only clean actors are
+        checkpointed, makes the sweep re-do that actor on every run forever.
+        The case only became reachable once migrate_to_v2() started
+        re-reading the stored format itself. Regression for the second-round
+        P2 on PR #121.
+        """
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(test_actor.config, test_actor.id, "raced_list", ["a", "b"])
+
+        real_migrate = ListProperty.migrate_to_v2
+
+        def _migrate_after_someone_else_did(self):
+            # Stand in for a concurrent lazy migration landing in the gap.
+            if self.name == "raced_list":
+                other = ListProperty(
+                    actor_id=self.actor_id, name=self.name, config=self.config
+                )
+                real_migrate(other)
+            return real_migrate(self)
+
+        with mock.patch.object(
+            ListProperty, "migrate_to_v2", _migrate_after_someone_else_did
+        ):
+            _checked, _migrated, errored, refused = script.migrate_actor(
+                test_actor.id,
+                test_actor.config,
+                migrate=True,
+                limiter=script.RateLimiter(0),
+            )
+
+        assert refused == [], "a concurrently-migrated list is not a refusal"
+        assert errored == 0
+        assert test_actor.property_lists.raced_list.verify()["format"] == 2
+        assert test_actor.property_lists.raced_list.to_list() == ["a", "b"]
 
     def test_actor_with_a_refused_list_is_not_checkpointed(
         self, test_actor, monkeypatch, tmp_path

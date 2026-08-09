@@ -150,11 +150,15 @@ stale handle.
 - [x] `make test-integration` passes on DynamoDB; same suite with `DATABASE_BACKEND=postgresql` passes
 - [x] `poetry run pyright actingweb tests` — 0 errors
 - [x] `poetry run ruff check actingweb tests && poetry run ruff format --check actingweb tests`
-- [x] Manual: re-run the research repro (`reverify_real_dynamo.py` scenarios 1-2) against the fixed code — insert must produce the correct list; injected read error must raise, not corrupt
+- [ ] Manual: re-run the research repro (`reverify_real_dynamo.py` scenarios 1-2) against the fixed code — insert must produce the correct list; injected read error must raise, not corrupt
 
-  (Checked off retroactively: verified at the time this phase was
-  implemented, and re-confirmed by the Phase 5 close-out's full-suite run
-  on both backends, which covers this phase's tests too.)
+  (Left unchecked: no record in this session or the prior session's
+  summary of this specific manual repro having been run. The automated
+  suite covers the same bugs via `tests/test_property_list_integrity.py`
+  and `tests/test_db_property_handle.py`, but that is not the same thing
+  as this checklist item, which the plan carved out precisely because it
+  isn't automated. Whoever reviews this plan before merge should either
+  run it or accept the automated coverage as a substitute explicitly.)
 
 ### Implementation Status: Complete
 
@@ -359,8 +363,13 @@ actionable error, and makes the REST contract self-consistent.
 
 - [x] `poetry run pytest tests/ -v` and `make test-integration` (both backends) pass
 - [x] `poetry run pyright actingweb tests` — 0 errors; `ruff` clean
-- [x] Manual: `docs/guides/property-lists.rst` examples exercised by hand
+- [ ] Manual: `docs/guides/property-lists.rst` examples exercised by hand
       against a running dev app (FastAPI and Flask)
+
+  (Left unchecked: no record of this having been done in this session or
+  the prior session's summary. `docs/guides/property-lists.rst` examples
+  are illustrative snippets, not doctested, so nothing in the automated
+  suite substitutes for actually running them against a live app.)
 
 ### Implementation Status: Complete
 

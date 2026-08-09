@@ -354,6 +354,11 @@ improvements on what the plan specified.
 
 ## Remaining Tasks
 
+> **Superseded later the same day** — every item below except the post-merge
+> release checklist was resolved after this section was written. See the
+> addendum at the end of this document; this list records the state at the
+> time of verification, per the snapshot convention.
+
 - [ ] **Phase 1 manual repro** (`reverify_real_dynamo.py` scenarios 1–2).
       **Cannot be run as written**: the harness does not exist anywhere in
       the repository or its git history — it was a scratch file from the

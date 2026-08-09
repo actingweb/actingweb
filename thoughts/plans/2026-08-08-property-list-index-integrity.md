@@ -393,6 +393,11 @@ actionable error, and makes the REST contract self-consistent.
   That is exactly the class of problem the automated suite cannot catch,
   since its fixtures create lists through a helper.
 
+  The driver script itself was throwaway and is not committed — every check
+  it made is enumerated in the verification document's addendum, which is
+  the durable record. Worth rebuilding rather than resurrecting if this is
+  ever wanted as a standing release-time check.
+
 ### Implementation Status: Complete
 
 **Deviations / notes:**

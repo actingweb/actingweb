@@ -45,24 +45,40 @@ logger = logging.getLogger(__name__)
 _V2_RANK_MARKER = "#"
 _V2_RANK_MAX_LEN = 180
 _V2_MAX_RANK_RETRIES = 8
-_V2_LAZY_MIGRATION_MAX_LENGTH = 50
+_V2_LAZY_MIGRATION_MAX_LENGTH = 0
 _V2_RANK_ALPHABET = frozenset(fi.BASE_62_DIGITS)
+_lazy_migration_nudge_logged = False
 
 
 def _lazy_migration_max_length() -> int:
-    """Largest v1 list that may migrate inline, during a user's write.
-
-    Defaults to ``_V2_LAZY_MIGRATION_MAX_LENGTH``; override with the
-    ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH`` environment variable. **Set it
-    to 0 to disable lazy migration entirely** and migrate only through
+    """Largest EXISTING v1 list that may migrate inline, during a user's
+    write. ``0`` (the default) means none: no existing list ever changes
+    format without an operator running
     ``scripts/migrate_property_lists.py``.
 
-    That escape hatch exists because migration is inline and synchronous:
-    an ``append()`` to a 40-item v1 list does the whole migration inside
-    that request (dozens of sequential writes plus two full-partition
-    reads) before the append itself runs. On a latency-sensitive or
-    serverless deployment that belongs on a rate-limited sweep, not in user
-    traffic.
+    Override with ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``; 50 was the
+    previous default and is a reasonable value once a release has been live
+    long enough that rolling back is off the table.
+
+    **This defaults to off because it is a rollback-safety control, not a
+    performance one.** A process running a pre-v2 release does not error on
+    a v2 list -- it reads it as *empty*, silently, because v2 stores no
+    ``length`` field and an older reader takes the absence as zero. A write
+    from that process then lands in v1 storage and the list forks across
+    both formats with nothing reporting an error. Deployment gives at most a
+    brief mixed-version window; rollback gives none at all -- convert lists
+    for hours or days, roll back for an unrelated reason, and every
+    converted list reads as empty in production, recoverable only one list
+    at a time. With this at 0 a release changes no data, so rolling back is
+    a pure code rollback.
+
+    This does NOT make v2 opt-in. Every list created from now on is v2 with
+    no operator action; only the conversion of data that already exists is
+    deferred to a deliberate, rate-limited step.
+
+    Migration is also inline and synchronous -- an ``append()`` to a 40-item
+    v1 list does the whole migration inside that request -- which is the
+    second, lesser reason to leave it off in latency-sensitive deployments.
     """
     raw = os.environ.get("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH")
     if raw is None:
@@ -75,6 +91,31 @@ def _lazy_migration_max_length() -> int:
             f"using the default {_V2_LAZY_MIGRATION_MAX_LENGTH}"
         )
         return _V2_LAZY_MIGRATION_MAX_LENGTH
+
+
+def _nudge_lazy_migration_disabled() -> None:
+    """Say once per process that v1 lists exist and nothing will convert
+    them.
+
+    Lazy migration being off by default is the safe choice, but silence
+    would turn it into "nobody ever migrates" -- an operator would have to
+    already know the script exists to find out they need it. One INFO the
+    first time a v1 list is actually encountered names the script, without
+    nagging a deployment that intends to stay on v1.
+    """
+    global _lazy_migration_nudge_logged
+    if _lazy_migration_nudge_logged:
+        return
+    _lazy_migration_nudge_logged = True
+    logger.info(
+        "Found v1-format list properties while lazy migration is disabled "
+        "(ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0, the default). They keep "
+        "working as v1 indefinitely. To convert them, run "
+        "scripts/migrate_property_lists.py --migrate once this release has "
+        "been live long enough that rolling back is off the table -- a "
+        "pre-v2 process reads a converted list as empty. Logged once per "
+        "process."
+    )
 
 
 def _v2_is_rank(candidate: str) -> bool:
@@ -1877,9 +1918,12 @@ class ListProperty:
         method that reads before it writes, this paragraph is why the call
         you are about to copy from ``append()`` does not belong there.
         """
-        if _lazy_migration_max_length() <= 0:
-            return
         if self._is_v2():
+            return
+        if _lazy_migration_max_length() <= 0:
+            # A v1 list exists and nothing here will convert it -- say so
+            # once, so "off by default" doesn't become "nobody ever knows".
+            _nudge_lazy_migration_disabled()
             return
         meta = self._load_metadata()
         length = int(meta.get("length", 0) or 0)

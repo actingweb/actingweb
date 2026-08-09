@@ -90,16 +90,17 @@ CHANGED
   time, which turned a single request into as many database writes as the
   index was large. The whole batch is validated before anything is written.
 
-- **``verify()`` accepts an ``identity_key``**, and its duplicate detection
-  is documented as having a false NEGATIVE rather than only false positives.
-  Adjacent rows were compared byte-for-byte, which finds the duplicate an
-  interrupted shift leaves — but stops finding it the moment either copy is
-  edited, i.e. exactly for the lists that have been used since the damage. A
-  real deployment hit this: a duplicated item edited afterwards reported
-  ``adjacent_duplicates: []`` with both copies still present. Pass
-  ``identity_key="id"`` (or whatever field identifies your items) to compare
-  on identity instead; ``scripts/verify_property_lists.py`` gained
-  ``--identity-key``.
+- **``verify()`` accepts an ``identity_key``**, adding a
+  ``duplicate_identities`` report that catches duplicates the existing
+  byte-adjacency heuristic structurally cannot. That heuristic is blind two
+  ways, and both were hit in a real deployment: it stops finding a duplicate
+  the moment either copy is edited (so it misses exactly the lists that have
+  been used since the damage), and it only looks at neighbouring rows (so it
+  missed the same ``id`` at positions 31 and 36 and called the list healthy).
+  ``duplicate_identities`` compares the identifying field across the whole
+  list and survives later edits. Both sweep scripts gained
+  ``--identity-key``; ``migrate_property_lists.py``'s dry-run duplicate
+  warning previously used only the unreliable comparison.
 - **Both sweep scripts now print the backend, region/host and table prefix
   they are about to operate on**, and warn when ``AWS_DB_PREFIX`` is an unset
   default. The library defaults it to ``demo_actingweb``; running a sweep
@@ -121,11 +122,15 @@ CHANGED
   Repair (``compact()`` or ``verify_property_lists.py --repair``) is now
   always an explicit operator action; damaged lists keep serving v1 and
   keep raising ``ListCorruptionError`` until then.
-- **New environment variable ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``**
-  (default 50) sets the largest v1 list that may migrate inline during a
-  user's write; **0 disables lazy migration entirely**. Consider setting it
-  to 0 for this release's first deployment: it is a **rollback-safety
-  control** before it is a latency one. A pre-3.13.0rc5 process does not
+- **Automatic conversion of existing lists to the v2 format is OFF by
+  default**, controlled by the new ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``
+  environment variable (default ``0``; set a positive number to allow v1
+  lists of at most that size to convert on their next write, or use
+  ``scripts/migrate_property_lists.py``). **This does not make v2 opt-in** —
+  every list created after upgrading is v2 with no operator action; only the
+  conversion of pre-existing data waits for a deliberate decision. The
+  default is off because it is a **rollback-safety control** before it is a
+  latency one. A pre-3.13.0rc5 process does not
   error on a migrated list — it reads it as *empty*, because a v2 list
   stores no ``length`` field and an older reader takes the absence as zero;
   a write from that process then forks the list across both formats with
@@ -136,7 +141,9 @@ CHANGED
   release changes no data, so rolling back is a pure code rollback.
   Secondarily: migration is synchronous, so one ``append()`` to a 40-item
   list performs the whole migration — dozens of sequential writes plus two
-  full-partition reads — inside that request.
+  full-partition reads — inside that request. The library logs one INFO per
+  process the first time it encounters a v1 list while conversion is
+  disabled, naming the script, so "off" does not quietly become "never".
 - ``ListProperty.storage_format()`` (new, public) returns 1 or 2 from a
   single point read. ``scripts/migrate_property_lists.py`` now uses it
   instead of ``verify()`` for format detection, which was fetching the

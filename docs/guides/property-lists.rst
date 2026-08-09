@@ -145,13 +145,27 @@ keys); creating one raises ``ValueError`` immediately.
 Existing v1 lists keep working indefinitely -- migration is optional and
 gradual, never required for a list to keep functioning:
 
-- **Lazy**: a v1 list with 50 or fewer items migrates automatically the
-  next time it's mutated (``append``, ``insert``, item assignment, or item
-  deletion). A failed lazy migration is logged and the mutation still
-  succeeds against the v1 storage -- migration never turns an ordinary
+- **Lazy** (**off by default**): set
+  ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH`` to a positive number and a v1 list
+  with at most that many items migrates automatically the next time it's
+  mutated (``append``, ``insert``, item assignment, or item deletion). 50 is
+  a reasonable value. A failed lazy migration is logged and the mutation
+  still succeeds against the v1 storage -- migration never turns an ordinary
   write into a failure.
 
-  Two things lazy migration deliberately will **not** do:
+  It defaults to off because it is a **rollback-safety** control: see the
+  danger box below. Leaving it off means the upgrade changes no stored data
+  at all, so rolling back stays a pure code rollback. Turn it on once the
+  release has been live long enough that rollback is off the table -- or
+  skip it and use the bulk script, which is the same operation on a rate
+  limiter and at a time you choose.
+
+  This does not make v2 opt-in: **every list created from now on is v2**
+  regardless of this setting. Only the conversion of lists that already
+  exist is deferred.
+
+  Two further things lazy migration deliberately will **not** do, whenever
+  it is enabled:
 
   - **It never migrates a damaged list.** If ``verify()`` reports the list
     unhealthy, migration is skipped with an operator-actionable warning.
@@ -162,25 +176,21 @@ gradual, never required for a list to keep functioning:
     real data, and ``verify()`` starts reporting the list healthy. Repair
     is an explicit decision. Run ``compact()`` (or
     ``verify_property_lists.py --repair``), then migrate.
-  - **It never runs when you turn it off.** Migration is inline and
-    synchronous: one ``append()`` to a 40-item v1 list performs the whole
-    migration inside that request, which is dozens of sequential writes
-    plus two full-partition reads. Set
-    ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` to keep migration out of user
-    traffic entirely and rely on the rate-limited bulk script; set it
-    higher than 50 to let bigger lists migrate inline. On Lambda or any
-    latency-sensitive deployment, ``0`` plus a scheduled sweep is the safer
-    shape -- and see the rollback hazard below, which is the stronger
-    reason to reach for ``0``.
+  - **It runs inline, in the request.** One ``append()`` to a 40-item v1
+    list performs the whole migration before the append itself -- dozens of
+    sequential writes plus two full-partition reads. That is the second
+    reason to leave it at ``0`` on Lambda or any latency-sensitive
+    deployment, after the rollback hazard below.
 
-  The size threshold is checked **at the moment of the mutation**, which is
-  not the same as "large lists stay v1 until I run the script". A
+  When enabled, the size threshold is checked **at the moment of the
+  mutation**, which is not the same as "large lists stay v1 until I run the
+  script". A
   ``clear()`` followed by ``extend()`` -- a whole-list rewrite, the shape a
   prune or a re-sync usually takes -- migrates a list of *any* original
   size, because the first ``append()`` inside ``extend()`` sees a list of
   length 0. If you are planning a controlled rollout, that is the case to
-  know about; ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` is the only setting
-  that makes "no list migrates without me" true.
+  know about; ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` -- the default -- is
+  the only setting that makes "no list migrates without me" true.
 - **Bulk**: larger or idle lists are migrated with the operator script::
 
     poetry run python scripts/migrate_property_lists.py            # dry run
@@ -218,13 +228,14 @@ gradual, never required for a list to keep functioning:
    Migration forward is automatic, fleet-wide and inline. Recovery back is
    manual and per-list. Size your caution to that asymmetry.
 
-   **The control is** ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0``. Set it for
-   a release's first deployment and no list changes format, so rolling back
-   stays a pure code rollback with no data to reconcile. Migrate later, once
-   the release has been live long enough that rollback is off the table, as
-   a deliberate rate-limited step via
-   ``scripts/migrate_property_lists.py --migrate``. It is a rollback-safety
-   control first and a latency control second.
+   **This is why ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH`` defaults to 0.**
+   Out of the box, no existing list changes format, so an upgrade stays a
+   pure code change with no data to reconcile if you roll back. Convert
+   later, once the release has been live long enough that rollback is off
+   the table, as a deliberate rate-limited step via
+   ``scripts/migrate_property_lists.py --migrate`` -- or by setting the
+   variable to a positive number and letting ordinary writes do it. Either
+   way it is your decision and your timing, which is the point.
 
 .. warning::
 
@@ -326,6 +337,19 @@ a v2 list has no separate stored length for a row to disagree with, so
 this failure mode is structurally impossible there::
 
   {"error": "list_corrupted", "list": "notes", "detail": "...", "remedy": "compact"}
+
+.. note::
+
+   ``verify()`` has two duplicate checks and each is blind to what the other
+   catches. ``adjacent_duplicates`` compares raw stored bytes of neighbouring
+   rows -- exactly the residue an interrupted shift leaves, but it stops
+   finding a duplicate once either copy is edited. Pass
+   ``identity_key="id"`` (or whatever field identifies your items) to also
+   get ``duplicate_identities``, which compares that field across the whole
+   list: it survives later edits, and it does not assume the copies stayed
+   neighbours. Duplicates from a different mechanism -- a failed read turning
+   an upsert into an append, say -- are under no obligation to be adjacent.
+   Both sweep scripts take ``--identity-key``.
 
 There is no HTTP repair endpoint. Repair through the library API --
 ``actor.property_lists.notes.verify()`` to inspect, ``.compact()`` to fix

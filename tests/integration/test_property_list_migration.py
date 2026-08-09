@@ -295,6 +295,46 @@ class TestMigrateToV2Idempotency:
         assert fresh.to_list() == ["a", "b"]
 
 
+@pytest.fixture(autouse=True)
+def _lazy_migration_on(monkeypatch):
+    """Lazy migration is OFF by default as of rc5 -- it is a rollback-safety
+    control, since a pre-v2 process reads a converted list as empty. These
+    tests exercise the trigger itself, so they opt in explicitly."""
+    monkeypatch.setenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", "50")
+
+
+class TestLazyMigrationDefault:
+    def test_lazy_migration_is_off_unless_asked_for(self, test_actor, monkeypatch):
+        """The default must not convert existing data. A release that
+        silently changes storage format is a release you cannot roll back
+        from: an older process reads a converted list as empty, and a write
+        from it forks the list across both formats."""
+        monkeypatch.delenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", raising=False)
+        _seed_v1_list(test_actor.config, test_actor.id, "default_off", ["a", "b"])
+
+        test_actor.property_lists.default_off.append("c")
+
+        fresh = test_actor.property_lists.default_off
+        assert fresh.verify().get("format") != 2, (
+            "the default must leave existing lists on v1"
+        )
+        assert fresh.to_list() == ["a", "b", "c"]
+
+    def test_new_lists_are_still_v2_with_lazy_migration_off(
+        self, test_actor, monkeypatch
+    ):
+        """Defaulting to off does not make v2 opt-in -- it defers conversion
+        of data that already exists. Everything created from now on is v2."""
+        monkeypatch.delenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", raising=False)
+
+        brand_new = test_actor.property_lists.born_v2
+        brand_new.append("x")
+        brand_new.append("y")
+
+        assert test_actor.property_lists.born_v2.verify()["format"] == 2
+        assert test_actor.property_lists.born_v2.to_list() == ["x", "y"]
+
+
 class TestLazyMigrationTrigger:
     def test_append_on_small_v1_list_migrates_it(self, test_actor):
         _seed_v1_list(test_actor.config, test_actor.id, "lazy_small", ["a", "b"])

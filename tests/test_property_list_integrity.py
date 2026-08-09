@@ -965,6 +965,9 @@ class TestLazyMigrationRefusesDamagedLists:
     """
 
     def test_damaged_v1_list_stays_v1_on_append(self, monkeypatch, fake_store):
+        # Opt in, so this proves the unhealthy check refuses -- not merely
+        # that lazy migration is off by default.
+        monkeypatch.setenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", "50")
         actor_id = "actor-damaged-lazy"
         name = "damaged"
         _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
@@ -991,6 +994,7 @@ class TestLazyMigrationRefusesDamagedLists:
             fresh.to_list()
 
     def test_healthy_v1_list_still_migrates_on_append(self, monkeypatch, fake_store):
+        monkeypatch.setenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", "50")
         actor_id = "actor-healthy-lazy"
         name = "healthy"
         _seed_list(fake_store, actor_id, name, ["a", "b"])
@@ -1041,7 +1045,7 @@ class TestLazyMigrationThresholdIsConfigurable:
             lambda config: _FakePropertyList(fake_store),
         )
 
-        # Default limit is 50 -- a 60-item list is left alone.
+        # Default is 0 (off) -- a 60-item list is left alone either way.
         ListProperty(actor_id=actor_id, name=name, config=object()).append("x")
         assert (
             ListProperty(actor_id=actor_id, name=name, config=object())

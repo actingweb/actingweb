@@ -131,9 +131,14 @@ Step 4: decide when lists are allowed to change format
 
 .. danger::
 
-   **Set ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` for this release's first
-   deployment.** Then no list changes format, and rolling back stays a pure
-   code rollback with no data to reconcile. Migrate later, deliberately.
+   **Automatic conversion of existing lists is OFF by default in rc5**
+   (``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0``). Leave it that way for this
+   release's deployment: no list changes format, so rolling back stays a
+   pure code rollback with no data to reconcile. Convert later, deliberately.
+
+   This does not make v2 opt-in -- every list created after the upgrade is
+   v2 with no action from you. Only the conversion of data you already have
+   waits for your go-ahead.
 
    The reason is not latency, it is rollback. A pre-rc5 process does not
    error on a migrated list -- it reads it as **empty**, silently. The
@@ -175,8 +180,9 @@ exists to clean up.
 Existing lists keep working unchanged, indefinitely, on the hardened old
 paths. Nothing forces you to migrate.
 
-**Lazy migration.** A healthy v1 list of 50 items or fewer migrates on its
-next mutation. Two deliberate limits:
+**Lazy migration.** With ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH`` set to a
+positive number, a healthy v1 list of at most that many items migrates on
+its next mutation. Three deliberate limits:
 
 - **Damaged lists are never migrated automatically.** Migration closes holes
   in flight, which is correct when an operator runs the bulk script and reads
@@ -185,10 +191,10 @@ next mutation. Two deliberate limits:
   duplicate residue becomes indistinguishable from real data, and
   ``verify()`` starts reporting the list healthy. Repair is always your
   decision. Damaged lists keep serving v1 and keep raising until you act.
-- **You can turn it off** — see step 4, which is the reason you should for
-  a first deployment. Migration is also inline and synchronous: one
-  ``append()`` to a 40-item list performs the entire migration inside that
-  request.
+- **It is off unless you enable it** (``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``
+  defaults to 0) — see step 4 for why. It is also inline and synchronous
+  when enabled: one ``append()`` to a 40-item list performs the entire
+  migration inside that request.
 
 The threshold is checked at the moment of the mutation, so "large lists stay
 v1 until I run the script" is not quite true: a ``clear()`` + ``extend()``

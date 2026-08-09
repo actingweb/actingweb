@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: Property-list index integrity — fixes, repair, and fractional-key storage
@@ -780,7 +780,7 @@ single conditional writes; order is derived from key sort; length is counted.
 - [ ] Release checklist from CLAUDE.md (version files match, CI green on both
       backends, tag from master merge commit)
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
 
 **Deviations / notes (sub-step 1 of 3 — `migrate_to_v2()` + lazy trigger + bulk script):**
 
@@ -883,6 +883,30 @@ single conditional writes; order is derived from key sort; length is counted.
   by Phases 1-4; its full history — including the "measured to make
   things worse" note on an initially-plausible fix — stays recoverable via
   git history, referenced from the new todo above).
+
+**Deviations / notes (sub-step 3 of 3 — release prep):**
+
+- Version bumped `3.13.0rc4` → `3.13.0rc5` in `pyproject.toml` and
+  `actingweb/__init__.py`, matching this plan's own "Release vehicle"
+  line from the header. `CHANGELOG.rst`'s `Unreleased` section renamed to
+  `v3.13.0rc5: August 9, 2026`, with a fresh empty `Unreleased` section
+  above it, per CLAUDE.md's release process.
+- **Stopped here deliberately, per CLAUDE.md's release process and an
+  explicit checkpoint with the user before Phase 4 started:** the version
+  bump and CHANGELOG rename are committed on this branch, but pushing,
+  opening/merging a PR, and tagging are NOT done by this session — tags
+  are only cut from commits on `master` after merge, and push/merge/tag
+  are exactly the kind of hard-to-reverse, shared-state actions this
+  project's working agreement requires explicit user sign-off for. The
+  branch is ready to push and open as a PR; final CI-both-backends-green
+  and the tag step happen after that human review.
+- Final full verification re-run at the end of all three sub-steps:
+  `ruff`/`ruff format`/`pyright` clean (`scripts/migrate_db.py`'s
+  pre-existing, unrelated `dotenv` import-resolution error aside — verified
+  via `git stash` that it's present identically on the pre-Phase-4 commit);
+  `pytest tests/ -m "not slow"` on DynamoDB (2699 passed, 26 skipped);
+  `tests/integration/` on PostgreSQL (810 passed, 18 skipped); a clean
+  `sphinx-build -W --keep-going` docs build.
 
 ---
 
@@ -991,3 +1015,92 @@ requires nothing (lazy migration covers small lists; the script is for large
 deployments); half-migrated states are fully functional; downgrade after
 migration is unsupported and documented loudly, with an emergency converter in
 the script.
+
+---
+
+## Implementation Summary
+
+**Completed:** 2026-08-09
+**All phases:** Complete
+**Test status:** All passing — `pytest tests/ -m "not slow"` on DynamoDB
+(2699 passed, 26 skipped); `tests/integration/` on PostgreSQL (810 passed,
+18 skipped, the CLAUDE.md-documented PostgreSQL coverage scope). `ruff`,
+`ruff format`, `pyright` clean on `actingweb/`, `tests/`, `scripts/`
+(excluding `scripts/migrate_db.py`'s pre-existing, unrelated `dotenv`
+import-resolution error). Docs build clean (`sphinx-build -W --keep-going`).
+
+### Deviations from Plan
+
+- Landed Phases 4 and 5 as separate, independently-green sub-step commits
+  (4 sub-commits for Phase 4, 3 for Phase 5) rather than one commit per
+  phase — proactively recommended by an advisor review before Phase 4
+  started, given the storage-format rewrite's size. This paid off
+  concretely: real bugs (missing v2 metadata persistence, a compact()
+  retry-loop infinite regeneration bug, a verify_property_lists.py
+  KeyError crash on v2 lists, get_metadata() always reporting 0 for v2
+  lists) were each caught by the test run immediately after the sub-step
+  that introduced them, not in one large end-of-phase debugging session.
+- `get_range()`'s bound semantics changed from the plan's `[lower, upper)`
+  (exclusive upper) to `[lower, upper]` (inclusive) — DynamoDB's
+  KeyConditionExpression cannot AND two separate comparisons on one key,
+  only `between()` (inclusive-inclusive) is legal for a two-sided range.
+  Callers choose `upper` as a sentinel value that can never collide with
+  real data, making the inclusive boundary unobservable in practice.
+- Migration idempotency: the plan's step 3 ("generate N ranks
+  deterministically from the v1 positions") is only deterministic for a
+  fixed N. Added an explicit cleanup step — every `migrate_to_v2()`
+  attempt clears any leftover v2-range rows from a prior interrupted
+  attempt before writing fresh ones — so re-running converges even if the
+  v1 list was mutated between attempts (a gap an advisor review caught
+  before implementation, not something the plan's original design
+  handled).
+- List-name validation ended up living solely in
+  `ListProperty._load_metadata()`, not "mirrored in
+  `interface/property_store.py`" as the plan's Phase 4 Changes section
+  suggested — traced the actual call chain and found
+  `NotifyingListProperty`/`interface/property_store.py::PropertyListStore`
+  are pure delegating wrappers with no independent name-handling logic
+  that could bypass the check, so a second enforcement point would have
+  been redundant.
+- `scripts/migrate_property_lists.py` follows `verify_property_lists.py`'s
+  backend-agnostic per-actor model rather than
+  `backfill_property_lookup.py`'s DynamoDB-only parallel-scan-segments
+  model the plan referenced — segmented `Scan` has no PostgreSQL
+  equivalent, and this script must work identically on both backends.
+- PUT-beyond-length (Phase 3) returns 404, not the plan's stray 400 in one
+  bullet — confirmed against `docs/protocol/actingweb-spec.rst` directly;
+  documented as a plan-text correction at the time (see Phase 3 notes
+  above), not a deviation from actual spec-compliance intent.
+
+### Learnings
+
+- **A phase that changes a default (v1→v2 for new lists) breaks every
+  test that implicitly relied on the old default**, even when those tests
+  are testing unrelated behavior. Every Phase 1-3 test that built a fresh
+  list via `.append()` and then corrupted it via raw v1-shaped writes
+  needed updating to seed v1 lists explicitly, once "a freshly created
+  list is v1" stopped being true. Worth flagging explicitly in any future
+  plan that changes a similar implicit default.
+- **`verify()`'s report shape diverging by format (v1: `stored_length`/
+  `missing_indices`/`orphan_indices`; v2: `length`/`max_rank_length`) is a
+  sharp edge for every caller that indexes the dict directly.** One such
+  caller (`scripts/verify_property_lists.py`) shipped with exactly this
+  bug in the same phase that introduced the v2 shape — worth grepping for
+  every `report["..."]` (as opposed to `.get(...)`) call site whenever a
+  polymorphic return shape is introduced, not just the ones a plan's
+  author happens to remember.
+- **Conditional-write retry loops need the retry bound itself to change
+  between attempts, not just be re-evaluated.** The `_v2_compact()` bug
+  (regenerating the identical colliding candidate every retry because
+  both `lower` and `upper` were held fixed across attempts) is a general
+  shape of bug: any "retry with the same deterministic inputs" loop needs
+  at least one input to actually vary between attempts, or it isn't a
+  retry, it's an expensive way to raise the same error N times.
+- **Advisor review before implementing a phase caught two real design
+  gaps (Phase 4's `get_range()` DynamoDB constraint touched on
+  implementation, but the two idempotency/stale-cache issues in Phases 4
+  and 5) that static reading of the plan text did not surface** — both
+  were specifically about behavior under concurrency/interruption, a
+  category that's easy to under-specify in a written plan and easy to
+  miss without deliberately asking "what happens if this crashes here,
+  or if two of these run concurrently?"

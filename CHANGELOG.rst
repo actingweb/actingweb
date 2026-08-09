@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc5: August 9, 2026
+--------------------------
+
 .. note::
 
    This release changes the ``/properties/<name>/items`` GET response shape,

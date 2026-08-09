@@ -287,3 +287,73 @@ class TestPutBeyondLength:
         # The list must NOT have been padded.
         response = requests.get(f"{test_app}/{actor_id}/properties/notes", auth=auth)
         assert response.json() == ["first"]
+
+
+class TestBulkPostIndexBound:
+    """The bulk list-item POST bounds every index against the pre-batch
+    length, exactly as PUT ?index=N does.
+
+    Before this bound, the update pass padded any gap with append(None) one
+    row at a time, so a single request naming a large index turned into that
+    many database writes -- the same unbounded-padding DoS the PUT path was
+    hardened against, surviving in the other of its two occurrences.
+    """
+
+    def test_index_beyond_length_is_rejected_without_padding(self, test_app, actor):
+        actor_id, auth = actor
+        _create_list(test_app, actor_id, auth, "todos")
+        response = requests.post(
+            f"{test_app}/{actor_id}/properties",
+            json={"todos": {"items": [{"index": 0, "task": "a"}]}},
+            auth=auth,
+        )
+        assert response.status_code == 201
+
+        # Length is 1. Index 5 is beyond it -> 400, and nothing is written.
+        response = requests.post(
+            f"{test_app}/{actor_id}/properties",
+            json={"todos": {"items": [{"index": 5, "task": "way-out"}]}},
+            auth=auth,
+        )
+        assert response.status_code == 400
+
+        response = requests.get(f"{test_app}/{actor_id}/properties/todos", auth=auth)
+        assert response.status_code == 200
+        assert [i["task"] for i in response.json()] == ["a"]
+
+    def test_index_equal_to_length_still_appends(self, test_app, actor):
+        actor_id, auth = actor
+        _create_list(test_app, actor_id, auth, "todos")
+        response = requests.post(
+            f"{test_app}/{actor_id}/properties",
+            json={"todos": {"items": [{"index": 0, "task": "a"}]}},
+            auth=auth,
+        )
+        assert response.status_code == 201
+
+        response = requests.post(
+            f"{test_app}/{actor_id}/properties",
+            json={"todos": {"items": [{"index": 1, "task": "b"}]}},
+            auth=auth,
+        )
+        assert response.status_code == 201
+
+        response = requests.get(f"{test_app}/{actor_id}/properties/todos", auth=auth)
+        assert [i["task"] for i in response.json()] == ["a", "b"]
+
+    def test_huge_index_does_not_write_a_single_row(self, test_app, actor):
+        """The actual DoS shape: one request, an index far past the end."""
+        actor_id, auth = actor
+        _create_list(test_app, actor_id, auth, "todos")
+
+        response = requests.post(
+            f"{test_app}/{actor_id}/properties",
+            json={"todos": {"items": [{"index": 10_000_000, "task": "boom"}]}},
+            auth=auth,
+            timeout=30,
+        )
+        assert response.status_code == 400
+
+        response = requests.get(f"{test_app}/{actor_id}/properties/todos", auth=auth)
+        assert response.status_code == 200
+        assert response.json() == []

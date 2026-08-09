@@ -120,6 +120,17 @@ affects repair internals.
 New list names may not contain ``#`` (reserved for internal storage
 keys); creating one raises ``ValueError`` immediately.
 
+.. note::
+
+   A list created before this restriction existed may legitimately contain
+   ``#`` in its name. Such a list keeps working as v1 forever (migration
+   refuses it, see below), and the library keeps it isolated from any v2
+   list whose name is a prefix of it: a list named ``foo-#bar`` stores rows
+   that fall inside the byte range a v2 list named ``foo`` reads, so the
+   range read additionally requires a well-formed rank key. Renaming such
+   lists is still the cleaner long-term answer, and it is what unblocks
+   migrating them.
+
 **Migrating existing v1 lists to v2**
 
 Existing v1 lists keep working indefinitely -- migration is optional and
@@ -165,6 +176,16 @@ REST API
 --------
 
 List properties integrate with the standard ``/properties`` endpoints:
+
+**Create an empty list**::
+
+  POST /{actor_id}/properties
+  Content-Type: application/json
+  {"notes": {"_type": "list"}}
+  # Returns 201: {"notes": "[Empty list property created]"}
+
+  # The list must exist before the /items endpoint below will accept
+  # anything for it -- POST /items on an unknown list is a 404.
 
 **GET all items**::
 
@@ -240,6 +261,19 @@ There is no HTTP repair endpoint. Repair through the library API --
 detecting and rebalancing rank keys that have grown long from repeated
 inserts at the same position, before they approach the internal length
 cap.
+
+.. warning::
+
+   ``compact()`` on a v2 list is not crash-safe end to end. It writes every
+   item under its new rank before retiring any old row, so an interruption
+   partway leaves both copies of the already-rewritten items readable, and
+   re-running ``compact()`` does not undo that -- it treats all of them as
+   genuine items. This is the deliberate trade: the alternative, retiring
+   each old row as its replacement is written, would leave interrupted
+   states silently *reordered* instead, which nothing detects. Recovery is
+   manual; the stale copies are the ones whose rank keys are not part of the
+   evenly spaced sequence a fresh rebalance produces. Prefer running it when
+   the actor is not taking writes.
 
 See the ActingWeb specification and Properties handler documentation for complete API details.
 

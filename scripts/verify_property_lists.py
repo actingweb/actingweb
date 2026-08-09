@@ -251,7 +251,14 @@ def main() -> int:
         total_unhealthy += unhealthy
         total_errored += errored
         actors_swept += 1
-        checkpoint.mark_done(actor_id)
+        # Only checkpoint an actor left fully healthy. Marking a
+        # still-unhealthy or errored actor done would let the next --repair
+        # run skip it and report clean over unrepaired corruption. Lists
+        # that --repair deliberately never fixes (duplicate residue) keep
+        # the actor out of the checkpoint until an operator resolves them,
+        # which is the intended nag.
+        if not errored and not unhealthy:
+            checkpoint.mark_done(actor_id)
 
     logger.info(
         f"Summary: actors_swept={actors_swept} lists_checked={total_checked} "

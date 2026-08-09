@@ -82,9 +82,48 @@ CHANGED
   the same batch could shift the update onto the wrong item. All indices
   in a batch are now interpreted against the list as it stood before the
   batch, consistently.
+- **The bulk list-item POST now rejects an update index beyond the end of
+  the list with 400**, the same rule ``PUT ?index=N`` follows. A batch may
+  still populate a list with consecutive indices (``0, 1, 2, …``) — the
+  bound advances with each append the batch performs — but it can no longer
+  name an arbitrary index and have the gap padded with ``None`` one row at a
+  time, which turned a single request into as many database writes as the
+  index was large. The whole batch is validated before anything is written.
 
 FIXED
 ~~~~~
+
+- **A v2 list could read, and delete, a legacy ``#``-named sibling list's
+  rows.** New list names may not contain ``#``, but lists created before
+  this release may, and migration deliberately refuses them so they keep
+  serving as v1. Such a list's rows (e.g. ``list:foo-#bar-0`` for a list
+  named ``foo-#bar``) sort inside the storage range a v2 list named ``foo``
+  reads, so ``foo`` returned the sibling's items as its own and
+  ``foo.clear()``/``foo.delete()``/migrating ``foo`` deleted the sibling's
+  rows. Every consumer of that range now additionally requires the key to
+  be a well-formed rank.
+- **``ListProperty.migrate_to_v2()`` could destroy an already-migrated
+  list.** It decided "this list is still v1" from possibly-cached metadata;
+  if another instance had migrated the list in the meantime, the v1 rows
+  were gone, so the migration saw an all-holes list, deleted the
+  now-authoritative v2 rows as leftover scratch, and wrote an empty list
+  over them. Metadata is now re-read from storage before that decision and
+  re-checked once more immediately before the first destructive write.
+- **v2 item ``__setitem__``/``__delitem__`` could act on a stale position
+  map.** Both resolved a position through a per-instance rank-key cache that
+  could be arbitrarily old on a long-lived instance; if another writer had
+  inserted an item earlier in the list, position ``i`` no longer named the
+  same row and the wrong item was overwritten or deleted. Both now re-read
+  the rank keys before committing. (``append``/``insert`` keep using the
+  cache — their conditional writes bound the effect to where an item lands,
+  never to destroying a different one.)
+- **``scripts/migrate_property_lists.py`` and
+  ``scripts/verify_property_lists.py`` checkpointed actors whose lists had
+  not actually been dealt with.** An actor with an errored or refused list
+  (migration) or one still unhealthy after ``--repair`` (verification) was
+  marked complete, so the next run skipped it, observed no problems, deleted
+  the checkpoint and exited 0 — reporting success over work that was never
+  done. Only fully successful actors are checkpointed now.
 
 - **``ListProperty.insert()`` destroyed data on every call into a non-empty
   list on DynamoDB.** ``insert()`` reused one cached ``DbProperty`` handle

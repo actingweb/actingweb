@@ -162,6 +162,24 @@ class TestMigrateActor:
         assert refused == []
 
 
+def _only_this_actor(monkeypatch, actor_id):
+    """Restrict main()'s actor sweep to one actor.
+
+    main() sweeps every actor in the table, but the test database is shared
+    with whatever other tests are running (xdist workers included), so its
+    exit code and checkpoint contents would otherwise depend on unrelated
+    actors' lists. Patching the actor listing keeps argparse, the sweep
+    loop and the checkpoint lifecycle -- the things these tests exist to
+    exercise -- while making the outcome deterministic.
+    """
+
+    class _OneActor:
+        def fetch(self):
+            return [{"id": actor_id}]
+
+    monkeypatch.setattr("actingweb.db.get_actor_list", lambda config: _OneActor())
+
+
 class TestMainCommandLineWorkflow:
     """Exercises script.main() itself (argparse + checkpoint lifecycle), not
     just the per-actor units the other tests in this file call directly.
@@ -175,6 +193,8 @@ class TestMainCommandLineWorkflow:
         self, test_actor, monkeypatch, tmp_path
     ):
         import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _only_this_actor(monkeypatch, test_actor.id)
 
         _seed_v1_list(
             test_actor.config, test_actor.id, "main_workflow_target", ["a", "b"]
@@ -212,6 +232,51 @@ class TestMainCommandLineWorkflow:
         migrated = test_actor.property_lists.main_workflow_target
         assert migrated.verify()["format"] == 2
         assert migrated.to_list() == ["a", "b"]
+
+    def test_actor_with_a_refused_list_is_not_checkpointed(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        """An actor whose lists didn't all migrate must NOT be checkpointed.
+
+        A '#'-named list is refused until an operator renames it. If the
+        actor were checkpointed anyway, the next --migrate run would skip
+        it, observe zero refusals, delete the checkpoint and exit 0 --
+        reporting success over a list that was never migrated. Regression
+        for the P1 raised on PR #121.
+        """
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _only_this_actor(monkeypatch, test_actor.id)
+
+        _seed_v1_list(test_actor.config, test_actor.id, "refused-#list", ["a"])
+        _seed_v1_list(test_actor.config, test_actor.id, "fine_list", ["b", "c"])
+
+        checkpoint_file = str(tmp_path / "checkpoint.json")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "migrate_property_lists.py",
+                "--migrate",
+                "--checkpoint-file",
+                checkpoint_file,
+            ],
+        )
+        assert script.main() == 1
+
+        # The healthy list did migrate...
+        assert test_actor.property_lists.fine_list.verify()["format"] == 2
+        # ...but the actor is not claimed as done.
+        if os.path.exists(checkpoint_file):
+            with open(checkpoint_file) as fh:
+                done = json.load(fh)
+            assert test_actor.id not in done, (
+                "an actor with a refused list must not be checkpointed -- "
+                "the next --migrate run would skip it and exit 0"
+            )
+
+        # Second run still surfaces the refusal instead of skipping the actor.
+        assert script.main() == 1
 
 
 class TestDowngradeToV1:

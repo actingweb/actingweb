@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-08-09-property-list-index-integrity.md
 ---
 
 # Implementation Plan: Property-list index integrity — fixes, repair, and fractional-key storage
@@ -150,15 +151,24 @@ stale handle.
 - [x] `make test-integration` passes on DynamoDB; same suite with `DATABASE_BACKEND=postgresql` passes
 - [x] `poetry run pyright actingweb tests` — 0 errors
 - [x] `poetry run ruff check actingweb tests && poetry run ruff format --check actingweb tests`
-- [ ] Manual: re-run the research repro (`reverify_real_dynamo.py` scenarios 1-2) against the fixed code — insert must produce the correct list; injected read error must raise, not corrupt
+- [x] Manual: re-run the research repro (`reverify_real_dynamo.py` scenarios 1-2) against the fixed code — insert must produce the correct list; injected read error must raise, not corrupt
 
-  (Left unchecked: no record in this session or the prior session's
-  summary of this specific manual repro having been run. The automated
-  suite covers the same bugs via `tests/test_property_list_integrity.py`
-  and `tests/test_db_property_handle.py`, but that is not the same thing
-  as this checklist item, which the plan carved out precisely because it
-  isn't automated. Whoever reviews this plan before merge should either
-  run it or accept the automated coverage as a substitute explicitly.)
+  **Closed by explicit acceptance, 2026-08-09** (maintainer directive during
+  the verification pass). The harness cannot be re-run as written:
+  `reverify_real_dynamo.py` exists neither in the working tree nor anywhere
+  in git history (`git log --all --diff-filter=A -- '*reverify_real_dynamo*'`
+  returns nothing) — it was a research-session scratch file, so "running it"
+  would mean rebuilding it first. Accepted instead: the automated coverage
+  that replaced it, confirmed in
+  `thoughts/verifications/2026-08-09-property-list-index-integrity.md` to
+  fail against the pre-fix code —
+  `tests/test_property_list_integrity.py::TestDeleteReadFailurePropagates`
+  (injected read error raises and does not destroy the successor) and
+  `tests/integration/test_property_lists_advanced.py` +
+  `tests/integration/test_db_property_handle.py` (insert into a non-empty
+  list; one handle serving two rows). A permanent regression test is a
+  more durable substitute than a one-off script; recording the swap
+  explicitly rather than leaving the box ambiguous.
 
 ### Implementation Status: Complete
 
@@ -363,13 +373,25 @@ actionable error, and makes the REST contract self-consistent.
 
 - [x] `poetry run pytest tests/ -v` and `make test-integration` (both backends) pass
 - [x] `poetry run pyright actingweb tests` — 0 errors; `ruff` clean
-- [ ] Manual: `docs/guides/property-lists.rst` examples exercised by hand
+- [x] Manual: `docs/guides/property-lists.rst` examples exercised by hand
       against a running dev app (FastAPI and Flask)
 
-  (Left unchecked: no record of this having been done in this session or
-  the prior session's summary. `docs/guides/property-lists.rst` examples
-  are illustrative snippets, not doctested, so nothing in the automated
-  suite substitutes for actually running them against a live app.)
+  **Done 2026-08-09**, during the verification pass. Ran a live Flask
+  server (`flask_app.run`, port 8731) and a live uvicorn/FastAPI server
+  (port 8732) against dynamodb-local — real servers over HTTP, not the
+  in-process test clients the automated suite uses — and walked every REST
+  example in the guide: list creation, `/items` add/update/delete, GET on
+  the list, `format=short`/`format=full`/`metadata=true`, `PUT ?index=`
+  at and beyond the length, the bulk items POST, and the 409 corruption
+  contract on a hand-punched v1 list. 23 checks, both integrations,
+  all passing and all matching what the guide documents.
+
+  It found one real gap: the REST section documented every operation on a
+  list but never how to *create* one, and `POST /items` against a
+  non-existent list is a 404 — so the documented flow could not be
+  followed start to finish. Added the `{"_type": "list"}` creation example.
+  That is exactly the class of problem the automated suite cannot catch,
+  since its fixtures create lists through a helper.
 
 ### Implementation Status: Complete
 

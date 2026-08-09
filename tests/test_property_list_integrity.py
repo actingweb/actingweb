@@ -256,6 +256,14 @@ class TestCrashInjectionResidue:
         name = "mylist"
         _seed_list(fake_store, actor_id, name, ["a", "b", "c", "d"])
 
+        # This test pins the v1 shift loop's crash residue, and injects the
+        # crash by absolute call number. A 4-item v1 list is a lazy-migration
+        # candidate, so __delitem__ would first attempt migrate_to_v2() (which
+        # fails harmlessly here and is swallowed) -- but its metadata reads
+        # land in the same counter and shift the crash point. Disable it so
+        # the sequence below describes only the shift loop.
+        monkeypatch.setattr(ListProperty, "_maybe_lazy_migrate", lambda self: None)
+
         call_counter = [0]
         # Call sequence for del prop_list[0]:
         #   1. meta get (len())
@@ -604,3 +612,230 @@ class TestV2RankCapAndCompact:
         # Ranks are short again -- insert-between works now.
         fresh.insert(1, "middle")
         assert fresh.to_list() == ["left", "middle", "right"]
+
+
+def _seed_v2_list(store, actor_id, name, items):
+    """Seed a v2-format list directly (evenly spaced ranks + meta row)."""
+    import fractional_indexing as fi
+
+    ranks = fi.generate_n_keys_between(None, None, len(items))
+    for rank, item in zip(ranks, items, strict=True):
+        store[(actor_id, f"list:{name}-#{rank}")] = json.dumps(item)
+    store[(actor_id, f"list:{name}-meta")] = json.dumps(
+        {
+            "format": 2,
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+            "item_type": "json",
+            "chunk_size": 1,
+            "version": "1.0",
+            "description": "",
+            "explanation": "",
+        }
+    )
+
+
+class TestV2LegacyHashSiblingIsolation:
+    """A v2 list's byte range is NOT sufficient to isolate its rows.
+
+    New list names may not contain '#', but lists created before Phase 4
+    may, and migration deliberately refuses them so they keep serving as
+    v1 forever. Such a list's rows -- e.g. 'list:foo-#bar-0' for a legacy
+    list named 'foo-#bar' -- sort INSIDE the range ['list:foo-#',
+    'list:foo-$'] that a new v2 list named 'foo' reads. Only the rank-shape
+    check (_v2_is_rank) keeps the two apart. Regression for the P1 raised
+    on PR #121.
+    """
+
+    LEGACY = "foo-#bar"
+    OWNER = "foo"
+
+    def _seed_both(self, store, actor_id):
+        _seed_list(store, actor_id, self.LEGACY, ["legacy-a", "legacy-b"])
+        _seed_v2_list(store, actor_id, self.OWNER, ["mine-1", "mine-2"])
+
+    def _legacy_rows(self, store, actor_id):
+        return {
+            k: v
+            for k, v in store.items()
+            if k[0] == actor_id and k[1].startswith(f"list:{self.LEGACY}-")
+        }
+
+    def test_reads_exclude_legacy_sibling_rows(self, monkeypatch, fake_store):
+        actor_id = "actor-sib-read"
+        self._seed_both(fake_store, actor_id)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        owner = ListProperty(actor_id=actor_id, name=self.OWNER, config=object())
+        assert owner.to_list() == ["mine-1", "mine-2"]
+        assert len(owner) == 2
+        assert list(owner) == ["mine-1", "mine-2"]
+        assert owner.verify()["length"] == 2
+
+        legacy = ListProperty(actor_id=actor_id, name=self.LEGACY, config=object())
+        assert legacy.to_list() == ["legacy-a", "legacy-b"]
+
+    def test_primed_reads_exclude_legacy_sibling_rows(self, monkeypatch, fake_store):
+        actor_id = "actor-sib-prime"
+        self._seed_both(fake_store, actor_id)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        # A bulk partition dump contains BOTH lists' rows -- the primed path
+        # matches row names in Python, so it needs the same filter as the
+        # range-query path.
+        rows = {
+            name: value for (aid, name), value in fake_store.items() if aid == actor_id
+        }
+        owner = ListProperty(actor_id=actor_id, name=self.OWNER, config=object())
+        owner.prime_from_rows(rows)
+
+        assert len(owner) == 2
+        assert owner.to_list_from_rows(rows) == ["mine-1", "mine-2"]
+
+    def test_clear_does_not_delete_legacy_sibling_rows(self, monkeypatch, fake_store):
+        actor_id = "actor-sib-clear"
+        self._seed_both(fake_store, actor_id)
+        before = self._legacy_rows(fake_store, actor_id)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        ListProperty(actor_id=actor_id, name=self.OWNER, config=object()).clear()
+
+        assert self._legacy_rows(fake_store, actor_id) == before
+        legacy = ListProperty(actor_id=actor_id, name=self.LEGACY, config=object())
+        assert legacy.to_list() == ["legacy-a", "legacy-b"]
+
+    def test_delete_does_not_delete_legacy_sibling_rows(self, monkeypatch, fake_store):
+        actor_id = "actor-sib-delete"
+        self._seed_both(fake_store, actor_id)
+        before = self._legacy_rows(fake_store, actor_id)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        ListProperty(actor_id=actor_id, name=self.OWNER, config=object()).delete()
+
+        assert self._legacy_rows(fake_store, actor_id) == before
+
+    def test_migration_of_owner_does_not_clear_legacy_sibling_rows(
+        self, monkeypatch, fake_store
+    ):
+        """migrate_to_v2()'s step-3 'clear leftover v2 scratch rows' runs a
+        range query too -- unfiltered, it would wipe the legacy sibling."""
+        actor_id = "actor-sib-migrate"
+        _seed_list(fake_store, actor_id, self.LEGACY, ["legacy-a", "legacy-b"])
+        _seed_list(fake_store, actor_id, self.OWNER, ["mine-1", "mine-2"])
+        before = self._legacy_rows(fake_store, actor_id)
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        owner = ListProperty(actor_id=actor_id, name=self.OWNER, config=object())
+        assert owner.migrate_to_v2()["migrated"] is True
+
+        assert owner.to_list() == ["mine-1", "mine-2"]
+        assert self._legacy_rows(fake_store, actor_id) == before
+
+
+class _FakePropertyList:
+    """Minimal DbPropertyList fake: one partition dump for verify()."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def fetch_all_including_lists(self, actor_id=None):
+        return {
+            name: value for (aid, name), value in self.store.items() if aid == actor_id
+        }
+
+
+class TestMigrateToV2StaleMetadata:
+    """migrate_to_v2() must never decide 'this list is v1' from a cached
+    metadata dict. Regression for the P1 raised on PR #121: a stale v1
+    cache over already-migrated v2 storage sent migration down the v1
+    path, where verify() sees every index as a hole, so step 3 deleted the
+    authoritative v2 rows and step 4 wrote an empty list over them."""
+
+    def test_stale_v1_cache_over_v2_storage_does_not_destroy_rows(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-stale-meta"
+        name = "notes"
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        # The instance loaded metadata while the list was still v1...
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert stale.to_list() == ["a", "b", "c"]  # populates _meta_cache as v1
+
+        # ...and another writer migrated it in the meantime.
+        for i in range(3):
+            fake_store.pop((actor_id, f"list:{name}-{i}"), None)
+        _seed_v2_list(fake_store, actor_id, name, ["a", "b", "c"])
+        rows_after_migration = dict(fake_store)
+
+        result = stale.migrate_to_v2()
+
+        assert result == {"migrated": False, "reason": "already_v2"}
+        assert fake_store == rows_after_migration
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == ["a", "b", "c"]
+
+
+class TestV2StaleRankCacheOnPositionalMutation:
+    """Destructive positional operations must re-read the rank keys.
+
+    A cached rank list can be arbitrarily old on a long-lived instance; if
+    another writer inserted an item earlier in the list, position i names a
+    different row than the cache says, and del/setitem would destroy the
+    wrong item. Regression for the P1 raised on PR #121.
+    """
+
+    def test_delitem_deletes_the_item_currently_at_that_position(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-stale-rank-del"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        stale.extend(["a", "b", "c"])
+        assert stale.to_list() == ["a", "b", "c"]  # rank cache warm
+
+        # Another instance inserts at the front.
+        other = ListProperty(actor_id=actor_id, name=name, config=object())
+        other.insert(0, "x")
+        assert other.to_list() == ["x", "a", "b", "c"]
+
+        del stale[1]
+
+        # Position 1 is "a" as of now -- NOT "b", which is what the stale
+        # cache would have pointed at.
+        assert ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list() == ["x", "b", "c"]
+
+    def test_setitem_overwrites_the_item_currently_at_that_position(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-stale-rank-set"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        stale.extend(["a", "b", "c"])
+        assert stale.to_list() == ["a", "b", "c"]
+
+        other = ListProperty(actor_id=actor_id, name=name, config=object())
+        other.insert(0, "x")
+
+        stale[1] = "REPLACED"
+
+        assert ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list() == ["x", "REPLACED", "b", "c"]

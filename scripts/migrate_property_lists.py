@@ -324,7 +324,14 @@ def main() -> int:
         total_errored += errored
         total_refused.extend(refused)
         actors_swept += 1
-        checkpoint.mark_done(actor_id)
+        # Only checkpoint an actor whose lists ALL came through cleanly.
+        # Marking a partially-failed actor done would let the next run skip
+        # it, observe zero new errors, delete the checkpoint and exit 0 --
+        # reporting success over lists that were never migrated. A refused
+        # ('#'-named) list needs an operator rename, so such an actor is
+        # deliberately re-reported on every run until that happens.
+        if not errored and not refused:
+            checkpoint.mark_done(actor_id)
 
     logger.info(
         f"Summary: actors_swept={actors_swept} v1_lists_checked={total_checked} "

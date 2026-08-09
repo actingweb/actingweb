@@ -1011,6 +1011,12 @@ class PropertiesHandler(base_handler.BaseHandler):
                             # indices are ever affected by a higher delete.
                             pending_updates: list[tuple[int, dict[str, Any]]] = []
                             pending_deletes: list[int] = []
+                            # Read once. Update indices are bounds-checked
+                            # against this, advanced by each append the batch
+                            # performs (see the check below); delete indices
+                            # keep their pre-batch meaning per the ordering
+                            # semantics documented above.
+                            projected_length = len(list_prop)
 
                             for i, item_spec in enumerate(val["items"]):
                                 # Validate item structure
@@ -1068,6 +1074,35 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 ):  # Only has "index" key, means delete
                                     pending_deletes.append(index)
                                 else:
+                                    # Same bound as the PUT ?index=N path,
+                                    # projected across the batch: an update
+                                    # may address an existing item or append
+                                    # at exactly the current length, never
+                                    # beyond it. `projected_length` tracks
+                                    # what the list will be when this update
+                                    # runs, so a batch may still populate an
+                                    # empty list with indices 0,1,2,...
+                                    # Without this bound the update pass
+                                    # padded the gap with append(None) one
+                                    # row at a time, so a single request
+                                    # naming index 10**8 became 10**8
+                                    # database writes. Validating here (not
+                                    # in the update pass) means an
+                                    # out-of-bounds index rejects the batch
+                                    # before anything is written.
+                                    if index > projected_length:
+                                        logger.error(
+                                            f"Index {index} in item at position {i} is beyond list length {projected_length}"
+                                        )
+                                        if self.response:
+                                            self.response.set_status(
+                                                400,
+                                                f"Index {index} in item at position {i} is beyond list length {projected_length}",
+                                            )
+                                        return
+                                    if index == projected_length:
+                                        projected_length += 1
+
                                     # Update/set item - the entire item_spec except "index" is the item data
                                     item_data = {
                                         k: v
@@ -1079,7 +1114,11 @@ class PropertiesHandler(base_handler.BaseHandler):
                             # Pass 1: updates, in the given order.
                             for index, item_data in pending_updates:
                                 try:
-                                    # Extend list if needed
+                                    # Append-at-length case. Bounded to a
+                                    # single append by the index <=
+                                    # pre_batch_length check above: updates
+                                    # never shrink the list, so len() here
+                                    # is always >= pre_batch_length.
                                     while len(list_prop) <= index:
                                         list_prop.append(None)
                                     # Store the complete object
@@ -1805,6 +1844,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     self.response.set_status(400, f"Unknown action: {action}")
                 return
 
+        except ListCorruptionError as e:
+            # Parity with /items GET and every other list-serving path: a
+            # corrupted list is a structured 409 with a repair hint, never a
+            # bare 500. No action above currently reads item rows, so this
+            # is a contract guarantee rather than a reachable branch today.
+            self._respond_list_corrupted(name, e)
+            return
         except Exception as e:
             logger.error(f"Error in list item operation '{action}' for '{name}': {e}")
             if self.response:

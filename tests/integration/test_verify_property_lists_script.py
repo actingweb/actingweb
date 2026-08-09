@@ -250,6 +250,24 @@ class TestSweepActor:
         assert not cp2.is_done("actor-2")
 
 
+def _only_this_actor(monkeypatch, actor_id):
+    """Restrict main()'s actor sweep to one actor.
+
+    main() sweeps every actor in the table, but the test database is shared
+    with whatever other tests are running (xdist workers included), so its
+    exit code and checkpoint contents would otherwise depend on unrelated
+    actors' lists. Patching the actor listing keeps argparse, the sweep
+    loop and the checkpoint lifecycle -- the things these tests exist to
+    exercise -- while making the outcome deterministic.
+    """
+
+    class _OneActor:
+        def fetch(self):
+            return [{"id": actor_id}]
+
+    monkeypatch.setattr("actingweb.db.get_actor_list", lambda config: _OneActor())
+
+
 class TestMainCommandLineWorkflow:
     """Exercises script.main() itself (argparse + checkpoint lifecycle), not
     just sweep_actor(). A dry-run that finds corruption must not leave a
@@ -260,6 +278,8 @@ class TestMainCommandLineWorkflow:
         self, test_actor, monkeypatch, tmp_path
     ):
         import verify_property_lists as script  # type: ignore[import-not-found]
+
+        _only_this_actor(monkeypatch, test_actor.id)
 
         _seed_v1_list(
             test_actor.config, test_actor.id, "main_workflow_holed", ["a", "b", "c"]
@@ -301,3 +321,52 @@ class TestMainCommandLineWorkflow:
         fresh = test_actor.property_lists.main_workflow_holed
         assert fresh.verify()["healthy"] is True
         assert fresh.to_list() == ["a", "c"]
+
+    def test_partially_repaired_actor_is_not_checkpointed(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        """An actor left unhealthy after --repair must NOT be checkpointed.
+
+        Duplicate residue is the case --repair deliberately never rewrites,
+        so the actor stays unhealthy afterwards. If it were checkpointed
+        anyway, the next --repair run would skip it, see zero unhealthy
+        lists, delete the checkpoint and exit 0 -- reporting clean over
+        corruption nobody ever resolved. Regression for the P1 raised on
+        PR #121.
+        """
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        _only_this_actor(monkeypatch, test_actor.id)
+
+        # Adjacent duplicate residue: two neighbouring rows with identical
+        # stored content. verify() reports it, compact() refuses to touch it.
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "dup_residue", ["same", "same", "z"]
+        )
+
+        checkpoint_file = str(tmp_path / "checkpoint.json")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_property_lists.py",
+                "--repair",
+                "--checkpoint-file",
+                checkpoint_file,
+            ],
+        )
+        assert script.main() == 1
+
+        # Still unhealthy, so the checkpoint must not claim this actor.
+        assert test_actor.property_lists.dup_residue.verify()["healthy"] is False
+        if os.path.exists(checkpoint_file):
+            with open(checkpoint_file) as fh:
+                done = json.load(fh)
+            assert test_actor.id not in done, (
+                "an actor still unhealthy after --repair must not be "
+                "checkpointed -- the next run would skip it and report clean"
+            )
+
+        # Second run re-examines the actor and still reports the problem,
+        # rather than skipping it and exiting 0.
+        assert script.main() == 1

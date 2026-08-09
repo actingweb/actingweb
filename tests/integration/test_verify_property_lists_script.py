@@ -322,6 +322,40 @@ class TestMainCommandLineWorkflow:
         assert fresh.verify()["healthy"] is True
         assert fresh.to_list() == ["a", "c"]
 
+    def test_dry_run_does_not_delete_an_interrupted_repairs_checkpoint(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        """A read-only run must not unlink the resume state of an
+        interrupted --repair.
+
+        The unlink was gated only on "nothing left unhealthy", so a dry run
+        over a clean fleet deleted a checkpoint it neither created nor could
+        know was finished with. The sibling migrate script gates on its
+        mutating flag; this one now does too. Reported by an operator who
+        hit the asymmetry mid-sweep.
+        """
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        _only_this_actor(monkeypatch, test_actor.id)
+
+        # A healthy fleet, and a checkpoint left behind by an earlier,
+        # interrupted --repair run.
+        _seed_v1_list(test_actor.config, test_actor.id, "clean_list", ["a", "b"])
+        checkpoint_file = tmp_path / "checkpoint.json"
+        checkpoint_file.write_text(json.dumps(["some-other-actor"]))
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["verify_property_lists.py", "--checkpoint-file", str(checkpoint_file)],
+        )
+        assert script.main() == 0
+
+        assert checkpoint_file.exists(), (
+            "a read-only run must not delete an interrupted --repair's resume state"
+        )
+        assert json.loads(checkpoint_file.read_text()) == ["some-other-actor"]
+
     def test_partially_repaired_actor_is_not_checkpointed(
         self, test_actor, monkeypatch, tmp_path
     ):

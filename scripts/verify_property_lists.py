@@ -98,11 +98,48 @@ class Checkpoint:
             os.replace(tmp, self._path)
 
 
+def _log_target(config: Any, mode: str, rps: float) -> None:
+    """Say out loud which deployment is about to be swept.
+
+    The library defaults AWS_DB_PREFIX to "demo_actingweb", and a real
+    populated demo deployment exists -- so running this without the
+    environment the application uses silently sweeps the WRONG data and
+    reports it clean. A clean report from the wrong table is worse than an
+    error, because nothing about it looks wrong. Print the target, and warn
+    when the prefix is the default that nobody sets deliberately.
+    """
+    backend = getattr(config, "database", "unknown")
+    if backend == "postgresql":
+        target = (
+            f"host={os.getenv('PG_DB_HOST', 'localhost')} "
+            f"db={os.getenv('PG_DB_NAME', 'actingweb')} "
+            f"schema={os.getenv('PG_DB_SCHEMA', 'public')} "
+            f"prefix={os.getenv('PG_DB_PREFIX', '') or '(none)'}"
+        )
+    else:
+        prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
+        target = (
+            f"region={os.getenv('AWS_DEFAULT_REGION', '(default)')} "
+            f"prefix={prefix} "
+            f"endpoint={os.getenv('AWS_DB_HOST', '(aws)')}"
+        )
+        if not os.getenv("AWS_DB_PREFIX"):
+            logger.warning(
+                "AWS_DB_PREFIX is not set -- defaulting to 'demo_actingweb'. "
+                "If your deployment uses a different prefix you are about to "
+                "sweep the wrong tables and get a clean report from them. Set "
+                "the same environment the application runs with."
+            )
+    logger.info(f"Target: backend={backend} {target}")
+    logger.info(f"Mode: {mode}; rps={rps}")
+
+
 def sweep_actor(
     actor_id: str,
     config: Any,
     repair: bool,
     limiter: RateLimiter,
+    identity_key: str | None = None,
 ) -> tuple[int, int, int]:
     """Verify (and optionally repair) every list belonging to one actor.
 
@@ -127,7 +164,7 @@ def sweep_actor(
             # is one dump per list. That is inherent to checking integrity
             # (which is this script's job) -- unlike the migrate script,
             # which only needs the format and uses storage_format().
-            report = list_prop.verify()
+            report = list_prop.verify(identity_key=identity_key)
         except Exception as e:
             logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
             errored += 1
@@ -190,7 +227,7 @@ def sweep_actor(
             errored += 1
             continue
 
-        post = list_prop.verify()
+        post = list_prop.verify(identity_key=identity_key)
         if post["healthy"]:
             logger.info(f"actor={actor_id} list={name}: repaired")
         else:
@@ -215,6 +252,16 @@ def main() -> int:
         help="max lists checked per second (default 10; 0 = unlimited)",
     )
     parser.add_argument(
+        "--identity-key",
+        default=None,
+        help=(
+            "field name identifying an item (e.g. 'id'). Duplicate "
+            "detection defaults to comparing raw stored bytes, which STOPS "
+            "finding a duplicate once either copy is edited -- pass this if "
+            "your items have an identifying field"
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-file",
         default=".verify_property_lists.checkpoint.json",
         help="resume state file (default .verify_property_lists.checkpoint.json)",
@@ -225,10 +272,7 @@ def main() -> int:
     from actingweb.db import get_actor_list
 
     config = Config()
-    logger.info(
-        f"Sweeping property lists on backend={config.database}; "
-        f"{'REPAIR' if args.repair else 'dry-run'}; rps={args.rps}"
-    )
+    _log_target(config, "REPAIR" if args.repair else "dry-run", args.rps)
 
     actors = get_actor_list(config).fetch()
     if not actors:
@@ -249,7 +293,7 @@ def main() -> int:
         if not actor_id or checkpoint.is_done(actor_id):
             continue
         checked, unhealthy, errored = sweep_actor(
-            actor_id, config, args.repair, limiter
+            actor_id, config, args.repair, limiter, args.identity_key
         )
         total_checked += checked
         total_unhealthy += unhealthy
@@ -273,8 +317,13 @@ def main() -> int:
             "Re-run with --repair to close holes/orphans (duplicate residue "
             "is never auto-repaired)."
         )
+    # Gate on --repair, matching the sibling migrate script. A read-only
+    # run has no business deleting the resume state of an interrupted
+    # --repair: it did not create that file and cannot know the repair run
+    # had finished with it.
     if (
-        total_unhealthy == 0
+        args.repair
+        and total_unhealthy == 0
         and total_errored == 0
         and os.path.exists(args.checkpoint_file)
     ):

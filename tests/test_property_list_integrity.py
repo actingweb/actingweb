@@ -1238,3 +1238,108 @@ class TestConditionalDeleteOnPopAndRemove:
         assert ListProperty(
             actor_id=actor_id, name=name, config=object()
         ).to_list() == ["a"]
+
+
+class TestDuplicateDetectionAfterAnEdit:
+    """verify()'s duplicate check had a false NEGATIVE, not just false
+    positives.
+
+    An interrupted delete/insert shift leaves two byte-identical adjacent
+    rows -- but the moment either copy is edited, the bytes diverge and the
+    only signal that a duplicate exists disappears, silently, for exactly
+    the lists that have been used since the damage. Found in a real
+    deployment: a duplicated item edited afterwards reported
+    adjacent_duplicates: [] with both copies still present.
+    """
+
+    @staticmethod
+    def _seed_diverged_duplicate(store, actor_id, name):
+        # Same logical item (id=112) at two adjacent slots, one since edited.
+        items = [
+            {"id": 110, "title": "a"},
+            {"id": 112, "title": "Self-Review", "body": "original"},
+            {"id": 112, "title": "Self-Review", "body": "edited later"},
+            {"id": 114, "title": "d"},
+        ]
+        _seed_list(store, actor_id, name, items)
+
+    def test_byte_comparison_misses_a_diverged_duplicate(self, monkeypatch, fake_store):
+        actor_id = "actor-dup-diverged"
+        name = "outputs"
+        self._seed_diverged_duplicate(fake_store, actor_id, name)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        # This is the documented-but-previously-unstated weakness.
+        assert prop_list.verify()["adjacent_duplicates"] == []
+
+    def test_identity_key_finds_it(self, monkeypatch, fake_store):
+        actor_id = "actor-dup-identity"
+        name = "outputs"
+        self._seed_diverged_duplicate(fake_store, actor_id, name)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        report = prop_list.verify(identity_key="id")
+        assert report["adjacent_duplicates"] == [(1, 2)]
+        assert report["healthy"] is False
+
+    def test_identity_key_does_not_flag_distinct_items(self, monkeypatch, fake_store):
+        actor_id = "actor-dup-clean"
+        name = "outputs"
+        _seed_list(
+            fake_store,
+            actor_id,
+            name,
+            [{"id": 1, "t": "x"}, {"id": 2, "t": "x"}, {"id": 3, "t": "x"}],
+        )
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.verify(identity_key="id")["adjacent_duplicates"] == []
+
+    def test_items_without_the_key_fall_back_to_byte_comparison(
+        self, monkeypatch, fake_store
+    ):
+        """Plain strings, or dicts lacking the field, must not all collapse
+        into 'identical' just because the key is absent."""
+        actor_id = "actor-dup-nokey"
+        name = "outputs"
+        _seed_list(fake_store, actor_id, name, ["alpha", "beta", "beta"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.verify(identity_key="id")["adjacent_duplicates"] == [(1, 2)]
+
+    def test_v2_lists_take_the_same_identity_key(self, monkeypatch, fake_store):
+        actor_id = "actor-dup-v2"
+        name = "outputs"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        prop_list.extend(
+            [
+                {"id": 1, "body": "one"},
+                {"id": 2, "body": "original"},
+                {"id": 2, "body": "edited later"},
+            ]
+        )
+
+        assert prop_list.verify()["adjacent_duplicates"] == []
+        assert prop_list.verify(identity_key="id")["adjacent_duplicates"] == [(1, 2)]

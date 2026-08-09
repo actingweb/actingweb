@@ -1302,7 +1302,26 @@ class ListProperty:
                 count += 1
         return count
 
-    def _v2_verify(self) -> dict[str, Any]:
+    def _duplicate_identity(self, raw_value: str, identity_key: str | None) -> Any:
+        """The value two adjacent rows are compared on for duplicate
+        detection.
+
+        Without ``identity_key`` this is the raw stored string, which only
+        finds duplicates whose copies are still byte-identical. With it,
+        it is that field of the decoded item, which keeps finding a
+        duplicate after either copy has been edited -- see ``verify()``.
+        """
+        if identity_key is None:
+            return raw_value
+        decoded = self._decode_item(raw_value)
+        if isinstance(decoded, dict) and identity_key in decoded:
+            return (identity_key, decoded[identity_key])
+        # Not addressable by that key (wrong shape, or the field is
+        # absent): fall back to raw comparison rather than silently
+        # treating every such row as identical to its neighbour.
+        return raw_value
+
+    def _v2_verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check for v2 lists.
 
         Structurally, v2 cannot have holes or orphans -- there is no
@@ -1329,7 +1348,9 @@ class ListProperty:
 
         adjacent_duplicates: list[tuple[int, int]] = []
         for i in range(len(pairs) - 1):
-            if pairs[i][1] == pairs[i + 1][1]:
+            left = self._duplicate_identity(pairs[i][1], identity_key)
+            right = self._duplicate_identity(pairs[i + 1][1], identity_key)
+            if left == right:
                 adjacent_duplicates.append((i, i + 1))
 
         return {
@@ -1340,7 +1361,7 @@ class ListProperty:
             "healthy": max_rank_length < _V2_RANK_MAX_LEN - 40,
         }
 
-    def verify(self) -> dict[str, Any]:
+    def verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check against stored rows.
 
         v2: see ``_v2_verify()`` -- a structurally different report shape
@@ -1352,6 +1373,12 @@ class ListProperty:
         rows actually exist, in the range ``[0, length)``. Reports index
         numbers only -- never item values.
 
+        Args:
+            identity_key: Optional field name that identifies an item
+                within your data (``"id"``, ``"uuid"``, ...). Strongly
+                recommended if your items have one -- see the duplicate
+                detection note below.
+
         Returns:
             Dict with:
             - stored_length: the metadata's recorded length
@@ -1360,14 +1387,28 @@ class ListProperty:
               (holes)
             - orphan_indices: rows present at or past ``stored_length``
             - adjacent_duplicates: list of ``(a, b)`` readable-index pairs
-              where ``b == a + 1`` and both rows hold byte-identical stored
-              content -- a heuristic; a legitimate list can hold two equal
-              adjacent items, so this is a hint, not proof of corruption
+              where ``b == a + 1`` and the two rows look like the same item
+              -- see below
             - healthy: True iff there are no holes, no orphans, and no
               adjacent-duplicate hits
+
+        **Duplicate detection has a false-NEGATIVE, not just false
+        positives.** By default two adjacent rows count as duplicates only
+        when their stored bytes are identical. An interrupted delete/insert
+        shift leaves exactly that -- but the moment either copy is edited,
+        the bytes diverge and the signal disappears, silently, for
+        precisely the lists that have been used since the damage. A real
+        deployment hit this: a duplicated item edited afterwards reported
+        ``adjacent_duplicates: []`` while both copies were still there.
+
+        Pass ``identity_key`` to compare on the field that identifies an
+        item instead of on its bytes; that keeps finding the duplicate
+        after either copy changes. (The reverse hazard is unchanged and
+        still a heuristic: a legitimate list may hold two adjacent items
+        with the same identity.)
         """
         if self._is_v2():
-            return self._v2_verify()
+            return self._v2_verify(identity_key=identity_key)
 
         meta = self._load_metadata()
         stored_length = int(meta.get("length", 0) or 0)
@@ -1393,7 +1434,11 @@ class ListProperty:
                 continue
             va = rows.get(self._get_item_property_name(a))
             vb = rows.get(self._get_item_property_name(b))
-            if va is not None and va == vb:
+            if va is None or vb is None:
+                continue
+            if self._duplicate_identity(va, identity_key) == self._duplicate_identity(
+                vb, identity_key
+            ):
                 adjacent_duplicates.append((a, b))
 
         return {

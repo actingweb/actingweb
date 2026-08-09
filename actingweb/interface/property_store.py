@@ -323,10 +323,14 @@ class NotifyingListProperty:
     def count(self, value: Any) -> int:
         return self._list_prop.count(value)
 
-    def verify(self) -> dict[str, Any]:
+    def verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check -- see ListProperty.verify(). No diff
-        is registered; nothing changes."""
-        return self._list_prop.verify()
+        is registered; nothing changes.
+
+        Pass ``identity_key`` if your items carry an identifying field:
+        duplicate detection defaults to byte comparison, which stops
+        finding a duplicate once either copy is edited."""
+        return self._list_prop.verify(identity_key=identity_key)
 
     # Mutation operations - register diffs after completion
     def __setitem__(self, index: int, value: Any) -> None:

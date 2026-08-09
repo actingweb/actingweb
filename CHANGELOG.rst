@@ -90,6 +90,26 @@ CHANGED
   time, which turned a single request into as many database writes as the
   index was large. The whole batch is validated before anything is written.
 
+- **``verify()`` accepts an ``identity_key``**, and its duplicate detection
+  is documented as having a false NEGATIVE rather than only false positives.
+  Adjacent rows were compared byte-for-byte, which finds the duplicate an
+  interrupted shift leaves — but stops finding it the moment either copy is
+  edited, i.e. exactly for the lists that have been used since the damage. A
+  real deployment hit this: a duplicated item edited afterwards reported
+  ``adjacent_duplicates: []`` with both copies still present. Pass
+  ``identity_key="id"`` (or whatever field identifies your items) to compare
+  on identity instead; ``scripts/verify_property_lists.py`` gained
+  ``--identity-key``.
+- **Both sweep scripts now print the backend, region/host and table prefix
+  they are about to operate on**, and warn when ``AWS_DB_PREFIX`` is an unset
+  default. The library defaults it to ``demo_actingweb``; running a sweep
+  without the application's environment could silently target a different
+  deployment and report it clean, which looks exactly like good news.
+- ``scripts/verify_property_lists.py`` no longer deletes the checkpoint file
+  on a clean **read-only** run — it is now gated on ``--repair``, matching
+  the migrate script. A dry run could previously remove the resume state of
+  an interrupted ``--repair``.
+
 - **Lazy migration now refuses a list that ``verify()`` reports as
   unhealthy**, logging what it found and how to fix it, instead of
   migrating it. Migration closes holes in flight and reports what it

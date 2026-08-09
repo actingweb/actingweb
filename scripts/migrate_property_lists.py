@@ -125,6 +125,42 @@ class Checkpoint:
             os.replace(tmp, self._path)
 
 
+def _log_target(config: Any, mode: str, rps: float) -> None:
+    """Say out loud which deployment is about to be swept.
+
+    The library defaults AWS_DB_PREFIX to "demo_actingweb", and a real
+    populated demo deployment exists -- so running this without the
+    environment the application uses silently sweeps the WRONG data and
+    reports it clean. A clean report from the wrong table is worse than an
+    error, because nothing about it looks wrong. Print the target, and warn
+    when the prefix is the default that nobody sets deliberately.
+    """
+    backend = getattr(config, "database", "unknown")
+    if backend == "postgresql":
+        target = (
+            f"host={os.getenv('PG_DB_HOST', 'localhost')} "
+            f"db={os.getenv('PG_DB_NAME', 'actingweb')} "
+            f"schema={os.getenv('PG_DB_SCHEMA', 'public')} "
+            f"prefix={os.getenv('PG_DB_PREFIX', '') or '(none)'}"
+        )
+    else:
+        prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
+        target = (
+            f"region={os.getenv('AWS_DEFAULT_REGION', '(default)')} "
+            f"prefix={prefix} "
+            f"endpoint={os.getenv('AWS_DB_HOST', '(aws)')}"
+        )
+        if not os.getenv("AWS_DB_PREFIX"):
+            logger.warning(
+                "AWS_DB_PREFIX is not set -- defaulting to 'demo_actingweb'. "
+                "If your deployment uses a different prefix you are about to "
+                "sweep the wrong tables and get a clean report from them. Set "
+                "the same environment the application runs with."
+            )
+    logger.info(f"Target: backend={backend} {target}")
+    logger.info(f"Mode: {mode}; rps={rps}")
+
+
 def migrate_actor(
     actor_id: str,
     config: Any,
@@ -315,10 +351,7 @@ def main() -> int:
         logger.info(f"Result: {result}")
         return 0 if result.get("downgraded") else 1
 
-    logger.info(
-        f"Migrating property lists on backend={config.database}; "
-        f"{'MIGRATE' if args.migrate else 'dry-run'}; rps={args.rps}"
-    )
+    _log_target(config, "MIGRATE" if args.migrate else "dry-run", args.rps)
 
     actors = get_actor_list(config).fetch()
     if not actors:

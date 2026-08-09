@@ -36,6 +36,13 @@ only against a list the application is not concurrently writing to (no
 locking is taken), and only as a last resort -- there is no forward path
 back to v2 other than a fresh migration.
 
+ORDER MATTERS: roll the application back to the pre-v2 release FIRST, then
+run --downgrade against the database. A list with <= 50 items is a lazy-
+migration candidate again the instant it's v1 -- if the current (v2-aware)
+application is still running against it, its very next append/insert/
+setitem/delitem migrates it straight back to v2, silently undoing the
+downgrade.
+
 Exit code 0 if every eligible list was migrated (or already was) by the
 end of the run, 1 if any list was refused or errored.
 """

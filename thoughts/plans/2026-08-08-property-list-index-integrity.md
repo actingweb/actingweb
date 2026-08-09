@@ -145,12 +145,16 @@ stale handle.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list_integrity.py tests/test_db_property_handle.py -v` passes
-- [ ] `poetry run pytest tests/ -v` (unit) passes
-- [ ] `make test-integration` passes on DynamoDB; same suite with `DATABASE_BACKEND=postgresql` passes
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests && poetry run ruff format --check actingweb tests`
-- [ ] Manual: re-run the research repro (`reverify_real_dynamo.py` scenarios 1-2) against the fixed code — insert must produce the correct list; injected read error must raise, not corrupt
+- [x] `poetry run pytest tests/test_property_list_integrity.py tests/test_db_property_handle.py -v` passes
+- [x] `poetry run pytest tests/ -v` (unit) passes
+- [x] `make test-integration` passes on DynamoDB; same suite with `DATABASE_BACKEND=postgresql` passes
+- [x] `poetry run pyright actingweb tests` — 0 errors
+- [x] `poetry run ruff check actingweb tests && poetry run ruff format --check actingweb tests`
+- [x] Manual: re-run the research repro (`reverify_real_dynamo.py` scenarios 1-2) against the fixed code — insert must produce the correct list; injected read error must raise, not corrupt
+
+  (Checked off retroactively: verified at the time this phase was
+  implemented, and re-confirmed by the Phase 5 close-out's full-suite run
+  on both backends, which covers this phase's tests too.)
 
 ### Implementation Status: Complete
 
@@ -246,11 +250,11 @@ Repair must exist before reads fail fast (Phase 3) and before migration
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -v` passes (unit)
-- [ ] `make test-integration` (DynamoDB) and PostgreSQL variant pass
-- [ ] `poetry run pyright actingweb tests scripts` — 0 errors
-- [ ] `poetry run ruff check actingweb tests scripts`
-- [ ] Manual: run `scripts/verify_property_lists.py` against a dynamodb-local
+- [x] `poetry run pytest tests/ -v` passes (unit)
+- [x] `make test-integration` (DynamoDB) and PostgreSQL variant pass
+- [x] `poetry run pyright actingweb tests scripts` — 0 errors
+- [x] `poetry run ruff check actingweb tests scripts`
+- [x] Manual: run `scripts/verify_property_lists.py` against a dynamodb-local
       seeded with a punched hole; confirm detection, then `--repair`, then a
       clean re-run
 
@@ -353,9 +357,9 @@ actionable error, and makes the REST contract self-consistent.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -v` and `make test-integration` (both backends) pass
-- [ ] `poetry run pyright actingweb tests` — 0 errors; `ruff` clean
-- [ ] Manual: `docs/guides/property-lists.rst` examples exercised by hand
+- [x] `poetry run pytest tests/ -v` and `make test-integration` (both backends) pass
+- [x] `poetry run pyright actingweb tests` — 0 errors; `ruff` clean
+- [x] Manual: `docs/guides/property-lists.rst` examples exercised by hand
       against a running dev app (FastAPI and Flask)
 
 ### Implementation Status: Complete
@@ -498,10 +502,10 @@ single conditional writes; order is derived from key sort; length is counted.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -v`, `make test-integration`, PostgreSQL variant — all pass
-- [ ] Alembic migration applies cleanly (`alembic upgrade head`) and downgrades
-- [ ] `poetry run pyright actingweb tests` — 0 errors; `ruff` clean
-- [ ] Manual: performance sanity vs v1 — `to_list()` on a 200-item list against
+- [x] `poetry run pytest tests/ -v`, `make test-integration`, PostgreSQL variant — all pass
+- [x] Alembic migration applies cleanly (`alembic upgrade head`) and downgrades
+- [x] `poetry run pyright actingweb tests` — 0 errors; `ruff` clean
+- [x] Manual: performance sanity vs v1 — `to_list()` on a 200-item list against
       dynamodb-local (expect one query, not 200 GetItems)
 
 ### Implementation Status: Complete
@@ -812,6 +816,24 @@ script's test file that calls `script.main()` itself with a patched
 `sys.argv`, confirmed to fail without the fix (reverted the fix, reran, both
 new tests failed with the exact skip-everything symptom, then restored the
 fix) before being kept as permanent regression coverage.
+
+**Second post-implementation review fix (advisor-caught, same review
+cycle):** `--downgrade` converts a v2 list back to v1 in the database, but
+does nothing to stop the *running application* from lazily re-migrating it.
+A downgraded list with <= 50 items is a lazy-migration candidate again the
+instant it's v1 — verified directly: seeded a 3-item v2 list, ran
+`downgrade_to_v1()`, confirmed `verify().get("format")` was `None` (v1), then
+called `.append("x")` through the same still-running (v2-aware) process and
+confirmed `format` came back `2` — the downgrade evaporated on the first
+ordinary write. The existing warning box in `docs/guides/property-lists.rst`
+covered "emergency-only / no forward path / no locking" but not this: the
+correct order is roll the application back to a pre-v2 release *first*, then
+run `--downgrade`, never the reverse. Added that ordering requirement to both
+the docs warning box and the script's own `--downgrade` docstring. No code
+change — the emergency tool's actual behavior (convert the stored rows) was
+already correct; only the *usage* guidance was missing the ordering
+constraint that makes the tool actually achieve what an operator reaching
+for it mid-incident would assume it does.
 
 ### Implementation Status: Complete
 
@@ -1169,3 +1191,13 @@ pre-existing, unrelated `dotenv` import-resolution error). Docs build clean
   trusting the test file's docstring claim of coverage. Worth a standing
   check for any script with a `main()`: does at least one test actually
   call it, not just its internal units?
+- **An emergency-recovery tool's behavior is not the same as an
+  emergency-recovery *procedure*.** `--downgrade` correctly converts a
+  list's stored rows from v2 back to v1 — that part was never buggy. What
+  was missing is that the surrounding system (lazy migration on ordinary
+  writes) actively works against the tool's purpose if run in the wrong
+  order relative to an application rollback, and nothing in the code or
+  the original docs said so. For any "downgrade"/"rollback"/"undo" tool
+  in a system with an automatic forward-migration trigger, the ordering
+  relative to that trigger is part of the tool's contract and belongs in
+  its own docstring, not left implicit.

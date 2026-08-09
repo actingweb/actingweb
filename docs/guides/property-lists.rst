@@ -151,6 +151,16 @@ gradual, never required for a list to keep functioning:
    takes no lock against concurrent writes and is not part of the normal
    operational flow -- do not script it into routine tooling.
 
+   **Order matters.** A downgraded list with <= 50 items is, by
+   definition, a lazy-migration candidate again -- if the *current*
+   application (the one with v2 support) is still running against it, its
+   very next mutation (``append``/``insert``/item ``__setitem__``/
+   ``__delitem__``) migrates it straight back to v2, silently undoing the
+   downgrade. Roll the application back to the pre-v2 release **first**,
+   then run ``--downgrade`` against the database from a checkout that
+   still has v2 support (the tool itself needs the v2 code to read the
+   list it's converting) -- never the other way around.
+
 REST API
 --------
 

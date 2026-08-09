@@ -1422,16 +1422,19 @@ class ListProperty:
             "adjacent_duplicates": adjacent_duplicates,
             "healthy": max_rank_length < _V2_RANK_MAX_LEN - 40,
         }
-        if identity_key is not None:
-            duplicates = self._identity_duplicates(
+        duplicates = (
+            None
+            if identity_key is None
+            else self._identity_duplicates(
                 [
                     (i, self._identity_of(raw, identity_key))
                     for i, (_, raw) in enumerate(pairs)
                 ]
             )
-            report["duplicate_identities"] = duplicates
-            if duplicates:
-                report["healthy"] = False
+        )
+        report["duplicate_identities"] = duplicates
+        if duplicates:
+            report["healthy"] = False
         return report
 
     def verify(self, identity_key: str | None = None) -> dict[str, Any]:
@@ -1462,9 +1465,14 @@ class ListProperty:
             - adjacent_duplicates: list of ``(a, b)`` readable-index pairs
               where ``b == a + 1`` and both rows hold byte-identical stored
               content -- see below
-            - duplicate_identities: present only when ``identity_key`` is
-              given. ``{identity: [positions]}`` for every identity
-              appearing more than once ANYWHERE in the list
+            - duplicate_identities: ``None`` when no ``identity_key`` was
+              supplied (the check did not run), otherwise
+              ``{identity: [positions]}`` for every identity appearing more
+              than once ANYWHERE in the list -- ``{}`` meaning checked and
+              clean. Always present, and distinguishable from "not checked",
+              because ``verify()``'s report shape already varies by storage
+              format and a second silently-optional key would be one sharp
+              edge too many for callers that index it directly
             - healthy: True iff there are no holes, no orphans, no
               adjacent-duplicate hits, and no repeated identities
 
@@ -1523,15 +1531,17 @@ class ListProperty:
             if va is not None and va == vb:
                 adjacent_duplicates.append((a, b))
 
-        duplicate_identities: dict[Any, list[int]] = {}
-        if identity_key is not None:
-            duplicate_identities = self._identity_duplicates(
+        duplicate_identities: dict[Any, list[int]] | None = (
+            None
+            if identity_key is None
+            else self._identity_duplicates(
                 [
                     (i, self._identity_of(raw, identity_key))
                     for i in ordered_present
                     if (raw := rows.get(self._get_item_property_name(i))) is not None
                 ]
             )
+        )
 
         report: dict[str, Any] = {
             "stored_length": stored_length,
@@ -1543,10 +1553,9 @@ class ListProperty:
             and not orphan_indices
             and not adjacent_duplicates,
         }
-        if identity_key is not None:
-            report["duplicate_identities"] = duplicate_identities
-            if duplicate_identities:
-                report["healthy"] = False
+        report["duplicate_identities"] = duplicate_identities
+        if duplicate_identities:
+            report["healthy"] = False
         return report
 
     def _v2_compact(self) -> dict[str, Any]:

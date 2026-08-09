@@ -1380,6 +1380,9 @@ class TestDuplicateDetectionAfterAnEdit:
         # Neither byte-identical nor adjacent: invisible to the old check.
         assert prop_list.verify()["adjacent_duplicates"] == []
         assert prop_list.verify()["healthy"] is True
+        # Not checked at all without an identity key -- distinguishable
+        # from "checked and clean".
+        assert prop_list.verify()["duplicate_identities"] is None
 
         report = prop_list.verify(identity_key="id")
         assert report["duplicate_identities"] == {1: [1, 6]}

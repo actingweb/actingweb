@@ -1105,8 +1105,43 @@ class ListProperty:
         meta["length"] = length + 1
         self._save_metadata(meta)
 
+    def _v2_remove(self, value: Any) -> None:
+        """Delete the first item equal to ``value``, by RANK.
+
+        Same hazard `_v2_pop` addresses, one method over: iterating to find
+        the position and then deleting by that position resolves the rank map
+        twice, so a concurrent mutation in between makes remove() delete
+        whatever happens to sit at that position now rather than the item it
+        matched. Deleting the rank the match came from removes exactly the
+        item that was matched, or nothing.
+        """
+        pairs = self._v2_load_full()
+        for i, (rank, raw_value) in enumerate(pairs):
+            if self._decode_item(raw_value) != value:
+                continue
+            del_db = get_property(self.config)
+            if not del_db.set(
+                actor_id=self.actor_id, name=self._v2_item_name(rank), value=None
+            ):
+                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
+            # _v2_load_full() just set the cache to exactly these ranks in
+            # this order, so dropping entry i keeps it consistent.
+            ranks = self._v2_rank_cache
+            if ranks is not None and i < len(ranks) and ranks[i] == rank:
+                del ranks[i]
+            else:  # pragma: no cover -- defensive
+                self._v2_rank_cache = None
+            self._v2_touch_metadata()
+            return
+        raise ValueError(f"{value} not in list")
+
     def remove(self, value: Any) -> None:
         """Remove first occurrence of value."""
+        self._maybe_lazy_migrate()
+        if self._is_v2():
+            self._v2_remove(value)
+            return
+
         for i, item in enumerate(self):
             if item == value:
                 del self[i]

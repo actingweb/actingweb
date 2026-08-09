@@ -758,3 +758,24 @@ a staged commit; all three are costed in
 
 Every fix in this round was confirmed to fail against the pre-fix code before
 being kept.
+
+### `remove()` had the same bug as `pop()`, found by applying the review's reasoning rather than by review
+
+Neither reviewer flagged it. `remove()` iterated to find a matching item —
+one range query under v2 — and then deleted by that *position*, so the rank
+map was resolved twice and a concurrent mutation in between made it delete
+whatever occupied that position afterwards rather than the item it matched.
+Identical shape to the `pop()` defect Codex found, one method over.
+
+Fixed by deleting the rank the match came from: `_v2_remove()` removes exactly
+the matched item, or nothing. Confirmed to fail against the pre-fix code.
+
+The generalisable point, since this is now the third instance: **any v2
+operation that resolves a position and then acts on it must carry the rank
+between the two steps, not the index.** `pop`, `remove` and the bulk-POST
+delete pass all have that shape; `index`/`count` are read-only and serve from
+a single snapshot; `append`/`insert` never resolve an existing position. The
+bulk-POST delete pass is left as-is deliberately — interpreting a batch's
+indices against the pre-batch list is its documented contract, and its
+exposure is the ordinary positional-API race across requests rather than a
+self-inconsistency inside one call.

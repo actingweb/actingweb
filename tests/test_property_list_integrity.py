@@ -904,3 +904,40 @@ class TestV2StaleRankCacheOnPositionalRead:
 
         assert stale.index("a") == 1
         assert stale.index("x") == 0
+
+    def test_remove_deletes_the_item_it_matched(self, monkeypatch, fake_store):
+        """remove() found a position by iterating a snapshot, then deleted by
+        that position after a refresh -- so a concurrent mutation in between
+        made it delete whatever sat there now. Same shape as the pop() bug,
+        one method over; found by applying the same reasoning rather than by
+        review."""
+        actor_id = "actor-stale-read-remove"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        stale.extend(["a", "b", "c"])
+        assert stale.to_list() == ["a", "b", "c"]
+
+        other = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        # Interleave a front-insert between remove()'s scan and its delete.
+        original_load = ListProperty._v2_load_full
+        fired = []
+
+        def _insert_after_scan(self):
+            pairs = original_load(self)
+            if not fired:
+                fired.append(True)
+                other.insert(0, "x")
+            return pairs
+
+        monkeypatch.setattr(ListProperty, "_v2_load_full", _insert_after_scan)
+        stale.remove("b")
+        monkeypatch.setattr(ListProperty, "_v2_load_full", original_load)
+
+        # "b" is gone and nothing else is: deleting by rank removes exactly
+        # the matched item regardless of how positions shifted.
+        assert ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list() == ["x", "a", "c"]

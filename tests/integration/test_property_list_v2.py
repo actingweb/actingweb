@@ -141,6 +141,17 @@ class TestV2BehavioralParity:
         assert report["healthy"] is True
         assert report["adjacent_duplicates"] == []
 
+    def test_get_metadata_length_is_counted_not_zero(self, test_actor):
+        lst = test_actor.property_lists.metadata_length_list
+        for item in ["a", "b", "c"]:
+            lst.append(item)
+
+        # NotifyingListProperty doesn't passthrough get_metadata() (a
+        # pre-existing gap, unrelated to the v2 storage format) --
+        # exercise ListProperty.get_metadata() directly, same access
+        # pattern as test_property_list_repair.py.
+        assert lst._list_prop.get_metadata()["length"] == 3
+
 
 class TestV2NameValidationLibrary:
     def test_hash_in_new_list_name_raises(self, test_actor):

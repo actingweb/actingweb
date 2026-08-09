@@ -386,6 +386,15 @@ class NotifyingListProperty:
         self._register_diff("metadata")
         return report
 
+    def migrate_to_v2(self) -> dict[str, Any]:
+        """Migrate this list from v1 to v2 storage -- see
+        ListProperty.migrate_to_v2(). Registers a "metadata" diff (same
+        rationale as compact()) only when a migration actually happened."""
+        report = self._list_prop.migrate_to_v2()
+        if report.get("migrated"):
+            self._register_diff("metadata")
+        return report
+
 
 class PropertyListStore:
     """Property list store wrapper that adds register_diffs for subscription notifications.

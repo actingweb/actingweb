@@ -780,7 +780,80 @@ single conditional writes; order is derived from key sort; length is counted.
 - [ ] Release checklist from CLAUDE.md (version files match, CI green on both
       backends, tag from master merge commit)
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress
+
+**Deviations / notes (sub-step 1 of 3 — `migrate_to_v2()` + lazy trigger + bulk script):**
+
+- **Idempotency fix beyond what the plan specified**, flagged by advisor
+  review before implementation started: the plan's step 3 ("generate N
+  evenly distributed ranks deterministically from the v1 positions") is
+  only deterministic for a FIXED `n`. If migration is interrupted after
+  step 4 (v2 rows written, meta not yet flipped — v1 stays authoritative)
+  and the v1 list is then mutated through the still-authoritative v1 path
+  before a second attempt, `n` changes, and re-running with the plan's
+  literal design would generate a different, non-overlapping rank set,
+  leaving the first attempt's v2 rows as permanent orphans no cleanup step
+  would ever find. Fixed by adding an explicit step: every
+  `migrate_to_v2()` attempt clears any v2-range rows already present
+  before generating and writing fresh ones, so every attempt starts from
+  a clean slate regardless of what happened (or changed) between
+  attempts. Pinned by
+  `test_rerun_after_v1_mutation_between_attempts_is_convergent` in
+  `tests/integration/test_property_list_migration.py` — the specific
+  scenario advisor described (interrupted migration + a v1 mutation in
+  between + re-run), not just the simpler "kill and re-run with no
+  changes" case the plan's own "New Tests" section asked for (also
+  covered, as `test_rerun_after_step4_crash_is_convergent`).
+- **Lazy-trigger failure semantics, decided explicitly per advisor's
+  callout:** a failed lazy migration is logged and swallowed — the
+  original v1 mutation (append/insert/setitem/delitem) always proceeds on
+  the v1 path regardless of whether migration succeeded, since migration
+  is a background upgrade, never a functional requirement for an ordinary
+  write to succeed. Pinned by
+  `test_failed_lazy_migration_does_not_fail_the_mutation` (monkeypatches
+  `migrate_to_v2` to raise, asserts the mutation still lands).
+- **Lazy trigger wired into exactly four methods** — `append`, `insert`,
+  `__setitem__`, `__delitem__` — not `clear()`/`delete()` (migrating a
+  list immediately before emptying or deleting it is pure waste) and not
+  `set_description()`/`set_explanation()` (metadata-only writes, not
+  "list mutation" in the sense the plan's lazy-trigger language was
+  clearly aimed at). `extend`/`pop`/`remove` need no separate wiring —
+  they delegate to `append`/`__delitem__` already.
+- **Real bug found while adding a test, not by design review:**
+  `ListProperty.get_metadata()` read `meta.get("length", 0)` directly
+  from the raw metadata dict — correct for v1, but v2 metadata never
+  stores a `length` field (Phase 4's deliberate design), so this silently
+  returned 0 for every non-empty v2 list. Missed in Phase 4 because
+  nothing in that phase's test suite called `get_metadata()` specifically
+  (`verify()`'s `length` field, which IS correct, was tested instead, and
+  the two are easy to conflate). Fixed: `get_metadata()` now dispatches to
+  `len(self)` for v2. Also surfaced along the way:
+  `NotifyingListProperty` never had a `get_metadata()` passthrough at all
+  (pre-existing, unrelated to storage format) — left as-is, out of scope
+  for this plan; the new test exercises `ListProperty.get_metadata()`
+  directly via `._list_prop`, matching the existing precedent in
+  `test_property_list_repair.py`.
+- **`scripts/migrate_property_lists.py` follows `verify_property_lists.py`'s
+  per-actor model, not `backfill_property_lookup.py`'s DynamoDB
+  parallel-scan-segments model** the plan referenced — segmented `Scan` is
+  a DynamoDB-only API with no PostgreSQL equivalent, and this script must
+  behave identically on both backends. Reuses the same `RateLimiter`/
+  `Checkpoint` shapes as `verify_property_lists.py` for consistency.
+  `--downgrade ACTOR_ID/list_name` is implemented as a script-local
+  function (not a `ListProperty` method) deliberately, to avoid presenting
+  it as a supported, casually-callable library API — it's documented as
+  emergency-only, single-invocation, unlocked (no protection against
+  concurrent writes).
+- New tests: `tests/integration/test_property_list_migration.py` (17
+  tests — direct `migrate_to_v2()` behavior, both idempotency scenarios,
+  all four lazy-trigger call sites, the 50/51-item lazy-migration
+  boundary, read-paths-never-migrate, failed-migration-doesn't-fail-the-
+  mutation); `tests/integration/test_migrate_property_lists_script.py` (6
+  tests — dry-run, `--migrate`, `#`-name refusal, already-v2 skip,
+  downgrade, downgrade-of-a-v1-list-is-a-noop).
+- Verified: `ruff`/`ruff format`/`pyright` clean; full `pytest tests/ -m
+  "not slow"` on DynamoDB (2699 passed); `tests/integration/` on
+  PostgreSQL (810 passed) — same CLAUDE.md-documented scope as Phase 4.
 
 ---
 

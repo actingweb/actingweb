@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 _V2_RANK_MARKER = "#"
 _V2_RANK_MAX_LEN = 180
 _V2_MAX_RANK_RETRIES = 8
+_V2_LAZY_MIGRATION_MAX_LENGTH = 50
 
 
 class ListCorruptionError(IndexError):
@@ -412,13 +413,17 @@ class ListProperty:
         Use set_description() and set_explanation() to update user-facing fields.
         """
         meta = self._load_metadata()
+        # v2 has no stored length -- meta.get("length", 0) would silently
+        # report 0 for every non-empty v2 list. len(self) counts it (and
+        # is cheap after the first call, via the cached rank-key range).
+        length = len(self) if self._is_v2() else meta.get("length", 0)
         return {
             "created_at": meta.get("created_at", ""),
             "updated_at": meta.get("updated_at", ""),
             "version": meta.get("version", ""),
             "item_type": meta.get("item_type", ""),
             "chunk_size": meta.get("chunk_size", 1),
-            "length": meta.get("length", 0),
+            "length": length,
         }
 
     def __len__(self) -> int:
@@ -537,6 +542,7 @@ class ListProperty:
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Set item at index."""
+        self._maybe_lazy_migrate()
         if self._is_v2():
             self._v2_setitem(index, value)
             return
@@ -595,6 +601,7 @@ class ListProperty:
 
     def __delitem__(self, index: int) -> None:
         """Delete item at index and shift remaining items."""
+        self._maybe_lazy_migrate()
         if self._is_v2():
             self._v2_delitem(index)
             return
@@ -697,6 +704,7 @@ class ListProperty:
         if not self._db:
             raise RuntimeError("No database connection available")
 
+        self._maybe_lazy_migrate()
         if self._is_v2():
             self._v2_append(item)
             return
@@ -944,6 +952,7 @@ class ListProperty:
         if not self._db:
             raise RuntimeError("No database connection available")
 
+        self._maybe_lazy_migrate()
         if self._is_v2():
             self._v2_insert(index, item)
             return
@@ -1277,3 +1286,164 @@ class ListProperty:
         self._save_metadata(meta)
 
         return report
+
+    def migrate_to_v2(self) -> dict[str, Any]:
+        """Migrate this list from v1 (dense integers) to v2 (fractional
+        rank keys) storage, in place.
+
+        Idempotent and safe to re-run after a crash at any point, and safe
+        to re-run even if the v1 list was mutated between attempts:
+
+        1. Refuse (log an operator-actionable error, list keeps serving
+           v1) if the name contains ``#``, or if metadata is unparsable
+           (``verify()`` -> ``_load_metadata()`` raises ``ValueError``,
+           which propagates -- Phase 2's existing fail-fast behavior).
+        2. ``verify()`` the v1 list. Holes are closed in-flight (only
+           surviving rows migrate, in their existing order); duplicate
+           residue migrates as both copies, as-is, and is reported.
+        3. Clear any v2-range rows a PREVIOUS interrupted attempt left
+           behind. This is what makes re-running safe even if the v1 list
+           changed length in between: each attempt starts from a clean
+           slate and regenerates a fresh, complete rank set from
+           whatever the v1 list looks like right now, rather than trying
+           to reconcile with a previous attempt's possibly-different rank
+           count.
+        4. Generate ``len(items)`` evenly distributed v2 ranks and write
+           them (plain puts -- convergent on re-run because step 3 always
+           clears first).
+        5. Flip metadata to format 2 (drop ``length``) via a freshly read
+           meta dict, so ``description``/``explanation``/``created_at``
+           survive untouched.
+        6. Delete the v1 item rows (idempotent -- a re-run just finds them
+           already gone).
+
+        A crash before step 5 leaves v1 fully authoritative: v1 reads and
+        writes are completely unaffected (the half-written v2 rows are
+        inert scratch space nothing reads), and the next attempt's step 3
+        cleans them up before writing fresh ones. A crash after step 5
+        leaves v2 authoritative with harmless leftover v1 rows -- v2
+        readers already ignore v1-shaped rows, and step 6 is itself
+        idempotent, so a re-run (or the bulk migration script) finishes
+        the cleanup safely.
+
+        Returns:
+            Dict with ``migrated`` (bool) and either ``reason`` (str, only
+            when not migrated) or ``item_count``/``had_holes``/
+            ``duplicate_count`` (when migrated).
+        """
+        if _V2_RANK_MARKER in self.name:
+            logger.error(
+                f"List '{self.name}' cannot be migrated to v2: name "
+                f"contains '{_V2_RANK_MARKER}', which is reserved for "
+                f"internal storage keys -- rename the list before "
+                f"migrating; it keeps working as v1 in the meantime"
+            )
+            return {"migrated": False, "reason": "name_contains_hash"}
+
+        if self._is_v2():
+            return {"migrated": False, "reason": "already_v2"}
+
+        report = self.verify()
+
+        if not self._db:
+            raise RuntimeError("No database connection available")
+
+        stored_length = report["stored_length"]
+
+        db_list = get_property_list(self.config)
+        rows = db_list.fetch_all_including_lists(actor_id=self.actor_id) or {}
+
+        ordered_values: list[str] = [
+            rows[self._get_item_property_name(i)]
+            for i in range(stored_length)
+            if self._get_item_property_name(i) in rows
+        ]
+
+        # Step 3: clear any v2 scratch rows a previous interrupted attempt
+        # left -- guarantees convergence regardless of what happened (or
+        # changed) between attempts.
+        lower, upper = self._v2_bounds()
+        range_db = get_property(self.config)
+        leftover = range_db.get_range(
+            actor_id=self.actor_id, lower=lower, upper=upper, keys_only=True
+        )
+        for leftover_name in leftover:
+            del_db = get_property(self.config)
+            if not del_db.set(actor_id=self.actor_id, name=leftover_name, value=None):
+                raise RuntimeError(
+                    f"list item write failed for '{self.name}' during "
+                    f"migrate_to_v2() cleanup"
+                )
+
+        # Step 4: write the fresh v2 rows.
+        ranks = fi.generate_n_keys_between(None, None, len(ordered_values))
+        for rank, raw_value in zip(ranks, ordered_values, strict=True):
+            item_db = get_property(self.config)
+            if not item_db.set(
+                actor_id=self.actor_id,
+                name=self._v2_item_name(rank),
+                value=raw_value,
+            ):
+                raise RuntimeError(
+                    f"list item write failed for '{self.name}' during migrate_to_v2()"
+                )
+
+        # Step 5: flip metadata (fresh read -- preserves description/
+        # explanation/created_at untouched).
+        meta_db = get_property(self.config)
+        meta_str = meta_db.get(
+            actor_id=self.actor_id, name=self._get_meta_property_name()
+        )
+        meta = json.loads(meta_str) if meta_str else self._create_default_metadata_v2()
+        meta.pop("length", None)
+        meta["format"] = 2
+        self._save_metadata(meta)
+        self._v2_rank_cache = list(ranks)
+
+        # Step 6: delete the v1 item rows (holes + orphans included).
+        highest_seen = max([stored_length - 1, *report["orphan_indices"]], default=-1)
+        for i in range(highest_seen + 1):
+            del_db = get_property(self.config)
+            if not del_db.set(
+                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
+            ):
+                raise RuntimeError(
+                    f"list item write failed for '{self.name}' during "
+                    f"migrate_to_v2() v1 cleanup"
+                )
+
+        return {
+            "migrated": True,
+            "item_count": len(ordered_values),
+            "had_holes": bool(report["missing_indices"]),
+            "duplicate_count": len(report["adjacent_duplicates"]),
+        }
+
+    def _maybe_lazy_migrate(self) -> None:
+        """Opportunistically migrate a small v1 list to v2 at the top of a
+        mutation method.
+
+        Best-effort: a failure here is logged and swallowed -- the
+        original v1 mutation proceeds unaffected, because migration is a
+        background upgrade, not a functional requirement for
+        append()/insert()/etc to succeed. Only ever called from mutation
+        methods, never from read paths (reads run under read-only
+        permission -- handlers/properties.py, www.py).
+
+        Larger v1 lists (``length > 50``) are left alone; they stay fully
+        functional via the hardened v1 paths until
+        ``scripts/migrate_property_lists.py`` runs.
+        """
+        if self._is_v2():
+            return
+        meta = self._load_metadata()
+        length = int(meta.get("length", 0) or 0)
+        if length > _V2_LAZY_MIGRATION_MAX_LENGTH:
+            return
+        try:
+            self.migrate_to_v2()
+        except Exception as e:
+            logger.warning(
+                f"Lazy migration to v2 failed for list '{self.name}': {e} "
+                f"-- continuing as v1"
+            )

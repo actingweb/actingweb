@@ -14,6 +14,10 @@ class TestListPropertyMetadataAccess:
         mock_db = Mock()
         mock_config.DbProperty.DbProperty.return_value = mock_db
         mock_db.get.return_value = None  # No existing metadata
+        # New lists default to v2 (Phase 4): get_metadata()'s "length"
+        # counts the (empty) rank-key range rather than reading a stored
+        # field.
+        mock_db.get_range.return_value = {}
 
         prop_list = ListProperty(
             actor_id="test_actor", name="test_list", config=mock_config
@@ -43,6 +47,7 @@ class TestListPropertyMetadataAccess:
         mock_db = Mock()
         mock_config.DbProperty.DbProperty.return_value = mock_db
         mock_db.get.return_value = None
+        mock_db.get_range.return_value = {}
 
         prop_list = ListProperty(
             actor_id="test_actor", name="test_list", config=mock_config
@@ -60,6 +65,7 @@ class TestListPropertyMetadataAccess:
         mock_db = Mock()
         mock_config.DbProperty.DbProperty.return_value = mock_db
         mock_db.get.return_value = None
+        mock_db.get_range.return_value = {}
 
         prop_list = ListProperty(
             actor_id="test_actor", name="test_list", config=mock_config

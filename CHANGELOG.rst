@@ -26,16 +26,28 @@ CHANGED
   iteration remain a single query regardless of list size. Existing lists
   are untouched and keep working exactly as before (the v1 format,
   including everything Phases 1-3 hardened, is fully supported
-  indefinitely); migrating them to v2 is Phase 5. New list names may no
-  longer contain ``#`` (reserved for internal storage keys) --
-  ``ListProperty`` raises ``ValueError`` immediately on first use of such a
-  name; existing v1 lists already named this way are unaffected.
-  ``list:``-prefixed property names are now also structurally excluded
-  from the property-lookup table sync, regardless of configuration.
+  indefinitely) until migrated. New list names may no longer contain
+  ``#`` (reserved for internal storage keys) -- ``ListProperty`` raises
+  ``ValueError`` immediately on first use of such a name; existing v1
+  lists already named this way are unaffected. ``list:``-prefixed
+  property names are now also structurally excluded from the
+  property-lookup table sync, regardless of configuration.
   ``scripts/verify_property_lists.py`` now understands both formats --
   v2's "unhealthy" signal is rank keys approaching the length cap
   (``compact()`` rebalances them), not holes/orphans, which are
   structurally impossible under v2.
+- **Existing v1 lists migrate to v2 automatically and gradually.** Small
+  lists (<= 50 items) migrate lazily the next time they're mutated
+  (``append``/``insert``/item ``__setitem__``/``__delitem__``); a failed
+  lazy migration is logged and the original mutation still succeeds as
+  v1 -- migration is a background upgrade, never a reason an ordinary
+  write can fail. Larger lists stay fully functional as v1 until swept by
+  the new ``scripts/migrate_property_lists.py`` (dry-run by default;
+  ``--migrate`` to perform it; reports refused names and duplicate
+  residue; ``--downgrade ACTOR_ID/list_name`` is an emergency-only v2->v1
+  converter for rollback scenarios). ``ListProperty.migrate_to_v2()`` is
+  idempotent and safe to interrupt and re-run at any point, including
+  across concurrent v1 mutations between attempts.
 - **Breaking: list-property reads now fail fast on corruption instead of
   silently compacting past it.** ``ListProperty.to_list()``, ``.slice()``
   and ``.to_list_from_rows()`` raise ``ListCorruptionError`` (an

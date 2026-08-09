@@ -941,3 +941,179 @@ class TestV2StaleRankCacheOnPositionalRead:
         assert ListProperty(
             actor_id=actor_id, name=name, config=object()
         ).to_list() == ["x", "a", "c"]
+
+
+class TestLazyMigrationRefusesDamagedLists:
+    """Lazy migration must never silently repair a damaged list.
+
+    migrate_to_v2() closes holes in flight and REPORTS what it closed --
+    right for an operator running the script and reading the output. Doing
+    it under an ordinary append() destroys the evidence instead: the hole
+    disappears, the lost item stays lost, duplicate residue is promoted to
+    real data, verify() starts saying healthy, and the report naming any of
+    it is thrown away by _maybe_lazy_migrate(). Raised by a downstream
+    consumer (actingweb_mcp) against 4a7d8b2 with a production-shaped
+    fixture.
+    """
+
+    def test_damaged_v1_list_stays_v1_on_append(self, monkeypatch, fake_store):
+        actor_id = "actor-damaged-lazy"
+        name = "damaged"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        # Punch a hole: metadata still claims 3 items, row 1 is gone.
+        del fake_store[(actor_id, f"list:{name}-1")]
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        prop_list.append("d")
+
+        # Still v1, still damaged, still reporting it.
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        report = fresh.verify()
+        assert report.get("format") != 2
+        assert report["missing_indices"] == [1]
+        assert report["healthy"] is False
+        # And the corruption is still surfaced to readers.
+        with pytest.raises(ListCorruptionError):
+            fresh.to_list()
+
+    def test_healthy_v1_list_still_migrates_on_append(self, monkeypatch, fake_store):
+        actor_id = "actor-healthy-lazy"
+        name = "healthy"
+        _seed_list(fake_store, actor_id, name, ["a", "b"])
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).append("c")
+
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.verify()["format"] == 2
+        assert fresh.to_list() == ["a", "b", "c"]
+
+
+class TestLazyMigrationThresholdIsConfigurable:
+    """Migration is inline and synchronous, so an operator must be able to
+    keep it out of user requests entirely and sweep with the script."""
+
+    def test_zero_disables_lazy_migration(self, monkeypatch, fake_store):
+        actor_id = "actor-lazy-off"
+        name = "small"
+        _seed_list(fake_store, actor_id, name, ["a"])
+
+        monkeypatch.setenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", "0")
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).append("b")
+
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.verify().get("format") != 2
+        assert fresh.to_list() == ["a", "b"]
+
+    def test_raised_limit_migrates_a_bigger_list(self, monkeypatch, fake_store):
+        actor_id = "actor-lazy-big"
+        name = "big"
+        _seed_list(fake_store, actor_id, name, [f"i{n}" for n in range(60)])
+
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        # Default limit is 50 -- a 60-item list is left alone.
+        ListProperty(actor_id=actor_id, name=name, config=object()).append("x")
+        assert (
+            ListProperty(actor_id=actor_id, name=name, config=object())
+            .verify()
+            .get("format")
+            != 2
+        )
+
+        monkeypatch.setenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", "100")
+        ListProperty(actor_id=actor_id, name=name, config=object()).append("y")
+        assert (
+            ListProperty(actor_id=actor_id, name=name, config=object()).verify()[
+                "format"
+            ]
+            == 2
+        )
+
+
+class TestIndexNegativeBounds:
+    """index()'s start/stop follow list.index semantics, identically before
+    and after migration -- a list must answer the same question in both
+    formats."""
+
+    @staticmethod
+    def _cases(prop_list):
+        return [
+            (("a",), 0),
+            (("a", 1), 2),
+            (("a", -1), 2),
+            (("a", -2), 2),
+            (("b", 0, -1), 1),
+        ]
+
+    def test_v2_matches_python_list(self, monkeypatch, fake_store):
+        actor_id = "actor-index-v2"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name="idx", config=object())
+        prop_list.extend(["a", "b", "a"])
+        reference = ["a", "b", "a"]
+
+        for args, expected in self._cases(prop_list):
+            assert prop_list.index(*args) == expected == reference.index(*args)
+
+    def test_v1_matches_python_list(self, monkeypatch, fake_store):
+        actor_id = "actor-index-v1"
+        _seed_list(fake_store, actor_id, "idx", ["a", "b", "a"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name="idx", config=object())
+        reference = ["a", "b", "a"]
+
+        for args, expected in self._cases(prop_list):
+            assert prop_list.index(*args) == expected == reference.index(*args)
+
+
+class TestV2PopEmptyCheckUsesFreshState:
+    def test_pop_sees_an_append_made_after_the_cache_went_empty(
+        self, monkeypatch, fake_store
+    ):
+        """`len(self)` is served from the rank cache, so an instance that has
+        seen the list empty would raise "pop from empty list" against a list
+        another writer has since appended to."""
+        actor_id = "actor-pop-empty"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        stale.append("only")
+        stale.pop()
+        assert stale.to_list() == []  # cache now empty
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).append("new")
+
+        assert stale.pop() == "new"
+
+    def test_pop_on_a_genuinely_empty_v2_list_raises(self, monkeypatch, fake_store):
+        actor_id = "actor-pop-really-empty"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        prop_list = ListProperty(actor_id=actor_id, name="empty", config=object())
+        prop_list.append("x")
+        prop_list.pop()
+
+        with pytest.raises(IndexError, match="pop from empty list"):
+            prop_list.pop()

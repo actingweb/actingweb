@@ -7,6 +7,7 @@ properties in DynamoDB, bypassing the 400KB limit while maintaining API compatib
 
 import json
 import logging
+import os
 import re
 from collections.abc import Iterator
 from datetime import datetime
@@ -46,6 +47,34 @@ _V2_RANK_MAX_LEN = 180
 _V2_MAX_RANK_RETRIES = 8
 _V2_LAZY_MIGRATION_MAX_LENGTH = 50
 _V2_RANK_ALPHABET = frozenset(fi.BASE_62_DIGITS)
+
+
+def _lazy_migration_max_length() -> int:
+    """Largest v1 list that may migrate inline, during a user's write.
+
+    Defaults to ``_V2_LAZY_MIGRATION_MAX_LENGTH``; override with the
+    ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH`` environment variable. **Set it
+    to 0 to disable lazy migration entirely** and migrate only through
+    ``scripts/migrate_property_lists.py``.
+
+    That escape hatch exists because migration is inline and synchronous:
+    an ``append()`` to a 40-item v1 list does the whole migration inside
+    that request (dozens of sequential writes plus two full-partition
+    reads) before the append itself runs. On a latency-sensitive or
+    serverless deployment that belongs on a rate-limited sweep, not in user
+    traffic.
+    """
+    raw = os.environ.get("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH")
+    if raw is None:
+        return _V2_LAZY_MIGRATION_MAX_LENGTH
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH={raw!r} -- "
+            f"using the default {_V2_LAZY_MIGRATION_MAX_LENGTH}"
+        )
+        return _V2_LAZY_MIGRATION_MAX_LENGTH
 
 
 def _v2_is_rank(candidate: str) -> bool:
@@ -970,6 +999,8 @@ class ListProperty:
         """
         ranks = self._v2_ensure_rank_cache(force=True)
         length = len(ranks)
+        if length == 0:
+            raise IndexError("pop from empty list")
         orig_index = index
         if index < 0:
             index = length + index
@@ -995,6 +1026,14 @@ class ListProperty:
 
     def pop(self, index: int = -1) -> Any:
         """Remove and return item at index (default last)."""
+        # v2 dispatch comes FIRST: `len(self)` is served from the rank cache,
+        # which an instance that has seen an empty list keeps until something
+        # forces a reload. Checking it here would raise "pop from empty list"
+        # against a list another writer has since appended to. _v2_pop()
+        # forces the refresh and makes its own empty check against that.
+        if self._is_v2():
+            return self._v2_pop(index)
+
         if len(self) == 0:
             raise IndexError("pop from empty list")
 
@@ -1137,7 +1176,11 @@ class ListProperty:
 
     def remove(self, value: Any) -> None:
         """Remove first occurrence of value."""
-        self._maybe_lazy_migrate()
+        # No _maybe_lazy_migrate() here, for the same reason pop() omits it:
+        # migration closes holes in flight, so triggering it before the v1
+        # scan would make a corrupted list silently self-repair instead of
+        # raising. The v1 scan below reaches __delitem__, which migrates
+        # exactly as it always has.
         if self._is_v2():
             self._v2_remove(value)
             return
@@ -1148,26 +1191,51 @@ class ListProperty:
                 return
         raise ValueError(f"{value} not in list")
 
+    @staticmethod
+    def _normalize_search_bounds(
+        start: int, stop: int | None, length: int
+    ) -> tuple[int, int]:
+        """Python-slice normalization for index()'s start/stop.
+
+        Shared by both storage formats so they cannot drift: a list's
+        ``index()`` must answer the same question before and after
+        migration. Negative values count from the end and everything is
+        clamped into ``[0, length]``, matching ``list.index``.
+        """
+        if start < 0:
+            start = max(0, length + start)
+        else:
+            start = min(start, length)
+        if stop is None:
+            stop = length
+        elif stop < 0:
+            stop = max(0, length + stop)
+        else:
+            stop = min(stop, length)
+        return start, stop
+
     def index(self, value: Any, start: int = 0, stop: int | None = None) -> int:
-        """Return index of first occurrence of value."""
+        """Return index of first occurrence of value.
+
+        ``start``/``stop`` follow ``list.index`` semantics, including
+        negative values counting from the end.
+        """
         if self._is_v2():
             # One range query for the whole list, then scan in memory. Going
             # through self[i] would cost two queries PER ITEM now that
             # positional reads refresh the rank map, and it would compare
             # against a list that can shift under the loop.
             values = self._v2_to_list()
-            if stop is None:
-                stop = len(values)
-            for i in range(max(0, start), min(stop, len(values))):
+            begin, end = self._normalize_search_bounds(start, stop, len(values))
+            for i in range(begin, end):
                 if values[i] == value:
                     return i
             raise ValueError(f"{value} is not in list")
 
         length = len(self)
-        if stop is None:
-            stop = length
+        begin, end = self._normalize_search_bounds(start, stop, length)
 
-        for i in range(start, min(stop, length)):
+        for i in range(begin, end):
             if self[i] == value:
                 return i
 
@@ -1625,17 +1693,59 @@ class ListProperty:
         methods, never from read paths (reads run under read-only
         permission -- handlers/properties.py, www.py).
 
-        Larger v1 lists (``length > 50``) are left alone; they stay fully
-        functional via the hardened v1 paths until
-        ``scripts/migrate_property_lists.py`` runs.
+        Larger v1 lists are left alone (see
+        ``_V2_LAZY_MIGRATION_MAX_LENGTH``, overridable per deployment); they
+        stay fully functional via the hardened v1 paths until
+        ``scripts/migrate_property_lists.py`` runs. Set the limit to 0 to
+        disable lazy migration entirely and migrate only via the script --
+        migration is inline and synchronous, so an operator who does not
+        want it happening inside user requests can opt out.
+
+        UNHEALTHY LISTS ARE NEVER MIGRATED HERE. ``migrate_to_v2()`` closes
+        holes in flight and reports what it closed, which is right for an
+        operator running the script and reading its output -- but doing it
+        silently under an ordinary ``append()`` destroys the evidence: the
+        hole disappears, the item that was lost stays lost, duplicate
+        residue is carried over as real data, ``verify()`` starts reporting
+        ``healthy: true``, and the report naming what happened is discarded
+        by this method's own return value. Repairing damaged data is an
+        operator decision, so a damaged list keeps serving v1 (and keeps
+        raising ``ListCorruptionError`` on the rows it has lost) until
+        somebody runs ``compact()`` or the sweep script.
+
+        NEVER call this from a method that must surface v1 corruption before
+        it mutates. Migration closes holes in flight, so an eager call turns
+        a `ListCorruptionError` (the Phase 1-3 fail-fast contract, and the
+        409 an operator sees) into a silent self-repair. ``pop()`` and
+        ``remove()`` both deliberately omit it and let their v1 path reach
+        ``__delitem__``, which triggers migration after the scan. This
+        mistake has been made twice; if you are adding a v2 dispatch to a
+        method that reads before it writes, this paragraph is why the call
+        you are about to copy from ``append()`` does not belong there.
         """
+        if _lazy_migration_max_length() <= 0:
+            return
         if self._is_v2():
             return
         meta = self._load_metadata()
         length = int(meta.get("length", 0) or 0)
-        if length > _V2_LAZY_MIGRATION_MAX_LENGTH:
+        if length > _lazy_migration_max_length():
             return
         try:
+            report = self.verify()
+            if not report.get("healthy", True):
+                logger.warning(
+                    f"List '{self.name}' (actor {self.actor_id}) is not "
+                    f"migrating to v2: it is damaged "
+                    f"(missing={report.get('missing_indices')}, "
+                    f"orphans={report.get('orphan_indices')}, "
+                    f"duplicate_pairs={len(report.get('adjacent_duplicates', []))}). "
+                    f"Migrating would close the holes and make the damage "
+                    f"unreportable. Run compact() or "
+                    f"scripts/verify_property_lists.py --repair first, then "
+                    f"scripts/migrate_property_lists.py --migrate"
+                )
+                return
             self.migrate_to_v2()
         except Exception as e:
             logger.warning(

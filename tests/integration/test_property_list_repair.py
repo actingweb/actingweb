@@ -208,6 +208,35 @@ class TestCompactRepairsHoles:
         assert result == "b"
         assert prop_list.to_list() == ["a"]
 
+    def test_remove_still_raises_on_a_holed_list_before_compact(self, test_actor):
+        """remove() must not silently migrate-and-repair a damaged list.
+
+        A small v1 list is lazy-migration eligible, and migration closes
+        holes in flight -- so an eager _maybe_lazy_migrate() at the top of
+        remove() made the corruption vanish and the call succeed, instead of
+        the v1 scan hitting the hole and raising. Same carve-out pop() has.
+        Both PR #121 reviewers flagged this independently after it was
+        introduced, having already been made and reverted once in pop().
+        """
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "repair_list_e", ["a", "b", "c"]
+        )
+        prop_list = test_actor.property_lists.repair_list_e
+
+        # Hole at index 0 -- ahead of the value being searched for.
+        _punch_hole(test_actor.config, test_actor.id, "repair_list_e", 0)
+
+        with pytest.raises(IndexError):
+            prop_list.remove("c")
+
+        # Still v1, still damaged: nothing was silently repaired.
+        assert prop_list.verify().get("format") != 2
+        assert prop_list.verify()["missing_indices"] == [0]
+
+        prop_list.compact()
+        prop_list.remove("c")
+        assert prop_list.to_list() == ["b"]
+
 
 class TestResyncSkipsCorruptedListsOnly:
     """Phase 3: a holed list must not abort a subscription full-state

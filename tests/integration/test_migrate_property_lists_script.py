@@ -162,6 +162,58 @@ class TestMigrateActor:
         assert refused == []
 
 
+class TestMainCommandLineWorkflow:
+    """Exercises script.main() itself (argparse + checkpoint lifecycle), not
+    just the per-actor units the other tests in this file call directly.
+
+    Pins the operator workflow documented in property-lists.rst: a dry-run
+    followed by --migrate must actually perform the migration, not silently
+    no-op because the dry-run itself created a checkpoint that made the
+    --migrate run skip every actor."""
+
+    def test_dry_run_does_not_poison_checkpoint_for_later_migrate_run(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "main_workflow_target", ["a", "b"]
+        )
+
+        checkpoint_file = str(tmp_path / "checkpoint.json")
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["migrate_property_lists.py", "--checkpoint-file", checkpoint_file],
+        )
+        assert script.main() == 0
+        assert not os.path.exists(checkpoint_file), (
+            "dry-run must not leave a checkpoint file behind -- a later "
+            "--migrate run would resume from it and skip every actor"
+        )
+
+        # Still v1 -- dry run wrote nothing.
+        fresh = test_actor.property_lists.main_workflow_target
+        assert fresh.verify().get("format") != 2
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "migrate_property_lists.py",
+                "--migrate",
+                "--checkpoint-file",
+                checkpoint_file,
+            ],
+        )
+        assert script.main() == 0
+
+        migrated = test_actor.property_lists.main_workflow_target
+        assert migrated.verify()["format"] == 2
+        assert migrated.to_list() == ["a", "b"]
+
+
 class TestDowngradeToV1:
     def test_downgrade_v2_list_to_v1(self, test_actor):
         import migrate_property_lists as script  # type: ignore[import-not-found]

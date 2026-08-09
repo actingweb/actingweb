@@ -232,7 +232,7 @@ def main() -> int:
         return 0
     assert isinstance(actors, list)
 
-    checkpoint = Checkpoint(args.checkpoint_file)
+    checkpoint = Checkpoint(args.checkpoint_file if args.repair else None)
     limiter = RateLimiter(args.rps)
 
     total_checked = 0

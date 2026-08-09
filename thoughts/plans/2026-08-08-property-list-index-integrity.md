@@ -770,15 +770,48 @@ single conditional writes; order is derived from key sort; length is counted.
 
 ### Verification
 
-- [ ] `make test-all-parallel` passes (full suite, per CLAUDE.md)
-- [ ] `make test-integration` sequential on DynamoDB AND PostgreSQL passes
-- [ ] `poetry run pyright actingweb tests scripts` — 0 errors; `ruff` clean
-- [ ] Docs build clean (`sphinx-build` per docs CI)
-- [ ] Manual: full upgrade rehearsal against dynamodb-local — seed v1 lists
-      (incl. one holed, one 200-item, one named `a-#x`), upgrade, run sweep +
-      migrate scripts, verify REST behaviour and reports
+- [x] `make test-all-parallel` passes (full suite, per CLAUDE.md) — 2706
+      passed, 26 skipped
+- [x] `make test-integration` sequential on DynamoDB AND PostgreSQL passes —
+      823 passed/8 skipped (DynamoDB), 813 passed/18 skipped (PostgreSQL)
+- [x] `poetry run pyright actingweb tests scripts` — 0 errors (excluding the
+      pre-existing, unrelated `scripts/migrate_db.py` dotenv import error);
+      `ruff` clean
+- [x] Docs build clean (`sphinx-build` per docs CI) — re-verified after the
+      CHANGELOG rename, not just before it
+- [x] Manual: full upgrade rehearsal against dynamodb-local — seeded v1 lists
+      (one holed, one 200-item, one named `a-#x`) on one actor, ran
+      `verify_property_lists.py` dry-run then `--repair`, then
+      `migrate_property_lists.py` dry-run then `--migrate`, confirmed the
+      hole was repaired, the hash-named list was refused and left as v1, the
+      200-item list migrated to v2 with content and `to_indexed_list()`
+      shape intact (the shape the REST `/items` handler serves)
 - [ ] Release checklist from CLAUDE.md (version files match, CI green on both
-      backends, tag from master merge commit)
+      backends, tag from master merge commit) — version files done in this
+      plan; CI-green and tagging happen after human review/merge, not part of
+      this implementation pass
+
+**Post-implementation review fix (advisor-caught, before considering this
+plan done):** both `scripts/migrate_property_lists.py` and
+`scripts/verify_property_lists.py`'s `main()` created their `Checkpoint`
+unconditionally, including on a dry-run. Since `mark_done()` writes to disk
+on every actor regardless of `--migrate`/`--repair`, a dry-run always left a
+fully-populated checkpoint file behind (the unlink-on-clean-exit guard only
+fires when the mutating flag was passed). The exact two-command workflow
+this plan's own docs section recommends — dry-run, read the report, then
+`--migrate`/`--repair` — had the second command resume from that checkpoint
+and skip every actor, silently reporting 0 changes needed. Worse for
+`verify_property_lists.py`: a dry-run that *found* corruption still wrote
+the checkpoint, so the follow-up `--repair` skipped everything and reported
+clean. Neither script's test file exercised `main()` at all — both called
+`migrate_actor()`/`sweep_actor()` directly, which don't touch the checkpoint.
+Fixed with `Checkpoint(args.checkpoint_file if args.migrate else None)` (and
+the `--repair` equivalent) — `Checkpoint` already treats `path=None` as
+in-memory-only. Pinned with a new `TestMainCommandLineWorkflow` class in each
+script's test file that calls `script.main()` itself with a patched
+`sys.argv`, confirmed to fail without the fix (reverted the fix, reran, both
+new tests failed with the exact skip-everything symptom, then restored the
+fix) before being kept as permanent regression coverage.
 
 ### Implementation Status: Complete
 
@@ -996,10 +1029,18 @@ single-query `to_list`/`__iter__`, otherwise counting a 200-item list per
 40-100× (one paginated query vs ~200 sequential consistent GetItems). (2) The
 meta row must survive v2 — `exists()` (`property.py:20-25`) and list discovery
 (`handlers/properties.py:440-443`) depend on it. Also: Python-side bytewise
-rank ordering (SQL collations disagree with DynamoDB byte order), append does
-not reintroduce a per-write meta update, lazy migration is bounded (a 202-item
-lazy migration inside a Lambda request is the original kill scenario), and
-the bulk script reuses the proven backfill machinery.
+rank ordering (SQL collations disagree with DynamoDB byte order), lazy
+migration is bounded (a 202-item lazy migration inside a Lambda request is
+the original kill scenario), and the bulk script reuses the proven backfill
+machinery.
+
+**Deviation, shipped behavior:** unlike the intent stated above, v2 mutations
+*do* write the meta row on every append/insert/setitem/delitem
+(`_v2_touch_metadata()`) — v1 got this for free via its per-mutation `length`
+write, and v2 has no `length` field, so nothing else keeps `exists()`/
+collision-detection/`list_all()` working for append-only lists. This is
+parity with v1's existing per-write cost, not a regression. See Phase 4
+sub-step 1's Implementation Status notes below.
 
 ### Usability
 
@@ -1022,12 +1063,14 @@ the script.
 
 **Completed:** 2026-08-09
 **All phases:** Complete
-**Test status:** All passing — `pytest tests/ -m "not slow"` on DynamoDB
-(2699 passed, 26 skipped); `tests/integration/` on PostgreSQL (810 passed,
-18 skipped, the CLAUDE.md-documented PostgreSQL coverage scope). `ruff`,
-`ruff format`, `pyright` clean on `actingweb/`, `tests/`, `scripts/`
-(excluding `scripts/migrate_db.py`'s pre-existing, unrelated `dotenv`
-import-resolution error). Docs build clean (`sphinx-build -W --keep-going`).
+**Test status:** All passing — `make test-all-parallel` (full suite,
+DynamoDB, per CLAUDE.md's stated final-validation command): 2706 passed, 26
+skipped. `tests/integration/` sequential on both backends (also required by
+this phase's own checklist): 823 passed/8 skipped on DynamoDB, 813 passed/18
+skipped on PostgreSQL. `ruff`, `ruff format`, `pyright` clean on
+`actingweb/`, `tests/`, `scripts/` (excluding `scripts/migrate_db.py`'s
+pre-existing, unrelated `dotenv` import-resolution error). Docs build clean
+(`sphinx-build -W --keep-going`), re-verified after the CHANGELOG rename.
 
 ### Deviations from Plan
 
@@ -1071,6 +1114,17 @@ import-resolution error). Docs build clean (`sphinx-build -W --keep-going`).
   bullet — confirmed against `docs/protocol/actingweb-spec.rst` directly;
   documented as a plan-text correction at the time (see Phase 3 notes
   above), not a deviation from actual spec-compliance intent.
+- Post-implementation advisor review (run before accepting the plan as
+  done, after all 5 phases' own sub-step reviews had already passed)
+  caught a real bug neither the plan's checklist nor any existing test
+  exercised: both bulk scripts' `main()` unconditionally created their
+  `Checkpoint` with the real file path, so a dry-run wrote a checkpoint
+  that a subsequent `--migrate`/`--repair` run would resume from and skip
+  every actor. See the Phase 5 Verification section above for the fix and
+  the new regression tests. Not a deviation from the plan's design (the
+  plan never specified `main()`'s checkpoint-vs-dry-run interaction at
+  all) but real, shipped-then-caught scope this summary would be
+  incomplete without recording.
 
 ### Learnings
 
@@ -1104,3 +1158,14 @@ import-resolution error). Docs build clean (`sphinx-build -W --keep-going`).
   category that's easy to under-specify in a written plan and easy to
   miss without deliberately asking "what happens if this crashes here,
   or if two of these run concurrently?"
+- **A script's per-actor units being tested is not the same as the
+  script being tested.** Both `migrate_property_lists.py` and
+  `verify_property_lists.py` had smoke tests calling `migrate_actor()`/
+  `sweep_actor()` directly, and both looked well-covered by that
+  metric — but neither test file ever invoked `main()`, so the argparse
+  wiring, the actor-sweep loop, and specifically the checkpoint's
+  interaction with the dry-run flag had zero coverage. The bug was only
+  found by a review pass that read `main()` end to end rather than
+  trusting the test file's docstring claim of coverage. Worth a standing
+  check for any script with a `main()`: does at least one test actually
+  call it, not just its internal units?

@@ -248,3 +248,56 @@ class TestSweepActor:
         cp2 = script.Checkpoint(path)
         assert cp2.is_done("actor-1")
         assert not cp2.is_done("actor-2")
+
+
+class TestMainCommandLineWorkflow:
+    """Exercises script.main() itself (argparse + checkpoint lifecycle), not
+    just sweep_actor(). A dry-run that finds corruption must not leave a
+    checkpoint behind -- a later --repair run resuming from it would skip
+    every actor and report false-clean."""
+
+    def test_dry_run_does_not_poison_checkpoint_for_later_repair_run(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "main_workflow_holed", ["a", "b", "c"]
+        )
+        db = get_property(test_actor.config)
+        assert db.set(
+            actor_id=test_actor.id, name="list:main_workflow_holed-1", value=None
+        )
+
+        checkpoint_file = str(tmp_path / "checkpoint.json")
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["verify_property_lists.py", "--checkpoint-file", checkpoint_file],
+        )
+        assert script.main() == 1
+        assert not os.path.exists(checkpoint_file), (
+            "a dry-run that found corruption must not leave a checkpoint "
+            "behind -- a later --repair run would resume from it and skip "
+            "every actor, reporting false-clean"
+        )
+
+        prop_list = test_actor.property_lists.main_workflow_holed
+        assert prop_list.verify()["healthy"] is False
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "verify_property_lists.py",
+                "--repair",
+                "--checkpoint-file",
+                checkpoint_file,
+            ],
+        )
+        assert script.main() == 0
+
+        fresh = test_actor.property_lists.main_workflow_holed
+        assert fresh.verify()["healthy"] is True
+        assert fresh.to_list() == ["a", "c"]

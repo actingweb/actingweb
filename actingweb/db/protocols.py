@@ -126,7 +126,11 @@ class DbPropertyProtocol(Protocol):
             name: The property name
 
         Returns:
-            Property value as string, or None if not found
+            Property value as string, or ``None`` if the row does not exist.
+            ``None`` means absence ONLY — a backend fault (throttle, timeout,
+            connection error) raises ``DbError``
+            (``actingweb.db.exceptions.DbError``), it is never reported as
+            absence.
         """
         ...
 
@@ -157,7 +161,15 @@ class DbPropertyProtocol(Protocol):
             value: Property value (None or empty string deletes)
 
         Returns:
-            True on success, False on failure
+            True on success, False only on failure — callers MUST check the
+            return value; a write is not confirmed until this is True.
+
+        Note:
+            A ``handle`` cached by a prior ``get()``/``set()`` call for a
+            different ``(actor_id, name)`` MUST NOT be reused — implementations
+            discard a stale handle and take the fresh-fetch/create path
+            whenever the arguments disagree with what the handle was built
+            for.
         """
         ...
 
@@ -167,6 +179,120 @@ class DbPropertyProtocol(Protocol):
 
         Returns:
             True on success, False on failure
+        """
+        ...
+
+    def get_range(
+        self,
+        actor_id: str | None = None,
+        lower: str | None = None,
+        upper: str | None = None,
+        keys_only: bool = False,
+    ) -> dict[str, str]:
+        """
+        Range-read property rows whose name falls in ``[lower, upper]``
+        (bytewise comparison, INCLUSIVE on both ends).
+
+        Used by v2 list-property storage to read a list's item rows in one
+        query instead of one per item. ``upper`` is inclusive because
+        DynamoDB's KeyConditionExpression rejects two separate comparisons
+        on the same key (no ``>=`` AND ``<``) — callers MUST choose
+        ``upper`` as a sentinel value that can never equal a real row name
+        (e.g. a delimiter character no real key contains), so the
+        inclusive boundary is unobservable in practice.
+
+        Ordering is NOT guaranteed by this method — backends may return
+        results in different orders (DynamoDB's natural range-key sort vs.
+        an unordered scan), so a caller that needs a specific order MUST
+        sort the returned dict's items itself. This is deliberate: it keeps
+        ordering behavior identical across backends instead of depending on
+        a per-backend implementation detail.
+
+        Args:
+            actor_id: The actor ID
+            lower: Inclusive lower bound on name
+            upper: Inclusive upper bound on name (see above — use a
+                sentinel value)
+            keys_only: If True, returned values are ``""`` (a cheaper
+                projection read used when only presence/count/order is
+                needed); if False, values are the actual property values.
+
+        Returns:
+            Dict of ``{name: value}`` (or ``{name: ""}`` when
+            ``keys_only``) for rows in the range. Empty dict if none found.
+
+        Raises:
+            DbError: On a backend fault.
+        """
+        ...
+
+    def create_if_not_exists(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """
+        Conditionally create a property row — succeeds only if no row for
+        this ``(actor_id, name)`` exists yet.
+
+        Used by v2 list-property storage for collision-free rank-key
+        inserts: two writers racing to use the same generated rank produce
+        one winner and one ``False``, never a silent overwrite of one
+        writer's item by the other's.
+
+        Args:
+            actor_id: The actor ID
+            name: Property name
+            value: Property value (serialized the same way as ``set()``)
+
+        Returns:
+            True if the row was created. False if a row already existed at
+            this name — a normal outcome (the caller should regenerate the
+            key and retry), not a failure.
+
+        Raises:
+            DbError: On a backend fault (not a conflict).
+        """
+        ...
+
+    def delete_if_value_equals(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """
+        Conditionally delete a property row — succeeds only if the row
+        currently holds exactly ``value``.
+
+        Used by v2 list-property storage wherever the item being deleted is
+        coupled to content the caller already read: ``pop()`` returns the
+        item it removed, and ``remove()`` deletes the item it matched. An
+        unconditional delete cannot honour either promise, because a
+        concurrent ``__setitem__`` on that same row between the read and the
+        delete would silently discard the other writer's value while
+        reporting the one this caller saw — an outcome that corresponds to
+        no serial ordering of the two operations.
+
+        ``__delitem__``/``__setitem__`` deliberately do NOT use this:
+        "delete whatever is at position i" and last-writer-wins are both
+        satisfied by an unconditional write.
+
+        ``value`` must be the RAW STORED STRING the caller read, not a
+        re-serialization of a decoded value — round-tripping through
+        decode/encode is not guaranteed byte-identical.
+
+        No lookup-table maintenance is performed or needed: ``list:``-
+        prefixed names are structurally excluded from indexing by
+        ``_should_index_property()`` on both backends.
+
+        Args:
+            actor_id: The actor ID
+            name: Property name
+            value: The exact stored value required for the delete to happen
+
+        Returns:
+            True if the row was deleted. False if it held a different value
+            or no longer exists — both normal outcomes meaning "re-resolve
+            and retry", not failures.
+
+        Raises:
+            DbError: On a backend fault (not a condition failure).
         """
         ...
 

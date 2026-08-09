@@ -49,7 +49,11 @@ class Property(Base):
     __table_args__ = (PrimaryKeyConstraint("id", "name"),)
 
     id = Column(String(255), nullable=False)  # actor_id
-    name = Column(String(255), nullable=False)
+    # TEXT, not VARCHAR(255): v2 list-property item rows are named
+    # "list:{name}-#{rank}" where rank can grow up to a ~180-char cap
+    # before compact() rebalances -- see migrations/versions/
+    # e5f6a7b8c9d0_widen_properties_name_to_text.py.
+    name = Column(Text, nullable=False)
     value = Column(Text, nullable=False)
 
 

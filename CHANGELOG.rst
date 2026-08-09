@@ -5,6 +5,255 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc5: August 9, 2026
+--------------------------
+
+.. note::
+
+   This release changes the ``/properties/<name>/items`` GET response shape,
+   makes list-property reads fail fast on corruption (409 instead of a
+   silently compacted result), enforces the spec's PUT bounds rule, and
+   changes the on-disk storage format for NEW list properties (v2,
+   fractional rank keys). See the CHANGED entries below.
+
+CHANGED
+~~~~~~~
+
+- **New list properties now use a v2 storage format (fractional rank
+  keys) instead of dense integer indices.** Delete and insert are now a
+  single conditional write each instead of a shift loop over every
+  following item -- the interrupted-shift corruption class Phases 1-3
+  hardened against structurally cannot occur in a v2 list, because there
+  is no separate stored ``length`` a row could disagree with; position is
+  always derived by sorting present rows. ``to_list()``/``slice()``/
+  iteration remain a single query regardless of list size. Existing lists
+  are untouched and keep working exactly as before (the v1 format,
+  including everything Phases 1-3 hardened, is fully supported
+  indefinitely) until migrated. New list names may no longer contain
+  ``#`` (reserved for internal storage keys) -- ``ListProperty`` raises
+  ``ValueError`` immediately on first use of such a name; existing v1
+  lists already named this way are unaffected. ``list:``-prefixed
+  property names are now also structurally excluded from the
+  property-lookup table sync, regardless of configuration.
+  ``scripts/verify_property_lists.py`` now understands both formats --
+  v2's "unhealthy" signal is rank keys approaching the length cap
+  (``compact()`` rebalances them), not holes/orphans, which are
+  structurally impossible under v2.
+- **Existing v1 lists migrate to v2 automatically and gradually.** Small
+  lists (<= 50 items) migrate lazily the next time they're mutated
+  (``append``/``insert``/item ``__setitem__``/``__delitem__``); a failed
+  lazy migration is logged and the original mutation still succeeds as
+  v1 -- migration is a background upgrade, never a reason an ordinary
+  write can fail. Larger lists stay fully functional as v1 until swept by
+  the new ``scripts/migrate_property_lists.py`` (dry-run by default;
+  ``--migrate`` to perform it; reports refused names and duplicate
+  residue; ``--downgrade ACTOR_ID/list_name`` is an emergency-only v2->v1
+  converter for rollback scenarios). ``ListProperty.migrate_to_v2()`` is
+  idempotent and safe to interrupt and re-run at any point, including
+  across concurrent v1 mutations between attempts.
+- **Breaking: list-property reads now fail fast on corruption instead of
+  silently compacting past it.** ``ListProperty.to_list()``, ``.slice()``
+  and ``.to_list_from_rows()`` raise ``ListCorruptionError`` (an
+  ``IndexError`` subclass) when an item within the list's recorded length
+  is missing from storage, matching ``AttributeList``'s existing contract.
+  Every HTTP path that serves list content (``GET /properties/<name>``,
+  ``?format=full``, ``?metadata=true``, ``GET/POST /properties/<name>/items``,
+  the bulk list-item POST, list DELETE) now returns **409 Conflict** with
+  ``{"error": "list_corrupted", "list": ..., "detail": ..., "remedy": "compact"}``
+  instead of a 500 or a quietly-wrong compacted response. Repair with
+  ``ListProperty.compact()`` (see ADDED below) before retrying.
+- **Breaking: ``GET /properties/<name>/items`` response shape changed.**
+  Was a bare JSON array (identical to ``GET /properties/<name>``); is now
+  ``{"items": [{"index": i, "item": ...}, ...], "count": n}``. ``index`` is
+  the storage index, matching what ``action=update``/``action=delete``
+  already expect in ``item_index`` — GET and POST are now consistent with
+  each other. Flask gained this route for the first time (parity with
+  FastAPI, which already had it).
+- **Breaking: ``PUT /properties/<name>?index=N`` beyond the list length now
+  returns 404** instead of silently padding the list with ``None`` up to
+  ``N`` (an unbounded-write DoS vector as well as a spec violation — the
+  spec requires 404 for ``index > length``; ``index == length`` still MAY
+  append). ``docs/protocol/actingweb-spec.rst`` "List Property PUT".
+- The bulk list-item POST (``POST /properties`` with a
+  ``{"items": [{"index": N, ...}]}``-shaped list value) now applies every
+  update before any delete, regardless of the order items appear in the
+  request, then applies deletes in descending index order. Previously,
+  processing in request order meant a delete appearing before an update in
+  the same batch could shift the update onto the wrong item. All indices
+  in a batch are now interpreted against the list as it stood before the
+  batch, consistently.
+- **The bulk list-item POST now rejects an update index beyond the end of
+  the list with 400**, the same rule ``PUT ?index=N`` follows. A batch may
+  still populate a list with consecutive indices (``0, 1, 2, …``) — the
+  bound advances with each append the batch performs — but it can no longer
+  name an arbitrary index and have the gap padded with ``None`` one row at a
+  time, which turned a single request into as many database writes as the
+  index was large. The whole batch is validated before anything is written.
+
+- **``verify()`` accepts an ``identity_key``**, adding a
+  ``duplicate_identities`` report that catches duplicates the existing
+  byte-adjacency heuristic structurally cannot. That heuristic is blind two
+  ways, and both were hit in a real deployment: it stops finding a duplicate
+  the moment either copy is edited (so it misses exactly the lists that have
+  been used since the damage), and it only looks at neighbouring rows (so it
+  missed the same ``id`` at positions 31 and 36 and called the list healthy).
+  ``duplicate_identities`` compares the identifying field across the whole
+  list and survives later edits, and the report carries
+  ``identity_checked_count`` so an empty result is distinguishable from a
+  mistyped key that compared nothing. Both sweep tools gained
+  ``--identity-key``; the migrate tool's dry-run duplicate warning
+  previously used only the unreliable comparison.
+- **The operator tools now ship with the library** as the console commands
+  ``actingweb-verify-property-lists`` and
+  ``actingweb-migrate-property-lists`` (implementation moved to
+  ``actingweb.maintenance``; ``scripts/`` keeps thin wrappers). They were
+  previously absent from the wheel, which mattered once converting existing
+  lists became an explicit operator step rather than something that
+  happened on its own.
+- **Both sweep scripts now print the backend, region/host and table prefix
+  they are about to operate on**, and warn when ``AWS_DB_PREFIX`` is an unset
+  default. The library defaults it to ``demo_actingweb``; running a sweep
+  without the application's environment could silently target a different
+  deployment and report it clean, which looks exactly like good news.
+- ``scripts/verify_property_lists.py`` no longer deletes the checkpoint file
+  on a clean **read-only** run — it is now gated on ``--repair``, matching
+  the migrate script. A dry run could previously remove the resume state of
+  an interrupted ``--repair``.
+
+- **Lazy migration now refuses a list that ``verify()`` reports as
+  unhealthy**, logging what it found and how to fix it, instead of
+  migrating it. Migration closes holes in flight and reports what it
+  closed, which is right for an operator running
+  ``scripts/migrate_property_lists.py`` and reading the output — but doing
+  it silently under an ordinary ``append()`` destroyed the evidence: the
+  hole disappeared, the lost item stayed lost, duplicate residue was
+  promoted to real data, and ``verify()`` began reporting the list healthy.
+  Repair (``compact()`` or ``verify_property_lists.py --repair``) is now
+  always an explicit operator action; damaged lists keep serving v1 and
+  keep raising ``ListCorruptionError`` until then.
+- **Automatic conversion of existing lists to the v2 format is OFF by
+  default**, controlled by the new ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``
+  environment variable (default ``0``; set a positive number to allow v1
+  lists of at most that size to convert on their next write, or use
+  ``scripts/migrate_property_lists.py``). **This does not make v2 opt-in** —
+  every list created after upgrading is v2 with no operator action; only the
+  conversion of pre-existing data waits for a deliberate decision. The
+  default is off because it is a **rollback-safety control** before it is a
+  latency one. A pre-3.13.0rc5 process does not
+  error on a migrated list — it reads it as *empty*, because a v2 list
+  stores no ``length`` field and an older reader takes the absence as zero;
+  a write from that process then forks the list across both formats with
+  nothing reporting an error, and ``--downgrade`` cannot reconcile a forked
+  list. Deployment gives a brief mixed-version window; **rollback gives
+  none** — every list that migrated before the rollback reads as empty
+  afterwards, recoverable only one list at a time. With the limit at 0 the
+  release changes no data, so rolling back is a pure code rollback.
+  Secondarily: migration is synchronous, so one ``append()`` to a 40-item
+  list performs the whole migration — dozens of sequential writes plus two
+  full-partition reads — inside that request. The library logs one INFO per
+  process the first time it encounters a v1 list while conversion is
+  disabled, naming the script, so "off" does not quietly become "never".
+- ``ListProperty.storage_format()`` (new, public) returns 1 or 2 from a
+  single point read. ``scripts/migrate_property_lists.py`` now uses it
+  instead of ``verify()`` for format detection, which was fetching the
+  actor's entire property partition once per list.
+
+FIXED
+~~~~~
+
+- **``list.index()`` semantics for negative ``start``/``stop``.**
+  ``index(value, -1)`` could previously return ``-1`` as an index (the loop
+  ran ``range(-1, n)`` and then indexed negatively). Both storage formats
+  now normalize bounds exactly as ``list.index`` does, through one shared
+  helper so they cannot diverge across a migration.
+- **``pop()`` and ``remove()`` now delete conditionally on the value they
+  read.** Resolving the item's storage key once was not enough: a
+  concurrent assignment to that same key between the read and the delete
+  would discard the other writer's value while reporting the one this
+  caller saw — an outcome corresponding to no serial ordering of the two
+  operations. Both now use the new
+  ``DbPropertyProtocol.delete_if_value_equals()`` and re-resolve on a
+  failed condition, so ``pop()`` always returns exactly what it removed and
+  ``remove()`` always removes exactly what it matched.
+  ``__delitem__``/``__setitem__`` remain unconditional by design.
+- ``pop()`` on a v2 list no longer raises ``pop from empty list`` against a
+  list another writer has appended to (the empty check consulted a cached
+  length before the v2 path could refresh it).
+- **A v2 list could read, and delete, a legacy ``#``-named sibling list's
+  rows.** New list names may not contain ``#``, but lists created before
+  this release may, and migration deliberately refuses them so they keep
+  serving as v1. Such a list's rows (e.g. ``list:foo-#bar-0`` for a list
+  named ``foo-#bar``) sort inside the storage range a v2 list named ``foo``
+  reads, so ``foo`` returned the sibling's items as its own and
+  ``foo.clear()``/``foo.delete()``/migrating ``foo`` deleted the sibling's
+  rows. Every consumer of that range now additionally requires the key to
+  be a well-formed rank.
+- **``ListProperty.migrate_to_v2()`` could destroy an already-migrated
+  list.** It decided "this list is still v1" from possibly-cached metadata;
+  if another instance had migrated the list in the meantime, the v1 rows
+  were gone, so the migration saw an all-holes list, deleted the
+  now-authoritative v2 rows as leftover scratch, and wrote an empty list
+  over them. Metadata is now re-read from storage before that decision and
+  re-checked once more immediately before the first destructive write.
+- **v2 item ``__setitem__``/``__delitem__`` could act on a stale position
+  map.** Both resolved a position through a per-instance rank-key cache that
+  could be arbitrarily old on a long-lived instance; if another writer had
+  inserted an item earlier in the list, position ``i`` no longer named the
+  same row and the wrong item was overwritten or deleted. Both now re-read
+  the rank keys before committing. (``append``/``insert`` keep using the
+  cache — their conditional writes bound the effect to where an item lands,
+  never to destroying a different one.)
+- **``scripts/migrate_property_lists.py`` and
+  ``scripts/verify_property_lists.py`` checkpointed actors whose lists had
+  not actually been dealt with.** An actor with an errored or refused list
+  (migration) or one still unhealthy after ``--repair`` (verification) was
+  marked complete, so the next run skipped it, observed no problems, deleted
+  the checkpoint and exited 0 — reporting success over work that was never
+  done. Only fully successful actors are checkpointed now.
+
+- **``ListProperty.insert()`` destroyed data on every call into a non-empty
+  list on DynamoDB.** ``insert()`` reused one cached ``DbProperty`` handle
+  across its whole shift loop instead of taking a fresh handle per
+  get()/set() like every other list method; on DynamoDB this caused each
+  shifted row to be overwritten with the last value read instead of its
+  own. Fixed both at the call site (fresh handles, matching the rest of the
+  class) and in the DynamoDB and PostgreSQL backends' ``DbProperty.get()``/
+  ``set()`` (a cached handle for a different ``(actor_id, name)`` is now
+  always discarded rather than reused).
+- **Backend read/write failures on property (and property-list item) storage
+  were silently swallowed as absence or as a no-op.** ``DbProperty.get()``
+  now raises ``actingweb.db.exceptions.DbError`` on a genuine backend fault
+  instead of returning ``None`` (``None`` means the row does not exist, and
+  only that, on both backends). Every ``ListProperty`` mutation
+  (``append``, ``__setitem__``, ``__delitem__``, ``insert``, ``clear``,
+  ``delete``, metadata writes) now checks ``set()``'s return value and
+  raises ``RuntimeError`` instead of continuing past a failed write. This is
+  a breaking change for any code that relied on a backend fault degrading
+  to ``None``/no-op on a property read/write.
+- Backend exception text no longer reaches HTTP error responses from the
+  list-property handlers (``PUT``/POST/DELETE on ``/properties/<name>`` and
+  ``/properties/<name>/items``) — the client sees a generic message; the
+  original exception is still logged server-side.
+- Unparsable list metadata no longer self-heals into a fresh empty list
+  (which orphaned every existing item row with no way back to them) —
+  ``ListProperty`` now raises ``ValueError`` instead, and the row is left
+  untouched for repair.
+
+ADDED
+~~~~~
+
+- **Property-list repair primitives.** ``ListProperty.verify()`` reports a
+  list's health (holes, orphan rows, a duplicate-value heuristic) without
+  modifying anything; ``ListProperty.compact()`` closes holes and removes
+  orphans in one pass while preserving ``description``/``explanation``/
+  ``created_at`` (unlike the previous ``clear()`` + ``extend()`` workaround,
+  which reset them). Duplicate residue is reported but never rewritten — a
+  duplicate value always means a destroyed item, and silently collapsing
+  one copy would bless the data loss as intentional. Both are also
+  available through ``actor.property_lists.<name>.verify()``/``.compact()``.
+  New operator script: ``scripts/verify_property_lists.py`` (dry-run by
+  default; ``--repair`` invokes ``compact()`` on unhealthy lists).
+
 v3.13.0rc4: August 3, 2026
 --------------------------
 

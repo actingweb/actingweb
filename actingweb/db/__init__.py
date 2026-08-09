@@ -39,6 +39,8 @@ This pattern provides:
 
 from typing import TYPE_CHECKING, Any
 
+from actingweb.db.exceptions import DbError
+
 if TYPE_CHECKING:
     from actingweb.config import Config
     from actingweb.db.protocols import (
@@ -421,6 +423,7 @@ def get_db_accessors() -> dict[str, Any]:
 
 # Export public API
 __all__ = [
+    "DbError",
     # Property accessors
     "get_property",
     "get_property_list",

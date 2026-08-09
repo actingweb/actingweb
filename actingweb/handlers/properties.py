@@ -5,6 +5,7 @@ from typing import Any
 
 from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
+from actingweb.property_list import ListCorruptionError
 
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
 
@@ -44,6 +45,30 @@ def delete_dict(d1, path):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _write_list_corrupted_response(response: Any, name: str, error: Exception) -> None:
+    """Write the structured 409 response for a ListCorruptionError.
+
+    Shared by every handler class in this module that serves list content
+    (PropertiesHandler, PropertyListItemsHandler). The exception's own
+    message (list name + index only, never item values) is safe to put in
+    the body.
+    """
+    logger.error(f"List '{name}' is corrupted: {error}")
+    if response:
+        response.set_status(409, "List corrupted")
+        response.headers["Content-Type"] = "application/json"
+        response.write(
+            json.dumps(
+                {
+                    "error": "list_corrupted",
+                    "list": name,
+                    "detail": str(error),
+                    "remedy": "compact",
+                }
+            )
+        )
 
 
 class PropertiesHandler(base_handler.BaseHandler):
@@ -122,6 +147,10 @@ class PropertiesHandler(base_handler.BaseHandler):
         peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
         return {"peer_id": peer_id, "config": self.config, "operation": operation}
 
+    def _respond_list_corrupted(self, name: str, error: Exception) -> None:
+        """Write the structured 409 response for a ListCorruptionError."""
+        _write_list_corrupted_response(self.response, name, error)
+
     def get(self, actor_id, name):
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
@@ -183,9 +212,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             try:
                 logger.info(f"Getting list property object for '{name}'")
                 list_prop = getattr(myself.property_lists, name)
-                logger.info(
-                    f"Got list_prop: {type(list_prop).__name__}, length={len(list_prop) if list_prop else 'N/A'}"
-                )
+                logger.info(f"Got list_prop: {type(list_prop).__name__}")
                 logger.info(f"index_param={index_param}, format_param={format_param}")
 
                 if index_param is not None:
@@ -217,6 +244,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     return
 
                         out = json.dumps(item)
+                    except ListCorruptionError:
+                        raise  # let the outer handler write the structured 409
                     except (IndexError, ValueError):
                         if self.response:
                             self.response.set_status(404, "List item not found")
@@ -286,6 +315,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.write(out)
                 return
 
+            except ListCorruptionError as e:
+                self._respond_list_corrupted(name, e)
+                return
             except Exception as e:
                 logger.error(f"Error accessing list property '{name}': {e}")
                 if self.response:
@@ -466,64 +498,73 @@ class PropertiesHandler(base_handler.BaseHandler):
                 list_names = all_list_names
 
         # Build response based on query parameters
-        if include_metadata:
-            # Metadata-only response: no property values, just structure info
-            simple_names = list(pair.keys())
-            simple_total_bytes = sum(len(json.dumps(v)) for v in pair.values())
-            lists_info: dict[str, Any] = {}
-            for list_name in list_names:
-                list_prop = getattr(actor_interface.property_lists, list_name)
-                list_prop.prime_from_rows(all_rows)
-                items = list_prop.to_list_from_rows(all_rows)
-                total_bytes = sum(len(json.dumps(item)) for item in items)
-                lists_info[list_name] = {
-                    "count": len(items),
-                    "total_bytes": total_bytes,
-                    "description": list_prop.get_description(),
-                    "explanation": list_prop.get_explanation(),
+        try:
+            if include_metadata:
+                # Metadata-only response: no property values, just structure info
+                simple_names = list(pair.keys())
+                simple_total_bytes = sum(len(json.dumps(v)) for v in pair.values())
+                lists_info: dict[str, Any] = {}
+                for list_name in list_names:
+                    list_prop = getattr(actor_interface.property_lists, list_name)
+                    list_prop.prime_from_rows(all_rows)
+                    items = list_prop.to_list_from_rows(all_rows)
+                    total_bytes = sum(len(json.dumps(item)) for item in items)
+                    lists_info[list_name] = {
+                        "count": len(items),
+                        "total_bytes": total_bytes,
+                        "description": list_prop.get_description(),
+                        "explanation": list_prop.get_explanation(),
+                    }
+                pair = {
+                    "simple": {
+                        "properties": simple_names,
+                        "total_bytes": simple_total_bytes,
+                    },
+                    "lists": lists_info,
                 }
-            pair = {
-                "simple": {
-                    "properties": simple_names,
-                    "total_bytes": simple_total_bytes,
-                },
-                "lists": lists_info,
-            }
-        elif format_param == "full":
-            # Full format: simple props as-is + list props with items, description, explanation
-            for list_name in list_names:
-                list_prop = getattr(actor_interface.property_lists, list_name)
-                list_prop.prime_from_rows(all_rows)
-                items = list_prop.to_list_from_rows(all_rows)
-                # Execute property hooks on list items if available
-                if self.hooks and actor_interface:
-                    auth_context = self._create_auth_context(check, "read")
-                    transformed_items = []
-                    for item in items:
-                        transformed = self.hooks.execute_property_hooks(
-                            list_name, "get", actor_interface, item, [], auth_context
-                        )
-                        if transformed is not None:
-                            transformed_items.append(transformed)
-                        else:
-                            transformed_items.append(item)
-                    items = transformed_items
-                pair[list_name] = {
-                    "_list": True,
-                    "count": len(items),
-                    "description": list_prop.get_description(),
-                    "explanation": list_prop.get_explanation(),
-                    "items": items,
-                }
-        else:
-            # Default / format=short: simple props as-is + minimal list markers
-            for list_name in list_names:
-                list_prop = getattr(actor_interface.property_lists, list_name)
-                list_prop.prime_from_rows(all_rows)
-                pair[list_name] = {
-                    "_list": True,
-                    "count": len(list_prop),
-                }
+            elif format_param == "full":
+                # Full format: simple props as-is + list props with items, description, explanation
+                for list_name in list_names:
+                    list_prop = getattr(actor_interface.property_lists, list_name)
+                    list_prop.prime_from_rows(all_rows)
+                    items = list_prop.to_list_from_rows(all_rows)
+                    # Execute property hooks on list items if available
+                    if self.hooks and actor_interface:
+                        auth_context = self._create_auth_context(check, "read")
+                        transformed_items = []
+                        for item in items:
+                            transformed = self.hooks.execute_property_hooks(
+                                list_name,
+                                "get",
+                                actor_interface,
+                                item,
+                                [],
+                                auth_context,
+                            )
+                            if transformed is not None:
+                                transformed_items.append(transformed)
+                            else:
+                                transformed_items.append(item)
+                        items = transformed_items
+                    pair[list_name] = {
+                        "_list": True,
+                        "count": len(items),
+                        "description": list_prop.get_description(),
+                        "explanation": list_prop.get_explanation(),
+                        "items": items,
+                    }
+            else:
+                # Default / format=short: simple props as-is + minimal list markers
+                for list_name in list_names:
+                    list_prop = getattr(actor_interface.property_lists, list_name)
+                    list_prop.prime_from_rows(all_rows)
+                    pair[list_name] = {
+                        "_list": True,
+                        "count": len(list_prop),
+                    }
+        except ListCorruptionError as e:
+            self._respond_list_corrupted(e.list_name, e)
+            return
 
         out = json.dumps(pair)
         self.response.write(out)
@@ -592,10 +633,18 @@ class PropertiesHandler(base_handler.BaseHandler):
                     return
 
                 list_prop = getattr(myself.property_lists, name)
+                length = len(list_prop)
 
-                # Extend list if needed
-                while len(list_prop) <= index:
-                    list_prop.append(None)
+                # Spec (docs/protocol/actingweb-spec.rst "List Property PUT"):
+                # index == length MAY create (append); index > length MUST
+                # 404. Unbounded append(None) padding was both a DoS vector
+                # and a spec violation.
+                if index > length:
+                    if self.response:
+                        self.response.set_status(
+                            404, f"Index {index} beyond list length {length}"
+                        )
+                    return
 
                 # Execute property put hook if available
                 if self.hooks:
@@ -617,8 +666,12 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 self.response.set_status(400, "Item rejected by hooks")
                             return
 
-                # Set the item at the index
-                list_prop[index] = item_value
+                # Set the item at the index (append if it equals the
+                # current length; otherwise it's a bounds-checked replace)
+                if index == length:
+                    list_prop.append(item_value)
+                else:
+                    list_prop[index] = item_value
 
                 # Register diff
                 myself.register_diffs(
@@ -634,7 +687,7 @@ class PropertiesHandler(base_handler.BaseHandler):
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")
                 if self.response:
-                    self.response.set_status(400, f"Error setting list item: {str(e)}")
+                    self.response.set_status(400, "Error setting list item")
                 return
 
         # Use unified access control system for permission checking
@@ -739,6 +792,20 @@ class PropertiesHandler(base_handler.BaseHandler):
         self.response.set_status(204)
 
     def post(self, actor_id, name):
+        """POST /properties -- includes the bulk list-item update path.
+
+        Bulk update semantics (a property value shaped as
+        ``{"items": [{"index": N, ...fields}, ...]}`` against a list
+        property): every ``index`` in the batch is interpreted against the
+        list as it stood BEFORE the batch, regardless of the order items
+        appear in the request. Updates (an item_spec with fields beyond
+        ``index``) are applied first, in the given order -- they never
+        shift positions. Deletes (an item_spec with ONLY ``index``) are
+        applied last, in descending index order, so each delete's target
+        index is still valid: a delete only shifts indices ABOVE it, and
+        descending order guarantees every not-yet-processed delete is at or
+        below the one just applied.
+        """
         auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
         if not auth_result.success:
             return
@@ -933,6 +1000,23 @@ class PropertiesHandler(base_handler.BaseHandler):
                             list_prop = getattr(myself.property_lists, key)
                             items_updated = 0
                             items_deleted = 0
+                            # Batch semantics: every "index" in this batch is
+                            # interpreted against the list as it stood BEFORE
+                            # the batch. Updates (__setitem__) don't shift
+                            # positions, so they're applied first, in the
+                            # given order; deletes DO shift later indices
+                            # down by one, so they run last, in descending
+                            # index order -- each delete's target is still
+                            # valid because only lower, not-yet-processed
+                            # indices are ever affected by a higher delete.
+                            pending_updates: list[tuple[int, dict[str, Any]]] = []
+                            pending_deletes: list[int] = []
+                            # Read once. Update indices are bounds-checked
+                            # against this, advanced by each append the batch
+                            # performs (see the check below); delete indices
+                            # keep their pre-batch meaning per the ordering
+                            # semantics documented above.
+                            projected_length = len(list_prop)
 
                             for i, item_spec in enumerate(val["items"]):
                                 # Validate item structure
@@ -988,44 +1072,88 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 if (
                                     len(item_spec) == 1
                                 ):  # Only has "index" key, means delete
-                                    try:
-                                        if index < len(list_prop):
-                                            del list_prop[index]
-                                            items_deleted += 1
-                                        else:
-                                            logger.warning(
-                                                f"Cannot delete item at index {index}: index out of range (list length: {len(list_prop)})"
-                                            )
-                                            # Don't fail the entire operation, just log warning
-                                    except IndexError as e:
-                                        logger.error(
-                                            f"Error deleting item at index {index}: {e}"
-                                        )
-                                        # Don't fail the entire operation for delete errors
+                                    pending_deletes.append(index)
                                 else:
+                                    # Same bound as the PUT ?index=N path,
+                                    # projected across the batch: an update
+                                    # may address an existing item or append
+                                    # at exactly the current length, never
+                                    # beyond it. `projected_length` tracks
+                                    # what the list will be when this update
+                                    # runs, so a batch may still populate an
+                                    # empty list with indices 0,1,2,...
+                                    # Without this bound the update pass
+                                    # padded the gap with append(None) one
+                                    # row at a time, so a single request
+                                    # naming index 10**8 became 10**8
+                                    # database writes. Validating here (not
+                                    # in the update pass) means an
+                                    # out-of-bounds index rejects the batch
+                                    # before anything is written.
+                                    if index > projected_length:
+                                        logger.error(
+                                            f"Index {index} in item at position {i} is beyond list length {projected_length}"
+                                        )
+                                        if self.response:
+                                            self.response.set_status(
+                                                400,
+                                                f"Index {index} in item at position {i} is beyond list length {projected_length}",
+                                            )
+                                        return
+                                    if index == projected_length:
+                                        projected_length += 1
+
                                     # Update/set item - the entire item_spec except "index" is the item data
                                     item_data = {
                                         k: v
                                         for k, v in item_spec.items()
                                         if k != "index"
                                     }
-                                    try:
-                                        # Extend list if needed
-                                        while len(list_prop) <= index:
-                                            list_prop.append(None)
-                                        # Store the complete object
-                                        list_prop[index] = item_data
-                                        items_updated += 1
-                                    except (IndexError, ValueError) as e:
-                                        logger.error(
-                                            f"Error updating item at index {index}: {e}"
+                                    pending_updates.append((index, item_data))
+
+                            # Pass 1: updates, in the given order.
+                            for index, item_data in pending_updates:
+                                try:
+                                    # Append-at-length case. Bounded to a
+                                    # single append by the index <=
+                                    # pre_batch_length check above: updates
+                                    # never shrink the list, so len() here
+                                    # is always >= pre_batch_length.
+                                    while len(list_prop) <= index:
+                                        list_prop.append(None)
+                                    # Store the complete object
+                                    list_prop[index] = item_data
+                                    items_updated += 1
+                                except (IndexError, ValueError) as e:
+                                    logger.error(
+                                        f"Error updating item at index {index}: {e}"
+                                    )
+                                    if self.response:
+                                        self.response.set_status(
+                                            500,
+                                            f"Error updating item at index {index}",
                                         )
-                                        if self.response:
-                                            self.response.set_status(
-                                                500,
-                                                f"Error updating item at index {index}: {str(e)}",
-                                            )
-                                        return
+                                    return
+
+                            # Pass 2: deletes, highest index first, so each
+                            # target is still the position it was specified
+                            # against (a delete only shifts LOWER,
+                            # not-yet-processed indices).
+                            for index in sorted(pending_deletes, reverse=True):
+                                try:
+                                    if index < len(list_prop):
+                                        del list_prop[index]
+                                        items_deleted += 1
+                                    else:
+                                        logger.warning(
+                                            f"Cannot delete item at index {index}: index out of range (list length: {len(list_prop)})"
+                                        )
+                                        # Don't fail the entire operation, just log warning
+                                except IndexError as e:
+                                    logger.error(
+                                        f"Error deleting item at index {index}: {e}"
+                                    )
+                                    # Don't fail the entire operation for delete errors
 
                             # Execute property post hook if available
                             if self.hooks:
@@ -1056,14 +1184,15 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 f"[Bulk update: {items_updated} items updated, {items_deleted} items deleted]"
                             )
 
+                        except ListCorruptionError as e:
+                            self._respond_list_corrupted(key, e)
+                            return
                         except Exception as e:
                             logger.error(
                                 f"Error in bulk update for list property '{key}': {e}"
                             )
                             if self.response:
-                                self.response.set_status(
-                                    500, f"Error in bulk update: {str(e)}"
-                                )
+                                self.response.set_status(500, "Error in bulk update")
                             return
                     else:
                         # Not a list property or doesn't exist
@@ -1186,11 +1315,12 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(204)
                     return
 
+                except ListCorruptionError as e:
+                    self._respond_list_corrupted(name, e)
+                    return
                 except Exception as e:
                     logger.error(f"Error deleting list property '{name}': {e}")
-                    self.response.set_status(
-                        500, f"Error deleting list property: {str(e)}"
-                    )
+                    self.response.set_status(500, "Error deleting list property")
                     return
 
             # Regular property handling
@@ -1494,8 +1624,20 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 method=method_map.get(operation, "GET"),
             )
 
+    def _respond_list_corrupted(self, name: str, error: Exception) -> None:
+        """Write the structured 409 response for a ListCorruptionError."""
+        _write_list_corrupted_response(self.response, name, error)
+
     def get(self, actor_id: str, name: str):
-        """Get all items from a list property."""
+        """Get all items from a list property.
+
+        Response shape: ``{"items": [{"index": i, "item": ...}], "count": n}``
+        -- storage indices on both this response and the ``item_index``
+        accepted by ``update``/``delete`` below, so the two are always
+        consistent with each other. This is an implementation extension,
+        not part of the ActingWeb spec (which addresses items by path
+        index, e.g. ``/properties/{name}/{index}``).
+        """
         auth_result = self.authenticate_actor(actor_id, "properties", subpath=name)
         if not auth_result.success:
             return
@@ -1523,10 +1665,21 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
 
         # Get all items
         list_prop = getattr(myself.property_lists, name)
-        items = list_prop.to_list()
+        try:
+            indexed = list_prop.to_indexed_list()
+        except ListCorruptionError as e:
+            self._respond_list_corrupted(name, e)
+            return
 
         if self.response:
-            self.response.write(json.dumps(items))
+            self.response.write(
+                json.dumps(
+                    {
+                        "items": [{"index": i, "item": item} for i, item in indexed],
+                        "count": len(indexed),
+                    }
+                )
+            )
             self.response.headers["Content-Type"] = "application/json"
             self.response.set_status(200)
 
@@ -1691,7 +1844,14 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     self.response.set_status(400, f"Unknown action: {action}")
                 return
 
+        except ListCorruptionError as e:
+            # Parity with /items GET and every other list-serving path: a
+            # corrupted list is a structured 409 with a repair hint, never a
+            # bare 500. No action above currently reads item rows, so this
+            # is a contract guarantee rather than a reachable branch today.
+            self._respond_list_corrupted(name, e)
+            return
         except Exception as e:
             logger.error(f"Error in list item operation '{action}' for '{name}': {e}")
             if self.response:
-                self.response.set_status(500, f"Error processing list item: {str(e)}")
+                self.response.set_status(500, "Error processing list item")

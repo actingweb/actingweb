@@ -222,6 +222,42 @@ class TestPropertyListMetadataStorage:
         assert items[0]["display_name"] == "Quick Notes"
 
 
+class TestPropertyListInsertIntoNonEmptyList:
+    """Regression coverage for ListProperty.insert() on a non-empty list.
+
+    Every prior insert() test called it on an empty list (insert(0, ...) as
+    the very first operation), so the shift loop ran zero iterations and
+    never exercised the bug where DynamoDB's insert() reused a single
+    stale DbProperty handle across the whole shift, overwriting every
+    shifted row with the last value read instead of its own (see
+    thoughts/research/2026-08-07-property-list-index-integrity.md). These
+    assert full list content, including the last element, after inserting
+    into a list with existing items.
+    """
+
+    def test_insert_at_end_minus_one_into_non_empty_list(self, test_actor):
+        prop_list = test_actor.property_lists.insert_regression_a
+        prop_list.append("a")
+        prop_list.append("b")
+        prop_list.append("c")
+
+        prop_list.insert(1, "X")
+
+        items = prop_list.to_list()
+        assert items == ["a", "X", "b", "c"]
+
+    def test_insert_at_zero_into_non_empty_list(self, test_actor):
+        prop_list = test_actor.property_lists.insert_regression_b
+        prop_list.append("a")
+        prop_list.append("b")
+        prop_list.append("c")
+
+        prop_list.insert(0, "X")
+
+        items = prop_list.to_list()
+        assert items == ["X", "a", "b", "c"]
+
+
 class TestPropertyListDiscovery:
     """Test list_all() and exists() methods for property list discovery."""
 

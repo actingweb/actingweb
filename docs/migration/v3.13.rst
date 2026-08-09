@@ -2,16 +2,270 @@
 Migrating to ActingWeb 3.13
 ===========================
 
+Behaviour change in rc5: property-list storage, repair, and fail-fast reads
+===========================================================================
+
+.. note::
+
+   This section covers ``v3.13.0rc5``. It is independent of the ``rc4`` MCP
+   change and the ``rc3``/``rc1``/``rc2`` sections below. It applies to every
+   deployment that uses **list properties** (``actor.property_lists.*``,
+   ``/properties/<name>`` on a list). If you use only scalar properties, read
+   just "Property reads now raise on backend faults" below and skip the rest.
+
+Read this section before upgrading, not after. One of the changes turns
+pre-existing, previously-invisible data damage into a visible error, so the
+order of operations matters.
+
+Why this release exists
+-----------------------
+
+``ListProperty`` could destroy data. ``insert()`` on DynamoDB overwrote every
+shifted row with the last value it read, so a single call into a non-empty
+list corrupted it. Backend read failures were swallowed and reported as "row
+absent", turning a transient fault into a permanent hole. Delete and insert
+were multi-write shift loops over a stored length counter with no
+transaction, so an interruption anywhere in the middle left a hole, a
+duplicate, or a length that disagreed with reality — and reads silently
+compacted past the damage, so nothing ever surfaced it.
+
+rc5 fixes the write paths, adds repair tooling, makes reads fail loudly
+instead of quietly, and introduces a storage format in which the whole class
+of defect is structurally impossible.
+
+Step 1: sweep for existing damage BEFORE upgrading
+--------------------------------------------------
+
+Any list damaged by the old code is still damaged. rc4 hid that; rc5 will
+not. Find out what you have first::
+
+    actingweb-verify-property-lists
+
+Read-only. It reports, per list, the recorded length, how many rows are
+actually readable, which indices are missing, which are orphaned, and any
+adjacent duplicate residue.
+
+.. warning::
+
+   **Run it with the same environment your application uses.** The library
+   defaults ``AWS_DB_PREFIX`` to ``demo_actingweb``. If your deployment uses
+   a different prefix — and if a demo deployment exists in the account — an
+   unset prefix silently sweeps the wrong tables and reports them clean. A
+   clean report from the wrong table looks exactly like good news. The script
+   now prints the backend, region and prefix it is about to use, and warns
+   when the prefix is an unset default; check that line before trusting the
+   result.
+
+If your items carry an identifying field, pass it::
+
+    actingweb-verify-property-lists --identity-key id
+
+Duplicate detection otherwise compares raw stored bytes, which finds the
+duplicate an interrupted shift leaves — but stops finding it the moment
+either copy is edited. That false negative hits precisely the lists that
+have been used since the damage. ``--identity-key`` compares on the field
+that identifies the item instead, and keeps working after an edit.
+
+Step 2: repair what it found
+----------------------------
+
+::
+
+    actingweb-verify-property-lists --repair
+
+``--repair`` calls ``compact()``, which rewrites the surviving rows densely,
+removes orphans, corrects the recorded length, and preserves
+``description``/``explanation``/``created_at``. It closes holes.
+
+**It does not resolve duplicates, by design.** A duplicate always means an
+item was destroyed; collapsing one copy would bless that loss as intentional
+rather than surface it. Duplicates are reported and left for you to decide
+about. Repair does not recover a destroyed item — nothing can; the row is
+gone.
+
+Step 3: expect these breaking changes after upgrading
+-----------------------------------------------------
+
+**List reads now raise on corruption instead of compacting past it.**
+``to_list()``, ``slice()`` and ``to_list_from_rows()`` raise
+``ListCorruptionError`` (an ``IndexError`` subclass) when an item inside the
+list's recorded length is missing from storage. Every HTTP path that serves
+list content returns **409** with
+``{"error": "list_corrupted", "list": ..., "detail": ..., "remedy": "compact"}``.
+
+This is the change that makes step 1 non-optional: a hole that rc4 silently
+skipped becomes a raised exception or a 409. Audit your call sites — anything
+that reads a list and cannot tolerate an exception needs a
+``ListCorruptionError`` handler, and the underlying list needs repairing::
+
+    from actingweb.property_list import ListCorruptionError
+
+**Property reads now raise on backend faults.** ``DbProperty.get()`` raises
+``actingweb.db.exceptions.DbError`` when the backend itself fails (timeout,
+throttle, connection error). ``None`` now means "the row does not exist", and
+only that. Code that relied on a fault degrading to ``None`` will now see an
+exception. This applies to scalar properties too, not just lists.
+
+**Every list mutation now checks its writes.** ``append``, ``__setitem__``,
+``__delitem__``, ``insert``, ``clear``, ``delete`` and metadata writes raise
+``RuntimeError`` instead of continuing past a failed write.
+
+**``GET /properties/<name>/items`` response shape changed.** Was a bare JSON
+array; is now
+``{"items": [{"index": i, "item": ...}, ...], "count": n}``. The ``index`` is
+the same one ``action=update``/``action=delete`` accept, so GET and POST are
+consistent. (Flask gained this route for the first time; it previously
+existed only on FastAPI.)
+
+**``PUT /properties/<name>?index=N`` beyond the list length returns 404.**
+It previously padded the list with ``None`` up to ``N`` — both a spec
+violation and an unbounded-write vector. ``index == length`` still appends.
+The bulk item POST gained the equivalent bound.
+
+**``index()`` honours negative ``start``/``stop``.** It previously ran
+``range(start, ...)`` unnormalized, so ``index(value, -1)`` could return
+``-1`` as an index. Both storage formats now match ``list.index``.
+
+Step 4: decide when lists are allowed to change format
+------------------------------------------------------
+
+.. danger::
+
+   **Automatic conversion of existing lists is OFF by default in rc5**
+   (``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0``). Leave it that way for this
+   release's deployment: no list changes format, so rolling back stays a
+   pure code rollback with no data to reconcile. Convert later, deliberately.
+
+   This does not make v2 opt-in -- every list created after the upgrade is
+   v2 with no action from you. Only the conversion of data you already have
+   waits for your go-ahead.
+
+   The reason is not latency, it is rollback. A pre-rc5 process does not
+   error on a migrated list -- it reads it as **empty**, silently. The
+   metadata row still exists, so the list "exists"; a v2 list stores no
+   ``length`` field, and an older reader takes the absence as zero. A write
+   from that process then lands in v1 storage and the list **forks**: two
+   versions, two disjoint views, nothing reporting an error.
+   ``--downgrade`` cannot reconcile a forked list; it overwrites v1 storage
+   with the v2 content and destroys whatever the older process wrote.
+
+   Deployment gives you at most a brief mixed-version window. Rollback gives
+   you no window at all: deploy, let lazy migration convert lists for hours
+   or days, then roll back for an unrelated reason, and every list that
+   migrated reads as empty in production. Recovery is ``--downgrade`` one
+   list at a time -- there is no bulk mode -- from a v2-capable checkout,
+   against a database served by the code you just rolled back to. That is
+   not a procedure to discover during an incident.
+
+   Migration forward is automatic, fleet-wide and inline. Recovery back is
+   manual and per-list. The general rule behind the setting: **no list may
+   become v2 until every process that might serve it can read v2, including
+   the release you would roll back to.**
+
+Once rc5 has been live long enough that rollback is off the table, migrate
+as a deliberate operator action::
+
+    actingweb-migrate-property-lists              # dry run
+    actingweb-migrate-property-lists --migrate
+
+Step 5: understand the new storage format
+-----------------------------------------
+
+Every **new** list is created in a new internal format ("v2") that stores
+items under sort keys rather than dense integer positions. Delete and insert
+become single writes: there is no shift loop, no stored length to disagree
+with, and therefore no way to produce the holes and duplicates this release
+exists to clean up.
+
+Existing lists keep working unchanged, indefinitely, on the hardened old
+paths. Nothing forces you to migrate.
+
+**Lazy migration.** With ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH`` set to a
+positive number, a healthy v1 list of at most that many items migrates on
+its next mutation. Three deliberate limits:
+
+- **Damaged lists are never migrated automatically.** Migration closes holes
+  in flight, which is correct when an operator runs the bulk script and reads
+  its report — but doing it silently under an ordinary ``append()`` would
+  erase the evidence: the hole closes, the destroyed item stays destroyed,
+  duplicate residue becomes indistinguishable from real data, and
+  ``verify()`` starts reporting the list healthy. Repair is always your
+  decision. Damaged lists keep serving v1 and keep raising until you act.
+- **It is off unless you enable it** (``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``
+  defaults to 0) — see step 4 for why. It is also inline and synchronous
+  when enabled: one ``append()`` to a 40-item list performs the entire
+  migration inside that request.
+
+The threshold is checked at the moment of the mutation, so "large lists stay
+v1 until I run the script" is not quite true: a ``clear()`` + ``extend()``
+whole-list rewrite migrates a list of any original size, because the first
+``append()`` inside ``extend()`` sees length 0.
+``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` is the only setting that makes
+"nothing migrates without me" true.
+
+**Bulk migration** (step 4 above) is for lists too large or too idle to
+migrate lazily, and is the only route for damaged lists once you have
+repaired them. ``migrate_to_v2()`` is idempotent and safe to interrupt and
+re-run.
+
+**List names containing ``#`` are refused.** ``#`` is reserved for internal
+v2 storage keys. New lists cannot be created with it; existing lists that
+have it keep working as v1 forever and are refused by migration. Rename them
+if you want them migrated. They are correctly isolated from v2 lists whose
+name is a prefix of theirs, so this is a migration blocker, not a data risk.
+
+**Positional reads cost more under v2.** ``lst[i]`` re-reads the list's key
+ordering before resolving the position, because resolving against a stale
+ordering returns the wrong item. A ``for i in range(len(lst)): lst[i]`` loop
+is therefore two queries per item. Use ``to_list()``, ``to_indexed_list()``
+or plain iteration — each is a single query for the whole list, in both
+formats. If you have such a loop, this is the one change likely to show up in
+your latency numbers.
+
+**Downgrade is unsupported.** ``migrate_property_lists.py --downgrade`` exists
+as an emergency converter only. If you use it, roll the application back to a
+pre-v2 release *first*: a downgraded list of 50 items or fewer is a
+lazy-migration candidate again, so a still-running v2-aware application
+migrates it straight back on its next write.
+
+PostgreSQL: one schema migration
+--------------------------------
+
+``properties.name`` widens from ``VARCHAR(255)`` to ``TEXT`` (metadata-only,
+no table rewrite)::
+
+    cd actingweb/db/postgresql/migrations && alembic upgrade head
+
+Apply it before running any v2 workload. The downgrade reverses it and will
+fail loudly if any name exceeds 255 characters at that point, which is
+intentional — downgrading the schema underneath live v2 keys should not
+silently truncate them.
+
+Repair API, if you would rather not use the scripts
+---------------------------------------------------
+
+.. code-block:: python
+
+   lst = actor.property_lists.notes
+   report = lst.verify(identity_key="id")   # read-only
+   if not report["healthy"]:
+       lst.compact()                        # closes holes, keeps duplicates
+
+``verify()``/``compact()`` also work on v2 lists, for a different purpose
+there: detecting and rebalancing sort keys that have grown long from repeated
+inserts at the same position.
+
 Behaviour change in rc4: MCP ``structuredContent`` is now opt-in
 =================================================================
 
 .. note::
 
    This section covers the ``v3.13.0rc4`` behaviour change. It is independent
-   of the ``rc3`` security fix and the ``rc1``/``rc2`` DynamoDB-scalability
-   steps below — read every section that falls between the version you are on
-   and the version you are upgrading to. It applies only if you expose MCP
-   tools; if you do not, skip to the next section.
+   of the ``rc5`` property-list changes above, the ``rc3`` security fix and
+   the ``rc1``/``rc2`` DynamoDB-scalability steps below — read every section
+   that falls between the version you are on and the version you are
+   upgrading to. It applies only if you expose MCP tools; if you do not, skip
+   to the next section.
 
 What changed
 ------------

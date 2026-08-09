@@ -4,6 +4,7 @@ import logging
 
 from actingweb.db import get_property
 from actingweb.handlers import base_handler
+from actingweb.property_list import ListCorruptionError
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +360,13 @@ class WwwHandler(base_handler.BaseHandler):
                     # For display, show summary
                     display_value = f"List with {list_length} items"
 
+                except ListCorruptionError as e:
+                    logger.error(f"List '{prop_name}' is corrupted: {e}")
+                    display_value = (
+                        "[List property is corrupted -- run "
+                        "verify()/compact() to repair]"
+                    )
+                    list_items = []
                 except Exception as e:
                     logger.error(f"Error loading list items for '{prop_name}': {e}")
                     display_value = "[List property - error loading items]"

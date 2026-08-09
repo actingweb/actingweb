@@ -110,6 +110,7 @@ class TestPropertyStoreBulkReads:
 class TestListPropertyPriming:
     def test_primed_list_serves_from_rows(self, config, actor_id):
         from actingweb.db import get_property_list
+        from actingweb.db.dynamodb.property import DbProperty
         from actingweb.property_list import ListProperty
 
         lst = ListProperty(actor_id, "mylist", config)
@@ -123,13 +124,58 @@ class TestListPropertyPriming:
             )
             fresh = ListProperty(actor_id, "mylist", config)
             fresh.prime_from_rows(rows)
-            # Metadata primed: len() must not hit the database
-            with mock.patch.object(
-                type(fresh), "_load_metadata", wraps=fresh._load_metadata
+
+            # v2 list: priming must hydrate both the metadata cache AND the
+            # rank-key cache from the bulk dump -- len()/to_list_from_rows()
+            # after priming must issue ZERO further get_range()/get() calls
+            # (the whole point of prime_from_rows() -- see Phase 4 of
+            # thoughts/plans/2026-08-08-property-list-index-integrity.md).
+            with (
+                mock.patch.object(
+                    DbProperty,
+                    "get_range",
+                    side_effect=AssertionError("get_range() after priming"),
+                ),
+                mock.patch.object(
+                    DbProperty,
+                    "get",
+                    side_effect=AssertionError("get() after priming"),
+                ),
             ):
                 assert len(fresh) == 3
+                assert fresh.to_list_from_rows(rows) == [
+                    {"a": 1},
+                    "plain string",
+                    [1, 2, 3],
+                ]
+
             # Items served from rows match the per-item read path exactly
             assert fresh.to_list_from_rows(rows) == lst.to_list()
+        finally:
+            lst.delete()
+
+    def test_to_list_is_one_range_query(self, config, actor_id):
+        """v2's whole storage-format point: to_list() on an N-item list is
+        ONE range query, not N GetItems."""
+        from actingweb.db.dynamodb.property import DbProperty
+        from actingweb.property_list import ListProperty
+
+        lst = ListProperty(actor_id, "querycountlist", config)
+        for i in range(20):
+            lst.append(f"item-{i}")
+        try:
+            fresh = ListProperty(actor_id, "querycountlist", config)
+            original_get_range = DbProperty.get_range
+            call_count = [0]
+
+            def _counting_get_range(self, *args, **kwargs):
+                call_count[0] += 1
+                return original_get_range(self, *args, **kwargs)
+
+            with mock.patch.object(DbProperty, "get_range", _counting_get_range):
+                result = fresh.to_list()
+            assert result == [f"item-{i}" for i in range(20)]
+            assert call_count[0] == 1
         finally:
             lst.delete()
 

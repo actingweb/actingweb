@@ -230,17 +230,29 @@ def migrate_actor(
             # operator gets a clean-looking report over damaged data and
             # migrates it away without ever seeing it.
             if report["missing_indices"] or report["orphan_indices"]:
-                refused.append((f"{actor_id}/{name}", "repair required"))
+                if not allow_damaged:
+                    refused.append((f"{actor_id}/{name}", "repair required"))
+                    logger.warning(
+                        f"actor={actor_id} list={name}: WOULD REFUSE -- "
+                        f"missing_indices={report['missing_indices']} "
+                        f"orphan_indices={report['orphan_indices']}. "
+                        f"Migration closes holes in flight and the damage "
+                        f"stops being reportable; repair first with "
+                        f"actingweb-verify-property-lists --repair, or pass "
+                        f"--migrate-damaged to migrate and accept the loss"
+                    )
+                    continue
+                # --migrate-damaged was passed, so predict what the real
+                # run will do rather than refusing: a dry run that reports
+                # a refusal the actual migration would not perform is
+                # useless as the gate the docs tell operators to use.
                 logger.warning(
-                    f"actor={actor_id} list={name}: WOULD REFUSE -- "
+                    f"actor={actor_id} list={name}: would migrate and CLOSE "
                     f"missing_indices={report['missing_indices']} "
-                    f"orphan_indices={report['orphan_indices']}. Migration "
-                    f"closes holes in flight and the damage stops being "
-                    f"reportable; repair first with "
-                    f"actingweb-verify-property-lists --repair, or pass "
-                    f"--migrate-damaged to migrate and accept the loss"
+                    f"orphan_indices={report['orphan_indices']} "
+                    f"(--migrate-damaged) -- the damage stops being "
+                    f"reportable once this runs"
                 )
-                continue
             if report["adjacent_duplicates"]:
                 logger.warning(
                     f"actor={actor_id} list={name}: would migrate "

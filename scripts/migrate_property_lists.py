@@ -166,6 +166,7 @@ def migrate_actor(
     config: Any,
     migrate: bool,
     limiter: RateLimiter,
+    identity_key: str | None = None,
 ) -> tuple[int, int, int, list[str]]:
     """Migrate (or dry-run report on) every v1 list belonging to one actor.
 
@@ -210,13 +211,22 @@ def migrate_actor(
             continue
 
         if not migrate:
-            report = list_prop.verify()
+            report = list_prop.verify(identity_key=identity_key)
             if report["adjacent_duplicates"]:
                 logger.warning(
                     f"actor={actor_id} list={name}: would migrate "
                     f"{report['readable_count']} items with "
                     f"{len(report['adjacent_duplicates'])} duplicate "
                     f"pair(s) preserved as-is"
+                )
+            for identity, positions in sorted(
+                (report.get("duplicate_identities") or {}).items(),
+                key=lambda kv: str(kv[0]),
+            ):
+                logger.warning(
+                    f"actor={actor_id} list={name}: would migrate with "
+                    f"{identity_key}={identity} duplicated at positions "
+                    f"{positions} -- migration preserves both copies"
                 )
             migrated += 1
             continue
@@ -320,6 +330,16 @@ def main() -> int:
         help="max lists processed per second (default 10; 0 = unlimited)",
     )
     parser.add_argument(
+        "--identity-key",
+        default=None,
+        help=(
+            "field name identifying an item (e.g. 'id'). The dry run's "
+            "duplicate warning otherwise compares raw stored bytes, which "
+            "misses a duplicate whose copies have been edited since, and "
+            "only looks at neighbouring rows"
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-file",
         default=".migrate_property_lists.checkpoint.json",
         help="resume state file (default .migrate_property_lists.checkpoint.json)",
@@ -373,7 +393,7 @@ def main() -> int:
         if not actor_id or checkpoint.is_done(actor_id):
             continue
         checked, migrated, errored, refused = migrate_actor(
-            actor_id, config, args.migrate, limiter
+            actor_id, config, args.migrate, limiter, args.identity_key
         )
         total_checked += checked
         total_migrated += migrated

@@ -1289,7 +1289,9 @@ class TestDuplicateDetectionAfterAnEdit:
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         report = prop_list.verify(identity_key="id")
-        assert report["adjacent_duplicates"] == [(1, 2)]
+        # Byte comparison still misses it -- that is the false negative.
+        assert report["adjacent_duplicates"] == []
+        assert report["duplicate_identities"] == {112: [1, 2]}
         assert report["healthy"] is False
 
     def test_identity_key_does_not_flag_distinct_items(self, monkeypatch, fake_store):
@@ -1308,7 +1310,7 @@ class TestDuplicateDetectionAfterAnEdit:
         )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
-        assert prop_list.verify(identity_key="id")["adjacent_duplicates"] == []
+        assert prop_list.verify(identity_key="id")["duplicate_identities"] == {}
 
     def test_items_without_the_key_fall_back_to_byte_comparison(
         self, monkeypatch, fake_store
@@ -1325,7 +1327,11 @@ class TestDuplicateDetectionAfterAnEdit:
         )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
-        assert prop_list.verify(identity_key="id")["adjacent_duplicates"] == [(1, 2)]
+        report = prop_list.verify(identity_key="id")
+        # Not identity-addressable, so excluded from the identity check --
+        # but still caught by the byte heuristic.
+        assert report["duplicate_identities"] == {}
+        assert report["adjacent_duplicates"] == [(1, 2)]
 
     def test_v2_lists_take_the_same_identity_key(self, monkeypatch, fake_store):
         actor_id = "actor-dup-v2"
@@ -1342,4 +1348,74 @@ class TestDuplicateDetectionAfterAnEdit:
         )
 
         assert prop_list.verify()["adjacent_duplicates"] == []
-        assert prop_list.verify(identity_key="id")["adjacent_duplicates"] == [(1, 2)]
+        assert prop_list.verify(identity_key="id")["duplicate_identities"] == {
+            2: [1, 2]
+        }
+
+    def test_identity_duplicates_need_not_be_adjacent(self, monkeypatch, fake_store):
+        """Adjacency is right for the byte heuristic and wrong for identity.
+
+        Shift residue is adjacent by construction, but a duplicate arising
+        any other way -- a failed read turning an upsert into an append, for
+        instance -- is under no obligation to be. A real deployment had the
+        same id at positions 31 and 36 and the sweep called the list healthy.
+        """
+        actor_id = "actor-dup-far-apart"
+        name = "embeddings"
+        items = [{"id": n, "vec": f"v{n}"} for n in range(8)]
+        items[6] = {"id": 1, "vec": "a newer vector for 1"}  # id 1 at 1 and 6
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+
+        # Neither byte-identical nor adjacent: invisible to the old check.
+        assert prop_list.verify()["adjacent_duplicates"] == []
+        assert prop_list.verify()["healthy"] is True
+
+        report = prop_list.verify(identity_key="id")
+        assert report["duplicate_identities"] == {1: [1, 6]}
+        assert report["healthy"] is False
+
+    def test_every_row_sharing_one_identity_is_reported(self, monkeypatch, fake_store):
+        """The pathological real case: 14 rows, one distinct id."""
+        actor_id = "actor-dup-all-same"
+        name = "embeddings_actions"
+        _seed_list(
+            fake_store, actor_id, name, [{"id": 3, "vec": f"v{n}"} for n in range(14)]
+        )
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        report = prop_list.verify(identity_key="id")
+        assert report["duplicate_identities"] == {3: list(range(14))}
+        assert report["healthy"] is False
+
+    def test_unhashable_identity_values_are_still_compared(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-dup-unhashable"
+        name = "tagged"
+        _seed_list(
+            fake_store,
+            actor_id,
+            name,
+            [{"id": ["a", 1]}, {"id": ["b", 2]}, {"id": ["a", 1]}],
+        )
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        duplicates = prop_list.verify(identity_key="id")["duplicate_identities"]
+        assert list(duplicates.values()) == [[0, 2]]

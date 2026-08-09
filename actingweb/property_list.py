@@ -1302,24 +1302,47 @@ class ListProperty:
                 count += 1
         return count
 
-    def _duplicate_identity(self, raw_value: str, identity_key: str | None) -> Any:
-        """The value two adjacent rows are compared on for duplicate
-        detection.
+    def _identity_of(self, raw_value: str, identity_key: str) -> Any:
+        """This row's value for ``identity_key``, or ``None`` if it has none.
 
-        Without ``identity_key`` this is the raw stored string, which only
-        finds duplicates whose copies are still byte-identical. With it,
-        it is that field of the decoded item, which keeps finding a
-        duplicate after either copy has been edited -- see ``verify()``.
+        Rows that are not dicts, or that lack the field, are not
+        identity-addressable and are excluded from identity duplicate
+        detection entirely -- lumping them together under a shared "no
+        identity" bucket would report every such row as a duplicate of
+        every other.
         """
-        if identity_key is None:
-            return raw_value
         decoded = self._decode_item(raw_value)
-        if isinstance(decoded, dict) and identity_key in decoded:
-            return (identity_key, decoded[identity_key])
-        # Not addressable by that key (wrong shape, or the field is
-        # absent): fall back to raw comparison rather than silently
-        # treating every such row as identical to its neighbour.
-        return raw_value
+        if not isinstance(decoded, dict) or identity_key not in decoded:
+            return None
+        value = decoded[identity_key]
+        try:
+            hash(value)
+        except TypeError:
+            # Unhashable identity (list/dict); compare on a stable
+            # serialization instead of refusing to check it.
+            return ("json", json.dumps(value, sort_keys=True, default=str))
+        return value
+
+    @staticmethod
+    def _identity_duplicates(
+        identities: list[tuple[int, Any]],
+    ) -> dict[Any, list[int]]:
+        """Group positions by identity, keeping only identities that appear
+        more than once -- ANYWHERE in the list, not merely adjacently.
+
+        Adjacency is the right constraint for the byte heuristic, because
+        the shift-loop residue it looks for is always adjacent by
+        construction. It is the wrong constraint here: a repeated identity
+        is a defect wherever the two copies sit, and a real deployment had
+        the same id at positions 31 and 36 with the sweep reporting the
+        list healthy. One dict pass finds it.
+        """
+        by_identity: dict[Any, list[int]] = {}
+        for index, identity in identities:
+            if identity is None:
+                continue
+            by_identity.setdefault(identity, []).append(index)
+        return {k: v for k, v in by_identity.items() if len(v) > 1}
 
     def _v2_verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check for v2 lists.
@@ -1348,18 +1371,27 @@ class ListProperty:
 
         adjacent_duplicates: list[tuple[int, int]] = []
         for i in range(len(pairs) - 1):
-            left = self._duplicate_identity(pairs[i][1], identity_key)
-            right = self._duplicate_identity(pairs[i + 1][1], identity_key)
-            if left == right:
+            if pairs[i][1] == pairs[i + 1][1]:
                 adjacent_duplicates.append((i, i + 1))
 
-        return {
+        report: dict[str, Any] = {
             "format": 2,
             "length": len(pairs),
             "max_rank_length": max_rank_length,
             "adjacent_duplicates": adjacent_duplicates,
             "healthy": max_rank_length < _V2_RANK_MAX_LEN - 40,
         }
+        if identity_key is not None:
+            duplicates = self._identity_duplicates(
+                [
+                    (i, self._identity_of(raw, identity_key))
+                    for i, (_, raw) in enumerate(pairs)
+                ]
+            )
+            report["duplicate_identities"] = duplicates
+            if duplicates:
+                report["healthy"] = False
+        return report
 
     def verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check against stored rows.
@@ -1387,25 +1419,38 @@ class ListProperty:
               (holes)
             - orphan_indices: rows present at or past ``stored_length``
             - adjacent_duplicates: list of ``(a, b)`` readable-index pairs
-              where ``b == a + 1`` and the two rows look like the same item
-              -- see below
-            - healthy: True iff there are no holes, no orphans, and no
-              adjacent-duplicate hits
+              where ``b == a + 1`` and both rows hold byte-identical stored
+              content -- see below
+            - duplicate_identities: present only when ``identity_key`` is
+              given. ``{identity: [positions]}`` for every identity
+              appearing more than once ANYWHERE in the list
+            - healthy: True iff there are no holes, no orphans, no
+              adjacent-duplicate hits, and no repeated identities
 
-        **Duplicate detection has a false-NEGATIVE, not just false
-        positives.** By default two adjacent rows count as duplicates only
-        when their stored bytes are identical. An interrupted delete/insert
-        shift leaves exactly that -- but the moment either copy is edited,
-        the bytes diverge and the signal disappears, silently, for
-        precisely the lists that have been used since the damage. A real
-        deployment hit this: a duplicated item edited afterwards reported
-        ``adjacent_duplicates: []`` while both copies were still there.
+        **The two duplicate checks answer different questions, and each is
+        blind to what the other catches.**
 
-        Pass ``identity_key`` to compare on the field that identifies an
-        item instead of on its bytes; that keeps finding the duplicate
-        after either copy changes. (The reverse hazard is unchanged and
-        still a heuristic: a legitimate list may hold two adjacent items
-        with the same identity.)
+        ``adjacent_duplicates`` compares raw stored bytes of neighbouring
+        rows. That is exactly the residue an interrupted delete/insert
+        shift leaves -- always adjacent, always byte-identical by
+        construction. Its false negative: the moment either copy is edited
+        the bytes diverge and the signal vanishes, silently, for precisely
+        the lists that have been used since the damage. A real deployment
+        hit this -- a duplicated item edited afterwards reported
+        ``adjacent_duplicates: []`` with both copies still present.
+
+        ``duplicate_identities`` compares the ``identity_key`` field across
+        the WHOLE list. It survives later edits, and it does not assume the
+        copies stayed neighbours -- a real deployment had the same ``id``
+        at positions 31 and 36, which any adjacency-bounded check reports
+        as healthy. Duplicates arising from a different mechanism (a failed
+        read turning an upsert into an append, say) are under no obligation
+        to be adjacent at all.
+
+        Pass ``identity_key`` whenever your items have an identifying
+        field. It remains a heuristic in the other direction: a list that
+        legitimately holds two items with the same identity will be
+        reported.
         """
         if self._is_v2():
             return self._v2_verify(identity_key=identity_key)
@@ -1434,14 +1479,20 @@ class ListProperty:
                 continue
             va = rows.get(self._get_item_property_name(a))
             vb = rows.get(self._get_item_property_name(b))
-            if va is None or vb is None:
-                continue
-            if self._duplicate_identity(va, identity_key) == self._duplicate_identity(
-                vb, identity_key
-            ):
+            if va is not None and va == vb:
                 adjacent_duplicates.append((a, b))
 
-        return {
+        duplicate_identities: dict[Any, list[int]] = {}
+        if identity_key is not None:
+            duplicate_identities = self._identity_duplicates(
+                [
+                    (i, self._identity_of(raw, identity_key))
+                    for i in ordered_present
+                    if (raw := rows.get(self._get_item_property_name(i))) is not None
+                ]
+            )
+
+        report: dict[str, Any] = {
             "stored_length": stored_length,
             "readable_count": readable_count,
             "missing_indices": missing_indices,
@@ -1451,6 +1502,11 @@ class ListProperty:
             and not orphan_indices
             and not adjacent_duplicates,
         }
+        if identity_key is not None:
+            report["duplicate_identities"] = duplicate_identities
+            if duplicate_identities:
+                report["healthy"] = False
+        return report
 
     def _v2_compact(self) -> dict[str, Any]:
         """Rebalance a v2 list's rank keys back to short, evenly-spaced

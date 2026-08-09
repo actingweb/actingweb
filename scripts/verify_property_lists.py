@@ -201,6 +201,15 @@ def sweep_actor(
                 f"actor={actor_id} list={name}: duplicate residue reported "
                 f"-- --repair never rewrites this, resolve manually"
             )
+        if report.get("duplicate_identities"):
+            for identity, positions in sorted(
+                report["duplicate_identities"].items(), key=lambda kv: str(kv[0])
+            ):
+                logger.warning(
+                    f"actor={actor_id} list={name}: {identity_key}={identity} "
+                    f"appears at positions {positions} -- --repair never "
+                    f"rewrites this, resolve manually"
+                )
 
         if not repair:
             unhealthy_after += 1

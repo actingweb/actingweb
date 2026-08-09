@@ -123,12 +123,20 @@ CHANGED
   keep raising ``ListCorruptionError`` until then.
 - **New environment variable ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``**
   (default 50) sets the largest v1 list that may migrate inline during a
-  user's write; **0 disables lazy migration entirely**. Migration is
-  synchronous, so one ``append()`` to a 40-item v1 list performs the whole
-  migration — dozens of sequential writes plus two full-partition reads —
-  inside that request. Latency-sensitive and serverless deployments can now
-  keep that out of user traffic and sweep with the rate-limited script
-  instead.
+  user's write; **0 disables lazy migration entirely**. Consider setting it
+  to 0 for this release's first deployment: it is a **rollback-safety
+  control** before it is a latency one. A pre-3.13.0rc5 process does not
+  error on a migrated list — it reads it as *empty*, because a v2 list
+  stores no ``length`` field and an older reader takes the absence as zero;
+  a write from that process then forks the list across both formats with
+  nothing reporting an error, and ``--downgrade`` cannot reconcile a forked
+  list. Deployment gives a brief mixed-version window; **rollback gives
+  none** — every list that migrated before the rollback reads as empty
+  afterwards, recoverable only one list at a time. With the limit at 0 the
+  release changes no data, so rolling back is a pure code rollback.
+  Secondarily: migration is synchronous, so one ``append()`` to a 40-item
+  list performs the whole migration — dozens of sequential writes plus two
+  full-partition reads — inside that request.
 - ``ListProperty.storage_format()`` (new, public) returns 1 or 2 from a
   single point read. ``scripts/migrate_property_lists.py`` now uses it
   instead of ``verify()`` for format detection, which was fetching the

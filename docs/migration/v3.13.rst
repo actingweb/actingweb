@@ -126,7 +126,44 @@ The bulk item POST gained the equivalent bound.
 ``range(start, ...)`` unnormalized, so ``index(value, -1)`` could return
 ``-1`` as an index. Both storage formats now match ``list.index``.
 
-Step 4: understand the new storage format
+Step 4: decide when lists are allowed to change format
+------------------------------------------------------
+
+.. danger::
+
+   **Set ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` for this release's first
+   deployment.** Then no list changes format, and rolling back stays a pure
+   code rollback with no data to reconcile. Migrate later, deliberately.
+
+   The reason is not latency, it is rollback. A pre-rc5 process does not
+   error on a migrated list -- it reads it as **empty**, silently. The
+   metadata row still exists, so the list "exists"; a v2 list stores no
+   ``length`` field, and an older reader takes the absence as zero. A write
+   from that process then lands in v1 storage and the list **forks**: two
+   versions, two disjoint views, nothing reporting an error.
+   ``--downgrade`` cannot reconcile a forked list; it overwrites v1 storage
+   with the v2 content and destroys whatever the older process wrote.
+
+   Deployment gives you at most a brief mixed-version window. Rollback gives
+   you no window at all: deploy, let lazy migration convert lists for hours
+   or days, then roll back for an unrelated reason, and every list that
+   migrated reads as empty in production. Recovery is ``--downgrade`` one
+   list at a time -- there is no bulk mode -- from a v2-capable checkout,
+   against a database served by the code you just rolled back to. That is
+   not a procedure to discover during an incident.
+
+   Migration forward is automatic, fleet-wide and inline. Recovery back is
+   manual and per-list. The general rule behind the setting: **no list may
+   become v2 until every process that might serve it can read v2, including
+   the release you would roll back to.**
+
+Once rc5 has been live long enough that rollback is off the table, migrate
+as a deliberate operator action::
+
+    poetry run python scripts/migrate_property_lists.py            # dry run
+    poetry run python scripts/migrate_property_lists.py --migrate
+
+Step 5: understand the new storage format
 -----------------------------------------
 
 Every **new** list is created in a new internal format ("v2") that stores
@@ -148,20 +185,22 @@ next mutation. Two deliberate limits:
   duplicate residue becomes indistinguishable from real data, and
   ``verify()`` starts reporting the list healthy. Repair is always your
   decision. Damaged lists keep serving v1 and keep raising until you act.
-- **You can turn it off.** Migration is inline and synchronous — one
+- **You can turn it off** — see step 4, which is the reason you should for
+  a first deployment. Migration is also inline and synchronous: one
   ``append()`` to a 40-item list performs the entire migration inside that
-  request. Set ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` to keep it out of
-  user traffic entirely, or raise it above 50 to let larger lists migrate
-  inline. On Lambda or any latency-sensitive deployment, ``0`` plus a
-  scheduled sweep is the safer shape.
+  request.
 
-**Bulk migration**, for lists too large or too idle to migrate lazily, and
-the only route for damaged lists once you have repaired them::
+The threshold is checked at the moment of the mutation, so "large lists stay
+v1 until I run the script" is not quite true: a ``clear()`` + ``extend()``
+whole-list rewrite migrates a list of any original size, because the first
+``append()`` inside ``extend()`` sees length 0.
+``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` is the only setting that makes
+"nothing migrates without me" true.
 
-    poetry run python scripts/migrate_property_lists.py            # dry run
-    poetry run python scripts/migrate_property_lists.py --migrate
-
-``migrate_to_v2()`` is idempotent and safe to interrupt and re-run.
+**Bulk migration** (step 4 above) is for lists too large or too idle to
+migrate lazily, and is the only route for damaged lists once you have
+repaired them. ``migrate_to_v2()`` is idempotent and safe to interrupt and
+re-run.
 
 **List names containing ``#`` are refused.** ``#`` is reserved for internal
 v2 storage keys. New lists cannot be created with it; existing lists that

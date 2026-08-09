@@ -170,7 +170,17 @@ gradual, never required for a list to keep functioning:
     traffic entirely and rely on the rate-limited bulk script; set it
     higher than 50 to let bigger lists migrate inline. On Lambda or any
     latency-sensitive deployment, ``0`` plus a scheduled sweep is the safer
-    shape.
+    shape -- and see the rollback hazard below, which is the stronger
+    reason to reach for ``0``.
+
+  The size threshold is checked **at the moment of the mutation**, which is
+  not the same as "large lists stay v1 until I run the script". A
+  ``clear()`` followed by ``extend()`` -- a whole-list rewrite, the shape a
+  prune or a re-sync usually takes -- migrates a list of *any* original
+  size, because the first ``append()`` inside ``extend()`` sees a list of
+  length 0. If you are planning a controlled rollout, that is the case to
+  know about; ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` is the only setting
+  that makes "no list migrates without me" true.
 - **Bulk**: larger or idle lists are migrated with the operator script::
 
     poetry run python scripts/migrate_property_lists.py            # dry run
@@ -182,6 +192,39 @@ gradual, never required for a list to keep functioning:
 - **Programmatic**: ``actor.property_lists.<name>._list_prop.migrate_to_v2()``
   migrates one list directly. Idempotent -- safe to call again (a no-op
   once the list is already v2) and safe to re-run after an interruption.
+
+.. danger::
+
+   **No list may become v2 until every process that serves it can read v2 --
+   and that includes the release you might roll back to.**
+
+   An older process does not error on a v2 list. It reads it as **empty**,
+   silently: the metadata row still exists (so the list "exists"), but a v2
+   list stores no ``length`` field and a pre-v2 reader takes the absence as
+   zero. Worse, a write from that process lands in v1 storage and the list
+   **forks** -- two versions, two disjoint views of one list, neither
+   reporting anything wrong. ``--downgrade`` cannot reconcile a forked list
+   afterwards; it overwrites v1 storage with the v2 content, destroying
+   whatever the older process wrote there.
+
+   The dangerous direction is **rollback**, not deployment. A deploy leaves
+   at most a brief mixed-version window. A rollback does not: deploy, let
+   lazy migration convert lists for hours or days, then roll back for an
+   unrelated reason, and *every list that migrated* now reads as empty in
+   production. There is no timing to be lucky about, and recovery is
+   ``--downgrade`` one list at a time, from a v2-capable checkout, against a
+   database being served by the code you just rolled back to.
+
+   Migration forward is automatic, fleet-wide and inline. Recovery back is
+   manual and per-list. Size your caution to that asymmetry.
+
+   **The control is** ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0``. Set it for
+   a release's first deployment and no list changes format, so rolling back
+   stays a pure code rollback with no data to reconcile. Migrate later, once
+   the release has been live long enough that rollback is off the table, as
+   a deliberate rate-limited step via
+   ``scripts/migrate_property_lists.py --migrate``. It is a rollback-safety
+   control first and a latency control second.
 
 .. warning::
 

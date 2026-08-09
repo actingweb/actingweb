@@ -25,11 +25,12 @@ Version Migrations
 **v3.13 Migration**
    Guide for upgrading to ActingWeb 3.13, covering the DynamoDB scalability
    work (``rc1``/``rc2``), the MCP trust-cache authorization fix (``rc3``),
-   the MCP ``structuredContent`` behaviour change in ``rc4``, and the
-   property-list changes in ``rc5``. **If you use list properties, read the
-   ``rc5`` section before upgrading** — list reads now fail loudly on
-   pre-existing data damage that earlier releases silently skipped past, so
-   sweeping and repairing comes first.
+   the MCP ``structuredContent`` behaviour change in ``rc4``, the
+   property-list changes in ``rc5``, and migration's refusal to convert
+   damaged lists in ``rc6``. **If you use list properties, read the ``rc5``
+   section before upgrading** — list reads now fail loudly on pre-existing
+   data damage that earlier releases silently skipped past, so sweeping and
+   repairing comes first.
 
 **v3.11 Migration**
    Guide for upgrading to ActingWeb 3.11, covering the one new PostgreSQL

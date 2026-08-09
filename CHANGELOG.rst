@@ -5,6 +5,44 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.13.0rc6: August 9, 2026
+--------------------------
+
+.. note::
+
+   Refines the ``rc5`` property-list work: bulk migration now refuses lists
+   with holes or orphans instead of silently closing them. Only affects
+   deployments that run ``actingweb-migrate-property-lists``.
+
+CHANGED
+~~~~~~~
+
+- **Migration now refuses a damaged list.**
+  ``actingweb-migrate-property-lists --migrate`` and
+  ``ListProperty.migrate_to_v2()`` refuse a list whose ``verify()`` reports
+  missing or orphaned indices, and the dry run reports those lists as
+  needing repair rather than counting them as "would migrate" — it exits
+  ``1`` when any exist, so ``0`` means the migration has nothing to trip
+  over. Migrating damaged data is not merely lossy but *unreportably*
+  lossy: migration renumbers the survivors, so afterwards the hole is
+  gone, the list verifies healthy, and nothing is left to say an item was
+  destroyed. In ``rc5`` the dry run warned about duplicate residue and said
+  nothing whatsoever about holes, so a sweep over a fleet containing one
+  could report "0 refused, 0 errors" and an operator would proceed past the
+  last moment the damage was visible. Lazy migration already refused
+  damaged lists on exactly these grounds; this applies the same rule to the
+  deliberate path. Repair first
+  (``actingweb-verify-property-lists --repair``), or pass
+  ``--migrate-damaged`` / ``migrate_to_v2(allow_damaged=True)`` to migrate
+  anyway — which logs what it is giving up.
+
+  Duplicate residue is unaffected and still migrates: it stays visible
+  after conversion, since a v2 list's ``verify()`` reports duplicates the
+  same way a v1 list's does, so migrating it destroys no evidence. Only
+  holes and orphans gate.
+- A successful migration that closed holes (only reachable via
+  ``--migrate-damaged``) now logs at WARNING rather than INFO.
+
 DOCUMENTATION
 ~~~~~~~~~~~~~
 
@@ -22,6 +60,12 @@ DOCUMENTATION
   migration guide's repair step (where operators are told to run it), the
   property-lists guide, and ``compact()``'s docstring, with a regression
   test pinning the measured interruption states. No behaviour change.
+- Corrected two stale statements about lazy migration, left behind when its
+  default changed to off in 3.13.0rc5: the downgrade-ordering warning
+  described a 50-item list as "by definition a lazy-migration candidate"
+  (true only where an operator has raised the limit), and the bulk script's
+  own docstring still opened by describing lazy migration as the normal
+  path.
 
 v3.13.0rc5: August 9, 2026
 --------------------------

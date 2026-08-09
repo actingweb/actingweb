@@ -196,12 +196,33 @@ gradual, never required for a list to keep functioning:
     actingweb-migrate-property-lists              # dry run
     actingweb-migrate-property-lists --migrate
 
-  The script reports lists it refuses to migrate (names containing
-  ``#`` -- rename first) and any duplicate-value residue it preserves
-  as-is.
+  The script reports lists it refuses to migrate -- names containing ``#``
+  (rename first) and lists with holes or orphans (repair first) -- and any
+  duplicate-value residue it preserves as-is. The dry run exits ``1`` if
+  anything would be refused, so ``0`` means the migration has nothing to
+  trip over; treat that as the gate rather than reading the log.
 - **Programmatic**: ``actor.property_lists.<name>._list_prop.migrate_to_v2()``
   migrates one list directly. Idempotent -- safe to call again (a no-op
   once the list is already v2) and safe to re-run after an interruption.
+
+.. warning::
+
+   **Migration refuses a damaged list, and this is worth understanding
+   rather than working around.** Migrating a list with a hole in it is not
+   merely lossy -- it is *unreportably* lossy. The surviving rows are
+   renumbered, so afterwards the hole is gone, the list verifies healthy,
+   and nothing is left to say an item was ever destroyed. Repair first
+   (``actingweb-verify-property-lists --repair``, or ``compact()``), which
+   closes the hole while leaving the duplicate evidence intact, and the
+   question does not arise.
+
+   ``--migrate-damaged`` (or ``migrate_to_v2(allow_damaged=True)``) exists
+   for the operator who has looked at the damage and decided to move on. It
+   logs what it is giving up.
+
+   Duplicate residue does **not** block migration, because it survives the
+   conversion visibly -- a v2 list's ``verify()`` reports duplicates the
+   same way a v1 list's does. Only holes and orphans gate.
 
 .. danger::
 
@@ -246,12 +267,16 @@ gradual, never required for a list to keep functioning:
    takes no lock against concurrent writes and is not part of the normal
    operational flow -- do not script it into routine tooling.
 
-   **Order matters.** A downgraded list with <= 50 items is, by
+   **Order matters.** Where lazy migration has been enabled, a downgraded
+   list at or under ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH`` is, by
    definition, a lazy-migration candidate again -- if the *current*
    application (the one with v2 support) is still running against it, its
    very next mutation (``append``/``insert``/item ``__setitem__``/
    ``__delitem__``) migrates it straight back to v2, silently undoing the
-   downgrade. Roll the application back to the pre-v2 release **first**,
+   downgrade. At the default of 0 that particular race is off, but the
+   ordering rule is the same either way, because a v2-aware application
+   still writes v2 to any list it creates or converts.
+   Roll the application back to the pre-v2 release **first**,
    then run ``--downgrade`` against the database from a checkout that
    still has v2 support (the tool itself needs the v2 code to read the
    list it's converting) -- never the other way around.

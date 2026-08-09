@@ -41,6 +41,17 @@ Any of these, roughly in increasing cost:
    reason `thoughts/plans/2026-08-08-property-list-index-integrity.md` ruled
    transactions out for the original shift-loop fix.
 
+## Why the current failure mode is at least loud
+
+Worth recording, because it is the strongest part of the argument for leaving
+this as-is until the redesign lands: after a crashed compact, `_v2_verify()`'s
+`length` goes from `n` to close to `2n`, and so does `len(mylist)`. That is a
+coarse signal but a reliable one, and it does not depend on the
+adjacent-duplicate heuristic — which is *not* guaranteed to catch this, since
+an item's old and new ranks need not sort adjacently. The reordering failure
+mode the alternative design would produce has no signal at all: same length,
+same values, healthy rank lengths, `verify()` reports nothing.
+
 ## Context
 
 - Reachability is low: `compact()` under v2 is a rank-length rebalance, invoked

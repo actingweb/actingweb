@@ -306,6 +306,45 @@ class TestDowngradeToV1:
         assert fresh.verify().get("format") != 2
         assert fresh.to_list() == ["a", "b", "c"]
 
+    def test_downgrade_does_not_delete_a_hash_named_sibling_list(self, test_actor):
+        """--downgrade's v2 cleanup must not delete a legacy '#'-named
+        sibling list's rows.
+
+        A list named "foo-#bar" stores "list:foo-#bar-0", which sorts inside
+        the byte range v2 list "foo" occupies. The cleanup loop deletes every
+        row it is handed, so reading that range directly (rather than through
+        the rank-shape filter) silently emptied the sibling. Same failure mode
+        as the P1 fixed in the library, reached from a call site that bypassed
+        the filtered helper. Found by review, not by the existing downgrade
+        tests -- none of them had a hash-named sibling present.
+        """
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        # The innocent bystander: a pre-Phase-4 list whose name contains '#'.
+        # Migration refuses these, so they stay v1 indefinitely, by design.
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "sibling-#legacy", ["keep-1", "keep-2"]
+        )
+
+        # The downgrade target: a v2 list whose name is a prefix of it.
+        target = test_actor.property_lists.sibling
+        target.append("a")
+        target.append("b")
+        assert target.verify()["format"] == 2
+
+        result = script.downgrade_to_v1(test_actor.id, "sibling", test_actor.config)
+        assert result["downgraded"] is True
+        assert result["item_count"] == 2
+
+        # The target came back as v1 with its content intact...
+        downgraded = test_actor.property_lists.sibling
+        assert downgraded.verify().get("format") != 2
+        assert downgraded.to_list() == ["a", "b"]
+
+        # ...and the sibling was not touched.
+        sibling = getattr(test_actor.property_lists, "sibling-#legacy")
+        assert sibling.to_list() == ["keep-1", "keep-2"]
+
     def test_downgrade_v1_list_is_a_noop(self, test_actor):
         import migrate_property_lists as script  # type: ignore[import-not-found]
 

@@ -655,3 +655,52 @@ resolved, and the plan records how:
   end to end. Fixed by adding the `{"_type": "list"}` creation example. The
   automated suite could not have caught this; its fixtures create lists
   through a helper, so the gap is invisible from inside the tests.
+
+### Second review round: a seventh consumer, in the emergency downgrade tool
+
+After the fixes above were pushed, both reviewers were re-triggered explicitly
+— neither re-runs on a push (`claude-code-review.yml` is configured
+`types: [opened]`, and Codex needs an `@codex review` mention). The re-review
+prompt asked directly whether a seventh consumer of a v2 list's storage range
+existed, since the whole isolation argument had already been wrong once.
+
+It did. `downgrade_to_v1()` in `scripts/migrate_property_lists.py` deleted the
+v2 rows by computing `_v2_bounds()` and issuing its own raw `get_range()`,
+bypassing `_v2_item_names_in_range()` and therefore the rank-shape filter. The
+cleanup loop deletes every row it is handed, so `--downgrade <actor>/foo` on an
+actor that also has a legacy list named `foo-#bar` silently deleted that
+sibling's items and metadata — the identical failure mode as the original
+finding, reintroduced by a call site outside `property_list.py`.
+
+Now routed through the filtered helper. Covered by
+`test_downgrade_does_not_delete_a_hash_named_sibling_list`, confirmed to fail
+against the pre-fix code.
+
+Two things worth drawing out of this, since it is the second time the same
+argument failed:
+
+- **My exhaustiveness claim was scoped to a file, and I did not say so.** The
+  fix and the addendum above both say "all six consumers of the range". That
+  was true of `actingweb/property_list.py` and false of the repository —
+  `scripts/` reaches into the same private helpers with a `noqa: SLF001`
+  escape hatch, which is exactly the kind of call site a within-module audit
+  does not see. A grep for `_v2_bounds|get_range(` across `actingweb` **and**
+  `scripts` finds it immediately; that is the check I should have run and did
+  not. Re-run now: three consumers in `property_list.py` (all filtered) and no
+  others.
+- **Asking the reviewer to attack a specific claim worked better than asking
+  it to review.** The finding came back against the exact question posed. The
+  generic review of the same code an hour earlier did not surface it.
+
+The re-review also independently re-derived and confirmed the three arguments
+it was asked to challenge: the shape filter is exact rather than merely
+sufficient (`PropertyStore` rejects any key starting with `list:`, closing the
+crafted-scalar-property path around it); the `insert`/`append` versus
+`setitem`/`delitem` asymmetry is structural, since the former write
+conditionally and can only misplace; and the `_v2_compact()` trade holds. It
+added one observation now recorded in the todo — a crashed compact roughly
+doubles the reported length, which is a coarser but far more reliable signal
+than the adjacent-duplicate heuristic, since an item's old and new ranks need
+not sort adjacently.
+
+Codex had not re-reviewed at the time of writing.

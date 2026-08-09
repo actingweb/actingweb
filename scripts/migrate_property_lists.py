@@ -229,12 +229,13 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
     ):
         raise RuntimeError(f"list metadata write failed for '{list_name}'")
 
-    # Delete the v2 rows.
-    lower, upper = list_prop._v2_bounds()  # noqa: SLF001 -- emergency tool
-    range_db = get_property(config)
-    v2_rows = range_db.get_range(
-        actor_id=actor_id, lower=lower, upper=upper, keys_only=True
-    )
+    # Delete the v2 rows. Go through _v2_item_names_in_range() rather than
+    # reading the byte range directly: the range alone also covers a legacy
+    # '#'-named sibling list's rows (a list named "foo-#bar" stores
+    # "list:foo-#bar-0", which sorts inside list "foo"'s bounds), and this
+    # loop deletes everything it is handed. The helper applies the rank-shape
+    # filter that keeps the two apart.
+    v2_rows = list_prop._v2_item_names_in_range()  # noqa: SLF001 -- emergency tool
     for v2_name in v2_rows:
         del_db = get_property(config)
         if not del_db.set(actor_id=actor_id, name=v2_name, value=None):

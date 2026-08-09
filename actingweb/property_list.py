@@ -184,6 +184,17 @@ class ListProperty:
     def _is_v2(self) -> bool:
         return self._format() == 2
 
+    def storage_format(self) -> int:
+        """Which storage format this list uses: 1 (dense integers) or 2
+        (fractional rank keys).
+
+        One point read of the metadata row. Callers that only need the
+        format -- the operator sweep scripts deciding what to do with a
+        list -- should use this rather than ``verify()``, which fetches the
+        actor's whole property partition to check integrity as well.
+        """
+        return self._format()
+
     def _decode_item(self, item_str: str) -> Any:
         try:
             return json.loads(item_str)
@@ -364,9 +375,24 @@ class ListProperty:
 
         `rows` is the result of a bulk fetch_all_including_lists() read.
         Priming avoids re-reading the `list:<name>-meta` row that the bulk
-        read already returned, and for v2 lists also avoids a separate
-        range query for length/positional lookups. Ignores missing or
-        unparsable metadata (the normal lazy path then applies).
+        read already returned, and for v2 lists also serves `len()`,
+        `to_list_from_rows()` and iteration with no further queries.
+
+        It does NOT make positional access free. `self[i]`, `pop()` and
+        `remove()` re-read the rank keys before acting, deliberately: a
+        primed snapshot can be arbitrarily old by the time one of them
+        runs, and resolving a position against a stale map means reading —
+        or destroying — the wrong item. So a `for i in range(len(lst))`
+        loop over `lst[i]` costs two queries per item under v2 even after
+        priming.
+
+        Use `to_list()`, `to_indexed_list()` or iteration for that: all
+        three are a single range query regardless of length, and
+        `to_indexed_list()` gives the `(index, item)` pairs such a loop is
+        usually reaching for.
+
+        Ignores missing or unparsable metadata (the normal lazy path then
+        applies).
         """
         meta_str = rows.get(self._get_meta_property_name())
         if meta_str is None:
@@ -988,41 +1014,55 @@ class ListProperty:
         return list(enumerate(self.to_list()))
 
     def _v2_pop(self, index: int) -> Any:
-        """Read and remove the item at ``index``, resolving its rank ONCE.
+        """Read and remove the item at ``index``.
 
         ``self[index]`` followed by ``del self[index]`` is not good enough
-        under v2: each refreshes the rank map independently, so a concurrent
-        mutation landing between them makes pop() return one item and delete
-        a different one. Resolving the rank a single time and using it for
-        both the read and the delete keeps the pair consistent — whatever it
-        returns is exactly what it removed.
+        under v2: each resolves the rank map independently, so a concurrent
+        mutation between them makes pop() return one item and delete a
+        different one. Resolving the rank once is necessary but still not
+        sufficient — a concurrent ``__setitem__`` on that same rank between
+        the read and the delete would discard the other writer's value while
+        reporting the one we saw, which is not a valid ordering of the two
+        operations either way round. So the delete is CONDITIONAL on the
+        exact bytes that were read; if it fails, everything is re-resolved
+        and tried again. What pop() returns is always what it removed.
+
+        The retry also covers what would otherwise look like corruption: a
+        row missing after the forced refresh usually means another writer
+        got there first, which is an ordinary race, not damaged storage.
         """
-        ranks = self._v2_ensure_rank_cache(force=True)
-        length = len(ranks)
-        if length == 0:
-            raise IndexError("pop from empty list")
-        orig_index = index
-        if index < 0:
-            index = length + index
-        if index < 0 or index >= length:
-            raise IndexError(f"List index {orig_index} out of range (length: {length})")
+        for _attempt in range(_V2_MAX_RANK_RETRIES):
+            ranks = self._v2_ensure_rank_cache(force=True)
+            length = len(ranks)
+            if length == 0:
+                raise IndexError("pop from empty list")
+            resolved = index + length if index < 0 else index
+            if resolved < 0 or resolved >= length:
+                raise IndexError(f"List index {index} out of range (length: {length})")
 
-        rank = ranks[index]
-        name = self._v2_item_name(rank)
+            rank = ranks[resolved]
+            name = self._v2_item_name(rank)
 
-        item_db = get_property(self.config)
-        item_str = item_db.get(actor_id=self.actor_id, name=name)
-        if item_str is None:
-            raise ListCorruptionError(self.name, index)
-        item = self._decode_item(item_str)
+            item_db = get_property(self.config)
+            item_str = item_db.get(actor_id=self.actor_id, name=name)
+            if item_str is None:
+                # Vanished between the range read and this get -- another
+                # writer removed it. Re-resolve rather than calling it
+                # corruption.
+                continue
+            item = self._decode_item(item_str)
 
-        del_db = get_property(self.config)
-        if not del_db.set(actor_id=self.actor_id, name=name, value=None):
-            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
-
-        del ranks[index]
-        self._v2_touch_metadata()
-        return item
+            del_db = get_property(self.config)
+            if del_db.delete_if_value_equals(
+                actor_id=self.actor_id, name=name, value=item_str
+            ):
+                del ranks[resolved]
+                self._v2_touch_metadata()
+                return item
+            # Value changed or row already gone -- re-resolve and retry.
+        raise RuntimeError(
+            f"list '{self.name}' pop: too many concurrent modifications, retry later"
+        )
 
     def pop(self, index: int = -1) -> Any:
         """Remove and return item at index (default last)."""
@@ -1154,25 +1194,38 @@ class ListProperty:
         matched. Deleting the rank the match came from removes exactly the
         item that was matched, or nothing.
         """
-        pairs = self._v2_load_full()
-        for i, (rank, raw_value) in enumerate(pairs):
-            if self._decode_item(raw_value) != value:
-                continue
-            del_db = get_property(self.config)
-            if not del_db.set(
-                actor_id=self.actor_id, name=self._v2_item_name(rank), value=None
-            ):
-                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
-            # _v2_load_full() just set the cache to exactly these ranks in
-            # this order, so dropping entry i keeps it consistent.
-            ranks = self._v2_rank_cache
-            if ranks is not None and i < len(ranks) and ranks[i] == rank:
-                del ranks[i]
-            else:  # pragma: no cover -- defensive
-                self._v2_rank_cache = None
-            self._v2_touch_metadata()
-            return
-        raise ValueError(f"{value} not in list")
+        for _attempt in range(_V2_MAX_RANK_RETRIES):
+            pairs = self._v2_load_full()
+            for i, (rank, raw_value) in enumerate(pairs):
+                if self._decode_item(raw_value) != value:
+                    continue
+                del_db = get_property(self.config)
+                if not del_db.delete_if_value_equals(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(rank),
+                    value=raw_value,
+                ):
+                    # Overwritten or already deleted since the scan -- the
+                    # match is stale, so rescan rather than deleting whatever
+                    # is there now.
+                    break
+                # _v2_load_full() just set the cache to exactly these ranks
+                # in this order, so dropping entry i keeps it consistent.
+                ranks = self._v2_rank_cache
+                if ranks is not None and i < len(ranks) and ranks[i] == rank:
+                    del ranks[i]
+                else:  # pragma: no cover -- defensive
+                    self._v2_rank_cache = None
+                self._v2_touch_metadata()
+                return
+            else:
+                # Scanned every item without a match: the value genuinely
+                # isn't there (possibly because a concurrent remove() of the
+                # same value won), which is exactly ValueError.
+                raise ValueError(f"{value} not in list")
+        raise RuntimeError(
+            f"list '{self.name}' remove: too many concurrent modifications, retry later"
+        )
 
     def remove(self, value: Any) -> None:
         """Remove first occurrence of value."""

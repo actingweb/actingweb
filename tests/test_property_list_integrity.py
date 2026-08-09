@@ -80,6 +80,14 @@ class FakePropertyDb:
         self.store[(actor_id, name)] = value
         return True
 
+    def delete_if_value_equals(self, actor_id=None, name=None, value=None):
+        if name in self.fail_set_on:
+            return False
+        if self.store.get((actor_id, name)) != value:
+            return False
+        del self.store[(actor_id, name)]
+        return True
+
 
 class CrashInjectingPropertyDb(FakePropertyDb):
     """Simulates a hard interruption (process death, timeout) after a fixed
@@ -1117,3 +1125,116 @@ class TestV2PopEmptyCheckUsesFreshState:
 
         with pytest.raises(IndexError, match="pop from empty list"):
             prop_list.pop()
+
+
+class TestConditionalDeleteOnPopAndRemove:
+    """pop() returns what it removed; remove() removes what it matched.
+
+    Resolving the rank once is not enough: a concurrent __setitem__ on that
+    same rank between the read and the delete would discard the other
+    writer's value while reporting the one we saw -- an outcome that matches
+    no serial ordering of the two operations. The delete is conditional on
+    the exact bytes read, and a failed condition re-resolves. Raised by
+    Codex on PR #121, round 3.
+
+    __delitem__/__setitem__ deliberately stay unconditional: "delete
+    whatever is at position i" and last-writer-wins are satisfied by an
+    unconditional write.
+    """
+
+    def test_pop_does_not_discard_a_concurrent_overwrite(self, monkeypatch, fake_store):
+        actor_id = "actor-cond-pop"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        prop_list.extend(["a", "b", "c"])
+
+        other = ListProperty(actor_id=actor_id, name=name, config=object())
+        fired = []
+        real_get = FakePropertyDb.get
+
+        def _overwrite_after_read(self, actor_id=None, name=None):
+            result = real_get(self, actor_id=actor_id, name=name)
+            if not fired and name and "-#" in name:
+                fired.append(True)
+                other[1] = "OVERWRITTEN"
+            return result
+
+        monkeypatch.setattr(FakePropertyDb, "get", _overwrite_after_read)
+        popped = prop_list.pop(1)
+        monkeypatch.setattr(FakePropertyDb, "get", real_get)
+
+        remaining = ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list()
+        # Whatever pop returned, it is what left the list -- the concurrent
+        # write is either still present or was the value returned, never
+        # silently dropped while a stale value was reported.
+        assert popped not in remaining
+        assert remaining == ["a", "c"]
+        assert popped == "OVERWRITTEN"
+
+    def test_remove_rescans_when_its_match_is_overwritten(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-cond-remove"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        prop_list.extend(["a", "b", "c", "b"])
+
+        other = ListProperty(actor_id=actor_id, name=name, config=object())
+        fired = []
+        real_load = ListProperty._v2_load_full
+
+        def _overwrite_first_match(self):
+            pairs = real_load(self)
+            if not fired:
+                fired.append(True)
+                other[1] = "NOT-B-ANYMORE"
+            return pairs
+
+        monkeypatch.setattr(ListProperty, "_v2_load_full", _overwrite_first_match)
+        prop_list.remove("b")
+        monkeypatch.setattr(ListProperty, "_v2_load_full", real_load)
+
+        # The first "b" was overwritten before the delete landed, so the
+        # conditional delete refused, the scan re-ran, and the SECOND "b"
+        # was removed. The overwrite survives.
+        assert ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list() == ["a", "NOT-B-ANYMORE", "c"]
+
+    def test_remove_raises_value_error_when_the_value_is_gone(
+        self, monkeypatch, fake_store
+    ):
+        """A concurrent remove() of the same value wins: the loser rescans,
+        finds nothing, and raises ValueError -- matching list.remove."""
+        actor_id = "actor-cond-remove-gone"
+        name = "mylist"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        prop_list.extend(["a", "b"])
+
+        other = ListProperty(actor_id=actor_id, name=name, config=object())
+        fired = []
+        real_load = ListProperty._v2_load_full
+
+        def _remove_first(self):
+            pairs = real_load(self)
+            if not fired:
+                fired.append(True)
+                other.remove("b")
+            return pairs
+
+        monkeypatch.setattr(ListProperty, "_v2_load_full", _remove_first)
+        with pytest.raises(ValueError):
+            prop_list.remove("b")
+        monkeypatch.setattr(ListProperty, "_v2_load_full", real_load)
+
+        assert ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list() == ["a"]

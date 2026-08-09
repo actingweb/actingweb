@@ -90,9 +90,51 @@ CHANGED
   time, which turned a single request into as many database writes as the
   index was large. The whole batch is validated before anything is written.
 
+- **Lazy migration now refuses a list that ``verify()`` reports as
+  unhealthy**, logging what it found and how to fix it, instead of
+  migrating it. Migration closes holes in flight and reports what it
+  closed, which is right for an operator running
+  ``scripts/migrate_property_lists.py`` and reading the output — but doing
+  it silently under an ordinary ``append()`` destroyed the evidence: the
+  hole disappeared, the lost item stayed lost, duplicate residue was
+  promoted to real data, and ``verify()`` began reporting the list healthy.
+  Repair (``compact()`` or ``verify_property_lists.py --repair``) is now
+  always an explicit operator action; damaged lists keep serving v1 and
+  keep raising ``ListCorruptionError`` until then.
+- **New environment variable ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``**
+  (default 50) sets the largest v1 list that may migrate inline during a
+  user's write; **0 disables lazy migration entirely**. Migration is
+  synchronous, so one ``append()`` to a 40-item v1 list performs the whole
+  migration — dozens of sequential writes plus two full-partition reads —
+  inside that request. Latency-sensitive and serverless deployments can now
+  keep that out of user traffic and sweep with the rate-limited script
+  instead.
+- ``ListProperty.storage_format()`` (new, public) returns 1 or 2 from a
+  single point read. ``scripts/migrate_property_lists.py`` now uses it
+  instead of ``verify()`` for format detection, which was fetching the
+  actor's entire property partition once per list.
+
 FIXED
 ~~~~~
 
+- **``list.index()`` semantics for negative ``start``/``stop``.**
+  ``index(value, -1)`` could previously return ``-1`` as an index (the loop
+  ran ``range(-1, n)`` and then indexed negatively). Both storage formats
+  now normalize bounds exactly as ``list.index`` does, through one shared
+  helper so they cannot diverge across a migration.
+- **``pop()`` and ``remove()`` now delete conditionally on the value they
+  read.** Resolving the item's storage key once was not enough: a
+  concurrent assignment to that same key between the read and the delete
+  would discard the other writer's value while reporting the one this
+  caller saw — an outcome corresponding to no serial ordering of the two
+  operations. Both now use the new
+  ``DbPropertyProtocol.delete_if_value_equals()`` and re-resolve on a
+  failed condition, so ``pop()`` always returns exactly what it removed and
+  ``remove()`` always removes exactly what it matched.
+  ``__delitem__``/``__setitem__`` remain unconditional by design.
+- ``pop()`` on a v2 list no longer raises ``pop from empty list`` against a
+  list another writer has appended to (the empty check consulted a cached
+  length before the v2 path could refresh it).
 - **A v2 list could read, and delete, a legacy ``#``-named sibling list's
   rows.** New list names may not contain ``#``, but lists created before
   this release may, and migration deliberately refuses them so they keep

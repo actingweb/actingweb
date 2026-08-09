@@ -123,6 +123,10 @@ def sweep_actor(
         checked += 1
         list_prop = ListProperty(actor_id=actor_id, name=name, config=config)
         try:
+            # verify() fetches the actor's whole property partition, so this
+            # is one dump per list. That is inherent to checking integrity
+            # (which is this script's job) -- unlike the migrate script,
+            # which only needs the format and uses storage_format().
             report = list_prop.verify()
         except Exception as e:
             logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")

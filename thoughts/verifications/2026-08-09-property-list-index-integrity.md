@@ -779,3 +779,61 @@ bulk-POST delete pass is left as-is deliberately — interpreting a batch's
 indices against the pre-batch list is its documented contract, and its
 exposure is the ordinary positional-API race across requests rather than a
 self-inconsistency inside one call.
+
+### Round 3: both reviewers found the same re-made mistake; a consumer found the design one
+
+Both PR reviewers, run against `0023be3`, independently flagged the same P1:
+`remove()`'s `_maybe_lazy_migrate()`. That call is the identical mistake made
+in `pop()` an hour earlier, caught by a test, reverted with a comment
+explaining why — and then written again in `remove()`, directly below that
+comment. It is the clearest process finding of the session: **the guard that
+works is a test, not a comment.** `pop()`'s version was caught by a test
+written two phases earlier for an unrelated reason; `remove()`'s had no test
+and needed two reviewers. Both now have one, and the rationale moved into
+`_maybe_lazy_migrate()`'s own docstring, where someone copying the call from
+`append()` will read it.
+
+Separately, a downstream consumer (actingweb_mcp) evaluated `4a7d8b2` and
+found the more important thing, which no reviewer raised: **lazy migration
+silently repaired damaged lists.** Pulling the trigger out of `pop()` and
+`remove()` fixed two call sites; `append`/`insert`/`__setitem__`/`__delitem__`
+still had it. On a production-shaped fixture the hole closed, the destroyed
+item stayed destroyed, duplicate residue was carried over as real data,
+`verify()` flipped to `healthy: true`, and the `had_holes`/`duplicate_count`
+report was discarded by `_maybe_lazy_migrate()`'s own return. The fix applies
+the carve-out at the source rather than method by method: lazy migration now
+refuses any list `verify()` calls unhealthy. Repair became an explicit
+operator action, which is what it always should have been.
+
+The same evaluation is why migration is now switchable off entirely
+(`ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`): it is inline and synchronous, so
+one `append()` to a 40-item v1 list runs the whole migration — dozens of
+sequential writes plus two partition dumps — inside a user request. That
+belongs on a rate-limited sweep for anyone latency-sensitive, and there was
+no way to ask for it.
+
+Also fixed this round: `pop()`/`remove()` now delete **conditionally on the
+value read** (new `delete_if_value_equals()` on the protocol and both
+backends), because resolving the storage key once still allowed a concurrent
+assignment to be silently discarded while a stale value was reported — an
+outcome matching no serial ordering of the two operations;
+`pop()`'s empty check consulting a cached length; and `index()`'s negative
+`start`/`stop`, which could return `-1` as an index under v1 and is the one
+change here touching released behaviour.
+
+Two consumer observations were documentation defects rather than code ones,
+and are fixed as such: `prime_from_rows()` claimed priming avoided a query
+for positional lookups, which stopped being true when positional reads
+started refreshing; and the guide claimed the storage format was invisible
+above the library, which is not true for `lst[i]` loops (two queries per item
+under v2 versus one under v1 — `to_indexed_list()` is one for the whole
+list). The migrate script also stopped calling `verify()` — a full partition
+dump — merely to read a list's format; `storage_format()` is a point read.
+
+**Convergence read.** Rounds 1 and 2 found data-loss bugs in the design.
+Round 3 found one repeated process mistake (now test-guarded), refinements of
+round 2's own fixes, and — from the consumer, not the reviewers — one real
+design defect in how migration and repair interact. The trend is narrowing,
+but the most valuable finding this round came from someone running the code
+against their own data, which is the perspective neither reviewer nor test
+suite had.

@@ -253,6 +253,49 @@ class DbPropertyProtocol(Protocol):
         """
         ...
 
+    def delete_if_value_equals(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """
+        Conditionally delete a property row — succeeds only if the row
+        currently holds exactly ``value``.
+
+        Used by v2 list-property storage wherever the item being deleted is
+        coupled to content the caller already read: ``pop()`` returns the
+        item it removed, and ``remove()`` deletes the item it matched. An
+        unconditional delete cannot honour either promise, because a
+        concurrent ``__setitem__`` on that same row between the read and the
+        delete would silently discard the other writer's value while
+        reporting the one this caller saw — an outcome that corresponds to
+        no serial ordering of the two operations.
+
+        ``__delitem__``/``__setitem__`` deliberately do NOT use this:
+        "delete whatever is at position i" and last-writer-wins are both
+        satisfied by an unconditional write.
+
+        ``value`` must be the RAW STORED STRING the caller read, not a
+        re-serialization of a decoded value — round-tripping through
+        decode/encode is not guaranteed byte-identical.
+
+        No lookup-table maintenance is performed or needed: ``list:``-
+        prefixed names are structurally excluded from indexing by
+        ``_should_index_property()`` on both backends.
+
+        Args:
+            actor_id: The actor ID
+            name: Property name
+            value: The exact stored value required for the delete to happen
+
+        Returns:
+            True if the row was deleted. False if it held a different value
+            or no longer exists — both normal outcomes meaning "re-resolve
+            and retry", not failures.
+
+        Raises:
+            DbError: On a backend fault (not a condition failure).
+        """
+        ...
+
 
 @runtime_checkable
 class DbPropertyListProtocol(Protocol):

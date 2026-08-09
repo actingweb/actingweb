@@ -549,6 +549,42 @@ class DbProperty:
             )
             raise DbError("property conditional create", actor_id) from e
 
+    def delete_if_value_equals(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """Conditionally delete — see ``DbPropertyProtocol.delete_if_value_equals``.
+
+        A zero rowcount covers both "someone changed it" and "someone
+        already deleted it"; both mean the same thing to the caller.
+        """
+        if not actor_id or not name or value is None:
+            return False
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM properties
+                        WHERE id = %s AND name = %s AND value = %s
+                        """,
+                        (actor_id, name, value),
+                    )
+                    deleted = cur.rowcount == 1
+                conn.commit()
+            if deleted and isinstance(self.handle, dict):
+                if (
+                    self.handle.get("id") == actor_id
+                    and self.handle.get("name") == name
+                ):
+                    self.handle = None
+            return deleted
+        except Exception as e:
+            logger.error(
+                f"Error conditionally deleting property {actor_id}/{name}: {e}"
+            )
+            raise DbError("property conditional delete", actor_id) from e
+
 
 class DbPropertyList:
     """

@@ -103,9 +103,18 @@ Storage Format (v1 / v2)
 -------------------------
 
 List properties have two internal storage formats. Both are fully
-supported; which one a given list uses is invisible to everything above
-the library (REST responses, ``to_list()``, item access) -- it only
-affects repair internals.
+supported, and which one a given list uses does not change any REST
+response or any value the API returns.
+
+It is not entirely invisible in one respect: **reading items one at a time
+by index costs more under v2**. ``lst[i]`` re-reads the list's key ordering
+before resolving the position, because a cached ordering can be stale and
+resolving against a stale one returns the wrong item. So a
+``for i in range(len(lst)): lst[i]`` loop is two queries per item under v2,
+where v1 was one. Use ``to_list()``, ``to_indexed_list()`` or plain
+iteration instead -- each is a single query for the whole list regardless
+of length, in both formats, and ``to_indexed_list()`` returns the
+``(index, item)`` pairs such a loop is usually after.
 
 - **v1** (dense integers): items stored as ``list:{name}-{index}``, with
   an authoritative ``length`` in metadata. Every list created before this
@@ -141,6 +150,27 @@ gradual, never required for a list to keep functioning:
   deletion). A failed lazy migration is logged and the mutation still
   succeeds against the v1 storage -- migration never turns an ordinary
   write into a failure.
+
+  Two things lazy migration deliberately will **not** do:
+
+  - **It never migrates a damaged list.** If ``verify()`` reports the list
+    unhealthy, migration is skipped with an operator-actionable warning.
+    Migration closes holes in flight, which is correct when an operator
+    runs the script and reads its report -- but silently, under an
+    ordinary write, it would erase the evidence: the hole disappears, the
+    lost item stays lost, duplicate residue becomes indistinguishable from
+    real data, and ``verify()`` starts reporting the list healthy. Repair
+    is an explicit decision. Run ``compact()`` (or
+    ``verify_property_lists.py --repair``), then migrate.
+  - **It never runs when you turn it off.** Migration is inline and
+    synchronous: one ``append()`` to a 40-item v1 list performs the whole
+    migration inside that request, which is dozens of sequential writes
+    plus two full-partition reads. Set
+    ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0`` to keep migration out of user
+    traffic entirely and rely on the rate-limited bulk script; set it
+    higher than 50 to let bigger lists migrate inline. On Lambda or any
+    latency-sensitive deployment, ``0`` plus a scheduled sweep is the safer
+    shape.
 - **Bulk**: larger or idle lists are migrated with the operator script::
 
     poetry run python scripts/migrate_property_lists.py            # dry run

@@ -120,3 +120,56 @@ class TestCreateIfNotExists:
             get_property(config).get(actor_id=actor_id, name="list:cine-#a0")
             == '"original"'
         )
+
+
+class TestConditionalDelete:
+    """delete_if_value_equals() against the real backend (both, via
+    DATABASE_BACKEND) -- the primitive pop()/remove() rely on to guarantee
+    they act on the value they read."""
+
+    def test_deletes_only_on_an_exact_value_match(self, config, actor_id):
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:cd-#a0", value='"original"')
+
+        refused = get_property(config).delete_if_value_equals(
+            actor_id=actor_id, name="list:cd-#a0", value='"something-else"'
+        )
+        assert refused is False
+        assert (
+            get_property(config).get(actor_id=actor_id, name="list:cd-#a0")
+            == '"original"'
+        )
+
+        deleted = get_property(config).delete_if_value_equals(
+            actor_id=actor_id, name="list:cd-#a0", value='"original"'
+        )
+        assert deleted is True
+        assert get_property(config).get(actor_id=actor_id, name="list:cd-#a0") is None
+
+    def test_missing_row_reports_false_not_an_error(self, config, actor_id):
+        assert (
+            get_property(config).delete_if_value_equals(
+                actor_id=actor_id, name="list:cd-#never", value='"x"'
+            )
+            is False
+        )
+
+    def test_overwritten_row_is_not_deleted(self, config, actor_id):
+        assert get_property(config).set(
+            actor_id=actor_id, name="list:cd-#b0", value='"v1"'
+        )
+        read = get_property(config).get(actor_id=actor_id, name="list:cd-#b0")
+        assert read == '"v1"'
+
+        # Another writer replaces it before our conditional delete lands.
+        assert get_property(config).set(
+            actor_id=actor_id, name="list:cd-#b0", value='"v2"'
+        )
+
+        assert (
+            get_property(config).delete_if_value_equals(
+                actor_id=actor_id, name="list:cd-#b0", value=read
+            )
+            is False
+        )
+        assert get_property(config).get(actor_id=actor_id, name="list:cd-#b0") == '"v2"'

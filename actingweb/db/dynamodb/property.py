@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist, PutError
+from pynamodb.exceptions import DeleteError, DoesNotExist, PutError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -538,6 +538,30 @@ class DbProperty:
             raise DbError("property conditional create", actor_id) from e
         except Exception as e:
             raise DbError("property conditional create", actor_id) from e
+        return True
+
+    def delete_if_value_equals(
+        self, actor_id: str | None = None, name: str | None = None, value: Any = None
+    ) -> bool:
+        """Conditionally delete — see ``DbPropertyProtocol.delete_if_value_equals``.
+
+        The condition covers both "someone changed it" and "someone already
+        deleted it": DynamoDB fails an equality condition on a missing
+        attribute just as it does on a differing one, and both mean the same
+        thing to the caller (re-resolve and retry).
+        """
+        if not actor_id or not name or value is None:
+            return False
+
+        item = Property(id=actor_id, name=name)
+        try:
+            item.delete(condition=Property.value == value)
+        except DeleteError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                return False
+            raise DbError("property conditional delete", actor_id) from e
+        except Exception as e:
+            raise DbError("property conditional delete", actor_id) from e
         return True
 
 

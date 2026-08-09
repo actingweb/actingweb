@@ -4,10 +4,22 @@ Bulk-migrate v1 (dense-integer) property lists to v2 (fractional rank key)
 storage -- see thoughts/plans/2026-08-08-property-list-index-integrity.md,
 Phase 5.
 
-Small lists (<= 50 items) already migrate lazily on their next mutation
-(append/insert/__setitem__/__delitem__) -- this script is for lists too
-large or too idle to reach that trigger on their own, and for a one-time
-upgrade sweep across an existing deployment.
+Small lists (<= 50 items by default) already migrate lazily on their next
+mutation (append/insert/__setitem__/__delitem__) -- this script is for
+lists too large or too idle to reach that trigger on their own, and for a
+one-time upgrade sweep across an existing deployment.
+
+Two things this script is the ONLY route for:
+
+- **Damaged lists.** Lazy migration refuses a list that verify() reports as
+  unhealthy, because migrating closes holes in flight and would make the
+  damage unreportable. Repair first (compact(), or
+  scripts/verify_property_lists.py --repair), then migrate.
+- **Deployments with lazy migration turned off.** Migration is inline and
+  synchronous -- one append() to a 40-item v1 list does the whole migration
+  inside that request. Set ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0 to keep it
+  out of user traffic entirely and rely on this script's rate limiter
+  instead.
 
 Run with the SAME environment as the application (DATABASE_BACKEND and its
 backend-specific connection settings), e.g.::
@@ -139,9 +151,12 @@ def migrate_actor(
         limiter.wait()
         list_prop = ListProperty(actor_id=actor_id, name=name, config=config)
         try:
-            already_v2 = list_prop.verify().get("format") == 2
+            # One point read of the meta row. verify() would fetch the
+            # actor's whole property partition per list purely to learn the
+            # format -- ~13 partition dumps per actor on a typical one.
+            already_v2 = list_prop.storage_format() == 2
         except Exception as e:
-            logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
+            logger.error(f"actor={actor_id} list={name}: format check failed: {e}")
             errored += 1
             continue
 
@@ -209,7 +224,7 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
     from actingweb.property_list import ListProperty
 
     list_prop = ListProperty(actor_id=actor_id, name=list_name, config=config)
-    if list_prop.verify().get("format") != 2:
+    if list_prop.storage_format() != 2:
         return {"downgraded": False, "reason": "not_v2"}
 
     items = list_prop.to_list()  # one range query, in order

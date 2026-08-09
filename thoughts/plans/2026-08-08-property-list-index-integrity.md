@@ -855,6 +855,35 @@ single conditional writes; order is derived from key sort; length is counted.
   "not slow"` on DynamoDB (2699 passed); `tests/integration/` on
   PostgreSQL (810 passed) — same CLAUDE.md-documented scope as Phase 4.
 
+**Deviations / notes (sub-step 2 of 3 — docs + todo cleanup):**
+
+- `docs/guides/property-lists.rst`: new "Storage Format (v1 / v2)" section
+  (formats, migration paths — lazy/bulk/programmatic, the downgrade
+  warning box) and a note on the existing "Corrupted list (409 Conflict)"
+  section clarifying it's v1-only (structurally impossible under v2) and
+  that `verify()`/`compact()` serve a different purpose there (rank-length
+  rebalancing, not hole detection).
+- `docs/reference/*.rst` needed no manual edits — they're Sphinx
+  `automodule` directives that pull docstrings at build time, so
+  `migrate_to_v2()`/`get_range()`/`create_if_not_exists()`/the v2
+  `verify()`/`compact()` variants are already covered by the docstrings
+  written alongside the code. Verified via a clean
+  `sphinx-build -W --keep-going` (matches the plan's Verification
+  checklist item and CI's `tests.yml` docs-build step) both before and
+  after the `property-lists.rst` edits.
+- `thoughts/todo/attribute-list-shift-design.md` (new): the deferred
+  `ListAttribute` work. `actingweb/attribute_list.py`'s
+  `__delitem__`/`insert()` have the same non-transactional shift-loop
+  design `ListProperty` had before this plan, per both research docs —
+  out of scope here because it's a distinct class (actor-internal
+  attribute storage, not user-facing properties) with no known production
+  incident, unlike the case this plan was written to fix. Sketches three
+  options at increasing cost, mirroring this plan's own phasing.
+- `thoughts/todo/property-list-delete-leaves-holes.md` deleted (resolved
+  by Phases 1-4; its full history — including the "measured to make
+  things worse" note on an initially-plausible fix — stays recoverable via
+  git history, referenced from the new todo above).
+
 ---
 
 ## Protocol Compliance

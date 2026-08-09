@@ -1705,6 +1705,27 @@ class ListProperty:
         item, and silently collapsing one copy would bless the data loss
         as intentional rather than surface it.
 
+        NOT CRASH-SAFE (v1, same shape as ``_v2_compact()``). Survivors are
+        rewritten at their new positions BEFORE the tail rows are deleted,
+        so an interruption between the two leaves a copy at both the old
+        and the new position. Measured on a 4-slot list with one hole,
+        interrupting at successive writes:
+
+        - after the first move: rows ``[a, c, c, d]``, length still 4
+        - after the second:     rows ``[a, c, d, d]``, length still 4
+
+        Both are readable with **no error** -- length matches the rows
+        present, so nothing looks wrong to a caller. ``verify()`` does
+        catch them, via the adjacent byte-identical heuristic, so a
+        follow-up sweep reports the list unhealthy.
+
+        The sharp part: re-running ``compact()`` does NOT clean this up.
+        Duplicates are preserved by design (above), so the repair tool
+        will not remove the copy its own interruption created, and the
+        list stays one item too long until someone resolves it by hand.
+        Prefer running repair when the actor is not taking writes, and
+        re-run ``verify()`` afterwards rather than assuming success.
+
         Returns:
             The ``verify()`` report this call acted on (taken before any
             write).

@@ -1485,3 +1485,83 @@ class TestDuplicateDetectionAfterAnEdit:
         assert report["duplicate_identities"] == {}
         assert report["identity_checked_count"] == 2
         assert report["healthy"] is True
+
+
+class TestCompactIsNotCrashSafe:
+    """Pins the documented interruption states of v1 ``compact()``.
+
+    Repair writes survivors to their new positions before deleting the tail,
+    so an interruption leaves a copy at both -- with the stored length
+    unchanged, which means the list reads back with NO error. Documented in
+    compact()'s docstring, the property-lists guide and the migration
+    guide's repair step; this test is what keeps those honest.
+
+    The sharp part is the last assertion: re-running compact() does not
+    clean it up, because duplicates are preserved by design -- including the
+    one the interrupted repair itself created.
+    """
+
+    @staticmethod
+    def _seed_holed(store, actor_id, name):
+        # [a, <hole>, c, d] with the length still claiming 4.
+        for i, v in [(0, "a"), (2, "c"), (3, "d")]:
+            store[(actor_id, f"list:{name}-{i}")] = json.dumps(v)
+        store[(actor_id, f"list:{name}-meta")] = json.dumps(
+            {
+                "length": 4,
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "item_type": "json",
+                "chunk_size": 1,
+                "version": "1.0",
+                "description": "",
+                "explanation": "",
+            }
+        )
+
+    @pytest.mark.parametrize(
+        ("calls_before_crash", "expected_rows"),
+        [(2, ["a", "c", "c", "d"]), (3, ["a", "c", "d", "d"])],
+    )
+    def test_interrupted_repair_leaves_a_readable_duplicate(
+        self, monkeypatch, fake_store, calls_before_crash, expected_rows
+    ):
+        actor_id = f"actor-compact-crash-{calls_before_crash}"
+        name = "damaged"
+        self._seed_holed(fake_store, actor_id, name)
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+        counter = [0]
+        _patch_get_property(
+            monkeypatch,
+            lambda config: CrashInjectingPropertyDb(
+                fake_store, calls_before_crash=calls_before_crash, call_counter=counter
+            ),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        with pytest.raises(DbError):
+            prop_list.compact()
+
+        # No error on read: the length still matches the rows present, so
+        # nothing is structurally inconsistent -- it is just wrong.
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == expected_rows
+        assert _meta_length(fake_store, actor_id, name) == 4
+
+        # verify() does catch it -- the copy is adjacent and byte-identical.
+        report = fresh.verify()
+        assert report["adjacent_duplicates"]
+        assert report["healthy"] is False
+
+        # But repair will not remove it: duplicates are preserved by design,
+        # including the one the interrupted repair created.
+        fresh.compact()
+        after = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert after.to_list() == expected_rows, (
+            "re-running repair must not silently collapse the duplicate -- "
+            "and equally must not be mistaken for cleaning it up"
+        )

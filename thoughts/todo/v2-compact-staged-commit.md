@@ -1,4 +1,4 @@
-# `_v2_compact()` needs a recoverable commit protocol
+# `compact()` needs a recoverable commit protocol (BOTH formats)
 
 `ListProperty._v2_compact()` rebalances a v2 list's fractional rank keys by
 writing every item under a fresh, evenly-spaced rank and then deleting the old
@@ -10,6 +10,22 @@ all of them as genuine items, and rebalances the doubled list.
 Raised as a P1 on PR #121 (Codex review, `actingweb/property_list.py:1186`) and
 accepted as real. Not fixed there: the fix is a protocol change, not a patch,
 and the current behaviour is the safer of the two obvious options.
+
+## v1 has the same window, and it was missed until after rc5 shipped
+
+This todo was written about `_v2_compact()`. The v1 path has the identical
+shape and is the one every upgrading operator runs, via
+`actingweb-verify-property-lists --repair`: survivors are written to their
+new positions before the tail is deleted, so an interruption leaves a copy
+at both. Measured on a 4-slot list with one hole — interrupting after the
+first move gives `[a, c, c, d]`, after the second `[a, c, d, d]`, with the
+stored length still 4, so the list reads back with **no error**.
+
+`verify()` catches it via the adjacent byte-identical heuristic, which is
+better than v2 manages. But re-running `--repair` will not remove it:
+duplicates are preserved by design, so the tool declines to touch the
+residue its own interruption created. Documented in rc5+1; a fix must cover
+both formats.
 
 ## Why the obvious fix is worse
 

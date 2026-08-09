@@ -5,6 +5,24 @@ CHANGELOG
 Unreleased
 ----------
 
+DOCUMENTATION
+~~~~~~~~~~~~~
+
+- **Documented that ``compact()`` is not crash-safe in either storage
+  format, and that an interrupted repair leaves damage repair will not
+  itself fix.** Only the v2 rank-rebalance window was documented in
+  3.13.0rc5; the v1 path -- the one every upgrading operator runs via
+  ``actingweb-verify-property-lists --repair`` -- has the same shape.
+  Survivors are written to their new positions before the tail rows are
+  deleted, so an interruption leaves a copy at both, with the stored length
+  unchanged: the list reads back with **no error**. ``verify()`` catches it
+  through the adjacent-duplicate heuristic, but re-running ``--repair``
+  will not remove the copy, because duplicates are preserved by design --
+  including the one the interrupted repair created. Now covered in the
+  migration guide's repair step (where operators are told to run it), the
+  property-lists guide, and ``compact()``'s docstring, with a regression
+  test pinning the measured interruption states. No behaviour change.
+
 v3.13.0rc5: August 9, 2026
 --------------------------
 

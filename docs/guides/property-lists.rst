@@ -369,16 +369,28 @@ cap.
 
 .. warning::
 
-   ``compact()`` on a v2 list is not crash-safe end to end. It writes every
-   item under its new rank before retiring any old row, so an interruption
-   partway leaves both copies of the already-rewritten items readable, and
-   re-running ``compact()`` does not undo that -- it treats all of them as
-   genuine items. This is the deliberate trade: the alternative, retiring
-   each old row as its replacement is written, would leave interrupted
-   states silently *reordered* instead, which nothing detects. Recovery is
-   manual; the stale copies are the ones whose rank keys are not part of the
-   evenly spaced sequence a fresh rebalance produces. Prefer running it when
-   the actor is not taking writes.
+   ``compact()`` is not crash-safe end to end, in **either** storage format.
+   It writes every item to its new location before retiring any old row, so
+   an interruption partway leaves a copy at both. Re-running ``compact()``
+   does not undo that -- it treats every copy as a genuine item, and under
+   v1 it explicitly declines to touch duplicate residue at all. Prefer
+   running it when the actor is not taking writes, and re-run ``verify()``
+   afterwards rather than assuming success.
+
+   **v1** (dense integers): interrupting the rewrite of a 4-slot list with
+   one hole leaves ``[a, c, c, d]`` or ``[a, c, d, d]`` with the length
+   still reading 4 -- readable with no error, because nothing is
+   structurally inconsistent. ``verify()`` catches it through the adjacent
+   byte-identical heuristic, but repair will not remove it: duplicates are
+   preserved by design, including the one repair itself created. Resolving
+   it is manual.
+
+   **v2** (rank keys): the same window, as a rank rebalance. The deliberate
+   trade here is that the alternative -- retiring each old row as its
+   replacement is written -- would leave interrupted states silently
+   *reordered* instead, which nothing detects at all. Recovery is manual;
+   the stale copies are the ones whose rank keys are not part of the evenly
+   spaced sequence a fresh rebalance produces.
 
 See the ActingWeb specification and Properties handler documentation for complete API details.
 

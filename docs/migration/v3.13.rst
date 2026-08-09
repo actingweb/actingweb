@@ -83,6 +83,28 @@ rather than surface it. Duplicates are reported and left for you to decide
 about. Repair does not recover a destroyed item — nothing can; the row is
 gone.
 
+.. warning::
+
+   **Repair is not crash-safe, and an interrupted repair leaves damage it
+   will not itself fix.** ``compact()`` rewrites surviving rows at their new
+   positions before deleting the tail, so an interruption between the two
+   leaves a copy at both the old and the new position. Measured on a 4-slot
+   list with one hole: interrupting after the first move leaves
+   ``[a, c, c, d]``, after the second ``[a, c, d, d]`` — both with the
+   length still reading 4, so **the list reads back with no error at all**.
+
+   ``verify()`` does catch it (the duplicate is adjacent and byte-identical,
+   which is exactly what its heuristic looks for), so a follow-up sweep
+   reports the list unhealthy. But re-running ``--repair`` will not remove
+   the copy: duplicates are preserved by design, so the tool declines to
+   touch the residue its own interruption created, and the list stays one
+   item too long until you resolve it by hand.
+
+   In practice: run repair when the actor is not taking writes, and **run
+   the sweep again afterwards** rather than assuming it worked. The same
+   shape applies to ``compact()`` on a v2 list, where it is a rank rebalance
+   — see the guide's warning box.
+
 Step 3: expect these breaking changes after upgrading
 -----------------------------------------------------
 

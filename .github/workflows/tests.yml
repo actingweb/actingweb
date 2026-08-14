@@ -2,7 +2,7 @@ name: Tests
 
 on:
   pull_request:
-    branches: [ master, main, develop ]
+    branches: [ master, main, develop, ci/probe-base ]
 
 jobs:
   # Classify the PR's changed files so a docs-only PR doesn't pay for the full

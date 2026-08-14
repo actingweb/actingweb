@@ -7,6 +7,10 @@ deliberately deferred — each needs design work or carries behavioural
 risk disproportionate to the v3.13 release. Line references are from
 commit `29783f8`; re-verify before implementing.
 
+**Decided 2026-08-14** (owner walkthrough): fold that re-verification into the
+**3.13.0 GA** work — walk all nine items against the settled codebase and
+refresh the line references then, rather than per-item at pick-up time.
+
 ## 1. batch_write for delete loops
 `batch_write`/`BatchWriteItem` is used nowhere. Item-by-item serial
 delete loops: `DbPropertyList.delete()`, `DbTrustList.delete()`,
@@ -16,6 +20,11 @@ fresh accessor + GetItem + DeleteItem — a 1000-item list delete is 1000
 serial round-trip pairs). `Actor.delete()` cascades through all of them.
 Needs 25-item chunking + unprocessed-item retry; lookup-row cleanup and
 property hooks stay per-item, so batching covers only the raw deletes.
+
+**Adjacent, filed separately:** `DbPropertyList.fetch()` reading the whole
+partition (`list:` rows included) is I0, and lives in
+`thoughts/todo/property-fetch-reads-whole-partition.md`. It is the per-*partition*
+read amplification; item 2 below is the per-*item* N+1. Item 3 touches both.
 
 ## 2. General ListProperty item N+1 and __delitem__ O(N) shift
 `ListProperty.__getitem__` does a fresh accessor + GetItem per item

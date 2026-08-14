@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: done
 ---
 
 # ActingWeb Library Protection Tests for actingweb_mcp Implementation Plan

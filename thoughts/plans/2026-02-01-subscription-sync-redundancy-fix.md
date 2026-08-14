@@ -1,11 +1,24 @@
 ---
-status: active
+status: done
 ---
 
 # Subscription Sync Redundancy Fix
 
 **Date**: 2026-02-01 (Updated: 2026-02-02)
-**Status**: Phase 0 & 0.5 Complete - Critical Bugs Fixed, New Critical Bug Found (Permission Diff), Performance Optimizations Pending
+**Status**: ~~Phase 0 & 0.5 Complete - Critical Bugs Fixed, New Critical Bug Found (Permission Diff), Performance Optimizations Pending~~
+
+> **Corrected 2026-08-14 — this status line was stale; the plan is `done`.** The
+> permission-diff asymmetry was fixed via **Option A** as recommended:
+> `_build_callback_data()` now sends the full effective permission set through
+> `_get_effective_permissions()` (`actingweb/trust_permissions.py:392`), so the
+> prerequisite this plan put on incremental sync was met before that landed.
+> Phase 1 (incremental sync) is in `actingweb/handlers/callbacks.py:804`; Phase 2
+> (capability staleness) is in `subscription_manager.py`. **Phase 3 is
+> superseded** — the permission callback no longer calls full `sync_peer()`, so
+> there is no redundant permission fetch left to skip. **Phase 4 is moot** — its
+> premise was the profile-extraction bug Phase 0 fixed
+> (`tests/integration/test_peer_profile_extraction.py`). No remainder was
+> carried to `todo/`.
 **Priority**: HIGH - Correctness + Performance Impact
 
 ## Overview

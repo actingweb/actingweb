@@ -103,6 +103,11 @@ Delete those three things to re-enable; CI on the branch will then verify the fi
 
 ## Suggested investigation steps
 
+**Decided 2026-08-14** (owner walkthrough): do the first step now, on one branch
+shared with `thoughts/todo/ci-postgres-parallel-flakiness.md`. Same CI matrix,
+same conditions, and that todo's process-global psycopg pool is hypothesis 1
+here — one instrumentation pass should collect evidence for both.
+
 - [ ] Reproduce in CI deterministically: add temporary debug to `delete_attr`
       (`db/postgresql/attribute.py`) logging `cur.rowcount` after the `DELETE` and
       `current_schema()` / `search_path` for the connection. Confirm whether the

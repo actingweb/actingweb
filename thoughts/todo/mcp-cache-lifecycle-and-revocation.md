@@ -34,6 +34,14 @@ these paths still authenticates/authorizes from a warm process for up to the
 window, not the cross-client bypass the parent plan fixed — a revoked
 client still only ever gets *its own* prior permissions, not someone else's.
 
+**Decided 2026-08-14** (owner walkthrough): **do both halves** — token-keyed
+eviction on `revoke_token`, `revoke_all_tokens` and `/oauth/revoke`, *and*
+direct `_trust_cache` eviction on trust deletion and permission downgrade. That
+closes everything a single process can close. §2 (cross-process) is explicitly
+**not** a blocker for this. Sequence alongside item 4 of
+`thoughts/todo/subs-list-cache-asymmetry.md` — same cache module, and the
+actor-cache lifetime question decides what is left to evict.
+
 **Proposed fix:** wire eviction into each of the paths above, calling
 `MCPHandler.clear_token_from_cache()` (or, for trust changes where the token
 is unknown, `_evict_trust_entries_for_actor(actor_id)` directly). Needs a

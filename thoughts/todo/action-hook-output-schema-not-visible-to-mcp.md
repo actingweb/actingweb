@@ -55,6 +55,11 @@ point is to make one behaviour predictable.
 
 Option 4 is the cheapest real improvement and is independent of the rest.
 
+**Decided 2026-08-14** (owner walkthrough): **option 4 now.** It catches the
+confusion at registration rather than call time, cannot false-positive, and
+forecloses nothing. Options 2 and 3 stay open and stay tied to the
+structuredContent decision — do not take them as a side effect of this.
+
 ## Related
 
 - `thoughts/plans/2026-08-03-structuredcontent-promotion-drops-tool-text.md`

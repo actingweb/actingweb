@@ -76,6 +76,16 @@ jobs:
               # job — a Markdown file that is genuinely part of CI.
               thoughts/*|AGENTS.md|CLAUDE.md|TODO.md)
                 ;;
+              # CHANGELOG.rst is a Sphinx source AND a test input — the same
+              # trap as XDIST_GROUPS.md above. tests/test_version_consistency.py
+              # asserts its version matches pyproject.toml/__init__.py and that
+              # the "Unreleased" section is present, and CLAUDE.md asks every PR
+              # to add an entry here. Must come before the *.rst branch: bash
+              # `case` takes the first match.
+              CHANGELOG.rst)
+                code=true
+                docs=true
+                ;;
               # Sphinx sources. source_suffix is .rst only, so .md under docs/
               # isn't built — but it's still a docs change, and treating it as
               # one costs a docs build, not a 30-minute matrix.

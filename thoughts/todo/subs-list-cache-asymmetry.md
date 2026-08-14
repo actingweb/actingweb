@@ -146,6 +146,15 @@ operation profile: `{GetItem: 1, PutItem: 1, Query: 1}`) stays until then.
 
 ## Proposed fix
 
+**Decided 2026-08-14** (owner walkthrough): **take item 4 first — the
+cache-lifetime question — not the guard.** Deciding whether `_actor_cache` holds
+only identity/auth context with the `Actor` rebuilt per request, or whether
+instance caches need an explicit request-boundary reset, is what unblocks item 2
+*and* de-risks every future instance-level memo. The guard alone was rejected as
+trading a bounded cost bug for an unbounded correctness one. Pair the work with
+§1 of `thoughts/todo/mcp-cache-lifecycle-and-revocation.md` — same module, and
+the eviction wiring depends on what the cache ends up holding.
+
 1. ~~**Centralise invalidation.**~~ **DONE in rc2** — `create_subscription()`
    resets `self.subs_list`. The hand-rolled reset at
    `handlers/subscription.py:262` is now redundant; harmless, but it
@@ -187,7 +196,8 @@ operation profile: `{GetItem: 1, PutItem: 1, Query: 1}`) stays until then.
 ## Related
 
 - `thoughts/research/2026-07-25-rc2-triage.md` — the 3.13.0 triage this came
-  out of; I0 (whole-partition property reads) is the other deferred item.
+  out of; I0 (whole-partition property reads) is the other deferred item —
+  now filed as `thoughts/todo/property-fetch-reads-whole-partition.md`.
 - `thoughts/research/2026-07-25-v3.13.0rc1-consumer-feedback.md` — the consumer
   report; D7 documents the operation-counting technique and its `get_session()`
   trap.

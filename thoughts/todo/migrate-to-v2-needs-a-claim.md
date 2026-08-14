@@ -54,6 +54,11 @@ actor race for it), so this should not be left indefinitely.
 
 Option 1 is the cheapest that actually closes it.
 
+**Decided 2026-08-14** (owner walkthrough): planned jointly with
+`thoughts/todo/v2-compact-staged-commit.md` under one `/create_plan`. Both want
+a mutual-exclusion / recoverable-commit primitive over the same storage layer,
+and designing them separately risks two divergent mechanisms.
+
 ## Context
 
 - The narrower cousin of this bug (deciding from a cached format) IS fixed;

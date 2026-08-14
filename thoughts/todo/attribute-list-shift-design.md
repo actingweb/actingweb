@@ -42,6 +42,14 @@ the phased approach this plan used for `ListProperty`:
    `ListProperty`. The largest option, but the only one that actually
    closes the underlying design flaw rather than mitigating its symptoms.
 
+**Decided 2026-08-14** (owner walkthrough): **option 3, the full v2 port.** It
+is the only one that closes the corruption class rather than mitigating its
+symptoms, and it is materially cheaper than when this was filed — the
+fractional-rank format, its `verify()`/`compact()` primitives and its migration
+shape all now exist and are proven on `ListProperty`. Note the port inherits
+`thoughts/todo/v2-compact-staged-commit.md`'s open commit-protocol gap, so
+sequence it after that work rather than reproducing the gap in a second class.
+
 Whoever scopes this should re-read both research docs above for the
 measured corruption mechanics (they were reproduced against real
 dynamodb-local, not just reasoned about) before designing a fix — several

@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-07-31-mcp-trust-cache-crosses-clients.md
 ---
 
 # Implementation Plan: MCP trust cache client crossing (authorization bypass)

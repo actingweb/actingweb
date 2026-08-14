@@ -57,6 +57,10 @@ Any of these, roughly in increasing cost:
    reason `thoughts/plans/2026-08-08-property-list-index-integrity.md` ruled
    transactions out for the original shift-loop fix.
 
+**Decided 2026-08-14** (owner walkthrough): planned jointly with
+`thoughts/todo/migrate-to-v2-needs-a-claim.md` under one `/create_plan`, so the
+journal row here and the claim row there come out of one design rather than two.
+
 ## Why the current failure mode is at least loud
 
 Worth recording, because it is the strongest part of the argument for leaving

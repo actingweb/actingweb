@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Automatic Subscription Handling Implementation Plan

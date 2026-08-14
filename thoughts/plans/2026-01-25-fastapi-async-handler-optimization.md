@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: done
 ---
 
 # FastAPI Async Handler Optimization

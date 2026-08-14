@@ -3,12 +3,17 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    # Don't spend review tokens on internal planning docs. `paths-ignore` is
+    # safe HERE — unlike tests.yml, this workflow is not a required status
+    # check, so a PR that never triggers it is still mergeable.
+    #
+    # Deliberately narrow: user-facing docs (docs/**, *.rst) still get a review.
+    # Widen this list if reviewing prose isn't worth the tokens.
+    paths-ignore:
+      - 'thoughts/**'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'TODO.md'
 
 jobs:
   claude-review:

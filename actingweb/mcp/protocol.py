@@ -62,6 +62,28 @@ def is_supported_protocol_version(version: str | None) -> bool:
     return bool(version) and version in SUPPORTED_PROTOCOL_VERSIONS
 
 
+def unsupported_version_message(requested: str | None) -> str:
+    """The error ``message`` for a rejected ``MCP-Protocol-Version`` header.
+
+    Names the versions this server speaks, **in the message string only**.
+
+    The spec makes this argument for the mirror-image case — a server SHOULD
+    name its versions because, for a client that cannot fall forward, *"this
+    message may be the only diagnostic they can surface to users."* The same
+    holds here: a client that cannot fall back gets a human-readable error
+    naming what would have worked, instead of a bare rejection.
+
+    **The versions belong in the message and nowhere else.** Moving them into a
+    structured ``data.supported`` array is the one change that must not happen —
+    see the comment on the rejection in ``MCPHandler._resolve_request_protocol_version``.
+    """
+    supported = ", ".join(SUPPORTED_PROTOCOL_VERSIONS)
+    return (
+        f"Unsupported MCP-Protocol-Version: {requested}. "
+        f"This server supports: {supported}"
+    )
+
+
 def supports_structured_content(version: str | None) -> bool:
     """True if the negotiated protocol version supports ``structuredContent``."""
     return is_supported_protocol_version(version) and (

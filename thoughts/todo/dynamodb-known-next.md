@@ -23,10 +23,20 @@ a disappointing one. Specifics:
 
 - **Item 1 stands, and got slightly worse** (see its own note below).
   `batch_write` / `BatchWriteItem` still appear nowhere in the package.
-- **Item 2 stands.** `ListProperty.__getitem__` and `__delitem__` are still
-  where they were (`property_list.py`), and the v2 fractional-rank format did
-  not remove either cost: v2 fixed the *corruption* class, not the per-item
-  round trips.
+- **Item 2 half stands, and the half that is gone matters.** The per-item N+1
+  is unchanged: `ListProperty.__getitem__` still does a fresh accessor plus a
+  `GetItem` per item, on both formats. **The `__delitem__` O(N) shift is gone
+  for v2 lists.** `_v2_delitem()` deletes exactly one ranked row and then says
+  so in the code — *"a single row delete IS the whole operation under v2 — no
+  shift loop"*. So the shift cost survives only on legacy v1 lists, which the
+  migration tools exist to retire.
+
+  This correction matters more than a tally: the original item proposes
+  "tombstones or stable item ids instead of positional `list:<name>-<i>`" as
+  the fix, and **that is what fractional rank keys already are.** Reading the
+  item as written would send someone to redesign a key layout that shipped in
+  3.13. What remains for item 2 is the item cache with staleness semantics,
+  and nothing else. Caught by Codex review on PR #131.
 - **Item 3's count is now 27, not ~22**, across eight `db/dynamodb` modules
   (`attribute.py` 8, `property_lookup.py` 4, `subscription_diff.py` 4,
   `property.py` 3, `subscription.py` 3, `trust.py` 3, `actor.py` 1,
@@ -36,11 +46,20 @@ a disappointing one. Specifics:
 - **Item 4 stands.** `subscription_diff.get()` still takes an optional `seqnr`
   and still scans the `subid:` prefix in memory; the range key is still an
   unpadded lexicographic string.
-- **Item 5 stands, and is now clearly labelled in the code** — `DbActorList.fetch()`
-  carries an explicit "Admin/maintenance use only … deliberate full-table Scan,
-  O(table size) and unpaginated — do not call it on a serving path" docstring.
-  That is the v3.13 docs note the original entry mentions, now inline. Still no
-  limit/cursor API.
+- **Item 5 stands and its premise has expired.** The entry says "no in-library
+  callers (public API only)". That is **no longer true**: both
+  `actingweb/maintenance/migrate_property_lists.py` and
+  `actingweb/maintenance/verify_property_lists.py` call
+  `get_actor_list(config).fetch()` to enumerate the fleet. Those are the two
+  operator tools GA exists to make safe to run, so the unpaginated full-table
+  scan is now on a real operational path, not a hypothetical one — and it is
+  the path whose input size grows with the deployment. The `fetch()` docstring
+  does carry an explicit "Admin/maintenance use only … deliberate full-table
+  Scan, O(table size) and unpaginated — do not call it on a serving path"
+  warning, which the maintenance callers honour; a sweep is not a serving path.
+  But "add a limit/cursor API before anyone uses it at scale" has quietly
+  become "before the next fleet sweep on a large table". Caught by Codex review
+  on PR #131.
 - **Item 6 stands, unchanged.** `table_name = os.getenv("AWS_DB_PREFIX", …)`
   is still evaluated in each model's `class Meta` body at import time.
 - **Item 7 stands.** `is_token_in_db` is still the GSI-based uniqueness check.
@@ -48,13 +67,18 @@ a disappointing one. Specifics:
   (`property.py`); PostgreSQL has since gained an in-transaction variant
   (`_update_lookup_entry_in_transaction`), which narrows the window on that
   backend only and leaves DynamoDB's exactly as described.
-- **Item 9 stands, at both call sites.** `if not self.subs_list` remains at
-  `actor.py:1351` (the trust-deletion sibling, item 3 of the linked todo) and
-  `actor.py:1620` (`get_subscriptions()`). The rc2 invalidation fix is present
-  and visible — `self.subs_list = None` at three sites — so only the *cost* half
-  is open, exactly as `thoughts/todo/subs-list-cache-asymmetry.md` records. Its
-  item 4 was half-answered on 2026-08-15 (see that file); the guard itself stays
-  blocked.
+- **Item 9 stands at both call sites, and "only the cost half is open" would
+  be wrong.** `if not self.subs_list` remains at `actor.py:1351` (the
+  trust-deletion sibling, item 3 of the linked todo) and `actor.py:1620`
+  (`get_subscriptions()`). The invalidation fix is present and visible —
+  `self.subs_list = None` at three sites — but it only refreshes the `Actor`
+  instance the create or delete happened on. A **different process** can still
+  hold a truthy stale `subs_list`, and the trust-deletion site then skips the
+  fetch and can leave a subscription created elsewhere undeleted. So a
+  correctness residue survives alongside the cost one, exactly as item 3 of
+  `thoughts/todo/subs-list-cache-asymmetry.md` records. Item 4 of that file was
+  half-answered on 2026-08-15 (see it); the guard stays blocked. Caught by
+  Codex review on PR #131.
 
 **Line references are deliberately not re-pinned to specific numbers** for items
 whose anchors are stable by name. Pinning them is what made this list go stale

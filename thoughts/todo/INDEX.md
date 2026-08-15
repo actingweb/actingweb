@@ -86,11 +86,12 @@ an rc7 soak the earlier reading — but the migrate/repair machinery was not
 restructured in the end, so the case for another pre-release fell away. The
 maintainer's call: the next tag is **`v3.13.0`**.
 
-That does not make the metadata-integrity PR the release PR. Rows 6, 11 and 8
-are still In GA scope and unlanded, so the version bump and the `Unreleased` ->
-`v3.13.0` rename ride in whichever PR is last — per `CLAUDE.md`, the bump goes
-in the release PR itself and the tag is pushed to master afterwards. Until then
-this work sits under `Unreleased` like any other change.
+**All GA-scope work landed on 2026-08-15** (#128, #129, #130, and this
+re-verification), so the bump does not ride in a feature PR after all: it goes
+in a **dedicated release PR** that also consolidates the six `rc` changelog
+sections into one `v3.13.0` section, dropping the rc-to-rc churn that never
+existed in a released version. Per `CLAUDE.md` the bump goes in that PR and the
+tag is pushed to master afterwards.
 
 ## 1. Do next
 
@@ -98,7 +99,7 @@ Real problems, in production or under it, with a known shape.
 
 | # | Item | Impact of doing it | Why now |
 | --- | --- | --- | --- |
-| 3 | [Postgres parallel DELETE not persisting](2026-06-15-postgres-parallel-delete-not-persisting.md) | Answers whether the PG backend can silently drop a committed `DELETE` under concurrency, and lifts the quarantine on two assertions currently dark on postgresql | Open since June with no root cause — but the **decisive step is cheap and nobody has run it**: log `cur.rowcount` and `search_path` from `delete_attr` in CI, and the leading hypothesis (a pooled connection contaminated by the `property_lookup_pkey` error) either falls or stands. **Decided 2026-08-14: one instrumentation branch covering this and row 10** — same matrix, and row 10's process-global psycopg pool is this row's leading hypothesis. **Ran 2026-08-15**, and it found something first: both ranked hypotheses had their proximate mechanism removed by #115 and #117 after this was filed. The branch therefore lifts the quarantine *and* instruments, so a green matrix closes it with evidence and a red one names the mechanism in the first failing run. Awaiting the CI verdict |
+| 3 | [Postgres parallel DELETE not persisting](2026-06-15-postgres-parallel-delete-not-persisting.md) | Answers whether the PG backend can silently drop a committed `DELETE` under concurrency, and lifts the quarantine on two assertions currently dark on postgresql | Open since June with no root cause — but the **decisive step is cheap and nobody has run it**: log `cur.rowcount` and `search_path` from `delete_attr` in CI, and the leading hypothesis (a pooled connection contaminated by the `property_lookup_pkey` error) either falls or stands. **Decided 2026-08-14: one instrumentation branch covering this and row 10** — same matrix, and row 10's process-global psycopg pool is this row's leading hypothesis. **Ran 2026-08-15**, and it found something first: both ranked hypotheses had their proximate mechanism removed by #115 and #117 after this was filed. The branch therefore lifts the quarantine *and* instruments, so a green matrix closes it with evidence and a red one names the mechanism in the first failing run. **Verdict 2026-08-15: green**, on every run across four PRs, zero reruns. Not proof of a root cause — proof the symptom is gone and the quarantine was obsolete. Diagnostics stay on in CI to catch a recurrence |
 
 ## 2. High leverage
 

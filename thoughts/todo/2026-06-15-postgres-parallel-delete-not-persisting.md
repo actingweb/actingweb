@@ -1,9 +1,14 @@
 # TODO: Postgres per-actor attribute DELETE intermittently not persisting under parallel CI
 
 **Date:** 2026-06-15
-**Status:** Open — root cause not yet found, but **both leading hypotheses have
-been removed by unrelated work since this was filed, and the quarantine was
-lifted on 2026-08-15 to find out whether that ended it.** See "What changed
+**Status:** **Symptom gone, root cause never found.** Both leading hypotheses
+had their proximate mechanism removed by unrelated work (#115, #117); the
+quarantine was lifted on 2026-08-15 and the postgres matrix has been green on
+every run since, across four PRs, with zero reruns. That is evidence the
+symptom is gone, **not** evidence of a diagnosis — so this file stays rather
+than being deleted, and `ACTINGWEB_PG_DELETE_DIAGNOSTICS` stays on in CI to
+name the mechanism if it ever returns. Delete this file after a few weeks of
+continued green. See "What changed
 under this todo" below before doing any further investigation: the code this
 document describes is not the code that runs today.
 **Severity:** Medium (test-infra reliability; no confirmed production impact, but the

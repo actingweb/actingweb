@@ -152,7 +152,16 @@ _UNSUPPORTED_VERSION_ESCALATE_AT = 5
 # one it exists to fix.
 _UNSUPPORTED_VERSION_MAX_ORIGINS = 512
 # origin -> (count within window, window start)
-_unsupported_version_origins: dict[str, tuple[int, float]] = {}
+# origin -> (count within window, window start, last seen)
+#
+# `last seen` exists only so eviction can pick the least *active* origin. Using
+# the window start conflates "oldest window" with "least active" and gets it
+# exactly backwards: an origin's window start never moves, so the longer a
+# genuinely sustained client keeps being rejected, the more eviction-prone its
+# entry becomes — a flood of one-shot origins would evict precisely the entry
+# whose count is the signal this whole mechanism exists to raise. Caught in
+# review on PR #129.
+_unsupported_version_origins: dict[str, tuple[int, float, float]] = {}
 _unsupported_version_lock = threading.Lock()
 
 
@@ -169,7 +178,7 @@ def _record_unsupported_version_rejection(origin: str) -> tuple[int, bool]:
         # and the cap below is the backstop for a burst of distinct origins.
         expired = [
             key
-            for key, (_, started) in _unsupported_version_origins.items()
+            for key, (_, started, _last) in _unsupported_version_origins.items()
             if now - started > _UNSUPPORTED_VERSION_WINDOW_SECONDS
         ]
         for key in expired:
@@ -178,18 +187,24 @@ def _record_unsupported_version_rejection(origin: str) -> tuple[int, bool]:
         entry = _unsupported_version_origins.get(origin)
         if entry is None:
             if len(_unsupported_version_origins) >= _UNSUPPORTED_VERSION_MAX_ORIGINS:
-                # Evict the oldest window rather than clearing everything: the
-                # long-lived origins are the ones whose counts matter.
-                oldest = min(
+                # Least *recently seen*, not oldest window — see the comment on
+                # the dict. A one-shot origin that handshook four minutes ago is
+                # the right thing to drop; the client still actively retrying is
+                # not, and under a flood of fresh one-shots it would otherwise
+                # be the first to go.
+                stalest = min(
                     _unsupported_version_origins,
-                    key=lambda k: _unsupported_version_origins[k][1],
+                    key=lambda k: _unsupported_version_origins[k][2],
                 )
-                _unsupported_version_origins.pop(oldest, None)
-            _unsupported_version_origins[origin] = (1, now)
+                _unsupported_version_origins.pop(stalest, None)
+            _unsupported_version_origins[origin] = (1, now, now)
             return (1, False)
 
         count = entry[0] + 1
-        _unsupported_version_origins[origin] = (count, entry[1])
+        # Window start is deliberately preserved: the window is a fixed span
+        # from the first rejection, not a sliding one, so a client retrying
+        # forever re-escalates every window instead of never escalating again.
+        _unsupported_version_origins[origin] = (count, entry[1], now)
         return (count, count == _UNSUPPORTED_VERSION_ESCALATE_AT)
 
 

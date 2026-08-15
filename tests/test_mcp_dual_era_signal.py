@@ -32,6 +32,7 @@ absence is the load-bearing half, and no test asserted it before 2026-08-15.
 See ``thoughts/todo/mcp-2026-07-28-dual-era-support.md``.
 """
 
+import itertools
 import logging
 
 import pytest
@@ -238,6 +239,54 @@ class TestOriginTrackingIsBounded:
             mcp_module._record_unsupported_version_rejection(f"ua:attacker-{i}")
 
         assert len(mcp_module._unsupported_version_origins) <= cap
+
+    def test_eviction_drops_the_least_recently_seen_not_the_oldest_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bug the #129 re-review found, and the reason `last seen` exists.
+
+        Eviction keyed on the *window start*, which never moves once set. So a
+        genuinely sustained client — the one whose count is the signal this
+        whole mechanism exists to raise — held the oldest window start and was
+        therefore the **first** entry dropped whenever a flood of fresh
+        one-shot origins filled the table. Exactly backwards.
+
+        The distinction only shows when the sustained origin is old by window
+        and new by activity, so the test constructs precisely that: it is
+        seeded first, the table is filled behind it, then it retries once, and
+        then one more origin forces an eviction. Under the old key it is the
+        victim; under the new one it is the last thing that would be dropped.
+
+        The clock is faked so the ordering is decided by the key under test
+        rather than by whether two `time.time()` calls microseconds apart
+        happened to tie.
+        """
+        # Milliseconds, not seconds: the whole scenario has to fit inside one
+        # window, or the prune step retires entries before the cap is ever
+        # reached and the eviction path under test never runs.
+        clock = itertools.count(1000.0, 0.001)
+        monkeypatch.setattr(mcp_module.time, "time", lambda: next(clock))
+
+        sustained = "ua:modern-only-client/2.0"
+        cap = mcp_module._UNSUPPORTED_VERSION_MAX_ORIGINS
+
+        # Seeded first: from here on it holds the oldest window start.
+        mcp_module._record_unsupported_version_rejection(sustained)
+        for i in range(cap - 1):
+            mcp_module._record_unsupported_version_rejection(f"ua:one-shot-{i}")
+
+        # It retries. Window start unchanged; last seen is now the newest.
+        mcp_module._record_unsupported_version_rejection(sustained)
+
+        # A new origin arrives with the table full, forcing one eviction.
+        mcp_module._record_unsupported_version_rejection("ua:newcomer")
+
+        assert sustained in mcp_module._unsupported_version_origins, (
+            "the actively-retrying origin was evicted; eviction is keyed on the "
+            "window start rather than on last-seen"
+        )
+        # The one-shot that has gone longest without being seen is the victim.
+        assert "ua:one-shot-0" not in mcp_module._unsupported_version_origins
 
     def test_counting_is_per_origin(self) -> None:
         assert mcp_module._record_unsupported_version_rejection("ua:a") == (1, False)

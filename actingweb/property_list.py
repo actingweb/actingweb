@@ -2254,14 +2254,32 @@ class ListProperty:
                 f"while migrating to v2 -- abandoning the migration and "
                 f"removing the {len(ranks)} v2 row(s) written so far"
             )
-            for rank in ranks:
+            # Delete CONDITIONALLY on the exact bytes we wrote, never by rank
+            # name alone. Between the read above and this loop, the delete()
+            # that removed the meta row can also have swept these rows, a new
+            # list can have been created under the same name, and its first
+            # append() lands on rank "a0" -- which is the first rank WE
+            # generated, because generate_n_keys_between(None, None, n) is
+            # deterministic. An unconditional delete by name would then
+            # destroy the successor's item and leave its metadata intact:
+            # exactly the silent cross-list loss this method exists to
+            # prevent, committed by the rollback rather than the migration.
+            for rank, raw_value in zip(ranks, ordered_values, strict=True):
                 del_db = get_property(self.config)
-                if not del_db.set(
-                    actor_id=self.actor_id, name=self._v2_item_name(rank), value=None
+                if not del_db.delete_if_value_equals(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(rank),
+                    value=raw_value,
                 ):
-                    raise RuntimeError(
-                        f"list item write failed for '{self.name}' during "
-                        f"migrate_to_v2() abort cleanup"
+                    # Already gone (the concurrent delete() swept it), or now
+                    # holds somebody else's value. Either way it is not ours
+                    # to remove, and that is a normal outcome here, not a
+                    # failure.
+                    logger.info(
+                        f"List '{self.name}' (actor {self.actor_id}): rollback "
+                        f"left row '{self._v2_item_name(rank)}' alone -- it is "
+                        f"gone or no longer holds the value this migration "
+                        f"wrote"
                     )
             self._invalidate_cache()
             return {"migrated": False, "reason": "deleted_concurrently"}

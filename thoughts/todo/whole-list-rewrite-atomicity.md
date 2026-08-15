@@ -70,6 +70,17 @@ second of which is the most valuable constraint any of this produced.
   what broke stage-and-flip's commit under concurrency. Precedent for the missing
   primitive is one protocol over: `DbAttributeProtocol.conditional_update_attr`
   (`db/protocols.py:925-950`).
+
+  **This is also the residual left by the 2026-08-15 metadata fix, raised as a
+  P1 by Codex review on PR #127 and accepted as a known trade rather than a
+  defect.** `_save_metadata()` reads the metadata row and writes it back; a
+  migration that completes inside that gap is still reverted. What the fix
+  removed was the *unbounded* variant — a retained `ListProperty` reverting a
+  migration that finished arbitrarily long ago — leaving a window of two
+  adjacent operations. Closing it needs exactly the CAS above, conditioned on
+  `format` or a metadata version. Documented as accepted in
+  `docs/guides/property-lists.rst` ("Concurrency during a whole-list rewrite")
+  and in the migration guide, so whoever adds the primitive should update both.
 - **DynamoDB transactions cap at 100 actions**, below the list sizes that need
   rebalancing — the same reason `thoughts/plans/2026-08-08-property-list-index-integrity.md`
   ruled them out for the original shift-loop fix.

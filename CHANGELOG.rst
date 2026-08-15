@@ -34,6 +34,15 @@ FIXED
   and a write whose metadata row has vanished (a concurrent ``delete()``
   won) is skipped rather than recreating the list from stale state.
 
+  **This narrows the window rather than closing it, and the difference is
+  worth being precise about.** What is gone is the unbounded variant: a
+  retained instance could previously revert a migration that finished
+  arbitrarily long ago. What remains is the gap between reading the metadata
+  row and writing it back — two adjacent operations — because neither
+  backend's ``DbProperty`` offers a compare-and-set to condition the write
+  on. That residue is accepted and deferred, not overlooked; quiescing writes
+  during a migration is still what closes it.
+
 - **An interrupted format change left rows behind permanently, and
   re-running did not clean them up.** Both ``migrate_to_v2()`` and the
   emergency ``--downgrade`` write the new format's rows, flip metadata, then

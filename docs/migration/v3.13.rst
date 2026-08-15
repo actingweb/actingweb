@@ -147,10 +147,17 @@ gone.
    during ``compact()``, ``--repair`` or ``--migrate`` can still be lost, so
    the advice above is a real operational requirement rather than a
    nice-to-have. What 3.13 *does* guarantee is that such a write can no
-   longer corrupt the list's **format**: a concurrent write updates only the
-   metadata fields it changes, merged into a fresh read, so it can never put
-   ``format: 1`` back over a completed migration. In ``rc6`` and earlier it
-   could, and the result was total silent loss — see the CHANGELOG.
+   longer corrupt the list's **format** *from a stale cache*: a concurrent
+   write updates only the metadata fields it changes, merged into a fresh
+   read. In ``rc6`` and earlier it wrote a whole cached dictionary back,
+   putting ``format: 1`` over a completed migration, and the result was total
+   silent loss — see the CHANGELOG.
+
+   The window is narrowed, not closed. It was unbounded in time (a retained
+   ``ListProperty`` could revert a migration that finished hours earlier); it
+   is now the gap between reading the metadata row and writing it back, since
+   there is no compare-and-set to condition that write on. Quiescing writes is
+   what closes the rest.
 
 Step 3: expect these breaking changes after upgrading
 -----------------------------------------------------

@@ -2161,3 +2161,99 @@ class TestVerifyReportsForeignFormatRows:
 
         report = ListProperty(actor_id=actor_id, name=name, config=object()).verify()
         assert report["foreign_format_rows"] == 0
+
+
+class TestMigrationRollbackDoesNotEatASuccessorList:
+    """The abort path must delete only rows it still owns.
+
+    Raised as a P2 by Codex review on PR #127 and accepted as real. Between
+    migrate_to_v2() observing the metadata row absent and its rollback loop
+    running, the concurrent delete() can sweep the scratch rows AND a new
+    list can be created under the same name. That successor's first
+    append() lands on rank "a0" -- the same rank migration generated, because
+    ``generate_n_keys_between(None, None, n)`` is deterministic. Deleting by
+    rank name alone therefore destroys the successor's item while leaving its
+    metadata intact: silent cross-list loss, committed by the rollback rather
+    than the migration.
+    """
+
+    def test_rollback_leaves_a_successors_row_alone(self, monkeypatch, fake_store):
+        import fractional_indexing as fi
+
+        actor_id = "actor-rollback-successor"
+        name = "notes"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        first_rank = fi.generate_n_keys_between(None, None, 3)[0]
+        successor_row = (actor_id, f"list:{name}-#{first_rank}")
+        prop = name
+
+        class Racing(FakePropertyDb):
+            """Trip on migration's STEP 5 metadata read -- identified by the
+            v2 rows step 4 has just written being present. Report the row as
+            absent, and in the same instant do what a concurrent delete() plus
+            a fresh create() would: sweep every row of the old list, then
+            stand a new list up under the same name whose first item takes
+            the very rank migration used."""
+
+            def get(self, actor_id=None, name=None):
+                step_five = name == f"list:{prop}-meta" and any(
+                    "-#" in k[1] for k in self.store
+                )
+                if not step_five:
+                    return super().get(actor_id=actor_id, name=name)
+                for key in [k for k in list(self.store) if f"list:{prop}-" in k[1]]:
+                    self.store.pop(key, None)
+                self.store[successor_row] = json.dumps("successor-item")
+                self.store[(actor_id, f"list:{prop}-meta")] = json.dumps(
+                    {"format": 2, "created_at": "x", "updated_at": "x"}
+                )
+                return None  # what migration's step-5 read observes
+
+        _patch_get_property(monkeypatch, lambda config: Racing(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        result = prop_list.migrate_to_v2()
+
+        assert result == {"migrated": False, "reason": "deleted_concurrently"}
+        assert fake_store.get(successor_row) == json.dumps("successor-item"), (
+            "the rollback deleted a row belonging to the list that replaced "
+            "the one being migrated"
+        )
+
+    def test_rollback_still_removes_its_own_rows(self, monkeypatch, fake_store):
+        """The conditional delete must not become a no-op: when nothing else
+        touched the rows, the rollback still cleans up after itself."""
+        actor_id = "actor-rollback-own"
+        name = "notes"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        class MetaVanishes(FakePropertyDb):
+            def get(self, actor_id=None, name=None):
+                if name == f"list:{name_}-meta" and any(
+                    "-#" in k[1] for k in self.store
+                ):
+                    # Step 4 has written the v2 rows; the meta row is gone.
+                    self.store.pop((actor_id, name), None)
+                    return None
+                return super().get(actor_id=actor_id, name=name)
+
+        name_ = name
+        _patch_get_property(monkeypatch, lambda config: MetaVanishes(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        result = prop_list.migrate_to_v2()
+
+        assert result == {"migrated": False, "reason": "deleted_concurrently"}
+        assert not [k for k in fake_store if "-#" in k[1]], (
+            "rows this migration wrote, and that nobody else touched, must "
+            "still be rolled back"
+        )

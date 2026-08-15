@@ -428,13 +428,25 @@ rewrite can be lost.
 
 Two things bound how bad that gets.
 
-*A concurrent write cannot change the list's storage format.* Every metadata
-write names the fields it is changing and merges them into a freshly read
-metadata row, so an ``append()`` running against a list that was migrated a
-moment ago updates a timestamp and nothing else. It cannot restore
-``format: 1`` over a completed migration — which, in ``3.13.0rc6`` and
-earlier, is exactly what it did, leaving metadata claiming v1 while every
-item lived in v2 rows nothing read.
+*A concurrent write can no longer revert the storage format from a stale
+cache.* Every metadata write names the fields it is changing and merges them
+into a freshly read metadata row, so an ``append()`` running against a list
+that was migrated a moment ago updates a timestamp and nothing else. In
+``3.13.0rc6`` and earlier it wrote a whole *cached* dictionary back, restoring
+``format: 1`` over a completed migration and leaving metadata claiming v1
+while every item lived in v2 rows nothing read.
+
+Be precise about what that buys, because the difference matters
+operationally. The old window was **unbounded in time**: a ``ListProperty``
+instance an application held on to kept its cached metadata until something
+explicitly invalidated it, so a write minutes or hours after a migration could
+still revert it. The remaining window is **two adjacent operations** — the
+read of the metadata row and the write that follows it. A migration that
+completes inside that gap can still be reverted, because neither backend's
+property layer offers a compare-and-set to condition the write on. That
+residue is accepted and deferred rather than closed; see
+``thoughts/todo/whole-list-rewrite-atomicity.md``. Quiescing writes during a
+migration is what actually closes it.
 
 *Two concurrent migrations resolve to last-writer-wins at whole-list
 granularity, and this is accepted rather than prevented.* Each migration

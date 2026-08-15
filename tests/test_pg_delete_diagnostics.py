@@ -201,6 +201,58 @@ class TestDiagnosticsCannotCauseTheBugTheyDiagnose:
         )
         assert statements.index("COMMIT") > delete_index
 
+    def test_a_failing_savepoint_does_not_attempt_a_rollback(self) -> None:
+        """The one branch reasoning alone had covered, now exercised.
+
+        If ``SAVEPOINT`` itself fails, the transaction was already unusable —
+        PostgreSQL rejects ``SAVEPOINT`` in an aborted transaction. There is no
+        savepoint to roll back to, so issuing ``ROLLBACK TO SAVEPOINT`` would
+        raise a second, more confusing error. Raised as a non-blocking point in
+        the #128 re-review.
+        """
+        log: list[str] = []
+
+        class SavepointRefusingCursor(FakeCursor):
+            def execute(self, statement: str, params: object = None) -> None:  # noqa: ARG002
+                log.append(" ".join(statement.split()))
+                raise psycopg.errors.InFailedSqlTransaction(
+                    "current transaction is aborted"
+                )
+
+        assert pg_attribute._read_schema_state(SavepointRefusingCursor([], 1)) is None
+        assert log == [f"SAVEPOINT {pg_attribute._DIAG_SAVEPOINT}"], (
+            "nothing may be issued after a failed SAVEPOINT"
+        )
+
+    def test_a_failing_savepoint_still_fails_the_delete_loudly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An already-aborted transaction must not report a successful delete."""
+        monkeypatch.setenv(_DIAG_ENV, "1")
+
+        class DeadConnection(FakeConnection):
+            def cursor(self) -> FakeCursor:
+                cursor = FakeCursor([], 1)
+
+                def dead_execute(statement: str, params: object = None) -> None:  # noqa: ARG001
+                    raise psycopg.errors.InFailedSqlTransaction(
+                        "current transaction is aborted"
+                    )
+
+                cursor.execute = dead_execute  # type: ignore[method-assign]
+                return cursor
+
+        monkeypatch.setattr(
+            pg_attribute, "get_connection", lambda: DeadConnection([], 1)
+        )
+
+        assert (
+            pg_attribute.DbAttribute.set_attr(
+                actor_id="actor1", bucket="mcp_clients", name="mcp_abc", data=None
+            )
+            is False
+        )
+
     def test_schema_is_reported_as_unknown_rather_than_guessed(
         self,
         monkeypatch: pytest.MonkeyPatch,

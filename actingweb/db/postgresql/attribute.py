@@ -63,7 +63,21 @@ def _read_schema_state(cur: Any) -> tuple[str, str] | None:
     """
     try:
         cur.execute(f"SAVEPOINT {_DIAG_SAVEPOINT}")
-    except Exception:  # pragma: no cover - defensive
+    except Exception:
+        # If SAVEPOINT itself fails the transaction was already unusable before
+        # we got here — PostgreSQL rejects SAVEPOINT in an aborted transaction,
+        # accepting only COMMIT/ROLLBACK or ROLLBACK TO an *existing* savepoint.
+        # Return without attempting a rollback: there is no savepoint to roll
+        # back to. The DELETE that follows then fails loudly and set_attr()
+        # returns False, which is the correct outcome — the one result that must
+        # never be silent is success.
+        #
+        # Not expected to be reachable from set_attr(): this is the first
+        # statement on a freshly checked-out connection, and psycopg_pool resets
+        # a connection to IDLE before handing it out (the pool is also
+        # configured with check=ConnectionPool.check_connection). Handled anyway
+        # because the guarantee lives in another library, and because a future
+        # caller might not run this first.
         logger.warning("PG_DELETE_DIAG could not open a savepoint", exc_info=True)
         return None
 

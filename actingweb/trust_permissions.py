@@ -143,6 +143,13 @@ class TrustPermissionStore:
                 # Update cache
                 cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
                 self._cache[cache_key] = permissions
+                # This store's own cache is not the only one holding the old
+                # permissions: the MCP handler caches the resolved trust
+                # relationship for five minutes, so a downgrade would otherwise
+                # keep being honoured at the old level from a warm process.
+                from .mcp.invalidation import evict_caches_for_actor
+
+                evict_caches_for_actor(permissions.actor_id)
                 logger.info(f"Stored trust permissions: {cache_key}")
                 return True
             else:
@@ -552,6 +559,11 @@ class TrustPermissionStore:
                 # Remove from cache
                 cache_key = f"{actor_id}:{peer_id}"
                 self._cache.pop(cache_key, None)
+                # Same reason as _store_permissions_internal(): the MCP
+                # handler's cached trust relationship outlives this one.
+                from .mcp.invalidation import evict_caches_for_actor
+
+                evict_caches_for_actor(actor_id)
                 logger.info(f"Deleted trust permissions: {cache_key}")
                 return True
             else:

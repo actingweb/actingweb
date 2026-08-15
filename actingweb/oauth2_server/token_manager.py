@@ -316,21 +316,37 @@ class ActingWebTokenManager:
             # Access token
             token_data = self._load_access_token(token)
             if token_data:
+                # Imported lazily, like the other callers in trust.py,
+                # trust_permissions.py and oauth_session.py: MCP is an optional
+                # higher layer and these are the modules it sits above.
+                from ..mcp.invalidation import (
+                    evict_caches_for_actor,
+                    evict_caches_for_token,
+                )
+
                 self._remove_access_token(token)
                 # Also revoke associated refresh token
                 token_id = token_data.get("token_id")
                 if token_id:
                     self._revoke_refresh_tokens_for_access_token(token_id)
+                evict_caches_for_token(token)
                 return True
         else:
             # Might be refresh token
             refresh_data = self._load_refresh_token(token)
             if refresh_data:
+                from ..mcp.invalidation import evict_caches_for_actor
+
                 self._remove_refresh_token(token)
                 # Also revoke associated access token
                 access_token_id = refresh_data.get("access_token_id")
                 if access_token_id:
                     self._revoke_access_token_by_id(access_token_id)
+                # A refresh token is not itself in the MCP token cache, but the
+                # actor's cached identity should not outlive its revocation.
+                actor_id = refresh_data.get("actor_id")
+                if actor_id:
+                    evict_caches_for_actor(actor_id)
                 return True
 
         return False

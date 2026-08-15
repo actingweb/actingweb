@@ -60,6 +60,17 @@ confusion at registration rather than call time, cannot false-positive, and
 forecloses nothing. Options 2 and 3 stay open and stay tied to the
 structuredContent decision — do not take them as a side effect of this.
 
+**Landed 2026-08-15.** `_warn_hook_output_schema_not_advertised_once()` in
+`actingweb/handlers/mcp.py` fires from the `tools/list` loop when a tool has no
+`_mcp_metadata` output schema but `get_hook_metadata()` reports one — which
+covers both the explicit `action_hook(output_schema=)` case and the `TypedDict`
+auto-derivation. Once per tool per process, since `tools/list` runs per request.
+
+**The asymmetry itself is unchanged, and this file stays open for that.** The
+warning tells an author their schema is not being advertised; it does not
+advertise it. Options 2 and 3 remain the actual fix and remain tied to the
+structuredContent decision.
+
 ## Related
 
 - `thoughts/plans/2026-08-03-structuredcontent-promotion-drops-tool-text.md`

@@ -389,12 +389,22 @@ class OAuth2SessionManager:
         )
 
         try:
+            # Read before deleting: eviction is actor-keyed and the token row is
+            # the only thing that knows which actor this is. One extra read on a
+            # path that runs at most once per revocation.
+            token_attr = bucket.get_attr(name=token)
             bucket.delete_attr(name=token)
             logger.debug("Revoked access token")
-            return True
         except Exception as e:
             logger.warning(f"Error revoking access token: {e}")
             return False
+
+        # Outside the try, deliberately. The row is gone by this point, so a
+        # failure here would report a revocation that did not happen. Eviction
+        # already swallows its own errors; keeping it out of the try means that
+        # contract is belt and braces rather than load-bearing.
+        self._evict_mcp_caches_for_token_owner(token_attr)
+        return True
 
     def create_refresh_token(
         self,
@@ -643,12 +653,35 @@ class OAuth2SessionManager:
         )
 
         try:
+            token_attr = bucket.get_attr(name=token)
             bucket.delete_attr(name=token)
             logger.debug("Revoked refresh token")
-            return True
         except Exception as e:
             logger.warning(f"Error revoking refresh token: {e}")
             return False
+
+        # Outside the try — see revoke_access_token().
+        self._evict_mcp_caches_for_token_owner(token_attr)
+        return True
+
+    @staticmethod
+    def _evict_mcp_caches_for_token_owner(token_attr: dict[str, Any] | None) -> None:
+        """Evict MCP caches for whichever actor owned a just-revoked token.
+
+        The SPA token row is the only place the actor id is recorded, so this
+        takes the attribute read before the delete. A row with no ``actor_id``
+        (already gone, or malformed) simply evicts nothing — the revocation
+        itself has already succeeded and must not be failed for this.
+        """
+        if not token_attr or "data" not in token_attr:
+            return
+        data = token_attr["data"]
+        actor_id = data.get("actor_id") if isinstance(data, dict) else None
+        if not actor_id:
+            return
+        from .mcp.invalidation import evict_caches_for_actor
+
+        evict_caches_for_actor(actor_id)
 
     def revoke_all_tokens(self, actor_id: str) -> int:
         """
@@ -702,6 +735,15 @@ class OAuth2SessionManager:
 
         if revoked:
             logger.warning(f"Revoked {revoked} tokens for actor {actor_id}")
+
+        # Revoke-all is the theft response; it has to take effect now, not when
+        # the MCP caches' five-minute TTL expires. Evicted unconditionally: this
+        # runs when theft is *suspected*, and the individual tokens have already
+        # been deleted from storage above, so an empty result here does not mean
+        # there was nothing cached.
+        from .mcp.invalidation import evict_caches_for_actor
+
+        evict_caches_for_actor(actor_id)
 
         return revoked
 
@@ -759,6 +801,13 @@ class OAuth2SessionManager:
                 f"Revoked {revoked} token(s) in chain {chain_id[:8]}... "
                 f"for actor {actor_id}"
             )
+
+        # This — not revoke_all_tokens() — is the production theft response, so
+        # it is the path that most needs the MCP caches cleared. Unconditional:
+        # a chain that deleted nothing still means reuse was detected.
+        from .mcp.invalidation import evict_caches_for_actor
+
+        evict_caches_for_actor(actor_id)
 
         return revoked
 

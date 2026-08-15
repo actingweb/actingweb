@@ -168,7 +168,15 @@ the eviction wiring depends on what the cache ends up holding.
    delete a peer's subscriptions, so a stale cache there means missing a
    subscription during trust teardown.
 4. **Decide whether a cross-request `Actor` cache should hold instance state
-   at all.** Fixing invalidation inside `create_subscription()` closes the
+   at all.** **Partly answered 2026-08-15** —
+   `thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md`
+   establishes that it *does*: `_actor_cache` stores a live `ActorInterface`,
+   keyed by actor id, on a **sliding** TTL, shared across requests and across
+   users of the container. That was the half row 6 needed, and it is enough to
+   make row 6's eviction correct regardless of how the rest is decided. What
+   remains open is the *should* — identity-only with the `Actor` rebuilt per
+   request, versus an explicit request-boundary reset — which INDEX §0 assigns
+   to 3.14, and item 2 below stays blocked on it. Fixing invalidation inside `create_subscription()` closes the
    window for one process, but `handlers/mcp.py`'s `_actor_cache` shares an
    `Actor` across requests *and across users of that container*, so any
    future instance-level memo inherits the same hazard. Either the MCP cache

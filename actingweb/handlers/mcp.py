@@ -213,6 +213,50 @@ def _reset_unsupported_version_telemetry() -> None:
         _unsupported_version_origins.clear()
 
 
+def evict_mcp_caches_for_actor(actor_id: str) -> int:
+    """Drop every MCP cache entry belonging to ``actor_id``. Returns the count.
+
+    The eviction hook for changes that invalidate an actor's cached identity or
+    authorization but do **not** arrive holding a token: a revoked-all, a
+    deleted trust relationship, a downgraded permission.
+    :meth:`MCPHandler.clear_token_from_cache` is the token-keyed counterpart and
+    ends up doing the same actor-wide work once it has resolved the actor.
+
+    **Actor-wide is not overreach, it is required.** ``_actor_cache`` holds a
+    live ``ActorInterface`` — and therefore the core ``Actor`` and every memo on
+    it, ``subs_list`` among them — shared across requests *and across users of
+    that container* on a sliding TTL. Evicting only the ``_trust_cache`` tuple
+    for one client would leave that shared wrapper in place with the stale trust
+    list still on it. Any narrower eviction has to be re-derived from what the
+    wrapper actually caches, which is not a stable surface.
+
+    Only closes the window in the process that runs it. Other workers keep
+    serving their own entries until TTL — see §2 of
+    ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``, deliberately out of
+    scope here.
+    """
+    evicted = 0
+
+    for token in [
+        token
+        for token, data in _token_cache.copy().items()
+        if data.get("actor_id") == actor_id
+    ]:
+        _token_cache.pop(token, None)
+        evicted += 1
+
+    if _actor_cache.pop(actor_id, None) is not None:
+        evicted += 1
+
+    trust_keys = [k for k in _trust_cache.copy() if k[0] == actor_id]
+    _evict_trust_entries_for_actor(actor_id)
+    evicted += len(trust_keys)
+
+    if evicted:
+        logger.debug("Evicted %d MCP cache entries for actor %s", evicted, actor_id)
+    return evicted
+
+
 # Tools already warned about a declared output_schema with no structuredContent,
 # so the warning fires once per tool per process rather than on every call.
 _output_schema_warned: set[str] = set()
@@ -235,6 +279,59 @@ def _warn_missing_structured_content_once(tool_name: str | None) -> None:
         "'structuredContent' key from the hook (and serialize the same object "
         "into a text content block for clients that ignore it).",
         key,
+    )
+
+
+# Tools already warned about an output_schema that stops at the action hook.
+_hook_output_schema_warned: set[str] = set()
+
+
+def _warn_hook_output_schema_not_advertised_once(hook: Any, tool_name: str) -> None:
+    """Warn when a hook declares an ``output_schema`` MCP will not advertise.
+
+    A hook's output schema can be supplied three ways and only one reaches MCP:
+    ``@mcp_tool(output_schema=S)`` sets ``_mcp_metadata``, which ``tools/list``
+    reads. ``@app.action_hook(..., output_schema=S)`` — and the ``TypedDict``
+    return-annotation auto-derivation — set ``_hook_metadata`` instead, and
+    nothing bridges the two. An author who declares a schema either of those
+    ways reasonably believes their tool advertises ``outputSchema``. It does
+    not, silently, and the missing-``structuredContent`` warning stays quiet for
+    them too because it is gated on the same metadata.
+
+    Warning is deliberately all this does. **Merging the two would newly
+    advertise ``outputSchema`` for every ``TypedDict``-annotated tool**, and
+    every one of those that does not also return ``structuredContent`` would
+    start failing on spec-conforming clients — breaking a population that works
+    today. That decision belongs with the ``structuredContent`` research, not
+    here: ``thoughts/todo/action-hook-output-schema-not-visible-to-mcp.md``.
+
+    Unlike the missing-``structuredContent`` warning, this condition is knowable
+    at listing time and cannot false-positive: either the hook metadata carries
+    a schema the MCP metadata lacks, or it does not.
+    """
+    if tool_name in _hook_output_schema_warned:
+        return
+    try:
+        from ..interface.hooks import get_hook_metadata
+
+        hook_metadata = get_hook_metadata(hook)
+    except Exception:  # pragma: no cover - metadata lookup must not break listing
+        return
+    if not hook_metadata:
+        return
+    declared = getattr(hook_metadata, "output_schema", None)
+    if not declared:
+        return
+
+    _hook_output_schema_warned.add(tool_name)
+    logger.warning(
+        "Tool '%s' declares an output_schema on its hook, but MCP will not "
+        "advertise it: `outputSchema` in tools/list comes from @mcp_tool, and "
+        "an output_schema set on @action_hook (or derived from a TypedDict "
+        "return annotation) is stored separately and never bridged. Pass "
+        "output_schema= to @mcp_tool as well if the schema is meant to reach "
+        "clients. See thoughts/todo/action-hook-output-schema-not-visible-to-mcp.md",
+        tool_name,
     )
 
 
@@ -898,6 +995,8 @@ class MCPHandler(BaseHandler):
                     output_schema = metadata.get("output_schema")
                     if output_schema:
                         tool_def["outputSchema"] = output_schema
+                    else:
+                        _warn_hook_output_schema_not_advertised_once(hook, tool_name)
 
                     # Add annotations if present (for ChatGPT safety evaluation)
                     annotations = metadata.get("annotations")

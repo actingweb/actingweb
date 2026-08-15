@@ -137,6 +137,41 @@ CHANGED
   ``-32022`` with ``data.supported`` would silently convert every dual-era
   client's working fallback into a retry loop.
 
+- **Revoking a token, deleting a trust relationship or downgrading a permission
+  now evicts the MCP caches.** ``MCPHandler.clear_token_from_cache()`` had
+  exactly one caller — the logout handler — so every other path that
+  invalidates a client's identity or authorization left the in-process MCP
+  caches serving the old answer for up to their five-minute TTL. A revoked
+  token kept authenticating, a deleted trust kept authorizing, and a narrowed
+  permission kept being honoured at the old level, from any warm process.
+
+  Eviction is now wired into ``TokenManager.revoke_token()``,
+  ``revoke_all_tokens()``, trust deletion, and both the store and delete paths
+  of ``TrustPermissionStore``. It is actor-wide by necessity rather than
+  scoped to one client: the cached ``ActorInterface`` carries the trust list
+  itself, so evicting a single ``(actor, client)`` entry would leave the shared
+  wrapper answering from stale state.
+
+  **This closes the window within one process only.** Every MCP cache is a
+  module global, so a multi-worker or multi-container deployment still serves
+  the stale entry from every *other* process until its TTL expires. Closing
+  that needs a shared invalidation channel and is not attempted here.
+
+- **``tools/list`` now warns when a hook's ``output_schema`` will not be
+  advertised.** ``outputSchema`` comes solely from ``@mcp_tool``; a schema
+  passed to ``@app.action_hook(..., output_schema=...)`` or derived from a
+  ``TypedDict`` return annotation is stored separately and never bridged, so an
+  author who declares one either of those ways gets silence rather than an
+  advertised schema — and the missing-``structuredContent`` warning stays quiet
+  for them too, because it is gated on the same metadata. The warning fires once
+  per tool per process, at listing time.
+
+  Deliberately a warning and not a merge: merging would newly advertise
+  ``outputSchema`` for every ``TypedDict``-annotated tool, and each one that
+  does not also return ``structuredContent`` would begin failing on
+  spec-conforming clients. That decision belongs with the ``structuredContent``
+  work and is not foreclosed here.
+
 ADDED
 ~~~~~
 
@@ -152,6 +187,7 @@ ADDED
   runs *before* the ``DELETE`` and inside a savepoint, because a server-side
   failure there would otherwise abort the transaction and turn the later commit
   into a silent rollback — the exact defect the diagnostics exist to find.
+
 
 .. note::
 

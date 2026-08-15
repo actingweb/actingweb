@@ -703,6 +703,15 @@ class OAuth2SessionManager:
         if revoked:
             logger.warning(f"Revoked {revoked} tokens for actor {actor_id}")
 
+        # Revoke-all is the theft response; it has to take effect now, not when
+        # the MCP caches' five-minute TTL expires. Evicted unconditionally: this
+        # runs when theft is *suspected*, and the individual tokens have already
+        # been deleted from storage above, so an empty result here does not mean
+        # there was nothing cached.
+        from .mcp.invalidation import evict_caches_for_actor
+
+        evict_caches_for_actor(actor_id)
+
         return revoked
 
     def revoke_token_chain(self, actor_id: str, chain_id: str) -> int:

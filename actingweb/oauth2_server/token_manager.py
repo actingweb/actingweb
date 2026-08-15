@@ -19,6 +19,7 @@ from ..constants import (
     OAUTH2_SYSTEM_ACTOR,
     REFRESH_TOKEN_INDEX_BUCKET,
 )
+from ..mcp.invalidation import evict_caches_for_actor, evict_caches_for_token
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +322,7 @@ class ActingWebTokenManager:
                 token_id = token_data.get("token_id")
                 if token_id:
                     self._revoke_refresh_tokens_for_access_token(token_id)
+                evict_caches_for_token(token)
                 return True
         else:
             # Might be refresh token
@@ -331,6 +333,11 @@ class ActingWebTokenManager:
                 access_token_id = refresh_data.get("access_token_id")
                 if access_token_id:
                     self._revoke_access_token_by_id(access_token_id)
+                # A refresh token is not itself in the MCP token cache, but the
+                # actor's cached identity should not outlive its revocation.
+                actor_id = refresh_data.get("actor_id")
+                if actor_id:
+                    evict_caches_for_actor(actor_id)
                 return True
 
         return False

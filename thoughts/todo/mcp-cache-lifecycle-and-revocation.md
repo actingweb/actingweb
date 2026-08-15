@@ -13,7 +13,7 @@ correctness/robustness issues found along the way.
 (research Patch 5, "cache lifecycle"), plus items discovered while
 implementing Phases 1–4 of the plan above.
 
-## 1. Revocation does not evict the MCP caches (research C7)
+## 1. Revocation does not evict the MCP caches (research C7) — DONE 2026-08-15
 
 `MCPHandler.clear_token_from_cache()` (`actingweb/handlers/mcp.py`) has
 exactly **one** caller: the logout handler
@@ -42,13 +42,24 @@ closes everything a single process can close. §2 (cross-process) is explicitly
 `thoughts/todo/subs-list-cache-asymmetry.md` — same cache module, and the
 actor-cache lifetime question decides what is left to evict.
 
-**Proposed fix:** wire eviction into each of the paths above, calling
-`MCPHandler.clear_token_from_cache()` (or, for trust changes where the token
-is unknown, `_evict_trust_entries_for_actor(actor_id)` directly). Needs a
-decision on scope: token revocation can evict by token; trust
-deletion/modification only has `actor_id` + `peer_id`/`client_id` in hand,
-which the tuple-keyed `_trust_cache` (see the parent plan, Phase 1) now
-supports evicting directly without touching `_token_cache`/`_actor_cache`.
+**Landed 2026-08-15.** Eviction is wired into `TokenManager.revoke_token()`,
+`OAuthSession.revoke_all_tokens()`, `Trust.delete()`, and both the store and
+delete paths of `TrustPermissionStore`. `actingweb/mcp/invalidation.py` holds the
+two shims callers use — the import of the handler is lazy and failure-tolerant,
+because these are core modules calling into an optional higher layer and a
+revocation must never fail because a cache could not be told about it.
+
+**The scope decision this asked for went the other way, and the reason is
+recorded in `thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md`.**
+This file suggested evicting the `_trust_cache` tuple alone for trust changes,
+"without touching `_token_cache`/`_actor_cache`". That is unsound: `_actor_cache`
+holds a live `ActorInterface`, which carries the trust list itself, so dropping
+the tuple leaves the shared wrapper serving stale trust. Eviction is therefore
+actor-wide on every path — which is also what `clear_token_from_cache()` already
+concluded for itself ("actor-wide by design").
+
+Answering that question on paper first was an INDEX §0 sequencing requirement,
+and it changed the implementation rather than confirming it.
 
 ## 2. No cross-process invalidation
 

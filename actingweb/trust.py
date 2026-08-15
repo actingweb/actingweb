@@ -127,6 +127,15 @@ class Trust:
                 logger.error(f"Error deleting OAuth2 client during trust deletion: {e}")
                 # Continue even if client deletion fails
 
+        if result and self.actor_id:
+            # A deleted trust relationship must stop authorizing immediately,
+            # not at the end of the MCP caches' five-minute TTL. Actor-wide
+            # because the cached ActorInterface carries the trust list itself —
+            # see evict_mcp_caches_for_actor(). No-op when MCP is not in use.
+            from .mcp.invalidation import evict_caches_for_actor
+
+            evict_caches_for_actor(self.actor_id)
+
         return result
 
     def _is_oauth2_client_trust(self) -> bool:

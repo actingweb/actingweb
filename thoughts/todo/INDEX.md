@@ -79,12 +79,18 @@ Two couplings that decide sequencing inside the GA tier:
   fleet grows past the point where anyone would notice. Do it while the fleet
   is small.
 
-**Release shape.** `rc6` shipped 2026-08-09 with an empty `Unreleased`. The GA
-plan landed 2026-08-15 and does touch the migrate path and metadata writes on
-every mutation, and every prior property-list change took its own rc — so **an
-rc7 soak before the GA tag** remains the safer read, though the case is weaker
-than it was, since the migrate/repair machinery was not restructured in the end.
-Confirm with the maintainer rather than assuming either way.
+**Release shape — decided 2026-08-15: straight to GA, no rc7.** `rc6` shipped
+2026-08-09 with an empty `Unreleased`. The GA plan landed 2026-08-15 and does
+touch the migrate path and metadata writes on every mutation, which is what made
+an rc7 soak the earlier reading — but the migrate/repair machinery was not
+restructured in the end, so the case for another pre-release fell away. The
+maintainer's call: the next tag is **`v3.13.0`**.
+
+That does not make the metadata-integrity PR the release PR. Rows 6, 11 and 8
+are still In GA scope and unlanded, so the version bump and the `Unreleased` ->
+`v3.13.0` rename ride in whichever PR is last — per `CLAUDE.md`, the bump goes
+in the release PR itself and the tag is pushed to master afterwards. Until then
+this work sits under `Unreleased` like any other change.
 
 ## 1. Do next
 

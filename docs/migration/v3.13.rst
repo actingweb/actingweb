@@ -38,6 +38,9 @@ Do the sections that were added after the rc you are running. Nothing in this
 table is optional for the rcs it names — the earlier rcs' pre-upgrade steps
 still apply if you never did them.
 
+Every row names sections by their exact title, so the table works as a
+checklist and not only as prose.
+
 .. list-table::
    :header-rows: 1
    :widths: 18 82
@@ -46,32 +49,35 @@ still apply if you never did them.
      - Still to do
    * - ``rc1``
      - Everything except the reverse-lookup **backfill**, which you have
-       already run. Property lists, the security audit and MCP
-       ``structuredContent`` are all new to you — and re-read the rest of the
-       DynamoDB section, because three of its changes touch a code path rather
-       than only docs: ``register_diffs()`` now resolves subscriptions before
-       consulting suspension state, ``create_subscription()`` invalidates the
-       actor's cached subscription list, and actor deletion writes a tombstone
-       before the wipe begins.
+       already run: ``Property lists``, ``Migration refuses damaged lists``,
+       ``Security: MCP trust-cache authorization bypass`` and ``MCP:
+       structuredContent is now opt-in`` are all new to you. Also re-read the
+       rest of the DynamoDB section, because three of its changes touch a code
+       path rather than only docs: ``register_diffs()`` now resolves
+       subscriptions before consulting suspension state,
+       ``create_subscription()`` invalidates the actor's cached subscription
+       list, and actor deletion writes a tombstone before the wipe begins.
    * - ``rc2``
      - Everything except the DynamoDB section, whose backfill you have already
-       run. Property lists, the security audit, and MCP ``structuredContent``
-       are all new to you.
+       run: ``Property lists``, ``Migration refuses damaged lists``,
+       ``Security: MCP trust-cache authorization bypass`` and ``MCP:
+       structuredContent is now opt-in`` are all new to you.
    * - ``rc3``
-     - Property lists, ``Migration refuses damaged lists``, and MCP
-       ``structuredContent``. **Run the step-1 sweep before upgrading** — see
-       the ``rc4`` row for why.
+     - ``Property lists``, ``Migration refuses damaged lists`` and ``MCP:
+       structuredContent is now opt-in``. **Run the step-1 sweep before
+       upgrading** — see the ``rc4`` row for why.
    * - ``rc4``
-     - Property lists and ``Migration refuses damaged lists``. **Run the
+     - ``Property lists`` and ``Migration refuses damaged lists``. **Run the
        step-1 sweep before upgrading**: you are on the last release that hides
        pre-existing list damage. 3.13.0 surfaces it as a 409 instead of
        silently compacting past it, so a list that has been quietly broken for
        months starts erroring the moment you deploy — and the sweep is easier
        to reason about before that than after.
    * - ``rc5``
-     - ``Migration refuses damaged lists``, plus the note below.
+     - ``Migration refuses damaged lists``, plus "What changed after ``rc6``"
+       below.
    * - ``rc6``
-     - Only the note below.
+     - Only "What changed after ``rc6``" below.
 
 What changed after ``rc6``
 --------------------------

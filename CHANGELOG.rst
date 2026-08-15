@@ -145,12 +145,23 @@ CHANGED
   token kept authenticating, a deleted trust kept authorizing, and a narrowed
   permission kept being honoured at the old level, from any warm process.
 
-  Eviction is now wired into ``TokenManager.revoke_token()``,
-  ``revoke_all_tokens()``, trust deletion, and both the store and delete paths
-  of ``TrustPermissionStore``. It is actor-wide by necessity rather than
-  scoped to one client: the cached ``ActorInterface`` carries the trust list
-  itself, so evicting a single ``(actor, client)`` entry would leave the shared
-  wrapper answering from stale state.
+  Eviction is now wired into ``TokenManager.revoke_token()``, the SPA session
+  paths ``revoke_access_token()`` / ``revoke_refresh_token()`` (which is what
+  ``/oauth/revoke`` reaches), ``revoke_token_chain()`` (the refresh-token-reuse
+  theft response), ``revoke_all_tokens()``, trust deletion, and both the store
+  and delete paths of ``TrustPermissionStore``. It is actor-wide by necessity
+  rather than scoped to one client: the cached ``ActorInterface`` carries the
+  trust list itself, so evicting a single ``(actor, client)`` entry would leave
+  the shared wrapper answering from stale state. One consequence worth knowing:
+  any permission change on one client invalidates the cache for every MCP
+  client connected to that actor.
+
+  Eviction alone would not have been enough. A request that read a token from
+  storage just before the revocation could write what it read back into the
+  cache just after, reviving the credential for a full TTL while the eviction
+  reported success. A generation counter, bumped by every eviction and
+  snapshotted by each request before the reads that feed the caches, makes such
+  a request decline to populate them.
 
   **This closes the window within one process only.** Every MCP cache is a
   module global, so a multi-worker or multi-container deployment still serves

@@ -19,7 +19,6 @@ from ..constants import (
     OAUTH2_SYSTEM_ACTOR,
     REFRESH_TOKEN_INDEX_BUCKET,
 )
-from ..mcp.invalidation import evict_caches_for_actor, evict_caches_for_token
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +316,14 @@ class ActingWebTokenManager:
             # Access token
             token_data = self._load_access_token(token)
             if token_data:
+                # Imported lazily, like the other callers in trust.py,
+                # trust_permissions.py and oauth_session.py: MCP is an optional
+                # higher layer and these are the modules it sits above.
+                from ..mcp.invalidation import (
+                    evict_caches_for_actor,
+                    evict_caches_for_token,
+                )
+
                 self._remove_access_token(token)
                 # Also revoke associated refresh token
                 token_id = token_data.get("token_id")
@@ -328,6 +335,8 @@ class ActingWebTokenManager:
             # Might be refresh token
             refresh_data = self._load_refresh_token(token)
             if refresh_data:
+                from ..mcp.invalidation import evict_caches_for_actor
+
                 self._remove_refresh_token(token)
                 # Also revoke associated access token
                 access_token_id = refresh_data.get("access_token_id")

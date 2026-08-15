@@ -130,3 +130,179 @@ class TestTokenKeyedEviction:
 
     def test_clearing_an_unknown_token_reports_false(self) -> None:
         assert mcp_module.MCPHandler.clear_token_from_cache("aw_nope") is False
+
+
+class TestEveryWiredCallSiteActuallyFires:
+    """The wiring, not the machinery.
+
+    Raised in review on #130: the eviction helpers were well covered, but
+    nothing asserted that the one-line call added to each revocation path is
+    still there. A regression that silently dropped one would have been
+    invisible — which is precisely how this class of bug got in originally,
+    since ``clear_token_from_cache()`` had exactly one caller for months
+    without anyone noticing.
+    """
+
+    def test_trust_delete_evicts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import actingweb.mcp.invalidation as invalidation
+        import actingweb.trust as trust_module
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            invalidation, "evict_caches_for_actor", lambda a: seen.append(a) or 0
+        )
+
+        handle = type("H", (), {"delete": lambda self: True, "get": lambda self: {}})()
+        t = trust_module.Trust.__new__(trust_module.Trust)
+        t.handle = handle  # type: ignore[assignment]
+        t.actor_id = ACTOR
+        t.trust = {"peerid": "peer1"}
+        t.config = None
+
+        assert t.delete() is True
+        assert seen == [ACTOR]
+
+    def test_permission_store_evicts_on_write(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import actingweb.mcp.invalidation as invalidation
+        import actingweb.trust_permissions as tp
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            invalidation, "evict_caches_for_actor", lambda a: seen.append(a) or 0
+        )
+
+        store = tp.TrustPermissionStore.__new__(tp.TrustPermissionStore)
+        store._cache = {}
+        store.config = None  # type: ignore[assignment]
+        monkeypatch.setattr(
+            store,
+            "_get_permissions_bucket",
+            lambda actor_id: type("B", (), {"set_attr": lambda self, **kw: True})(),
+        )
+
+        permissions = tp.TrustPermissions(
+            actor_id=ACTOR, peer_id="peer1", trust_type="mcp_client"
+        )
+        assert store._store_permissions_internal(permissions) is True
+        assert seen == [ACTOR]
+
+    def test_permission_store_evicts_on_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import actingweb.mcp.invalidation as invalidation
+        import actingweb.trust_permissions as tp
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            invalidation, "evict_caches_for_actor", lambda a: seen.append(a) or 0
+        )
+
+        store = tp.TrustPermissionStore.__new__(tp.TrustPermissionStore)
+        store._cache = {}
+        store.config = None  # type: ignore[assignment]
+        monkeypatch.setattr(
+            store,
+            "_get_permissions_bucket",
+            lambda actor_id: type("B", (), {"delete_attr": lambda self, **kw: True})(),
+        )
+
+        assert store.delete_permissions(ACTOR, "peer1") is True
+        assert seen == [ACTOR]
+
+    def test_spa_token_chain_revocation_evicts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The production theft response, and the one the first pass missed.
+
+        `revoke_all_tokens()` was wired first and has zero callers; refresh-token
+        reuse actually routes through `revoke_token_chain()`.
+        """
+        import actingweb.mcp.invalidation as invalidation
+        import actingweb.oauth_session as oauth_session
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            invalidation, "evict_caches_for_actor", lambda a: seen.append(a) or 0
+        )
+        monkeypatch.setattr(
+            oauth_session,
+            "get_attribute",
+            lambda config: type(
+                "D", (), {"delete_by_chain": lambda self, *a, **kw: 2}
+            )(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "actingweb.db.get_attribute",
+            lambda config: type(
+                "D", (), {"delete_by_chain": lambda self, *a, **kw: 2}
+            )(),
+        )
+
+        mgr = oauth_session.OAuth2SessionManager.__new__(
+            oauth_session.OAuth2SessionManager
+        )
+        mgr.config = None  # type: ignore[assignment]
+
+        assert mgr.revoke_token_chain(ACTOR, "chain-abc") == 2
+        assert seen == [ACTOR]
+
+    def test_spa_access_token_revocation_evicts_the_owning_actor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`/oauth/revoke` routes here, and it was missed on the first pass."""
+        import actingweb.mcp.invalidation as invalidation
+        import actingweb.oauth_session as oauth_session
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            invalidation, "evict_caches_for_actor", lambda a: seen.append(a) or 0
+        )
+
+        class FakeBucket:
+            def get_attr(self, name: str) -> dict:  # noqa: ARG002
+                return {"data": {"actor_id": ACTOR}}
+
+            def delete_attr(self, name: str) -> bool:  # noqa: ARG002
+                return True
+
+        monkeypatch.setattr("actingweb.attribute.Attributes", lambda **kw: FakeBucket())
+
+        mgr = oauth_session.OAuth2SessionManager.__new__(
+            oauth_session.OAuth2SessionManager
+        )
+        mgr.config = None  # type: ignore[assignment]
+
+        assert mgr.revoke_access_token("spa_token") is True
+        assert seen == [ACTOR]
+
+
+class TestCacheFillCannotOutraceEviction:
+    """The P1 Codex raised: eviction is useless if an in-flight read refills.
+
+    A request reads a token from storage, a revocation deletes the row *and*
+    evicts, and then the request writes what it read back into the cache. The
+    credential is live again for a full TTL and the eviction reported success.
+    """
+
+    def test_a_fill_is_refused_when_an_eviction_landed_mid_read(self) -> None:
+        generation = mcp_module._current_cache_generation()
+        mcp_module.evict_mcp_caches_for_actor(ACTOR)
+        assert mcp_module._cache_fill_still_valid(generation) is False
+
+    def test_an_undisturbed_fill_is_allowed(self) -> None:
+        generation = mcp_module._current_cache_generation()
+        assert mcp_module._cache_fill_still_valid(generation) is True
+
+    def test_the_generation_moves_even_when_nothing_was_cached(self) -> None:
+        """The entry being evicted may not exist *yet* — that is the race."""
+        before = mcp_module._current_cache_generation()
+        mcp_module.evict_mcp_caches_for_actor("an-actor-with-no-cache-entries")
+        assert mcp_module._current_cache_generation() != before
+
+    def test_token_keyed_eviction_also_moves_the_generation(self) -> None:
+        before = mcp_module._current_cache_generation()
+        mcp_module.MCPHandler.clear_token_from_cache("a-token-never-cached")
+        assert mcp_module._current_cache_generation() != before

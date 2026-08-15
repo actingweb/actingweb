@@ -213,6 +213,44 @@ def _reset_unsupported_version_telemetry() -> None:
         _unsupported_version_origins.clear()
 
 
+# Monotonic counter bumped by every eviction, anywhere.
+#
+# Eviction alone is not enough, and the gap is a plain time-of-check race: a
+# request can read a token or a trust relationship from storage, a revocation
+# can then delete that row *and* run its eviction, and the in-flight request
+# then writes the result it read a moment earlier back into the cache. The
+# revoked credential is live again for a full TTL, and the eviction reported
+# success. Raised as a P1 by Codex review on PR #130.
+#
+# The counter closes it: a request snapshots it before the storage reads that
+# feed the caches, and declines to populate them if it has moved by the time it
+# would insert. Deliberately **global** rather than per-actor: the actor is not
+# known until after the read that needs guarding, so there is nothing per-actor
+# to snapshot beforehand. The cost of the coarseness is that an unrelated
+# revocation elsewhere makes one request skip its cache fill — that request
+# still succeeds, it just pays full price. Revocations are rare and cache
+# misses are cheap; a resurrected credential is neither.
+_cache_generation = 0
+_cache_generation_lock = threading.Lock()
+
+
+def _current_cache_generation() -> int:
+    return _cache_generation
+
+
+def _bump_cache_generation() -> None:
+    global _cache_generation
+    with _cache_generation_lock:
+        _cache_generation += 1
+
+
+def _cache_fill_still_valid(generation_at_read: int | None) -> bool:
+    """False when an eviction landed while this request was reading storage."""
+    if generation_at_read is None:
+        return True
+    return generation_at_read == _cache_generation
+
+
 def evict_mcp_caches_for_actor(actor_id: str) -> int:
     """Drop every MCP cache entry belonging to ``actor_id``. Returns the count.
 
@@ -251,6 +289,11 @@ def evict_mcp_caches_for_actor(actor_id: str) -> int:
     trust_keys = [k for k in _trust_cache.copy() if k[0] == actor_id]
     _evict_trust_entries_for_actor(actor_id)
     evicted += len(trust_keys)
+
+    # Bumped unconditionally, not only when something was evicted: an
+    # in-flight request may be about to insert an entry that did not exist yet
+    # when this ran, which is exactly the race the counter exists to stop.
+    _bump_cache_generation()
 
     if evicted:
         logger.debug("Evicted %d MCP cache entries for actor %s", evicted, actor_id)
@@ -319,8 +362,11 @@ def _warn_hook_output_schema_not_advertised_once(hook: Any, tool_name: str) -> N
         return
     if not hook_metadata:
         return
+    # `is None`, not falsiness: `output_schema={}` is a valid JSON Schema and an
+    # explicit declaration, so it is exactly as invisible to MCP as any other —
+    # and exactly as worth warning about. Codex review, PR #130.
     declared = getattr(hook_metadata, "output_schema", None)
-    if not declared:
+    if declared is None:
         return
 
     _hook_output_schema_warned.add(tool_name)
@@ -1850,6 +1896,11 @@ class MCPHandler(BaseHandler):
 
             oauth2_server = get_actingweb_oauth2_server(self.config)
 
+            # Snapshot before the storage reads that feed the caches below.
+            # If a revocation lands while we are reading, none of what we read
+            # gets cached — see the comment on _cache_generation.
+            generation_at_read = _current_cache_generation()
+
             # Validate ActingWeb token (not Google token)
             token_validation = oauth2_server.validate_mcp_token(bearer_token)
             if not token_validation:
@@ -1859,16 +1910,17 @@ class MCPHandler(BaseHandler):
             actor_id, client_id, token_data = token_validation
 
             # Cache token validation result
-            _token_cache[bearer_token] = {
-                "actor_id": actor_id,
-                "client_id": client_id,
-                "token_data": token_data,
-                "cached_at": current_time,
-            }
+            if _cache_fill_still_valid(generation_at_read):
+                _token_cache[bearer_token] = {
+                    "actor_id": actor_id,
+                    "client_id": client_id,
+                    "token_data": token_data,
+                    "cached_at": current_time,
+                }
 
             # Get or create actor (with caching)
             actor_interface = self._get_or_create_actor_cached(
-                actor_id, token_data, current_time
+                actor_id, token_data, current_time, generation_at_read
             )
             if not actor_interface:
                 return None
@@ -1877,7 +1929,10 @@ class MCPHandler(BaseHandler):
             trust_relationship = self._lookup_mcp_trust_relationship(
                 actor_interface, client_id, token_data
             )
-            _trust_cache_put(_trust_cache_key(actor_id, client_id), trust_relationship)
+            if _cache_fill_still_valid(generation_at_read):
+                _trust_cache_put(
+                    _trust_cache_key(actor_id, client_id), trust_relationship
+                )
             self._check_trust_client_invariant(actor_id, client_id, trust_relationship)
 
             # Mark client as peer_approved on successful authentication (if not already)
@@ -1906,7 +1961,11 @@ class MCPHandler(BaseHandler):
             return None
 
     def _get_or_create_actor_cached(
-        self, actor_id: str, token_data: dict[str, Any], current_time: float
+        self,
+        actor_id: str,
+        token_data: dict[str, Any],
+        current_time: float,
+        generation_at_read: int | None = None,
     ) -> ActorInterface | None:
         """Get or create actor with caching."""
         # Check actor cache first
@@ -1971,13 +2030,14 @@ class MCPHandler(BaseHandler):
             core_actor=core_actor, service_registry=registry
         )
 
-        # Cache the actor
-        _actor_cache[actor_id] = {
-            "actor": actor_interface,
-            "last_accessed": current_time,
-            # Which application's config built this wrapper -- see above.
-            "config": self.config,
-        }
+        # Cache the actor, unless a revocation landed while we were loading it.
+        if _cache_fill_still_valid(generation_at_read):
+            _actor_cache[actor_id] = {
+                "actor": actor_interface,
+                "last_accessed": current_time,
+                # Which application's config built this wrapper -- see above.
+                "config": self.config,
+            }
 
         return actor_interface
 
@@ -2479,10 +2539,15 @@ class MCPHandler(BaseHandler):
             # Also clear associated actor and trust caches to force
             # re-authentication. Actor-wide by design: evicting the shared
             # actor wrapper already affects every client on the actor, so
-            # every (actor, client) trust entry goes with it.
+            # every (actor, client) trust entry goes with it. Delegated rather
+            # than repeated, so the two cannot drift.
             if actor_id:
-                _actor_cache.pop(actor_id, None)
-                _evict_trust_entries_for_actor(actor_id)
+                evict_mcp_caches_for_actor(actor_id)
+        else:
+            # Nothing cached under this token, but a revocation still happened;
+            # bump so an in-flight authentication cannot cache what it read
+            # just before it.
+            _bump_cache_generation()
 
         return token_found
 

@@ -50,6 +50,12 @@ _V2_RANK_WARNING_LENGTH = 140
 _V2_MAX_RANK_RETRIES = 8
 _V2_LAZY_MIGRATION_MAX_LENGTH = 0
 _V2_RANK_ALPHABET = frozenset(fi.BASE_62_DIGITS)
+# Shape filter for a v1 item row's suffix. The v1 byte range alone is not
+# enough to isolate a list's rows -- a sibling list whose NAME starts with a
+# digit ("foo-5") stores "list:foo-5-0", which sorts inside list "foo"'s
+# range. The suffix "5-0" fails this pattern; a genuine "list:foo-7" row's
+# suffix "7" passes. Same role _v2_is_rank() plays for the v2 range.
+_V1_INDEX_RE = re.compile(r"^\d+$")
 _lazy_migration_nudge_logged = False
 
 
@@ -193,6 +199,20 @@ class ListProperty:
     - format 2 ("v2"): items at ``list:{name}-#{rank}``, fractional
       ("rank") keys that sort into item order -- length is always counted
       from the rank-key range, never stored. Every NEW list as of Phase 4.
+
+    Metadata writes go through ``_save_metadata()``, which names the fields
+    it changes and merges them into a fresh read -- never a cached dict.
+    See that method for why.
+
+    KNOWN RESIDUAL (v1 only): ``append()`` and ``insert()`` derive the new
+    ``length`` from ``len(self)``, which reads the metadata cache rather
+    than storage. An instance an application retains across a concurrent
+    mutation can therefore still write a stale ABSOLUTE length -- the
+    write side is bounded (nothing else about the row is reverted), the
+    read side is not. Quiesce writes during an operator rewrite, as the
+    migration and repair docs already advise; a fix that makes ``length``
+    relative is tracked in
+    ``thoughts/todo/whole-list-rewrite-atomicity.md``.
     """
 
     def __init__(self, actor_id: str, name: str, config: Any) -> None:
@@ -393,8 +413,110 @@ class ListProperty:
             "explanation": "",
         }
 
-    def _save_metadata(self, meta: dict[str, Any]) -> None:
-        """Save metadata to database and update cache."""
+    def _read_meta_row(self) -> dict[str, Any] | None:
+        """The meta row as stored RIGHT NOW, bypassing the cache entirely.
+
+        ``None`` means the row is absent -- the list was never created, or
+        another writer deleted it. Unparsable content raises, matching
+        ``_load_metadata()``: self-healing over it orphans every item row.
+
+        This is deliberately NOT ``_load_metadata()``. That method conflates
+        "absent" with "a brand-new v2 list", which is the right default for
+        a reader and the wrong one for a writer deciding whether it is
+        allowed to recreate a row somebody else just deleted.
+        """
+        if not self._db:
+            return None
+        meta_db = get_property(self.config)
+        meta_str = meta_db.get(
+            actor_id=self.actor_id, name=self._get_meta_property_name()
+        )
+        if meta_str is None:
+            return None
+        try:
+            parsed = json.loads(meta_str)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise ValueError(f"Unparsable metadata for list '{self.name}': {e}") from e
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"Metadata for list '{self.name}' is not a JSON object "
+                f"(got {type(parsed).__name__})"
+            )
+        return parsed
+
+    def _save_metadata(
+        self,
+        updates: dict[str, Any],
+        *,
+        remove: tuple[str, ...] = (),
+        create_if_absent: bool = True,
+    ) -> None:
+        """Merge ``updates`` into a FRESH read of the meta row and write it
+        back.
+
+        **Never round-trip a cached metadata dict through here.** That is
+        what this signature exists to prevent. A ``ListProperty`` instance
+        caches metadata until something explicitly invalidates it -- for an
+        instance an application retains, unboundedly -- so writing a whole
+        cached dict back means a concurrent ``append()`` can revert a
+        migration's ``format: 2`` flip long after it completed. Metadata
+        then claims format 1 while every item lives in v2 rows nothing
+        reads, and migration's final step deletes the v1 rows: total silent
+        loss on ordinary traffic. Naming the fields you changed makes that
+        impossible, because ``format`` is never among them unless you meant
+        it.
+
+        Args:
+            updates: only the fields this caller is changing. ``length`` is
+                dropped when the stored row is v2 -- v2 has no authoritative
+                stored length, and a writer that computed one against a
+                different view must not introduce one.
+            remove: fields to delete from the stored row (migration drops
+                ``length`` this way).
+            create_if_absent: what to do when the meta row is gone. ``True``
+                (list creation, and the v2 metadata touch whose whole purpose
+                is to make the row exist) recreates it from this instance's
+                view. ``False`` skips the write entirely: for the v1 length
+                writers, an absent row means a concurrent ``delete()`` won,
+                and merging a stale length would resurrect the list.
+        """
+        stored = self._read_meta_row()
+        if stored is None:
+            if not create_if_absent:
+                logger.info(
+                    f"List '{self.name}' (actor {self.actor_id}): metadata "
+                    f"row is gone (deleted concurrently) -- skipping the "
+                    f"metadata update rather than recreating the list"
+                )
+                # Drop BOTH caches, not just the metadata one: whatever this
+                # instance believes about the list is describing something
+                # that no longer exists.
+                self._invalidate_cache()
+                return
+            # No stored state to preserve, so nothing can be reverted by
+            # falling back to what this instance knows. _load_metadata()
+            # also applies the '#'-name ban and the property-name collision
+            # check that creating a list must go through.
+            stored = dict(self._load_metadata())
+
+        meta = dict(stored)
+        if int(meta.get("format", 1) or 1) == 2:
+            updates = {k: v for k, v in updates.items() if k != "length"}
+        meta.update(updates)
+        for field in remove:
+            meta.pop(field, None)
+        self._replace_metadata(meta)
+
+    def _replace_metadata(self, meta: dict[str, Any]) -> None:
+        """Write ``meta`` wholesale and cache it.
+
+        Only two kinds of caller may use this: a deliberate reset
+        (``clear()``, which resets description/explanation by design) and
+        one that derived ``meta`` from a read it just performed itself
+        (migration's format flip). Everything else goes through
+        ``_save_metadata()`` -- see its docstring for what writing a cached
+        dict back costs.
+        """
         meta["updated_at"] = datetime.now().isoformat()
 
         if self._db:
@@ -410,8 +532,20 @@ class ListProperty:
         self._meta_cache = meta
 
     def _invalidate_cache(self) -> None:
-        """Invalidate the metadata cache."""
+        """Invalidate the metadata cache AND the v2 rank cache.
+
+        The two are coupled: the rank cache is only meaningful for the
+        format the metadata cache reports, so keeping stale ranks after
+        discarding the metadata they belong to is how a v1 view acquires a
+        v2 list's positions. Nothing enforced that before; this does.
+
+        Callers that only want the metadata re-read (every v2 item
+        mutation, which has just updated the rank cache in place and would
+        otherwise pay a full range query on the next operation) should not
+        use this -- ``_save_metadata()`` already re-reads the row.
+        """
         self._meta_cache = None
+        self._v2_rank_cache = None
 
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
         """Hydrate the metadata cache (and, for v2, the rank-key cache)
@@ -507,9 +641,7 @@ class ListProperty:
 
     def set_description(self, description: str) -> None:
         """Set the description field for UI info about the list."""
-        meta = self._load_metadata()
-        meta["description"] = description
-        self._save_metadata(meta)
+        self._save_metadata({"description": description})
 
     def get_explanation(self) -> str:
         """Get the explanation field to be used for LLMs."""
@@ -519,9 +651,7 @@ class ListProperty:
 
     def set_explanation(self, explanation: str) -> None:
         """Set the explanation field to be used for LLMs."""
-        meta = self._load_metadata()
-        meta["explanation"] = explanation
-        self._save_metadata(meta)
+        self._save_metadata({"explanation": explanation})
 
     def get_metadata(self) -> dict[str, Any]:
         """
@@ -656,8 +786,24 @@ class ListProperty:
         must still be discoverable -- so every v2 mutation persists
         metadata (matching v1's per-mutation write, just without a
         `length` field to update).
+
+        Writes no fields of its own: the stored row is re-read and only its
+        ``updated_at`` moves. That is what keeps a v2 mutation from carrying
+        a cached ``format`` back to storage -- including the reverse of the
+        migration case, a stale format-2 cache over storage another process
+        has downgraded to v1.
+
+        It DOES create the row when absent, unlike the v1 length writers,
+        which skip the write on the grounds that a vanished row means a
+        concurrent ``delete()`` won. The asymmetry is real and deliberate:
+        under v2 there is no separate creation step, so ``append()`` to a
+        list with no metadata row is how a list comes into existence. A
+        ``delete()`` racing an ``append()`` therefore leaves a one-item list
+        rather than nothing -- which is the same answer appending to a
+        never-created list gives, and the alternative is an item row no
+        ``exists()`` or ``list_all()`` can see.
         """
-        self._save_metadata(self._load_metadata())
+        self._save_metadata({})
 
     def _v2_setitem(self, index: int, value: Any) -> None:
         # Force a fresh rank read: this is a DESTRUCTIVE positional write,
@@ -719,8 +865,7 @@ class ListProperty:
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
 
         # Update metadata timestamp
-        meta = self._load_metadata()
-        self._save_metadata(meta)
+        self._save_metadata({}, create_if_absent=False)
 
     def _v2_delitem(self, index: int) -> None:
         # Force a fresh rank read before deleting by position -- a stale
@@ -804,9 +949,7 @@ class ListProperty:
                     raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
 
         # Update metadata length
-        meta = self._load_metadata()
-        meta["length"] = length - 1
-        self._save_metadata(meta)
+        self._save_metadata({"length": length - 1}, create_if_absent=False)
 
     def __iter__(self) -> "ListPropertyIterator | Iterator[Any]":
         """Return an iterator over the list.
@@ -876,10 +1019,11 @@ class ListProperty:
             f"append(): Stored item at '{item_property_name}' with value: {item_str}"
         )
 
-        # Update metadata
-        meta = self._load_metadata()
-        meta["length"] = length + 1
-        self._save_metadata(meta)
+        # Update metadata. `length` here is derived from len(self), which
+        # reads the metadata cache -- see the class docstring's note on the
+        # residual this leaves. What _save_metadata() guarantees is only
+        # that nothing ELSE about the stored row is reverted by this write.
+        self._save_metadata({"length": length + 1}, create_if_absent=False)
 
     def extend(self, items: list[Any]) -> None:
         """Add multiple items to end of list."""
@@ -902,10 +1046,104 @@ class ListProperty:
         prefix_len = len(self._v2_item_prefix())
         return [name for name in rows if _v2_is_rank(name[prefix_len:])]
 
+    def _v1_bounds(self) -> tuple[str, str]:
+        """Inclusive [lower, upper] bounds for get_range() covering exactly
+        this list's v1 item rows.
+
+        v1 rows are ``list:{name}-{index}``, so the range runs from
+        ``-0`` to ``-:`` (0x3A, the byte just past ``9``). That excludes
+        the meta row (``m``, 0x6D) above and every v2 row (``#``, 0x23)
+        below.
+
+        It does NOT exclude a SIBLING list whose name begins with a digit:
+        a list called ``foo-5`` stores ``list:foo-5-0``, which sorts inside
+        list ``foo``'s bounds. Only the ``^\\d+$`` shape check on the
+        suffix keeps the two apart -- the v1 counterpart of the hazard
+        ``_v2_item_names_in_range()`` documents.
+        """
+        return (f"list:{self.name}-0", f"list:{self.name}-:")
+
+    def _v1_item_names_in_range(self) -> list[str]:
+        """This list's OWN v1 item row names, via one keys-only range read.
+
+        Deliberately a ``get_range()`` and not a
+        ``fetch_all_including_lists()`` partition dump: the bulk migration
+        script avoids those precisely because they cost roughly one dump
+        per list on a typical actor.
+        """
+        lower, upper = self._v1_bounds()
+        db = get_property(self.config)
+        rows = db.get_range(
+            actor_id=self.actor_id, lower=lower, upper=upper, keys_only=True
+        )
+        prefix_len = len(f"list:{self.name}-")
+        return [name for name in rows if _V1_INDEX_RE.match(name[prefix_len:])]
+
+    def sweep_foreign_format_rows(self) -> int:
+        """Delete this list's item rows belonging to the storage format it
+        is NOT currently in, and return how many were removed.
+
+        Both format-changing rewrites write the new format's rows, flip
+        metadata, then delete the old format's rows -- and both early-return
+        before reaching that last step when re-run, because by then the
+        list already reads as the target format. So an interrupted rewrite
+        leaves the old rows behind PERMANENTLY: re-running does not finish
+        the job, it declines to start it. This is the cleanup those early
+        returns call before returning.
+
+        Cross-format residue is normally inert (each format's readers
+        ignore the other's row shape), which is why it survived unnoticed.
+        It stops being inert when the list is deleted and a new list is
+        created under the same name: ``exists()`` and ``list_all()`` key
+        off the meta row, so the residue is invisible until the moment a
+        fresh list adopts it as its own items.
+
+        The format is read from storage, never from the cache. A stale
+        cache here would classify the LIVE rows as foreign and delete the
+        list. When there is no meta row at all -- the list is gone, and
+        both namespaces are residue by definition -- both are swept.
+        """
+        stored = self._read_meta_row()
+        if stored is None:
+            names = self._v1_item_names_in_range() + self._v2_item_names_in_range()
+        elif int(stored.get("format", 1) or 1) == 2:
+            names = self._v1_item_names_in_range()
+        else:
+            names = self._v2_item_names_in_range()
+
+        for name in names:
+            del_db = get_property(self.config)
+            if not del_db.set(actor_id=self.actor_id, name=name, value=None):
+                raise RuntimeError(
+                    f"list item write failed for '{self.name}' during "
+                    f"sweep_foreign_format_rows()"
+                )
+        if names:
+            logger.info(
+                f"List '{self.name}' (actor {self.actor_id}): swept "
+                f"{len(names)} row(s) left by an interrupted format change"
+            )
+        return len(names)
+
     def clear(self) -> None:
         """Remove all items from list."""
         if not self._db:
             raise RuntimeError("No database connection available")
+
+        # Dispatch on the STORED format, not a cached one. Both branches end
+        # in a wholesale metadata write, so a stale v1 cache over migrated
+        # storage would put `_create_default_metadata()` -- format 1, length
+        # 0 -- over a live v2 list's meta row while its rows stay put. That
+        # is the same format revert _save_metadata() exists to prevent,
+        # arriving through the replace path instead of the merge path.
+        self._invalidate_cache()
+
+        # An emptied list must be empty in BOTH namespaces. The branches
+        # below only clear the format the list currently reports, so
+        # residue from an interrupted rewrite would survive a clear() and
+        # then be adopted as items by whichever format the list next
+        # changes to.
+        self.sweep_foreign_format_rows()
 
         if self._is_v2():
             for item_name in self._v2_item_names_in_range():
@@ -914,7 +1152,7 @@ class ListProperty:
                     raise RuntimeError(
                         f"list item write failed for '{self.name}' during clear()"
                     )
-            self._save_metadata(self._create_default_metadata_v2())
+            self._replace_metadata(self._create_default_metadata_v2())
             self._v2_rank_cache = []
             return
 
@@ -929,13 +1167,26 @@ class ListProperty:
                 raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
 
         # Reset metadata
-        meta = self._create_default_metadata()
-        self._save_metadata(meta)
+        self._replace_metadata(self._create_default_metadata())
 
     def delete(self) -> None:
         """Delete the entire list including metadata."""
         if not self._db:
             raise RuntimeError("No database connection available")
+
+        # Dispatch on the stored format -- see clear(). A stale cache here
+        # picks the wrong item namespace to delete from, leaving the real
+        # rows behind after the meta row is gone: invisible to exists() and
+        # list_all(), and resurrected inside the next list created under
+        # this name.
+        self._invalidate_cache()
+
+        # Sweep the other namespace BEFORE the meta row goes: cross-format
+        # residue left by an interrupted rewrite outlives the list
+        # otherwise, invisible to exists()/list_all() (which key off the
+        # meta row) right up until a new list is created under this name
+        # and reads it as its own items.
+        self.sweep_foreign_format_rows()
 
         if self._is_v2():
             for item_name in self._v2_item_names_in_range():
@@ -1224,9 +1475,7 @@ class ListProperty:
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
 
         # Update metadata
-        meta = self._load_metadata()
-        meta["length"] = length + 1
-        self._save_metadata(meta)
+        self._save_metadata({"length": length + 1}, create_if_absent=False)
 
     def _v2_remove(self, value: Any) -> None:
         """Delete the first item equal to ``value``, by RANK.
@@ -1418,6 +1667,12 @@ class ListProperty:
             - max_rank_length: the longest rank key currently in use
             - adjacent_duplicates: same heuristic as v1's verify(), but
               position-indexed pairs -- informational only
+            - foreign_format_rows: how many v1-shaped rows share this
+              list's name -- residue from an interrupted format change.
+              Informational, NOT part of ``healthy``: the rows are inert to
+              every v2 reader, and ``sweep_foreign_format_rows()`` (which
+              ``clear()``, ``delete()`` and a re-run of the migration all
+              call) removes them without operator involvement
             - needs_rebalance: True iff a rank key has reached the warning
               zone -- the ONLY v2 condition ``compact()`` can fix. Repair
               tooling should gate on this, not on ``healthy``, which also
@@ -1439,6 +1694,7 @@ class ListProperty:
             "length": len(pairs),
             "max_rank_length": max_rank_length,
             "adjacent_duplicates": adjacent_duplicates,
+            "foreign_format_rows": len(self._v1_item_names_in_range()),
             "needs_rebalance": max_rank_length >= _V2_RANK_WARNING_LENGTH,
             "healthy": max_rank_length < _V2_RANK_WARNING_LENGTH,
         }
@@ -1485,6 +1741,12 @@ class ListProperty:
             - adjacent_duplicates: list of ``(a, b)`` readable-index pairs
               where ``b == a + 1`` and both rows hold byte-identical stored
               content -- see below
+            - foreign_format_rows: how many v2-shaped rows share this
+              list's name -- residue from an interrupted format change.
+              Informational, NOT part of ``healthy``: they are inert to
+              every v1 reader, and ``sweep_foreign_format_rows()`` removes
+              them without operator involvement. Reported so an operator
+              looking at a list can see that a rewrite was interrupted
             - duplicate_identities: ``None`` when no ``identity_key`` was
               supplied (the check did not run), otherwise
               ``{identity: [positions]}`` for every identity appearing more
@@ -1568,12 +1830,23 @@ class ListProperty:
                 ]
             )
 
+        # Cross-format residue, counted from the partition dump already in
+        # hand rather than a second range read.
+        v2_prefix = self._v2_item_prefix()
+        v2_prefix_len = len(v2_prefix)
+        foreign_format_rows = sum(
+            1
+            for key in rows
+            if key.startswith(v2_prefix) and _v2_is_rank(key[v2_prefix_len:])
+        )
+
         report: dict[str, Any] = {
             "stored_length": stored_length,
             "readable_count": readable_count,
             "missing_indices": missing_indices,
             "orphan_indices": orphan_indices,
             "adjacent_duplicates": adjacent_duplicates,
+            "foreign_format_rows": foreign_format_rows,
             "healthy": not missing_indices
             and not orphan_indices
             and not adjacent_duplicates,
@@ -1622,7 +1895,7 @@ class ListProperty:
         than duplicated, and a reordered list passes every check
         ``verify()`` performs. Duplicate residue at least shows up in the
         data. A staged-commit protocol that is genuinely recoverable is
-        tracked in ``thoughts/todo/v2-compact-staged-commit.md``.
+        tracked in ``thoughts/todo/whole-list-rewrite-atomicity.md``.
         """
         report = self._v2_verify()
 
@@ -1769,9 +2042,7 @@ class ListProperty:
             ):
                 raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
 
-        meta = self._load_metadata()
-        meta["length"] = len(ordered_values)
-        self._save_metadata(meta)
+        self._save_metadata({"length": len(ordered_values)}, create_if_absent=False)
 
         return report
 
@@ -1809,10 +2080,14 @@ class ListProperty:
         writes are completely unaffected (the half-written v2 rows are
         inert scratch space nothing reads), and the next attempt's step 3
         cleans them up before writing fresh ones. A crash after step 5
-        leaves v2 authoritative with harmless leftover v1 rows -- v2
-        readers already ignore v1-shaped rows, and step 6 is itself
-        idempotent, so a re-run (or the bulk migration script) finishes
-        the cleanup safely.
+        leaves v2 authoritative with leftover v1 rows -- v2 readers ignore
+        v1-shaped rows, and a re-run finishes the cleanup via
+        ``sweep_foreign_format_rows()`` on the ``already_v2`` path.
+
+        That last part used to be a false claim in this docstring. Step 6
+        being idempotent does not help when nothing reaches it: the re-run
+        sees format 2, returns at the top, and the v1 rows stay forever.
+        The sweep is what makes the sentence true.
 
         Args:
             allow_damaged: migrate a list that ``verify()`` reports holes
@@ -1842,6 +2117,9 @@ class ListProperty:
             when not migrated) or ``item_count``/``had_holes``/
             ``duplicate_count`` (when migrated). A ``"damaged"`` reason
             also carries ``missing_indices`` and ``orphan_indices``.
+            ``"deleted_concurrently"`` means the list was deleted mid-run
+            and this attempt rolled its own writes back -- not a refusal,
+            and nothing for an operator to act on.
         """
         if _V2_RANK_MARKER in self.name:
             logger.error(
@@ -1861,6 +2139,12 @@ class ListProperty:
         # top -- silent, total data loss. Re-read from storage first.
         self._invalidate_cache()
         if self._is_v2():
+            # Already v2 -- but that is also exactly what a migration
+            # interrupted between steps 5 and 6 looks like, so finish its
+            # cleanup instead of walking away from it. Without this, a
+            # crash after the metadata flip leaves the v1 rows in place
+            # forever: every re-run returns here and never reaches step 6.
+            self.sweep_foreign_format_rows()
             return {"migrated": False, "reason": "already_v2"}
 
         report = self.verify()
@@ -1926,6 +2210,7 @@ class ListProperty:
                     f"abandoning this attempt without touching its rows"
                 )
                 self._invalidate_cache()
+                self.sweep_foreign_format_rows()
                 return {"migrated": False, "reason": "already_v2"}
 
         # Step 3: clear any v2 scratch rows a previous interrupted attempt
@@ -1954,14 +2239,55 @@ class ListProperty:
 
         # Step 5: flip metadata (fresh read -- preserves description/
         # explanation/created_at untouched).
-        meta_db = get_property(self.config)
-        meta_str = meta_db.get(
-            actor_id=self.actor_id, name=self._get_meta_property_name()
-        )
-        meta = json.loads(meta_str) if meta_str else self._create_default_metadata_v2()
+        #
+        # A VANISHED meta row is not a missing default to fill in: it means
+        # the list was deleted while we were copying it. Recreating it here
+        # would resurrect a deleted list, in v2 form, out of rows we wrote
+        # ourselves. Undo step 4 and leave -- delete() has already removed
+        # everything else, and the v2 rows are invisible to exists() and
+        # list_all() (which key off the meta row) but WOULD be read as items
+        # by the next list created under this name.
+        stored_meta = self._read_meta_row()
+        if stored_meta is None:
+            logger.warning(
+                f"List '{self.name}' (actor {self.actor_id}) was deleted "
+                f"while migrating to v2 -- abandoning the migration and "
+                f"removing the {len(ranks)} v2 row(s) written so far"
+            )
+            # Delete CONDITIONALLY on the exact bytes we wrote, never by rank
+            # name alone. Between the read above and this loop, the delete()
+            # that removed the meta row can also have swept these rows, a new
+            # list can have been created under the same name, and its first
+            # append() lands on rank "a0" -- which is the first rank WE
+            # generated, because generate_n_keys_between(None, None, n) is
+            # deterministic. An unconditional delete by name would then
+            # destroy the successor's item and leave its metadata intact:
+            # exactly the silent cross-list loss this method exists to
+            # prevent, committed by the rollback rather than the migration.
+            for rank, raw_value in zip(ranks, ordered_values, strict=True):
+                del_db = get_property(self.config)
+                if not del_db.delete_if_value_equals(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(rank),
+                    value=raw_value,
+                ):
+                    # Already gone (the concurrent delete() swept it), or now
+                    # holds somebody else's value. Either way it is not ours
+                    # to remove, and that is a normal outcome here, not a
+                    # failure.
+                    logger.info(
+                        f"List '{self.name}' (actor {self.actor_id}): rollback "
+                        f"left row '{self._v2_item_name(rank)}' alone -- it is "
+                        f"gone or no longer holds the value this migration "
+                        f"wrote"
+                    )
+            self._invalidate_cache()
+            return {"migrated": False, "reason": "deleted_concurrently"}
+
+        meta = dict(stored_meta)
         meta.pop("length", None)
         meta["format"] = 2
-        self._save_metadata(meta)
+        self._replace_metadata(meta)
         self._v2_rank_cache = list(ranks)
 
         # Step 6: delete the v1 item rows (holes + orphans included).

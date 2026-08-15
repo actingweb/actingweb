@@ -47,7 +47,7 @@ is the only one that closes the corruption class rather than mitigating its
 symptoms, and it is materially cheaper than when this was filed — the
 fractional-rank format, its `verify()`/`compact()` primitives and its migration
 shape all now exist and are proven on `ListProperty`. Note the port inherits
-`thoughts/todo/v2-compact-staged-commit.md`'s open commit-protocol gap, so
+`thoughts/todo/whole-list-rewrite-atomicity.md`'s open commit-protocol gap, so
 sequence it after that work rather than reproducing the gap in a second class.
 
 Whoever scopes this should re-read both research docs above for the

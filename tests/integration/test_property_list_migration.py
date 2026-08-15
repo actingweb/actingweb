@@ -497,3 +497,229 @@ class TestLazyMigrationTrigger:
         assert prop_list.to_list() == ["a", "b", "c"]
         fresh = test_actor.property_lists.lazy_migrate_fails
         assert fresh.verify().get("format") != 2
+
+
+class TestConcurrentWriteDuringMigration:
+    """A retained ListProperty instance holding pre-migration metadata must
+    not revert a completed migration.
+
+    Phase 1 of thoughts/plans/2026-08-15-property-list-metadata-integrity.md.
+    Metadata used to be persisted by writing a whole cached dict back, so an
+    instance that read a list before it was migrated restored ``format: 1``
+    over the flip on its next write. Metadata then claimed v1 while every
+    item lived in v2 rows nothing read, and migration's step 6 deletes the
+    v1 rows -- the list came back EMPTY, with no error. Against real storage
+    on both backends, because the failure is a storage-level one.
+    """
+
+    def test_concurrent_append_does_not_revert_the_migration(self, test_actor):
+        _seed_v1_list(
+            test_actor.config,
+            test_actor.id,
+            "concurrent_append",
+            ["a", "b", "c"],
+            description="kept across the migration",
+        )
+
+        # An instance the application retained, holding v1 metadata.
+        retained = ListProperty(test_actor.id, "concurrent_append", test_actor.config)
+        assert retained.to_list() == ["a", "b", "c"]
+
+        # Another process migrates it.
+        migrator = ListProperty(test_actor.id, "concurrent_append", test_actor.config)
+        assert migrator.migrate_to_v2()["migrated"] is True
+
+        # ...and the retained instance writes, still believing it is v1.
+        retained.append("d")
+
+        fresh = ListProperty(test_actor.id, "concurrent_append", test_actor.config)
+        assert fresh.storage_format() == 2, "the format flip must survive the write"
+        assert fresh.to_list() == ["a", "b", "c"], "no migrated item may be lost"
+        assert fresh.get_description() == "kept across the migration"
+
+    def test_a_v2_metadata_row_never_acquires_a_length(self, test_actor):
+        """`length` is authoritative for v1 and absent for v2. A stale v1
+        writer computed one against a different view of the list."""
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "concurrent_length", ["a", "b", "c"]
+        )
+        retained = ListProperty(test_actor.id, "concurrent_length", test_actor.config)
+        assert len(retained) == 3
+
+        ListProperty(
+            test_actor.id, "concurrent_length", test_actor.config
+        ).migrate_to_v2()
+        retained.append("d")
+
+        raw_meta = get_property(test_actor.config).get(
+            actor_id=test_actor.id, name="list:concurrent_length-meta"
+        )
+        assert raw_meta is not None
+        meta = json.loads(raw_meta)
+        assert meta["format"] == 2
+        assert "length" not in meta
+
+    def test_concurrent_delete_is_not_undone(self, test_actor):
+        """An absent metadata row means a concurrent delete() won.
+        Recreating it from a stale cache resurrects the list -- and
+        ``exists()``/``list_all()`` key off exactly that row."""
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "concurrent_delete", ["a", "b", "c"]
+        )
+        retained = ListProperty(test_actor.id, "concurrent_delete", test_actor.config)
+        assert len(retained) == 3
+
+        ListProperty(test_actor.id, "concurrent_delete", test_actor.config).delete()
+
+        retained.append("d")
+
+        assert (
+            get_property(test_actor.config).get(
+                actor_id=test_actor.id, name="list:concurrent_delete-meta"
+            )
+            is None
+        )
+        assert "concurrent_delete" not in test_actor.property_lists.list_all()
+
+
+class TestInterruptedMigrationConverges:
+    """A migration interrupted between its metadata flip (step 5) and its v1
+    cleanup (step 6) left the v1 rows behind permanently: every re-run saw
+    format 2 and returned before reaching step 6, and the bulk script skipped
+    the list without calling migrate_to_v2() at all.
+
+    Phase 2 of thoughts/plans/2026-08-15-property-list-metadata-integrity.md.
+    """
+
+    @staticmethod
+    def _crash_after_the_flip(config, actor_id, name, items):
+        """Drive a REAL migrate_to_v2() and abort it at the format flip, so
+        the resulting state is produced by the code under test rather than
+        hand-seeded."""
+
+        class _Interrupt(Exception):
+            pass
+
+        real = ListProperty._replace_metadata  # noqa: SLF001
+
+        def _flip_then_die(self, meta):
+            real(self, meta)
+            raise _Interrupt
+
+        ListProperty._replace_metadata = _flip_then_die  # noqa: SLF001
+        try:
+            ListProperty(actor_id, name, config).migrate_to_v2()
+        except _Interrupt:
+            pass
+        finally:
+            ListProperty._replace_metadata = real  # noqa: SLF001
+
+    def test_rerunning_migrate_to_v2_sweeps_the_v1_rows(self, test_actor):
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "converge_direct", ["a", "b", "c"]
+        )
+        self._crash_after_the_flip(
+            test_actor.config, test_actor.id, "converge_direct", ["a", "b", "c"]
+        )
+
+        crashed = ListProperty(test_actor.id, "converge_direct", test_actor.config)
+        assert crashed.storage_format() == 2
+        assert _raw_v1_rows(test_actor.config, test_actor.id, "converge_direct", 3) == [
+            json.dumps(v) for v in ["a", "b", "c"]
+        ], "the crash window requires the v1 rows to still be present"
+        # Residue is reported but does not fail healthy.
+        report = crashed.verify()
+        assert report["foreign_format_rows"] == 3
+        assert report["healthy"] is True
+
+        assert crashed.migrate_to_v2() == {"migrated": False, "reason": "already_v2"}
+
+        fresh = ListProperty(test_actor.id, "converge_direct", test_actor.config)
+        assert fresh.to_list() == ["a", "b", "c"]
+        assert fresh.verify()["foreign_format_rows"] == 0
+        assert _raw_v1_rows(test_actor.config, test_actor.id, "converge_direct", 3) == [
+            None,
+            None,
+            None,
+        ]
+
+    def test_the_bulk_script_reaches_that_cleanup(self, test_actor):
+        """The load-bearing one: migrate_actor() gated on
+        ``if already_v2: continue``, so the fix above was unreachable from
+        the command operators actually run."""
+        from actingweb.maintenance.migrate_property_lists import (
+            RateLimiter,
+            migrate_actor,
+        )
+
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "converge_script", ["a", "b", "c"]
+        )
+        self._crash_after_the_flip(
+            test_actor.config, test_actor.id, "converge_script", ["a", "b", "c"]
+        )
+
+        _checked, _migrated, errored, refused = migrate_actor(
+            test_actor.id, test_actor.config, migrate=True, limiter=RateLimiter(0)
+        )
+
+        assert (errored, refused) == (0, [])
+        assert _raw_v1_rows(test_actor.config, test_actor.id, "converge_script", 3) == [
+            None,
+            None,
+            None,
+        ], "the script's already_v2 path must sweep, not skip"
+        fresh = ListProperty(test_actor.id, "converge_script", test_actor.config)
+        assert fresh.to_list() == ["a", "b", "c"]
+
+    def test_a_deleted_list_does_not_resurrect_inside_its_successor(self, test_actor):
+        """Cross-format residue outlives the list: ``exists()`` and
+        ``list_all()`` key off the metadata row, so nothing reports it until
+        a new list is created under the same name and adopts it."""
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "converge_reuse", ["old-a", "old-b"]
+        )
+        self._crash_after_the_flip(
+            test_actor.config, test_actor.id, "converge_reuse", ["old-a", "old-b"]
+        )
+
+        ListProperty(test_actor.id, "converge_reuse", test_actor.config).delete()
+
+        recreated = ListProperty(test_actor.id, "converge_reuse", test_actor.config)
+        assert recreated.to_list() == []
+        recreated.append("new-a")
+        assert recreated.to_list() == ["new-a"]
+
+    def test_clear_empties_both_namespaces(self, test_actor):
+        _seed_v1_list(test_actor.config, test_actor.id, "converge_clear", ["a", "b"])
+        self._crash_after_the_flip(
+            test_actor.config, test_actor.id, "converge_clear", ["a", "b"]
+        )
+
+        prop_list = ListProperty(test_actor.id, "converge_clear", test_actor.config)
+        prop_list.clear()
+
+        assert prop_list.to_list() == []
+        assert _raw_v1_rows(test_actor.config, test_actor.id, "converge_clear", 2) == [
+            None,
+            None,
+        ]
+
+    def test_a_digit_named_sibling_list_survives_the_sweep(self, test_actor):
+        """A list named 'sweep_owner-5' stores 'list:sweep_owner-5-0', which
+        sorts inside list 'sweep_owner''s v1 byte range. Only the ^\\d+$
+        suffix filter keeps the sweep off it."""
+        _seed_v1_list(test_actor.config, test_actor.id, "sweep_owner", ["a", "b"])
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "sweep_owner-5", ["keep-1", "keep-2"]
+        )
+        self._crash_after_the_flip(
+            test_actor.config, test_actor.id, "sweep_owner", ["a", "b"]
+        )
+
+        owner = ListProperty(test_actor.id, "sweep_owner", test_actor.config)
+        owner.sweep_foreign_format_rows()
+
+        assert owner.to_list() == ["a", "b"]
+        sibling = ListProperty(test_actor.id, "sweep_owner-5", test_actor.config)
+        assert sibling.to_list() == ["keep-1", "keep-2"]

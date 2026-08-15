@@ -417,6 +417,55 @@ cap.
    the stale copies are the ones whose rank keys are not part of the evenly
    spaced sequence a fresh rebalance produces.
 
+Concurrency during a whole-list rewrite
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``compact()``, ``migrate_to_v2()`` and the operator sweep scripts rewrite a
+whole list. **None of them takes a lock, and nothing excludes an application
+write while one runs.** "Run repair when the actor is not taking writes" is
+therefore a requirement, not a suggestion: a concurrent write during a
+rewrite can be lost.
+
+Two things bound how bad that gets.
+
+*A concurrent write can no longer revert the storage format from a stale
+cache.* Every metadata write names the fields it is changing and merges them
+into a freshly read metadata row, so an ``append()`` running against a list
+that was migrated a moment ago updates a timestamp and nothing else. In
+``3.13.0rc6`` and earlier it wrote a whole *cached* dictionary back, restoring
+``format: 1`` over a completed migration and leaving metadata claiming v1
+while every item lived in v2 rows nothing read.
+
+Be precise about what that buys, because the difference matters
+operationally. The old window was **unbounded in time**: a ``ListProperty``
+instance an application held on to kept its cached metadata until something
+explicitly invalidated it, so a write minutes or hours after a migration could
+still revert it. The remaining window is **two adjacent operations** — the
+read of the metadata row and the write that follows it. A migration that
+completes inside that gap can still be reverted, because neither backend's
+property layer offers a compare-and-set to condition the write on. That
+residue is accepted and deferred rather than closed; see
+``thoughts/todo/whole-list-rewrite-atomicity.md``. Quiescing writes during a
+migration is what actually closes it.
+
+*Two concurrent migrations resolve to last-writer-wins at whole-list
+granularity, and this is accepted rather than prevented.* Each migration
+clears the v2 range before writing, so the loser's snapshot never mixes with
+the winner's — you get one coherent list, not an interleaving. What is not
+guaranteed is that the winner is the *newer* snapshot: a migration that read
+the list first can finish last, and items added in between are then absent
+from the migrated list. Mutual exclusion would close this, and was designed
+and rejected for 3.13 (the designs are recorded in
+``thoughts/plans/2026-08-15-property-list-metadata-integrity.md``). Run one
+migration at a time, against a quiesced actor, and the question does not
+arise.
+
+Interrupted format changes clean themselves up on the next run: leftover
+rows from the format the list is no longer in are swept when the migration
+or downgrade is re-run, and by ``clear()`` and ``delete()``. ``verify()``
+reports them as ``foreign_format_rows`` — informational only, because they
+are inert to every reader of the current format.
+
 See the ActingWeb specification and Properties handler documentation for complete API details.
 
 Web UI

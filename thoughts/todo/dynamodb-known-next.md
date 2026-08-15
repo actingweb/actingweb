@@ -21,6 +21,18 @@ serial round-trip pairs). `Actor.delete()` cascades through all of them.
 Needs 25-item chunking + unprocessed-item retry; lookup-row cleanup and
 property hooks stay per-item, so batching covers only the raw deletes.
 
+**Got slightly worse on 2026-08-15** (`thoughts/plans/2026-08-15-property-list-metadata-integrity.md`,
+Phase 2): `ListProperty.clear()` and `delete()` now also call
+`sweep_foreign_format_rows()`, which adds one meta-row read plus one
+keys-only range read, and then deletes any rows found serially like
+everything else here. Necessary — a cleared or deleted list has to be
+empty in *both* storage namespaces, or an interrupted migration's residue
+gets adopted by the next list created under the same name — but it is one
+more serial delete loop for a `batch_write` fix to cover, not one fewer.
+Separately, every list *mutation* now costs one extra point read
+(`_save_metadata()` merges into a fresh read of the meta row), which is
+adjacent to item 2's N+1 and belongs in the same measurement.
+
 **Adjacent, filed separately:** `DbPropertyList.fetch()` reading the whole
 partition (`list:` rows included) is I0, and lives in
 `thoughts/todo/property-fetch-reads-whole-partition.md`. It is the per-*partition*

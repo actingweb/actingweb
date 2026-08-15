@@ -1565,3 +1565,695 @@ class TestCompactIsNotCrashSafe:
             "re-running repair must not silently collapse the duplicate -- "
             "and equally must not be mistaken for cleaning it up"
         )
+
+
+class TestStaleMetadataIsNeverWrittenBack:
+    """A retained ListProperty instance must not revert a concurrent
+    migration by round-tripping its cached metadata dict.
+
+    The previously-unfiled P0 from the 2026-08-15 review round: metadata was
+    saved by writing the WHOLE cached dict back, so a concurrent v1
+    ``append()`` restored ``format: 1`` over a completed migration. Metadata
+    then claimed v1 while every item lived in v2 rows nothing read, and
+    migration's final step deleted the v1 rows -- total silent loss on
+    ordinary traffic. The window is one round trip for a fresh instance and
+    UNBOUNDED for any instance an application retains, because the metadata
+    cache only clears on an explicit invalidation.
+
+    See thoughts/plans/2026-08-15-property-list-metadata-integrity.md Phase 1.
+    """
+
+    @staticmethod
+    def _migrate_underneath(store, actor_id, name, items):
+        """Another process migrates the list to v2 while our instance holds
+        a cached v1 metadata dict."""
+        for i in range(len(items)):
+            store.pop((actor_id, f"list:{name}-{i}"), None)
+        _seed_v2_list(store, actor_id, name, items)
+
+    @staticmethod
+    def _stored_meta(store, actor_id, name):
+        return json.loads(store[(actor_id, f"list:{name}-meta")])
+
+    def test_concurrent_append_does_not_revert_the_format_flip(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-writeback-append"
+        name = "notes"
+        items = ["a", "b", "c"]
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        # An instance the application retained, holding v1 metadata.
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert retained.to_list() == items
+
+        self._migrate_underneath(fake_store, actor_id, name, items)
+
+        retained.append("d")
+
+        # The flip survives, and so does every migrated item.
+        assert self._stored_meta(fake_store, actor_id, name)["format"] == 2
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == items
+
+    def test_v2_metadata_row_never_acquires_a_length(self, monkeypatch, fake_store):
+        """`length` is authoritative for v1 and absent for v2.
+
+        A stale v1 writer computed its length against a different view of
+        the list, so merging it into a v2 row would plant a number no v2
+        reader agrees with -- and that a later downgrade would believe.
+        """
+        actor_id = "actor-writeback-length"
+        name = "notes"
+        items = ["a", "b", "c"]
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert len(retained) == 3
+        self._migrate_underneath(fake_store, actor_id, name, items)
+
+        retained.append("d")
+
+        assert "length" not in self._stored_meta(fake_store, actor_id, name)
+
+    def test_concurrent_clear_is_not_undone(self, monkeypatch, fake_store):
+        """A cleared list stays cleared.
+
+        clear() resets a v2 list's metadata wholesale; a stale v1 instance
+        writing its cached dict back put ``format: 1`` and a pre-clear
+        ``length`` over that, so the list came back reading as a v1 list
+        with items that were no longer there.
+        """
+        actor_id = "actor-writeback-clear"
+        name = "notes"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        # v1 list, plus an instance holding its metadata.
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert len(retained) == 3
+
+        # Another process migrated, then cleared it.
+        self._migrate_underneath(fake_store, actor_id, name, ["a", "b", "c"])
+        ListProperty(actor_id=actor_id, name=name, config=object()).clear()
+
+        retained.append("d")
+
+        meta = self._stored_meta(fake_store, actor_id, name)
+        assert meta["format"] == 2
+        assert "length" not in meta
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == []
+
+    def test_concurrent_delete_is_not_undone(self, monkeypatch, fake_store):
+        """A deleted list must not resurrect from a stale writer's metadata.
+
+        ``exists()``/``list_all()`` key off the meta row, so recreating it
+        from a cached dict brings the list back -- with a length describing
+        rows that were deleted, i.e. as a corrupt list rather than an
+        absent one.
+        """
+        actor_id = "actor-writeback-delete"
+        name = "notes"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert len(retained) == 3
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).delete()
+        assert (actor_id, f"list:{name}-meta") not in fake_store
+
+        retained.append("d")
+
+        assert (actor_id, f"list:{name}-meta") not in fake_store, (
+            "an absent meta row means a concurrent delete() won -- recreating "
+            "it from a stale cache resurrects the list"
+        )
+
+    def test_a_retained_instance_does_not_resurrect_its_cached_format(
+        self, monkeypatch, fake_store
+    ):
+        """Not one operation: the cache survives until something invalidates
+        it, so EVERY later operation on a retained instance is a chance to
+        write the stale format back.
+
+        The instance also heals as a side effect. Each metadata write now
+        re-reads the row and caches what it read, so the operation AFTER the
+        first one dispatches on the true format -- the second append below
+        lands as a real v2 item rather than as inert v1 residue. That is a
+        consequence of the fix, not a separate mechanism, and it bounds how
+        long a retained instance stays wrong to a single mutation.
+        """
+        actor_id = "actor-writeback-retained"
+        name = "notes"
+        items = ["a", "b", "c"]
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert retained.to_list() == items
+        self._migrate_underneath(fake_store, actor_id, name, items)
+
+        retained.append("d")  # stale: lands in v1 space, inert
+        retained.set_description("written while this instance thought it was v1")
+        retained.append("e")  # cache refreshed by now: a real v2 item
+
+        assert self._stored_meta(fake_store, actor_id, name)["format"] == 2
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == [*items, "e"]
+        assert (
+            fresh.get_description() == "written while this instance thought it was v1"
+        )
+
+    def test_stale_v1_clear_does_not_downgrade_live_v2_storage(
+        self, monkeypatch, fake_store
+    ):
+        """clear() dispatches on the STORED format, not a cached one.
+
+        Both branches end in a wholesale metadata write, so a stale v1
+        cache would put `_create_default_metadata()` over a live v2 list's
+        meta row while its rows stayed put -- the same format revert,
+        arriving through the replace path rather than the merge path.
+        """
+        actor_id = "actor-stale-clear"
+        name = "notes"
+        items = ["a", "b", "c"]
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert retained.to_list() == items
+        self._migrate_underneath(fake_store, actor_id, name, items)
+
+        retained.clear()
+
+        meta = self._stored_meta(fake_store, actor_id, name)
+        assert meta["format"] == 2
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == []
+        # The v2 rows are actually gone, not merely unreachable.
+        assert not [
+            k for k in fake_store if k[0] == actor_id and f"list:{name}-#" in k[1]
+        ]
+
+    def test_stale_v1_delete_removes_the_v2_rows(self, monkeypatch, fake_store):
+        """delete() dispatches on the stored format too. A stale cache
+        deletes the wrong namespace and leaves the real rows behind, where
+        nothing can see them -- until the next list of the same name."""
+        actor_id = "actor-stale-delete"
+        name = "notes"
+        items = ["a", "b", "c"]
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert retained.to_list() == items
+        self._migrate_underneath(fake_store, actor_id, name, items)
+
+        retained.delete()
+
+        assert not [k for k in fake_store if k[0] == actor_id], (
+            "every row of the deleted list must be gone, whichever format "
+            "the deleting instance had cached"
+        )
+
+
+class TestMigrateRefusesAVanishedMetaRow:
+    """migrate_to_v2() must not recreate a meta row that was deleted while
+    it was copying: the list was deleted, and recreating it resurrects it
+    out of rows migration wrote itself."""
+
+    def test_deleted_mid_migration_rolls_back_rather_than_recreating(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-migrate-vanish"
+        name = "notes"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        class DeletingMetaDb(FakePropertyDb):
+            """Deletes the whole list the moment migration writes its first
+            v2 row -- the window between steps 4 and 5."""
+
+            def set(self, actor_id=None, name=None, value=None):
+                result = super().set(actor_id=actor_id, name=name, value=value)
+                if "-#" in (name or "") and self.store.get(
+                    (actor_id, f"list:{prop_name}-meta")
+                ):
+                    for key in [k for k in list(self.store) if "-#" not in k[1]]:
+                        self.store.pop(key, None)
+                return result
+
+        prop_name = name
+        _patch_get_property(monkeypatch, lambda config: DeletingMetaDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        result = prop_list.migrate_to_v2()
+
+        assert result == {"migrated": False, "reason": "deleted_concurrently"}
+        assert fake_store == {}, (
+            "the v2 rows this attempt wrote must be rolled back -- they are "
+            "invisible to exists()/list_all() without a meta row, but the "
+            "next list created under this name would read them as its items"
+        )
+
+
+class TestInvalidateCacheClearsBothCaches:
+    """The metadata cache and the v2 rank cache are semantically coupled:
+    ranks are only meaningful for the format the metadata reports. Nothing
+    enforced that before."""
+
+    def test_invalidate_cache_clears_the_rank_cache_too(self, monkeypatch, fake_store):
+        actor_id = "actor-cache-coupling"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a", "b", "c"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.to_list() == ["a", "b", "c"]
+        assert prop_list._v2_rank_cache is not None  # noqa: SLF001
+
+        prop_list._invalidate_cache()  # noqa: SLF001
+
+        assert prop_list._meta_cache is None  # noqa: SLF001
+        assert prop_list._v2_rank_cache is None  # noqa: SLF001
+
+    def test_v2_mutations_keep_their_rank_cache(self, monkeypatch, fake_store):
+        """The metadata touch after every v2 mutation re-reads the meta row
+        but must NOT discard the rank cache it just updated in place --
+        that would cost a full range query per mutation."""
+        actor_id = "actor-cache-kept"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a", "b"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.to_list() == ["a", "b"]
+        prop_list.append("c")
+
+        assert prop_list._v2_rank_cache is not None  # noqa: SLF001
+        assert len(prop_list._v2_rank_cache) == 3  # noqa: SLF001
+
+
+class TestSweepForeignFormatRows:
+    """The cleanup primitive both interrupted rewrites need, and the shape
+    filters that keep it from eating a sibling list."""
+
+    def test_sweeps_v1_residue_from_a_v2_list(self, monkeypatch, fake_store):
+        actor_id = "actor-sweep-v1"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a", "b"])
+        # Residue a migration crashed before deleting.
+        for i, item in enumerate(["a", "b"]):
+            fake_store[(actor_id, f"list:{name}-{i}")] = json.dumps(item)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.sweep_foreign_format_rows() == 2
+
+        assert (actor_id, f"list:{name}-0") not in fake_store
+        assert prop_list.to_list() == ["a", "b"]
+
+    def test_sweeps_v2_residue_from_a_v1_list(self, monkeypatch, fake_store):
+        actor_id = "actor-sweep-v2"
+        name = "notes"
+        _seed_list(fake_store, actor_id, name, ["a", "b"])
+        fake_store[(actor_id, f"list:{name}-#a0")] = json.dumps("a")
+        fake_store[(actor_id, f"list:{name}-#a1")] = json.dumps("b")
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.sweep_foreign_format_rows() == 2
+
+        assert not [k for k in fake_store if "-#" in k[1]]
+        assert prop_list.to_list() == ["a", "b"]
+
+    def test_a_stale_cache_cannot_make_the_sweep_delete_the_live_rows(
+        self, monkeypatch, fake_store
+    ):
+        """The format comes from storage. A cached v1 view over migrated
+        storage would classify every LIVE v2 row as foreign."""
+        actor_id = "actor-sweep-stale"
+        name = "notes"
+        items = ["a", "b", "c"]
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        retained = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert retained.to_list() == items
+        for i in range(len(items)):
+            fake_store.pop((actor_id, f"list:{name}-{i}"), None)
+        _seed_v2_list(fake_store, actor_id, name, items)
+
+        assert retained.sweep_foreign_format_rows() == 0
+        assert ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list() == (items)
+
+    def test_a_digit_named_sibling_list_survives_a_v1_sweep(
+        self, monkeypatch, fake_store
+    ):
+        """A list called 'foo-5' stores 'list:foo-5-0', which sorts inside
+        list 'foo''s v1 byte range. Only the ^\\d+$ suffix check keeps the
+        sweep off it -- the v1 counterpart of the '#'-sibling hazard."""
+        actor_id = "actor-sweep-sibling-v1"
+        _seed_v2_list(fake_store, actor_id, "foo", ["mine"])
+        _seed_list(fake_store, actor_id, "foo-5", ["sibling-a", "sibling-b"])
+        sibling_before = {
+            k: v for k, v in fake_store.items() if k[1].startswith("list:foo-5-")
+        }
+        assert sibling_before
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        owner = ListProperty(actor_id=actor_id, name="foo", config=object())
+        assert owner.sweep_foreign_format_rows() == 0
+
+        assert {
+            k: v for k, v in fake_store.items() if k[1].startswith("list:foo-5-")
+        } == sibling_before
+
+    def test_a_legacy_hash_named_sibling_survives_a_v2_sweep(
+        self, monkeypatch, fake_store
+    ):
+        """A pre-Phase-4 list named 'foo-#bar' stores 'list:foo-#bar-0',
+        inside list 'foo''s v2 range. _v2_is_rank() is what excludes it."""
+        actor_id = "actor-sweep-sibling-v2"
+        _seed_list(fake_store, actor_id, "foo", ["mine"])
+        _seed_list(fake_store, actor_id, "foo-#bar", ["legacy-a", "legacy-b"])
+        sibling_before = {
+            k: v for k, v in fake_store.items() if k[1].startswith("list:foo-#bar-")
+        }
+        assert sibling_before
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        owner = ListProperty(actor_id=actor_id, name="foo", config=object())
+        assert owner.sweep_foreign_format_rows() == 0
+
+        assert {
+            k: v for k, v in fake_store.items() if k[1].startswith("list:foo-#bar-")
+        } == sibling_before
+
+    def test_the_meta_row_is_never_swept(self, monkeypatch, fake_store):
+        actor_id = "actor-sweep-meta"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a"])
+        fake_store[(actor_id, f"list:{name}-0")] = json.dumps("a")
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        prop_list.sweep_foreign_format_rows()
+
+        assert (actor_id, f"list:{name}-meta") in fake_store
+
+
+class TestInterruptedRewritesConverge:
+    """Re-running an interrupted format change must finish it. Both
+    rewrites early-returned before reaching their own cleanup, so the
+    residue was permanent: a re-run did not finish the job, it declined to
+    start it."""
+
+    @staticmethod
+    def _crash_migration_after_the_flip(store, actor_id, name, items):
+        """The state a crash between migrate_to_v2()'s step 5 and step 6
+        leaves: v2 rows plus v2 metadata, with the v1 rows still there."""
+        _seed_v2_list(store, actor_id, name, items)
+        for i, item in enumerate(items):
+            store[(actor_id, f"list:{name}-{i}")] = json.dumps(item)
+
+    def test_rerunning_migrate_to_v2_sweeps_the_v1_rows(self, monkeypatch, fake_store):
+        actor_id = "actor-converge-migrate"
+        name = "notes"
+        items = ["a", "b", "c"]
+        self._crash_migration_after_the_flip(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.migrate_to_v2() == {"migrated": False, "reason": "already_v2"}
+
+        assert not [
+            k
+            for k in fake_store
+            if k[1].startswith(f"list:{name}-")
+            and "-#" not in k[1]
+            and not k[1].endswith("-meta")
+        ]
+        assert prop_list.to_list() == items
+
+    def test_the_bulk_script_reaches_that_cleanup(self, monkeypatch, fake_store):
+        """The load-bearing one. migrate_actor() gated on
+        `if already_v2: continue`, so after an interrupted migration the
+        list reads format 2 and the script skipped it without ever calling
+        migrate_to_v2() -- making the fix above unreachable from the
+        command operators actually run.
+        """
+        from actingweb.maintenance.migrate_property_lists import (
+            RateLimiter,
+            migrate_actor,
+        )
+
+        actor_id = "actor-converge-script"
+        name = "notes"
+        items = ["a", "b", "c"]
+        self._crash_migration_after_the_flip(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+        monkeypatch.setattr(
+            "actingweb.property.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+            raising=False,
+        )
+
+        _checked, _migrated, errored, refused = migrate_actor(
+            actor_id, object(), migrate=True, limiter=RateLimiter(0)
+        )
+
+        assert (errored, refused) == (0, [])
+        assert not [
+            k
+            for k in fake_store
+            if k[1].startswith(f"list:{name}-")
+            and "-#" not in k[1]
+            and not k[1].endswith("-meta")
+        ], "the script's already_v2 path must sweep, not skip"
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert prop_list.to_list() == items
+
+    def test_rerunning_downgrade_sweeps_the_v2_rows(self, monkeypatch, fake_store):
+        from actingweb.maintenance.migrate_property_lists import downgrade_to_v1
+
+        actor_id = "actor-converge-downgrade"
+        name = "notes"
+        items = ["a", "b"]
+        # A downgrade interrupted after its metadata flip: v1 rows and v1
+        # metadata, with the v2 rows still present.
+        _seed_list(fake_store, actor_id, name, items)
+        fake_store[(actor_id, f"list:{name}-#a0")] = json.dumps("a")
+        fake_store[(actor_id, f"list:{name}-#a1")] = json.dumps("b")
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.db.get_property",
+            lambda config: FakePropertyDb(fake_store),
+            raising=False,
+        )
+
+        result = downgrade_to_v1(actor_id, name, object())
+
+        assert result["downgraded"] is False
+        assert result["swept_v2_rows"] == 2
+        assert not [k for k in fake_store if "-#" in k[1]]
+        assert ListProperty(
+            actor_id=actor_id, name=name, config=object()
+        ).to_list() == (items)
+
+    def test_a_deleted_list_does_not_resurrect_inside_its_successor(
+        self, monkeypatch, fake_store
+    ):
+        """Residue outlives the list: exists()/list_all() key off the meta
+        row, so nothing reports it -- until a new list is created under the
+        same name and adopts it as its own items."""
+        actor_id = "actor-resurrect"
+        name = "notes"
+        self._crash_migration_after_the_flip(
+            fake_store, actor_id, name, ["old-a", "old-b"]
+        )
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        ListProperty(actor_id=actor_id, name=name, config=object()).delete()
+        assert not [k for k in fake_store if k[0] == actor_id]
+
+        recreated = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert recreated.to_list() == []
+        recreated.append("new-a")
+        assert recreated.to_list() == ["new-a"]
+
+    def test_clear_empties_both_namespaces(self, monkeypatch, fake_store):
+        actor_id = "actor-clear-both"
+        name = "notes"
+        self._crash_migration_after_the_flip(fake_store, actor_id, name, ["a", "b"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        prop_list.clear()
+
+        assert prop_list.to_list() == []
+        assert [k[1] for k in fake_store if k[0] == actor_id] == [f"list:{name}-meta"]
+
+
+class TestVerifyReportsForeignFormatRows:
+    """Cross-format residue is reported but does NOT fail `healthy`.
+
+    It is inert to every reader of the current format, and the sweep
+    removes it without operator involvement -- matching v2's informational
+    duplicate reporting rather than v1's, where duplicates do fail.
+    """
+
+    def test_v2_verify_reports_v1_residue_without_failing_healthy(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-verify-foreign-v2"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a", "b"])
+        for i, item in enumerate(["a", "b"]):
+            fake_store[(actor_id, f"list:{name}-{i}")] = json.dumps(item)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        report = ListProperty(actor_id=actor_id, name=name, config=object()).verify()
+
+        assert report["foreign_format_rows"] == 2
+        assert report["healthy"] is True
+
+    def test_v1_verify_reports_v2_residue_without_failing_healthy(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-verify-foreign-v1"
+        name = "notes"
+        _seed_list(fake_store, actor_id, name, ["a", "b"])
+        fake_store[(actor_id, f"list:{name}-#a0")] = json.dumps("a")
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        report = ListProperty(actor_id=actor_id, name=name, config=object()).verify()
+
+        assert report["foreign_format_rows"] == 1
+        assert report["healthy"] is True
+
+    def test_a_clean_list_reports_zero(self, monkeypatch, fake_store):
+        actor_id = "actor-verify-foreign-clean"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        report = ListProperty(actor_id=actor_id, name=name, config=object()).verify()
+        assert report["foreign_format_rows"] == 0
+
+
+class TestMigrationRollbackDoesNotEatASuccessorList:
+    """The abort path must delete only rows it still owns.
+
+    Raised as a P2 by Codex review on PR #127 and accepted as real. Between
+    migrate_to_v2() observing the metadata row absent and its rollback loop
+    running, the concurrent delete() can sweep the scratch rows AND a new
+    list can be created under the same name. That successor's first
+    append() lands on rank "a0" -- the same rank migration generated, because
+    ``generate_n_keys_between(None, None, n)`` is deterministic. Deleting by
+    rank name alone therefore destroys the successor's item while leaving its
+    metadata intact: silent cross-list loss, committed by the rollback rather
+    than the migration.
+    """
+
+    def test_rollback_leaves_a_successors_row_alone(self, monkeypatch, fake_store):
+        import fractional_indexing as fi
+
+        actor_id = "actor-rollback-successor"
+        name = "notes"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        first_rank = fi.generate_n_keys_between(None, None, 3)[0]
+        successor_row = (actor_id, f"list:{name}-#{first_rank}")
+        prop = name
+
+        class Racing(FakePropertyDb):
+            """Trip on migration's STEP 5 metadata read -- identified by the
+            v2 rows step 4 has just written being present. Report the row as
+            absent, and in the same instant do what a concurrent delete() plus
+            a fresh create() would: sweep every row of the old list, then
+            stand a new list up under the same name whose first item takes
+            the very rank migration used."""
+
+            def get(self, actor_id=None, name=None):
+                step_five = name == f"list:{prop}-meta" and any(
+                    "-#" in k[1] for k in self.store
+                )
+                if not step_five:
+                    return super().get(actor_id=actor_id, name=name)
+                for key in [k for k in list(self.store) if f"list:{prop}-" in k[1]]:
+                    self.store.pop(key, None)
+                self.store[successor_row] = json.dumps("successor-item")
+                self.store[(actor_id, f"list:{prop}-meta")] = json.dumps(
+                    {"format": 2, "created_at": "x", "updated_at": "x"}
+                )
+                return None  # what migration's step-5 read observes
+
+        _patch_get_property(monkeypatch, lambda config: Racing(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        result = prop_list.migrate_to_v2()
+
+        assert result == {"migrated": False, "reason": "deleted_concurrently"}
+        assert fake_store.get(successor_row) == json.dumps("successor-item"), (
+            "the rollback deleted a row belonging to the list that replaced "
+            "the one being migrated"
+        )
+
+    def test_rollback_still_removes_its_own_rows(self, monkeypatch, fake_store):
+        """The conditional delete must not become a no-op: when nothing else
+        touched the rows, the rollback still cleans up after itself."""
+        actor_id = "actor-rollback-own"
+        name = "notes"
+        _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(fake_store),
+        )
+
+        class MetaVanishes(FakePropertyDb):
+            def get(self, actor_id=None, name=None):
+                if name == f"list:{name_}-meta" and any(
+                    "-#" in k[1] for k in self.store
+                ):
+                    # Step 4 has written the v2 rows; the meta row is gone.
+                    self.store.pop((actor_id, name), None)
+                    return None
+                return super().get(actor_id=actor_id, name=name)
+
+        name_ = name
+        _patch_get_property(monkeypatch, lambda config: MetaVanishes(fake_store))
+
+        prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
+        result = prop_list.migrate_to_v2()
+
+        assert result == {"migrated": False, "reason": "deleted_concurrently"}
+        assert not [k for k in fake_store if "-#" in k[1]], (
+            "rows this migration wrote, and that nobody else touched, must "
+            "still be rolled back"
+        )

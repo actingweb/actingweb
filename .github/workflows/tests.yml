@@ -288,6 +288,19 @@ jobs:
           PG_DB_NAME: actingweb_test
           PG_DB_USER: actingweb
           PG_DB_PASSWORD: testpassword
+          # Attribute-DELETE diagnostics (postgresql backend only; a no-op on
+          # dynamodb). Emits PG_DELETE_DIAG at WARNING with the rowcount, the
+          # deleting connection's resolved schema, and a post-commit re-read on a
+          # fresh connection. pytest buffers these and prints them only for a
+          # FAILING test, so a green run costs two extra queries per attribute
+          # delete and no log volume.
+          #
+          # Here to catch the intermittent "DELETE does not persist" failure that
+          # quarantined two assertions in test_trust_oauth_integration.py from
+          # 2026-06-15 to 2026-08-15. Drop this once the postgres matrix has been
+          # green across enough runs to call it gone —
+          # thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md.
+          ACTINGWEB_PG_DELETE_DIAGNOSTICS: '1'
 
       - name: Report test flakiness
         if: always() && needs.changes.outputs.code == 'true'

@@ -1,7 +1,11 @@
 # TODO: Postgres per-actor attribute DELETE intermittently not persisting under parallel CI
 
 **Date:** 2026-06-15
-**Status:** Open — root cause not yet found
+**Status:** Open — root cause not yet found, but **both leading hypotheses have
+been removed by unrelated work since this was filed, and the quarantine was
+lifted on 2026-08-15 to find out whether that ended it.** See "What changed
+under this todo" below before doing any further investigation: the code this
+document describes is not the code that runs today.
 **Severity:** Medium (test-infra reliability; no confirmed production impact, but the
 mechanism *could* drop writes in production under concurrency)
 **Origin:** PR #105 (Apple Sign-In / native OIDC / GitHub mobile parity)
@@ -89,6 +93,44 @@ Delete those three things to re-enable; CI on the branch will then verify the fi
    reproduce locally; full-suite postgres parallel runs take ~1h wall in the dev
    sandbox, which blocked local iteration.
 
+## What changed under this todo (found 2026-08-15)
+
+The evidence above was gathered against the code as it stood on 2026-06-15.
+Two of the three ranked hypotheses have had their proximate mechanism removed
+since, by work that was not aimed at this bug and did not update this file.
+
+1. **The unaccounted-for `property_lookup_pkey` INSERT is gone.** Evidence
+   item 6 could not locate the statement raising the duplicate-key error, and
+   named `property_lookup.py:86` (`DbPropertyLookup.create()`, a plain INSERT
+   with no `ON CONFLICT`) as the only candidate, apparently callerless. That
+   statement gained `ON CONFLICT (property_name, value)` — both the
+   `DO UPDATE` and `DO NOTHING` branches — in **#115**
+   (`89f1b0b`, the v3.13.0 DynamoDB-scalability PR), two months after this was
+   filed. All three `INSERT INTO property_lookup` sites are now idempotent.
+   Hypothesis 1 depends on *something* aborting a pooled connection's
+   transaction; the only identified candidate for that no longer exists.
+2. **The pool no longer serves a mix of schemas.** Hypothesis 2 was
+   `search_path` instability under per-worker isolation. `get_pool()` now
+   tracks the schema a pool was built for (`_pool_schema`) and rebuilds when
+   `PG_DB_PREFIX`/`PG_DB_SCHEMA` changes, instead of holding connections
+   configured against different schemas and handing them out load-dependently
+   (`connection.py`, added in **#117**). Test fixtures set `PG_DB_PREFIX`
+   in-process, which is exactly the mutation that produced the mixed pool.
+
+Also worth knowing before re-reading the evidence: `pool.connection()` rolls
+back on exception exit, and every `with get_connection()` block in
+`attribute.py` has its `try` *outside* the `with`, so a swallowed exception
+cannot return a connection to the pool mid-transaction. The "audit every
+`with get_connection()` block" step below was written before that was checked;
+it is done for `attribute.py`.
+
+**Action taken 2026-08-15:** quarantine lifted and instrumentation added, on
+one branch, rather than instrumenting a bug that may already be fixed. If the
+postgres matrix is green across several runs the flake dies with evidence; if
+it is not, `ACTINGWEB_PG_DELETE_DIAGNOSTICS=1` (on in CI) prints `PG_DELETE_DIAG`
+lines naming the mechanism in the first failing run. That is strictly more
+information than either half alone.
+
 ## Hypotheses (ranked)
 
 1. **Pooled-connection transaction contamination.** The `property_lookup_pkey`
@@ -108,13 +150,21 @@ shared with `thoughts/todo/ci-postgres-parallel-flakiness.md`. Same CI matrix,
 same conditions, and that todo's process-global psycopg pool is hypothesis 1
 here — one instrumentation pass should collect evidence for both.
 
-- [ ] Reproduce in CI deterministically: add temporary debug to `delete_attr`
-      (`db/postgresql/attribute.py`) logging `cur.rowcount` after the `DELETE` and
-      `current_schema()` / `search_path` for the connection. Confirm whether the
-      DELETE matches 0 rows (wrong schema / wrong key) or matches but doesn't commit.
-- [ ] Find what raises `property_lookup_pkey`; make that INSERT idempotent
-      (`ON CONFLICT`), and audit every `with get_connection()` block to ensure a DB
-      error triggers `rollback()` before the connection is returned to the pool.
+- [x] **Done 2026-08-15.** Reproduce in CI deterministically: debug in the
+      `delete_attr` path (`db/postgresql/attribute.py`) logging `cur.rowcount`
+      after the `DELETE` and `current_schema()` / `search_path` for the
+      connection. Confirm whether the DELETE matches 0 rows (wrong schema /
+      wrong key) or matches but doesn't commit. Shipped as an opt-in
+      (`ACTINGWEB_PG_DELETE_DIAGNOSTICS`) rather than temporary debug, with a
+      post-commit re-read on a *fresh* connection — that third data point is
+      what actually separates "did not commit" from "reader is in a different
+      schema than the writer", which rowcount alone cannot.
+- [x] **Done, before this todo was picked up.** Find what raises
+      `property_lookup_pkey`; make that INSERT idempotent (`ON CONFLICT`) — see
+      "What changed under this todo". Auditing every `with get_connection()`
+      block for `rollback()` is done for `attribute.py`; the other backend
+      modules follow the same try-outside-the-`with` shape but were not walked
+      line by line.
 - [ ] Consider pinning `search_path` at the protocol level (conninfo
       `options=-c search_path=<schema>`) instead of (or in addition to) the
       per-connection `configure` hook, so it cannot drift.

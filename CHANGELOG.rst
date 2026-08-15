@@ -98,6 +98,32 @@ CHANGED
   last-writer-wins at whole-list granularity — accepted and documented
   rather than prevented.
 
+- **Two OAuth2 client-deletion assertions run on PostgreSQL again.**
+  ``test_trust_oauth_integration.py``'s
+  ``TestTrustDeletionOnClientDeletion`` tests were quarantined on the
+  PostgreSQL backend from 2026-06-15 because a per-actor attribute ``DELETE``
+  intermittently did not persist under the parallel CI matrix. Both mechanisms
+  the investigation ranked highest have since been removed by unrelated work —
+  ``DbPropertyLookup.create()``, the one ``INSERT`` that could abort a pooled
+  connection's transaction with ``property_lookup_pkey``, gained ``ON
+  CONFLICT``; and the connection pool now rebuilds rather than serving a mix
+  of connections bound to different ``search_path`` values. The quarantine is
+  lifted so CI can confirm or refute that, rather than leaving two deletion
+  assertions dark on one backend indefinitely.
+
+ADDED
+~~~~~
+
+- **Opt-in diagnostics for the PostgreSQL attribute ``DELETE`` path.** Set
+  ``ACTINGWEB_PG_DELETE_DIAGNOSTICS=1`` to log, per attribute delete, the
+  statement's ``rowcount``, the deleting connection's resolved schema and
+  ``search_path``, and a post-commit re-read on a freshly checked-out
+  connection. That combination distinguishes a delete that matched no rows
+  (wrong schema or wrong key) from one that matched and did not persist — the
+  question the quarantine above left unanswered for two months. Off by
+  default; it costs two extra queries per delete when on, and never fails the
+  delete it is observing.
+
 .. note::
 
    ``compact()`` crash atomicity is **not** addressed here and is deferred.

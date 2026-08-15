@@ -28,20 +28,28 @@ from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
 # Get database backend from environment (set by conftest.py)
 DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 
-# Quarantine note (PR #105): under the parallel postgresql CI matrix, a per-actor
-# attribute DELETE during OAuth2-client/trust deletion intermittently does not
-# persist, so the client remains listable (`assert 1 == 0`). It reproduces only in
-# CI under concurrent load — the same tests pass on the dynamodb matrix and in
-# local postgresql runs (sequential and `-n 4`). The root cause is a pre-existing
-# postgres connection-layer issue (not specific to this PR's feature work) and is
-# tracked for separate investigation; these two deletion assertions are skipped on
-# postgresql until it is fixed, keeping full coverage on dynamodb.
-_PG_DELETE_FLAKE = DATABASE_BACKEND == "postgresql"
-_PG_DELETE_FLAKE_REASON = (
-    "Pre-existing postgres-CI flake: per-actor attribute DELETE during client/trust "
-    "deletion intermittently does not persist under parallel load (passes on "
-    "dynamodb and in local postgres runs). Tracked separately; see PR #105."
-)
+# Quarantine lifted 2026-08-15. From PR #105 until now the two deletion assertions
+# below were skipped on postgresql: under the parallel postgresql CI matrix a
+# per-actor attribute DELETE during OAuth2-client/trust deletion intermittently did
+# not persist, so the client stayed listable (`assert 1 == 0`).
+#
+# Both mechanisms the investigation ranked highest have since been removed by
+# unrelated work, which is why these run again rather than because anyone
+# reproduced a fix:
+#
+#   * `DbPropertyLookup.create()` was the one INSERT that could raise
+#     `duplicate key value violates unique constraint "property_lookup_pkey"` and
+#     abort a pooled connection's transaction — the leading hypothesis. It gained
+#     `ON CONFLICT` in #115, after the quarantine went in.
+#   * `get_pool()` now tracks the schema a pool was built for and rebuilds rather
+#     than serving a mix of connections bound to different `search_path`s (#117),
+#     which was hypothesis 2.
+#
+# If the flake returns, the run will say which mechanism it is: set
+# ACTINGWEB_PG_DELETE_DIAGNOSTICS=1 (already on in the CI matrix) and grep the job
+# log for PG_DELETE_DIAG — rowcount, the deleting connection's schema, and a
+# post-commit re-read on a fresh connection. See
+# thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md.
 
 
 @pytest.fixture
@@ -355,7 +363,6 @@ class TestTrustDeletionOnClientDeletion:
         finally:
             actor.delete()
 
-    @pytest.mark.skipif(_PG_DELETE_FLAKE, reason=_PG_DELETE_FLAKE_REASON)
     def test_deleting_trust_deletes_client_and_revokes_tokens(self, aw_app):
         """
         Test that deleting a trust relationship also deletes the OAuth2 client and revokes tokens.
@@ -438,7 +445,6 @@ class TestTrustDeletionOnClientDeletion:
         finally:
             actor.delete()
 
-    @pytest.mark.skipif(_PG_DELETE_FLAKE, reason=_PG_DELETE_FLAKE_REASON)
     def test_delete_client_succeeds_when_global_index_missing(self, aw_app):
         """Regression: client deletion must succeed even if the shared global
         client index entry is unreadable.

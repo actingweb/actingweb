@@ -15,6 +15,14 @@ the research doc — read it before re-deriving them.
 **Decided 2026-08-14** (owner walkthrough): instrument now, on one branch shared
 with the DELETE todo below rather than waiting for the next hang.
 
+**Done 2026-08-15, and it collected for the DELETE todo only.** The shared
+branch shipped `ACTINGWEB_PG_DELETE_DIAGNOSTICS` and lifted that todo's
+quarantine. Nothing here was instrumented: follow-up 1's process-global
+singletons were the shared surface, and the pool half of that surface was
+already rebuilt in #117 (see the DELETE todo's "What changed under this todo"),
+leaving `trust_type_registry._registry` and the fixed `creator` as the only
+untouched part of it. The three follow-ups below all remain open.
+
 ## The three follow-ups
 
 1. **Stabilise `test_oauth2_client_manager.py::TestOAuth2ClientCreation` under

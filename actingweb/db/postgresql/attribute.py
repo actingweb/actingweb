@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Any
@@ -9,6 +10,102 @@ from typing import Any
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
+
+
+def _delete_diagnostics_enabled() -> bool:
+    """Whether to emit per-DELETE diagnostics for the attribute table.
+
+    Off by default. Set ``ACTINGWEB_PG_DELETE_DIAGNOSTICS=1`` to turn it on;
+    enabled in the parallel PostgreSQL CI matrix, where a per-actor attribute
+    ``DELETE`` has intermittently failed to take effect since 2026-06-15
+    (``thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md``).
+
+    The two candidate mechanisms produce different evidence, and nothing in the
+    logs today distinguishes them:
+
+    * **0 rows matched** — the statement ran against the wrong schema (a pooled
+      connection whose ``search_path`` drifted under per-worker isolation) or
+      against the wrong key.
+    * **1 row matched but is still readable afterwards** — the statement matched
+      and the transaction did not durably commit, or the follow-up read is
+      served from a *different* schema than the delete was.
+
+    So the diagnostic reports the rowcount, the schema the deleting connection
+    resolved, and a post-commit re-read on a freshly checked-out connection with
+    the schema *it* resolved. One failing CI run then names the mechanism.
+    """
+    return os.getenv("ACTINGWEB_PG_DELETE_DIAGNOSTICS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _log_delete_diagnostics(
+    conn: Any, cur: Any, actor_id: str, bucket: str, name: str, rowcount: int
+) -> None:
+    """Record where the DELETE landed. Called only when diagnostics are on.
+
+    Runs *before* the commit, so it reads the deleting transaction's own view.
+    Never raises: a diagnostic that breaks the operation it is diagnosing is
+    worse than no diagnostic.
+    """
+    try:
+        cur.execute("SELECT current_schema(), current_setting('search_path')")
+        row = cur.fetchone()
+        logger.warning(
+            "PG_DELETE_DIAG attr=%s/%s/%s rowcount=%s conn=%s schema=%s search_path=%s",
+            actor_id,
+            bucket,
+            name,
+            rowcount,
+            id(conn),
+            row[0] if row else "?",
+            row[1] if row else "?",
+        )
+    except Exception:  # pragma: no cover - diagnostics must never break the delete
+        logger.warning(
+            "PG_DELETE_DIAG failed to collect connection state", exc_info=True
+        )
+
+
+def _log_delete_aftermath(actor_id: str, bucket: str, name: str, rowcount: int) -> None:
+    """Re-read the deleted row on a fresh connection, after the commit.
+
+    This is the half that separates the two mechanisms. ``present=True`` here
+    with ``rowcount=1`` above means the DELETE matched and the row survived it
+    — either the commit did not stick, or the reader is looking at a different
+    schema than the writer, which the logged schema pair then shows directly.
+    """
+    bucket_name = bucket + ":" + name
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT current_schema(), current_setting('search_path'),
+                           EXISTS(
+                               SELECT 1 FROM attributes
+                               WHERE id = %s AND bucket_name = %s
+                           )
+                    """,
+                    (actor_id, bucket_name),
+                )
+                row = cur.fetchone()
+        logger.warning(
+            "PG_DELETE_DIAG post-commit attr=%s/%s/%s rowcount=%s conn=%s "
+            "schema=%s search_path=%s present=%s",
+            actor_id,
+            bucket,
+            name,
+            rowcount,
+            id(conn),
+            row[0] if row else "?",
+            row[1] if row else "?",
+            row[2] if row else "?",
+        )
+    except Exception:  # pragma: no cover - diagnostics must never break the delete
+        logger.warning("PG_DELETE_DIAG post-commit re-read failed", exc_info=True)
 
 
 class DbAttribute:
@@ -187,6 +284,7 @@ class DbAttribute:
         # Empty data means delete
         if not data:
             bucket_name = bucket + ":" + name
+            diagnostics = _delete_diagnostics_enabled()
             try:
                 with get_connection() as conn:
                     with conn.cursor() as cur:
@@ -197,7 +295,14 @@ class DbAttribute:
                             """,
                             (actor_id, bucket_name),
                         )
+                        rowcount = cur.rowcount
+                        if diagnostics:
+                            _log_delete_diagnostics(
+                                conn, cur, actor_id, bucket, name, rowcount
+                            )
                     conn.commit()
+                if diagnostics:
+                    _log_delete_aftermath(actor_id, bucket, name, rowcount)
                 return True
             except Exception as e:
                 logger.error(

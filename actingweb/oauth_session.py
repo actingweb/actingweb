@@ -395,11 +395,16 @@ class OAuth2SessionManager:
             token_attr = bucket.get_attr(name=token)
             bucket.delete_attr(name=token)
             logger.debug("Revoked access token")
-            self._evict_mcp_caches_for_token_owner(token_attr)
-            return True
         except Exception as e:
             logger.warning(f"Error revoking access token: {e}")
             return False
+
+        # Outside the try, deliberately. The row is gone by this point, so a
+        # failure here would report a revocation that did not happen. Eviction
+        # already swallows its own errors; keeping it out of the try means that
+        # contract is belt and braces rather than load-bearing.
+        self._evict_mcp_caches_for_token_owner(token_attr)
+        return True
 
     def create_refresh_token(
         self,
@@ -651,11 +656,13 @@ class OAuth2SessionManager:
             token_attr = bucket.get_attr(name=token)
             bucket.delete_attr(name=token)
             logger.debug("Revoked refresh token")
-            self._evict_mcp_caches_for_token_owner(token_attr)
-            return True
         except Exception as e:
             logger.warning(f"Error revoking refresh token: {e}")
             return False
+
+        # Outside the try — see revoke_access_token().
+        self._evict_mcp_caches_for_token_owner(token_attr)
+        return True
 
     @staticmethod
     def _evict_mcp_caches_for_token_owner(token_attr: dict[str, Any] | None) -> None:

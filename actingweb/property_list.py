@@ -488,7 +488,10 @@ class ListProperty:
                     f"row is gone (deleted concurrently) -- skipping the "
                     f"metadata update rather than recreating the list"
                 )
-                self._meta_cache = None
+                # Drop BOTH caches, not just the metadata one: whatever this
+                # instance believes about the list is describing something
+                # that no longer exists.
+                self._invalidate_cache()
                 return
             # No stored state to preserve, so nothing can be reverted by
             # falling back to what this instance knows. _load_metadata()

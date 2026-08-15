@@ -151,7 +151,6 @@ _UNSUPPORTED_VERSION_ESCALATE_AT = 5
 # dict would be a memory lever, which would be a worse bug than the log-volume
 # one it exists to fix.
 _UNSUPPORTED_VERSION_MAX_ORIGINS = 512
-# origin -> (count within window, window start)
 # origin -> (count within window, window start, last seen)
 #
 # `last seen` exists only so eviction can pick the least *active* origin. Using

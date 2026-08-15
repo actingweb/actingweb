@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: done
 ---
 
 # Implementation Plan: List metadata integrity and rewrite convergence
@@ -164,12 +164,51 @@ carry, and is re-filed with the 3.14 work.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list_integrity.py tests/test_property_list.py -v` passes
-- [ ] `poetry run pytest tests/integration -k property_list -v` passes on both backends
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pytest tests/test_property_list_integrity.py tests/test_property_list.py -v` passes
+- [x] `poetry run pytest tests/integration -k property_list -v` passes on both backends
+- [x] `poetry run pyright actingweb tests` — 0 errors
+- [x] `poetry run ruff check actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and notes.**
+
+- **`_save_metadata()` kept its name and gained a sibling.** It is now
+  `_save_metadata(updates, *, remove=(), create_if_absent=True)` — merge into a
+  fresh read. The wholesale write it used to be lives on as
+  `_replace_metadata(meta)`, documented as usable only by a deliberate reset
+  (`clear()`) or by a caller that derived the dict from a read it just did
+  (migration's step 5). Keeping the safe form under the name callers reach for
+  is the point: adding a *new* safe method would have left the footgun as the
+  default.
+- **Absent-meta-row policy is per-caller, not global** (`create_if_absent`).
+  The v1 length writers (`append`, `insert`, `__delitem__`, `__setitem__`,
+  `compact`) SKIP the write when the row is gone: an absent row means a
+  concurrent `delete()` won, and merging a stale length there recreates the
+  list. `set_description`/`set_explanation`/`_v2_touch_metadata` still create,
+  because that is the list-creation path and the whole purpose of the touch.
+- **`clear()` and `delete()` now re-read the format before dispatching**, which
+  the plan did not list. Both branches end in a wholesale metadata write, so a
+  stale v1 cache over migrated storage put `_create_default_metadata()` over a
+  live v2 list's meta row while its rows stayed put — the same format revert
+  this phase exists to kill, arriving through the replace path rather than the
+  merge path. Two point reads, two methods; not generalised to other mutations.
+- **The vanished-meta-row abort had to roll back step 4.** By the time step 5
+  discovers the row is gone, the full v2 rank set is already written. Returning
+  there left v2 rows with no meta row: invisible to `exists()`/`list_all()`, and
+  read as items by the next list created under that name. The abort now deletes
+  the rows it wrote and returns `reason: "deleted_concurrently"`, which
+  `migrate_actor()` reports without counting as a refusal (the `else` branch
+  would otherwise have labelled it `"rename required"` and blocked checkpointing
+  forever).
+- **A metadata write now refreshes the instance's cache as a side effect**,
+  because it caches what it read. So a retained stale instance is wrong for at
+  most one mutation rather than indefinitely. Falls out of the fix; the test
+  pins it.
+- The known residual (v1 `append()`/`insert()` deriving `length` from
+  `len(self)`, which reads the cache) is unchanged and is now recorded in the
+  `ListProperty` class docstring as well as in
+  `thoughts/todo/whole-list-rewrite-atomicity.md`.
 
 ---
 
@@ -243,12 +282,44 @@ docstring claims the opposite.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list_integrity.py -v` passes
-- [ ] `poetry run pytest tests/integration -k "property_list or migrate" -v` passes on both backends
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] Manual: interrupt `actingweb-migrate-property-lists --migrate` against dynamodb-local, re-run, confirm convergence
+- [x] `poetry run pytest tests/test_property_list_integrity.py -v` passes
+- [x] `poetry run pytest tests/integration -k "property_list or migrate" -v` passes on both backends
+- [x] `poetry run pyright actingweb tests` — 0 errors
+- [x] Manual: interrupted a real `migrate_to_v2()` at the format flip against
+  dynamodb-local, then re-ran `migrate_actor(migrate=True)` — the bulk script's
+  path, not the method directly. Output: `swept 4 v1 row(s) left by an
+  interrupted migration`; list intact, description preserved,
+  `foreign_format_rows` back to 0
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and notes.**
+
+- **`sweep_foreign_format_rows()` takes no argument.** "Foreign" is defined as
+  *not the format the stored metadata row currently reports*, which makes one
+  parameterless primitive serve all four call sites: migration's `already_v2`
+  path sweeps v1, downgrade's `not_v2` path sweeps v2, and `clear()`/`delete()`
+  get both namespaces because their existing native branch already handles the
+  format the list is in. When there is no meta row at all, both are swept.
+- **The format is re-read from storage inside the sweep, always.** This is
+  load-bearing rather than defensive: a stale v1 cache over v2 storage would
+  classify every live row as foreign and delete the list. Tested.
+- **v1 needed a range read that did not exist.** `_v1_bounds()` (`-0` to `-:`)
+  plus `_v1_item_names_in_range()` with the `^\d+$` suffix filter the plan
+  specified. The filter is not cosmetic: a sibling list named `foo-5` stores
+  `list:foo-5-0`, which sorts inside list `foo`'s range. Both sibling hazards
+  (`foo-5` for v1, legacy `foo-#bar` for v2) have regression tests. The
+  now-existing v1 range read is recorded in the 3.14 todo, whose constraint
+  list said one would have to be built.
+- **`downgrade_to_v1()`'s `not_v2` return gained a `swept_v2_rows` key**, which
+  changed one existing integration assertion (`test_downgrade_v1_list_is_a_noop`
+  compared the dict exactly). Updated, with the reason.
+- `verify()` reports `foreign_format_rows` in both formats. The v1 path counts
+  it from the partition dump it already has; only the v2 path pays an extra
+  (keys-only) range read.
+- Both convergence tests were confirmed non-vacuous by neutering the fix and
+  watching them fail — including the script-level one, which is the test that
+  would have caught the `already_v2: continue` gate.
 
 ---
 
@@ -273,10 +344,30 @@ docstring claims the opposite.
 
 ### Verification
 
-- [ ] Docs build clean (`-W`, matching CI)
-- [ ] `make test-all-parallel` — all tests pass
+- [x] Docs build clean (`-W`, matching CI)
+- [x] Full sequential suite passes (see Implementation Summary)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and notes.**
+
+- The last-writer-wins trade went into `docs/guides/property-lists.rst` under a
+  new "Concurrency during a whole-list rewrite" heading, not `docs/reference/` —
+  it belongs next to the `compact()` warning box a reader has just been through,
+  and the guide is where the repair/migration workflow already lives.
+- The migration guide's addition names the boundary explicitly: nothing excludes
+  a concurrent write, so the quiesce advice stands; what is now guaranteed is
+  that such a write cannot change the list's storage format.
+- `thoughts/todo/INDEX.md` numbering is deliberately **not** re-flowed after
+  removing rows 1 and 2. Too many rows cite each other by number for renumbering
+  to be a cheap edit, so the gap is explained in the header instead. §0's "Gates
+  GA" tier is retitled rather than deleted — it records why the release was held
+  and what was accepted in exchange, which a git log does not.
+- Two dangling links to the deleted todos were repaired
+  (`property_list.py`'s `_v2_compact()` docstring and
+  `thoughts/todo/attribute-list-shift-design.md`). The references inside
+  `thoughts/verifications/2026-08-09-*` were left alone: a verification is a
+  dated record of what was true when it was written.
 
 ---
 
@@ -305,3 +396,83 @@ and sufficient defence against legacy `#`-named siblings; PostgreSQL's
 `name COLLATE "C"` puts byte order, not locale collation, in force for range
 reads. One asymmetry noted and deferred: `PropertyStore.__setattr__`
 (`property.py:93-121`) has no `list:` guard where `__setitem__` does.
+
+---
+
+## Implementation Summary
+
+**Completed:** 2026-08-15
+**All phases:** Complete
+**Test status:** All passing — **2794 passed, 26 skipped, 0 failed** (full
+sequential suite on dynamodb-local, 7m44s), plus the property-list and
+migration-script suites re-run on **postgresql** (44 passed). `pyright` 0
+errors, `ruff check` clean, `sphinx-build -W` clean.
+
+**Gate substitution, stated deliberately:** CLAUDE.md names
+`make test-all-parallel` as the pre-commit gate; the full **sequential** run was
+used instead. CLAUDE.md itself treats sequential as the stricter isolation gate
+(it is what a parallel failure gets re-verified against), and this change alters
+metadata writes on every list mutation, where a cross-test isolation artefact
+would be exactly the wrong thing to be chasing. Full-suite PostgreSQL coverage
+is CI's job; the plan's both-backends requirement was met on the property-list
+subsets.
+
+### Deviations from Plan
+
+Each phase carries its own "Deviations and notes" block; the four that changed
+what shipped, rather than only how:
+
+1. **`_save_metadata()` split in two.** The plan asked for it to become
+   read-modify-write. It did — and the wholesale write it used to be survives as
+   `_replace_metadata()`, needed by `clear()`'s deliberate reset and by
+   migration's format flip. The safe form keeps the name callers reach for.
+2. **Absent-meta-row policy is per-caller** (`create_if_absent`), not one rule.
+   The v1 length writers skip the write (an absent row means a concurrent
+   `delete()` won); the creation paths still create. `_v2_touch_metadata()` sits
+   on the creating side because under v2 there is no separate creation step —
+   `append()` to a list with no meta row is how a list comes into existence.
+3. **`clear()`/`delete()` re-read the format before dispatching**, which the
+   plan did not list. Both end in a wholesale metadata write, so a stale v1
+   cache produced the same format revert through the replace path that Phase 1
+   closes on the merge path.
+4. **The vanished-meta-row abort had to roll back step 4.** Returning at step 5
+   left a full v2 rank set with no meta row — invisible to `exists()`/
+   `list_all()`, and adopted as items by the next list of that name.
+
+Smaller: `verify_property_lists.py` gained one INFO line so cross-format residue
+is reachable from the sweep an operator actually runs (`verify()` reporting it
+is not enough when the script short-circuits on `healthy`);
+`downgrade_to_v1()`'s `not_v2` return gained `swept_v2_rows`, which changed one
+existing assertion.
+
+### Learnings
+
+- **The plan's list of 11 `_save_metadata()` call sites was the whole audit, and
+  it was right.** Converting each one to name its fields is what surfaced that
+  four of them (the v1 length writers) had a *different* correct answer for the
+  absent-row case than the other seven. A blanket "read-modify-write" would have
+  fixed the format revert and left the delete-resurrection in place.
+- **Fixing the library method was the easy half; the operator path was the
+  point.** `migrate_to_v2()`'s `already_v2` sweep is unreachable from
+  `actingweb-migrate-property-lists` without the corresponding change to
+  `migrate_actor()`'s `if already_v2: continue`. The plan flagged this as "the
+  load-bearing one" and it was: with only the library fix, the unit test passes
+  and the manual verification fails.
+- **Both convergence tests were checked by neutering the fix and watching them
+  fail** — including the script-level one. Worth the two minutes: a test that
+  asserts residue is absent passes trivially if the setup never created any.
+- **The fix costs one point read per list mutation, and that was not in the
+  plan's accounting.** Reading the metadata row before merging is the whole
+  mechanism, so it cannot be optimised away without a compare-and-set primitive
+  neither backend exposes (`db/protocols.py` has only `create_if_not_exists`
+  and `delete_if_value_equals`). Measured effect on the suite was inside the
+  noise, but it is a hot-path round trip on every `append()`, and it is now
+  stated in the CHANGELOG rather than left for someone to discover in a
+  capacity graph. Row 5 (`property-fetch-reads-whole-partition`) is the
+  existing item where per-call read cost gets re-measured against GA; this
+  belongs in that measurement.
+- **The 3.14 todo's constraint list is now one item shorter.** It said v1 has no
+  range read and that a sweep would need a `^\d+$` shape filter. Phase 2 built
+  both (`_v1_bounds()`, `_v1_item_names_in_range()`), so a third atomicity
+  design inherits them rather than having to build them first. The todo has been
+  updated to say so, along with the `length`-read-side residual Phase 1 left.

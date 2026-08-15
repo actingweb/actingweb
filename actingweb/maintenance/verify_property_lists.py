@@ -170,6 +170,21 @@ def sweep_actor(
             errored += 1
             continue
 
+        # Rows of the OTHER storage format sharing this list's name: what an
+        # interrupted migration or downgrade leaves. Not a health failure --
+        # they are inert to every reader of the current format, and the
+        # migrate script's re-run sweeps them -- but this is the only sweep
+        # an operator runs that would ever surface them, and the remedy is a
+        # command rather than a manual repair. So: say it, then move on.
+        if report.get("foreign_format_rows"):
+            logger.info(
+                f"actor={actor_id} list={name}: {report['foreign_format_rows']} "
+                f"row(s) of the other storage format present -- residue from "
+                f"an interrupted migration/downgrade. Harmless to reads; "
+                f"clear it by re-running actingweb-migrate-property-lists "
+                f"--migrate"
+            )
+
         if report["healthy"]:
             continue
 

@@ -76,10 +76,23 @@ second of which is the most valuable constraint any of this produced.
 - **`length` is an absolute value with more than one writer.** Several reviewed
   failures traced to a mutation computing `length` against one view and merging
   it into metadata describing another. v2 avoids this by storing no length.
-- **v1 has no range read.** "The inactive namespace" has no defined extent under
-  v1, and index enumeration over the active length cannot bound whatever a
-  crashed run left. A range sweep instead needs a `^\d+$` shape filter — the v1
-  analogue of `_v2_is_rank` — or it deletes a sibling list's rows.
+
+  The 2026-08-15 plan fixed the *write* side — `_save_metadata()` names the
+  fields it changes and merges them into a fresh read, and refuses to write
+  `length` into a v2 row at all — and left the *read* side open, deliberately.
+  v1's `append()`/`insert()` still derive the new length from `len(self)`, which
+  reads `_meta_cache`, so a retained instance can compute a stale absolute value
+  and write it. Making `length` relative (a delta, or dropping it in favour of a
+  counted range read as v2 does) is the residual, and it belongs to whatever
+  design lands here.
+- **v1 now HAS a range read, as of 2026-08-15**: `_v1_bounds()` /
+  `_v1_item_names_in_range()` in `property_list.py`, with the `^\d+$` shape
+  filter this constraint said one would need — a sibling list named `foo-5`
+  stores `list:foo-5-0`, which sorts inside list `foo`'s v1 range, so the filter
+  is load-bearing rather than cosmetic. "The inactive namespace" therefore has a
+  defined extent under v1 now, which removes one obstacle a third design would
+  otherwise have had to build first. `sweep_foreign_format_rows()` is the
+  existing consumer.
 - **Prefer a visible failure to an invisible one.** This is the principle both
   cut designs violated, and it is why the current duplicate residue, for all its
   awkwardness, was kept in the first place.

@@ -5,6 +5,96 @@ CHANGELOG
 Unreleased
 ----------
 
+.. note::
+
+   Closes a data-loss defect in list properties that ordinary application
+   traffic could trigger. **Any deployment that has migrated, or intends to
+   migrate, property lists to the v2 storage format should take this.**
+
+FIXED
+~~~~~
+
+- **A concurrent write could revert a completed list migration and destroy
+  the entire list.** Metadata was persisted by writing a whole cached
+  metadata dictionary back, so a ``ListProperty`` instance that had read a
+  list before it was migrated would put ``format: 1`` back over the
+  migration's ``format: 2`` flip on its next ``append()``, ``insert()``,
+  ``clear()`` or ``delete()``. Metadata then claimed v1 while every item
+  lived in v2 rows nothing read — and migration's final step deletes the v1
+  rows. The list read back as **empty, with no error anywhere**. No
+  interruption or operator action was required: an ordinary write racing an
+  ordinary migration was enough, and because the metadata cache only clears
+  on an explicit invalidation, an instance an application holds on to stayed
+  dangerous **indefinitely**, not for one round trip.
+
+  Metadata writes now name the fields they change and merge them into a
+  fresh read of the stored row, so ``format`` is never carried over from a
+  cached view. ``length`` is likewise never written into a v2 row, ``clear()``
+  and ``delete()`` dispatch on the stored format rather than a cached one,
+  and a write whose metadata row has vanished (a concurrent ``delete()``
+  won) is skipped rather than recreating the list from stale state.
+
+- **An interrupted format change left rows behind permanently, and
+  re-running did not clean them up.** Both ``migrate_to_v2()`` and the
+  emergency ``--downgrade`` write the new format's rows, flip metadata, then
+  delete the old format's rows. A crash between the flip and the delete left
+  the old rows in place — and every re-run saw the list already in the
+  target format and returned before reaching its own cleanup.
+  ``migrate_to_v2()``'s docstring claimed the opposite. Worse, the bulk
+  script skipped such a list without calling ``migrate_to_v2()`` at all, so
+  the cleanup was unreachable from the command operators actually run.
+
+  New ``ListProperty.sweep_foreign_format_rows()`` removes rows belonging to
+  the format a list is no longer in, and is now called from both re-run
+  paths, from the bulk script's already-migrated branch, and from
+  ``clear()`` and ``delete()``. The residue was inert to readers, which is
+  why it went unnoticed — but it outlived the list: ``exists()`` and
+  ``list_all()`` key off the metadata row, so a deleted list's residue was
+  invisible right up until a new list was created under the same name and
+  adopted it as its own items.
+
+- **``migrate_to_v2()`` no longer recreates a metadata row that was deleted
+  while it was running.** A list deleted mid-migration was resurrected in v2
+  form out of rows the migration had just written. The migration now rolls
+  its own writes back and returns ``reason: "deleted_concurrently"``, which
+  the bulk script reports without counting as a refusal.
+
+- ``_invalidate_cache()`` now clears the v2 rank cache along with the
+  metadata cache. The two are coupled — ranks are only meaningful for the
+  format the metadata reports — and nothing enforced it.
+
+CHANGED
+~~~~~~~
+
+- ``verify()`` reports ``foreign_format_rows`` in both storage formats: how
+  many rows of the *other* format share this list's name. Informational
+  only — it does not affect ``healthy``, because the rows are inert to every
+  reader of the current format and the sweep above removes them without
+  operator involvement.
+
+- **Each list mutation now costs one additional point read.** Merging into a
+  fresh read of the metadata row is what makes the fix above work, and it is
+  not free: where a mutation previously wrote metadata from cache, it now reads
+  the row first. One extra round trip per ``append()``/``insert()``/``pop()``/
+  ``remove()``/``__setitem__()``/``__delitem__()``, on both backends. The
+  alternative is a compare-and-set primitive neither backend's ``DbProperty``
+  exposes; correctness was preferred over the round trip, and the trade is
+  recorded rather than buried.
+
+- The migration and property-list guides now state what a whole-list rewrite
+  does and does not exclude. Nothing locks out a concurrent application
+  write, so "run repair when the actor is not taking writes" remains a real
+  requirement; what is now guaranteed is that such a write cannot change the
+  list's storage format. Two concurrent migrations resolve to
+  last-writer-wins at whole-list granularity — accepted and documented
+  rather than prevented.
+
+.. note::
+
+   ``compact()`` crash atomicity is **not** addressed here and is deferred.
+   The ``rc6`` warning boxes describing that window stand: the damage it
+   leaves is visible in the data and ``verify()`` catches it.
+
 v3.13.0rc6: August 9, 2026
 --------------------------
 

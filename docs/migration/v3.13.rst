@@ -141,6 +141,17 @@ gone.
    shape applies to ``compact()`` on a v2 list, where it is a rank rebalance
    — see the guide's warning box.
 
+   **What "not taking writes" does and does not buy you.** Nothing excludes
+   an application write while a whole-list rewrite runs: there is no lock,
+   and adding one is deliberately not part of 3.13. A concurrent write
+   during ``compact()``, ``--repair`` or ``--migrate`` can still be lost, so
+   the advice above is a real operational requirement rather than a
+   nice-to-have. What 3.13 *does* guarantee is that such a write can no
+   longer corrupt the list's **format**: a concurrent write updates only the
+   metadata fields it changes, merged into a fresh read, so it can never put
+   ``format: 1`` back over a completed migration. In ``rc6`` and earlier it
+   could, and the result was total silent loss — see the CHANGELOG.
+
 Step 3: expect these breaking changes after upgrading
 -----------------------------------------------------
 

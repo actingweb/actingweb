@@ -210,6 +210,27 @@ def migrate_actor(
             continue
 
         if already_v2:
+            # Reading as v2 is also what a migration interrupted between
+            # its metadata flip and its v1 cleanup looks like, and this
+            # branch is why re-running the script did not converge: it
+            # skips the list without ever calling migrate_to_v2(), so the
+            # cleanup that method now performs on the already_v2 path was
+            # unreachable from the command operators actually run.
+            if migrate:
+                try:
+                    swept = list_prop.sweep_foreign_format_rows()
+                except Exception as e:
+                    logger.error(
+                        f"actor={actor_id} list={name}: sweeping leftover v1 "
+                        f"rows failed: {e}"
+                    )
+                    errored += 1
+                    continue
+                if swept:
+                    logger.warning(
+                        f"actor={actor_id} list={name}: already v2; swept "
+                        f"{swept} v1 row(s) left by an interrupted migration"
+                    )
             continue
 
         checked += 1
@@ -302,6 +323,13 @@ def migrate_actor(
             # would fail the run and (since only clean actors are
             # checkpointed) make the sweep re-do this actor forever.
             logger.info(f"actor={actor_id} list={name}: already migrated concurrently")
+        elif result.get("reason") == "deleted_concurrently":
+            # The list was deleted while we were copying it, and
+            # migrate_to_v2() rolled its own writes back. Nothing is left to
+            # migrate and nothing needs an operator, so this must not be a
+            # refusal: refusing would fail the run and keep the actor out of
+            # the checkpoint forever over a list that no longer exists.
+            logger.info(f"actor={actor_id} list={name}: deleted while migrating")
         else:
             # "name_contains_hash" -- needs an operator rename before this
             # list can ever migrate.
@@ -319,7 +347,17 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
 
     list_prop = ListProperty(actor_id=actor_id, name=list_name, config=config)
     if list_prop.storage_format() != 2:
-        return {"downgraded": False, "reason": "not_v2"}
+        # Reading as v1 is also what a downgrade interrupted between its
+        # metadata flip and its v2 cleanup looks like. Re-running is the
+        # documented remedy, so finish the cleanup here rather than
+        # returning from a state a second run will decline just as fast.
+        swept = list_prop.sweep_foreign_format_rows()
+        if swept:
+            logger.warning(
+                f"{actor_id}/{list_name}: already v1; swept {swept} v2 row(s) "
+                f"left by an interrupted downgrade"
+            )
+        return {"downgraded": False, "reason": "not_v2", "swept_v2_rows": swept}
 
     items = list_prop.to_list()  # one range query, in order
 

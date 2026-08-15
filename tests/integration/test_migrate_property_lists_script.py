@@ -550,4 +550,12 @@ class TestDowngradeToV1:
             test_actor.id, "already_v1_target", test_actor.config
         )
 
-        assert result == {"downgraded": False, "reason": "not_v2"}
+        # Not a no-op any more, strictly speaking: reading as v1 is also what
+        # a downgrade interrupted between its metadata flip and its v2
+        # cleanup looks like, so this path now finishes that cleanup. There
+        # is nothing to sweep on a list that was never v2.
+        assert result == {
+            "downgraded": False,
+            "reason": "not_v2",
+            "swept_v2_rows": 0,
+        }

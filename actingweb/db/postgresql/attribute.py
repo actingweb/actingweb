@@ -41,32 +41,73 @@ def _delete_diagnostics_enabled() -> bool:
     )
 
 
-def _log_delete_diagnostics(
-    conn: Any, cur: Any, actor_id: str, bucket: str, name: str, rowcount: int
-) -> None:
-    """Record where the DELETE landed. Called only when diagnostics are on.
+_DIAG_SAVEPOINT = "actingweb_delete_diag"
 
-    Runs *before* the commit, so it reads the deleting transaction's own view.
-    Never raises: a diagnostic that breaks the operation it is diagnosing is
-    worse than no diagnostic.
+
+def _read_schema_state(cur: Any) -> tuple[str, str] | None:
+    """Read the connection's schema and ``search_path``, inside a savepoint.
+
+    **The savepoint is load-bearing, and so is running this before the DELETE.**
+    A server-side failure in this query — a statement timeout, a cancellation —
+    marks the *entire* PostgreSQL transaction as aborted. Catching the Python
+    exception does not un-abort it: the later ``conn.commit()`` would silently
+    degrade to a rollback while ``set_attr()`` still returned ``True``. That is
+    precisely the "DELETE that does not persist" this instrumentation exists to
+    diagnose, which would make the diagnostic a source of the bug it is meant to
+    identify. Reported by Codex review on PR #128.
+
+    Rolling back to a savepoint taken *before* the query restores the
+    transaction to a usable state, so the DELETE that follows is unaffected
+    either way. Returns ``None`` when the state could not be read; the delete
+    proceeds and the log line says ``schema=?``.
     """
+    try:
+        cur.execute(f"SAVEPOINT {_DIAG_SAVEPOINT}")
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("PG_DELETE_DIAG could not open a savepoint", exc_info=True)
+        return None
+
     try:
         cur.execute("SELECT current_schema(), current_setting('search_path')")
         row = cur.fetchone()
+        cur.execute(f"RELEASE SAVEPOINT {_DIAG_SAVEPOINT}")
+    except Exception:
         logger.warning(
-            "PG_DELETE_DIAG attr=%s/%s/%s rowcount=%s conn=%s schema=%s search_path=%s",
-            actor_id,
-            bucket,
-            name,
-            rowcount,
-            id(conn),
-            row[0] if row else "?",
-            row[1] if row else "?",
+            "PG_DELETE_DIAG could not read connection schema state", exc_info=True
         )
-    except Exception:  # pragma: no cover - diagnostics must never break the delete
-        logger.warning(
-            "PG_DELETE_DIAG failed to collect connection state", exc_info=True
-        )
+        try:
+            cur.execute(f"ROLLBACK TO SAVEPOINT {_DIAG_SAVEPOINT}")
+        except Exception:  # pragma: no cover - connection is beyond saving
+            # The DELETE below will now fail loudly and set_attr() returns
+            # False. Loud is the correct outcome; silent success is not.
+            logger.warning("PG_DELETE_DIAG could not roll back to savepoint")
+        return None
+
+    if not row:  # pragma: no cover - current_schema() always returns a row
+        return None
+    return (row[0], row[1])
+
+
+def _log_delete_diagnostics(
+    conn: Any,
+    actor_id: str,
+    bucket: str,
+    name: str,
+    rowcount: int,
+    schema_state: tuple[str, str] | None,
+) -> None:
+    """Record where the DELETE landed, using state captured before it ran."""
+    schema, search_path = schema_state if schema_state else ("?", "?")
+    logger.warning(
+        "PG_DELETE_DIAG attr=%s/%s/%s rowcount=%s conn=%s schema=%s search_path=%s",
+        actor_id,
+        bucket,
+        name,
+        rowcount,
+        id(conn),
+        schema,
+        search_path,
+    )
 
 
 def _log_delete_aftermath(actor_id: str, bucket: str, name: str, rowcount: int) -> None:
@@ -288,6 +329,10 @@ class DbAttribute:
             try:
                 with get_connection() as conn:
                     with conn.cursor() as cur:
+                        # Before the DELETE, and savepoint-isolated — see
+                        # _read_schema_state() for why that ordering is not
+                        # cosmetic.
+                        schema_state = _read_schema_state(cur) if diagnostics else None
                         cur.execute(
                             """
                             DELETE FROM attributes
@@ -298,7 +343,7 @@ class DbAttribute:
                         rowcount = cur.rowcount
                         if diagnostics:
                             _log_delete_diagnostics(
-                                conn, cur, actor_id, bucket, name, rowcount
+                                conn, actor_id, bucket, name, rowcount, schema_state
                             )
                     conn.commit()
                 if diagnostics:

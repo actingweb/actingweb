@@ -121,8 +121,11 @@ ADDED
   connection. That combination distinguishes a delete that matched no rows
   (wrong schema or wrong key) from one that matched and did not persist — the
   question the quarantine above left unanswered for two months. Off by
-  default; it costs two extra queries per delete when on, and never fails the
-  delete it is observing.
+  default. When on it costs a savepoint-wrapped schema read plus a post-commit
+  re-read per delete, and cannot affect the delete it observes: the schema read
+  runs *before* the ``DELETE`` and inside a savepoint, because a server-side
+  failure there would otherwise abort the transaction and turn the later commit
+  into a silent rollback — the exact defect the diagnostics exist to find.
 
 .. note::
 

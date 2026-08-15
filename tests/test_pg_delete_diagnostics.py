@@ -3,8 +3,9 @@
 The diagnostics exist to name the mechanism behind an intermittent CI failure
 where a per-actor attribute ``DELETE`` did not take effect
 (``thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md``). They
-are off by default and must stay that way: they cost two extra queries per
-delete, on a path that runs during every actor and trust teardown.
+are off by default and must stay that way: they cost a savepoint-wrapped schema
+read plus a post-commit re-read per delete, on a path that runs during every
+actor and trust teardown.
 
 These tests are about the *gate* and the *shape of the evidence*, not about
 PostgreSQL — the connection is faked, so they run on any backend.
@@ -109,7 +110,7 @@ class TestDeletePathCost:
             "COMMIT",
         ]
 
-    def test_enabled_adds_the_two_diagnostic_reads(
+    def test_enabled_reads_schema_before_the_delete_inside_a_savepoint(
         self, monkeypatch: pytest.MonkeyPatch, statements: list[str]
     ) -> None:
         monkeypatch.setenv(_DIAG_ENV, "1")
@@ -121,28 +122,42 @@ class TestDeletePathCost:
             is True
         )
 
-        # In order: the DELETE, the deleting transaction's own schema, the
-        # commit, then a post-commit re-read on a freshly checked-out
-        # connection. The last one is what separates "matched 0 rows" from
-        # "matched but did not persist" — see the module docstring in
-        # actingweb/db/postgresql/attribute.py.
-        assert statements[0].startswith("DELETE FROM attributes")
+        # Order is the point, not just the presence of the extra queries. The
+        # schema read is savepoint-wrapped and runs BEFORE the DELETE so a
+        # server-side failure in it cannot abort the transaction the DELETE
+        # then commits — see TestDiagnosticsCannotCauseTheBugTheyDiagnose.
+        assert statements[0] == f"SAVEPOINT {pg_attribute._DIAG_SAVEPOINT}"
         assert "current_schema()" in statements[1]
-        assert statements[2] == "COMMIT"
-        assert "EXISTS(" in statements[3]
-        assert len(statements) == 4
+        assert statements[2] == f"RELEASE SAVEPOINT {pg_attribute._DIAG_SAVEPOINT}"
+        assert statements[3].startswith("DELETE FROM attributes")
+        assert statements[4] == "COMMIT"
+        # Post-commit re-read on a freshly checked-out connection. This is what
+        # separates "matched 0 rows" from "matched but did not persist".
+        assert "EXISTS(" in statements[5]
+        assert len(statements) == 6
 
 
-class TestDiagnosticsNeverBreakTheDelete:
-    """A diagnostic that breaks the operation it diagnoses is worse than none."""
+class TestDiagnosticsCannotCauseTheBugTheyDiagnose:
+    """The failure mode Codex review caught on PR #128.
 
-    def test_a_failing_diagnostic_read_still_reports_success(
+    A server-side error in the schema query (statement timeout, cancellation)
+    aborts the whole PostgreSQL transaction. Catching the Python exception does
+    not un-abort it — the subsequent ``conn.commit()`` degrades to a rollback
+    while ``set_attr()`` still returns ``True``. The instrumentation would then
+    be *producing* the non-persisting DELETE it was added to explain.
+
+    The savepoint plus the before-the-DELETE ordering is what makes that
+    impossible. These tests assert the recovery, not just the absence of a
+    raised exception.
+    """
+
+    def test_a_failing_schema_read_rolls_back_to_the_savepoint(
         self, monkeypatch: pytest.MonkeyPatch, statements: list[str]
     ) -> None:
         monkeypatch.setenv(_DIAG_ENV, "1")
 
         def exploding_fetchone(self: FakeCursor) -> tuple[str, str, bool]:
-            raise psycopg.OperationalError("connection reset during diagnostics")
+            raise psycopg.OperationalError("statement timeout during diagnostics")
 
         monkeypatch.setattr(FakeCursor, "fetchone", exploding_fetchone)
 
@@ -152,6 +167,50 @@ class TestDiagnosticsNeverBreakTheDelete:
             )
             is True
         )
-        # The DELETE and its COMMIT still happened.
-        assert statements[0].startswith("DELETE FROM attributes")
-        assert "COMMIT" in statements
+
+        assert statements[0] == f"SAVEPOINT {pg_attribute._DIAG_SAVEPOINT}"
+        # The recovery, without which the transaction stays aborted.
+        assert f"ROLLBACK TO SAVEPOINT {pg_attribute._DIAG_SAVEPOINT}" in statements, (
+            "a failed schema read must roll back to the savepoint"
+        )
+        assert f"RELEASE SAVEPOINT {pg_attribute._DIAG_SAVEPOINT}" not in statements
+
+    def test_the_delete_still_runs_and_commits_after_a_failed_schema_read(
+        self, monkeypatch: pytest.MonkeyPatch, statements: list[str]
+    ) -> None:
+        monkeypatch.setenv(_DIAG_ENV, "1")
+
+        def exploding_fetchone(self: FakeCursor) -> tuple[str, str, bool]:
+            raise psycopg.OperationalError("statement timeout during diagnostics")
+
+        monkeypatch.setattr(FakeCursor, "fetchone", exploding_fetchone)
+
+        pg_attribute.DbAttribute.set_attr(
+            actor_id="actor1", bucket="mcp_clients", name="mcp_abc", data=None
+        )
+
+        delete_index = next(
+            i
+            for i, s in enumerate(statements)
+            if s.startswith("DELETE FROM attributes")
+        )
+        # The DELETE comes after the recovery, and the commit after the DELETE.
+        assert (
+            statements.index(f"ROLLBACK TO SAVEPOINT {pg_attribute._DIAG_SAVEPOINT}")
+            < delete_index
+        )
+        assert statements.index("COMMIT") > delete_index
+
+    def test_schema_is_reported_as_unknown_rather_than_guessed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        statements: list[str],  # noqa: ARG002
+    ) -> None:
+        """A diagnostic that cannot read the state must say so, not invent it."""
+        monkeypatch.setenv(_DIAG_ENV, "1")
+
+        def exploding_fetchone(self: FakeCursor) -> tuple[str, str, bool]:
+            raise psycopg.OperationalError("statement timeout during diagnostics")
+
+        monkeypatch.setattr(FakeCursor, "fetchone", exploding_fetchone)
+        assert pg_attribute._read_schema_state(FakeCursor([], 1)) is None

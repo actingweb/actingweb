@@ -119,10 +119,18 @@ CHANGED
   recognise a legacy-era server and fall back to ``initialize``. What changed:
   the error ``message`` now lists the versions that would have worked, which
   for a client that cannot fall back is the only diagnostic it can show a
-  user; and the rejection is logged at all (it previously was not), at
-  WARNING, so a *sustained* stream from one origin — a client retrying instead
-  of falling back — is visible in telemetry rather than arriving as a user
-  report.
+  user; and the rejection is logged at all, which it previously was not.
+
+  The logging is graded per origin rather than uniform, because the rejection
+  is answered on an **unauthenticated** path. A lone rejection is the normal
+  legacy-server handshake and is recorded at INFO; only a sustained run from
+  the same origin — a client retrying instead of falling back, i.e. a
+  modern-only client — escalates to WARNING, once per origin per five-minute
+  window. That keeps the actionable signal visible without handing anonymous
+  callers a log-volume lever, and it makes the "one-off versus sustained"
+  judgement in code instead of leaving it to whoever reads the logs. Origin is
+  taken from ``Mcp-Session-Id`` or the ``User-Agent``; the number of tracked
+  origins is capped.
 
   The response code and the absence of ``data.supported`` are now covered by
   regression tests that state why, since "fixing" this to a spec-shaped

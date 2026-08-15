@@ -45,9 +45,11 @@ when?** That is unknown and unverifiable from public sources as of 2026-08-13.
    `MCP-Protocol-Version: 2026-07-28` (or later). One per client origin is
    normal and healthy — that *is* the fallback handshake. A *sustained* stream
    from the same origin means a client is retrying rather than falling back,
-   i.e. it is modern-only or mis-implements the fallback. **Logged at WARNING
-   since 2026-08-15** — before that it was not logged at all, so this criterion
-   could only have fired via a user report. See "Cheap hardening" below.
+   i.e. it is modern-only or mis-implements the fallback. **Since 2026-08-15
+   the library fires this criterion for you**: the one-off logs at INFO and a
+   sustained run from one origin escalates to a WARNING naming the origin.
+   Before that it was not logged at all, so the criterion could only have
+   surfaced via a user report. See "Cheap hardening" below.
 3. **A user reports an MCP client that can no longer connect** and the trace
    shows no `initialize` ever arriving.
 4. **We want a feature that only exists in the modern revision** — most
@@ -107,12 +109,29 @@ it was written to be, which it was not before.
    `unsupported_version_message()` in `actingweb/mcp/protocol.py`, next to
    `SUPPORTED_PROTOCOL_VERSIONS` so the two cannot drift. The docstring says
    why the versions must not migrate to `data`.
-3. ~~**Raise the log level**~~ **Done**, though the premise was slightly off:
-   the rejection did not log at debug, it **did not log at all**. It now logs
-   at WARNING, naming the supported versions and stating in the message itself
-   that one rejection is healthy and a sustained stream is the trigger — the
-   operator reading the line is the person who needs criterion 2, and they
-   should not have to find this file to apply it.
+3. ~~**Raise the log level**~~ **Done**, though the premise was off twice
+   over. First, the rejection did not log at debug — it **did not log at all**.
+   Second, "raise the log level" was the wrong shape, and review on #129
+   surfaced why: the rejection is answered on an **unauthenticated** path, so
+   an unconditional WARNING is a log-volume and alert-noise lever any anonymous
+   caller can pull, and it buries the actionable case among the healthy ones.
+
+   What landed instead grades by origin: a lone rejection is the healthy
+   handshake and logs at INFO; a run of five from the same origin inside a
+   five-minute window escalates to WARNING **once**, naming the origin and this
+   file. Criterion 2 above is a statement about *sustained traffic from one
+   origin*, so this makes the criterion itself the thing that fires, rather than
+   asking an operator to reconstruct it from a pile of identical lines.
+
+   Note on the origin: `remote_addr` is **not** available. Two call sites read
+   `getattr(self.request, "remote_addr", "unknown")`, but nothing ever sets it —
+   `AWWebObj`/`AWRequest` take only url, params, body, headers and cookies, and
+   neither integration passes an address, so both existing reads always evaluate
+   to the literal `"unknown"`. The origin is therefore `Mcp-Session-Id` when
+   present, else the `User-Agent` — which is also the field that actually names
+   the client *implementation*, i.e. the thing criterion 1 asks you to watch.
+   Both are client-supplied and spoofable, which is acceptable because nothing
+   here is a security decision and the counter is capped.
 
 ## Scope when it is picked up
 

@@ -36,9 +36,17 @@ import logging
 
 import pytest
 
+from actingweb.handlers import mcp as mcp_module
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.mcp.protocol import SUPPORTED_PROTOCOL_VERSIONS
 from tests.mcp_helpers import make_mcp_handler
+
+
+@pytest.fixture(autouse=True)
+def _clean_rejection_telemetry() -> None:
+    """Per-origin counters are module-global; don't let tests see each other."""
+    mcp_module._reset_unsupported_version_telemetry()
+
 
 # The MCP-reserved JSON-RPC error range. A code inside it identifies a modern
 # server to a dual-era client; a code outside it identifies a legacy one.
@@ -50,9 +58,14 @@ MCP_RESERVED_RANGE = range(-32099, -32019)
 FUTURE_VERSION = "2099-01-01"
 
 
-def _reject(version: str = FUTURE_VERSION) -> tuple[MCPHandler, dict]:
+def _reject(
+    version: str = FUTURE_VERSION, *, user_agent: str | None = None
+) -> tuple[MCPHandler, dict]:
     """POST a `ping` carrying an unsupported version header."""
-    handler = make_mcp_handler(headers={"MCP-Protocol-Version": version})
+    headers = {"MCP-Protocol-Version": version}
+    if user_agent is not None:
+        headers["User-Agent"] = user_agent
+    handler = make_mcp_handler(headers=headers)
     return handler, handler.post({"jsonrpc": "2.0", "id": 1, "method": "ping"})
 
 
@@ -113,37 +126,123 @@ class TestSupportedVersionsAreNamedInTheMessage:
 
 
 class TestRejectionIsVisibleInTelemetry:
-    """One rejection is a healthy handshake; a stream of them is the trigger."""
+    """One rejection is a healthy handshake; a stream of them is the trigger.
 
-    def test_rejection_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        """The documented trigger for taking on dual-era support is a
-        *sustained* stream of these from one origin — a client retrying instead
-        of falling back, i.e. modern-only. At debug level that trigger is
-        invisible in ordinary telemetry and would first surface as a user
-        report.
-        """
-        with caplog.at_level(logging.WARNING, logger="actingweb.handlers.mcp"):
-            _reject()
+    The level grading is the point. The rejection is answered on an
+    *unauthenticated* path, so logging every one at WARNING would hand any
+    anonymous caller a log-volume and alert-noise lever — and it would also
+    bury the actionable case among the healthy ones. Both were raised in review
+    on PR #129.
+    """
 
-        rejections = [
-            r
-            for r in caplog.records
-            if "Unsupported MCP-Protocol-Version" in r.getMessage()
-            or "unsupported MCP-Protocol-Version" in r.getMessage()
+    def test_a_single_rejection_is_info_not_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One rejection per origin *is* the normal legacy handshake."""
+        with caplog.at_level(logging.INFO, logger="actingweb.handlers.mcp"):
+            _reject(user_agent="some-client/1.0")
+
+        records = [
+            r for r in caplog.records if "MCP-Protocol-Version" in r.getMessage()
         ]
-        assert rejections, "the rejection produced no WARNING record"
-        assert all(r.levelno >= logging.WARNING for r in rejections)
+        assert records, "the rejection produced no log record at all"
+        assert all(r.levelno == logging.INFO for r in records), (
+            "a lone rejection is the healthy handshake and must not alert"
+        )
+
+    def test_a_sustained_stream_escalates_to_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The documented trigger for taking on dual-era support.
+
+        A client retrying instead of falling back is modern-only. Until this
+        escalation existed the trigger could only surface as a user report.
+        """
+        with caplog.at_level(logging.INFO, logger="actingweb.handlers.mcp"):
+            for _ in range(mcp_module._UNSUPPORTED_VERSION_ESCALATE_AT):
+                _reject(user_agent="modern-only-client/2.0")
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1, (
+            "expected exactly one escalation, not one per request"
+        )
+        assert "modern-only-client/2.0" in warnings[0].getMessage()
+
+    def test_escalation_fires_once_per_window_not_once_per_request(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Bounding the volume is what makes WARNING safe on a pre-auth path."""
+        with caplog.at_level(logging.INFO, logger="actingweb.handlers.mcp"):
+            for _ in range(mcp_module._UNSUPPORTED_VERSION_ESCALATE_AT * 4):
+                _reject(user_agent="noisy-client/1.0")
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1
+
+    def test_distinct_origins_do_not_escalate_each_other(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """N clients each handshaking once is healthy and must stay quiet.
+
+        This is the distinction the origin exists for: without it, N one-off
+        rejections and one client retrying N times are the same log.
+        """
+        with caplog.at_level(logging.INFO, logger="actingweb.handlers.mcp"):
+            for i in range(mcp_module._UNSUPPORTED_VERSION_ESCALATE_AT * 2):
+                _reject(user_agent=f"legacy-client-{i}/1.0")
+
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_the_origin_is_named_in_the_log_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="actingweb.handlers.mcp"):
+            _reject(user_agent="claude-desktop/9.9")
+
+        assert any("claude-desktop/9.9" in r.getMessage() for r in caplog.records)
+
+    def test_a_session_id_wins_over_the_user_agent_as_origin(self) -> None:
+        """`Mcp-Session-Id` is per-connection, so it is the more specific key."""
+        handler = make_mcp_handler(
+            headers={"Mcp-Session-Id": "abc123", "User-Agent": "some-client/1.0"}
+        )
+        assert handler._rejection_origin() == "session:abc123"
+
+    def test_no_identifying_headers_still_yields_a_key(self) -> None:
+        handler = make_mcp_handler(headers={})
+        assert handler._rejection_origin() == "unidentified"
 
     def test_supported_versions_are_in_the_log_line_too(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """So an operator reading the log knows what the client should send."""
-        with caplog.at_level(logging.WARNING, logger="actingweb.handlers.mcp"):
-            _reject()
+        with caplog.at_level(logging.INFO, logger="actingweb.handlers.mcp"):
+            _reject(user_agent="some-client/1.0")
 
         logged = " ".join(r.getMessage() for r in caplog.records)
         for version in SUPPORTED_PROTOCOL_VERSIONS:
             assert version in logged
+
+
+class TestOriginTrackingIsBounded:
+    """The origin key comes from client-supplied headers on a pre-auth path.
+
+    An anonymous caller can therefore mint unlimited distinct origins. Without
+    a cap the counter dict would be a memory lever — a worse bug than the
+    log-volume one it was added to fix.
+    """
+
+    def test_tracked_origins_are_capped(self) -> None:
+        cap = mcp_module._UNSUPPORTED_VERSION_MAX_ORIGINS
+        for i in range(cap + 50):
+            mcp_module._record_unsupported_version_rejection(f"ua:attacker-{i}")
+
+        assert len(mcp_module._unsupported_version_origins) <= cap
+
+    def test_counting_is_per_origin(self) -> None:
+        assert mcp_module._record_unsupported_version_rejection("ua:a") == (1, False)
+        assert mcp_module._record_unsupported_version_rejection("ua:b") == (1, False)
+        assert mcp_module._record_unsupported_version_rejection("ua:a")[0] == 2
 
 
 class TestSupportedVersionsStillNegotiateNormally:

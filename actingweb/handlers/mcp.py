@@ -14,6 +14,7 @@ MCP is not available at all.
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -126,6 +127,76 @@ def _evict_trust_entries_for_actor(actor_id: str) -> None:
     """
     for key in [k for k in _trust_cache.copy() if k[0] == actor_id]:
         _trust_cache.pop(key, None)
+
+
+# --- Unsupported-protocol-version rejection telemetry ------------------------
+#
+# The rejection is answered on an UNAUTHENTICATED path, so anything logged there
+# is a lever an anonymous caller can pull at will. That rules out logging every
+# rejection at WARNING, and it also happens to rule *in* the more useful
+# behaviour: the signal worth alerting on was never the individual rejection.
+#
+# Per thoughts/todo/mcp-2026-07-28-dual-era-support.md, ONE rejection per origin
+# is the healthy dual-era handshake — the client learns we are a legacy-era
+# server and falls back to `initialize`. A SUSTAINED stream from one origin is
+# the actionable case: a client retrying instead of falling back, i.e.
+# modern-only. So the one-off is recorded at INFO and only a run of them
+# escalates to WARNING, which makes the distinction in code rather than leaving
+# it to whoever reads the logs, and bounds the volume at roughly one WARNING per
+# origin per window.
+_UNSUPPORTED_VERSION_WINDOW_SECONDS = 300.0
+_UNSUPPORTED_VERSION_ESCALATE_AT = 5
+# Hard cap on tracked origins. The key is derived from client-supplied headers,
+# so an anonymous caller can mint unlimited distinct origins; without a cap this
+# dict would be a memory lever, which would be a worse bug than the log-volume
+# one it exists to fix.
+_UNSUPPORTED_VERSION_MAX_ORIGINS = 512
+# origin -> (count within window, window start)
+_unsupported_version_origins: dict[str, tuple[int, float]] = {}
+_unsupported_version_lock = threading.Lock()
+
+
+def _record_unsupported_version_rejection(origin: str) -> tuple[int, bool]:
+    """Count one rejection for ``origin``. Returns ``(count, escalate)``.
+
+    ``escalate`` is True exactly once per window, on the rejection that crosses
+    :data:`_UNSUPPORTED_VERSION_ESCALATE_AT` — so a client hammering the
+    endpoint produces one WARNING per window, not one per request.
+    """
+    now = time.time()
+    with _unsupported_version_lock:
+        # Prune first: this is what keeps the dict bounded in the normal case,
+        # and the cap below is the backstop for a burst of distinct origins.
+        expired = [
+            key
+            for key, (_, started) in _unsupported_version_origins.items()
+            if now - started > _UNSUPPORTED_VERSION_WINDOW_SECONDS
+        ]
+        for key in expired:
+            _unsupported_version_origins.pop(key, None)
+
+        entry = _unsupported_version_origins.get(origin)
+        if entry is None:
+            if len(_unsupported_version_origins) >= _UNSUPPORTED_VERSION_MAX_ORIGINS:
+                # Evict the oldest window rather than clearing everything: the
+                # long-lived origins are the ones whose counts matter.
+                oldest = min(
+                    _unsupported_version_origins,
+                    key=lambda k: _unsupported_version_origins[k][1],
+                )
+                _unsupported_version_origins.pop(oldest, None)
+            _unsupported_version_origins[origin] = (1, now)
+            return (1, False)
+
+        count = entry[0] + 1
+        _unsupported_version_origins[origin] = (count, entry[1])
+        return (count, count == _UNSUPPORTED_VERSION_ESCALATE_AT)
+
+
+def _reset_unsupported_version_telemetry() -> None:
+    """Drop all per-origin rejection state. For tests and process reuse."""
+    with _unsupported_version_lock:
+        _unsupported_version_origins.clear()
 
 
 # Tools already warned about a declared output_schema with no structuredContent,
@@ -1429,20 +1500,39 @@ class MCPHandler(BaseHandler):
             # branches on) and never in `data`.
             # thoughts/todo/mcp-2026-07-28-dual-era-support.md
             #
-            # WARNING, not debug, deliberately: ONE of these per client origin is
-            # the healthy dual-era handshake, but a *sustained* stream from one
-            # origin means a client is retrying rather than falling back — i.e.
-            # it is modern-only, which is the documented trigger for taking on
-            # dual-era support. That trigger is only observable if the rejection
-            # is visible in ordinary telemetry.
-            logger.warning(
-                "Rejecting unsupported MCP-Protocol-Version %r (supported: %s). "
-                "A single rejection per client is the normal legacy-server "
-                "handshake; a sustained stream from one origin means a "
-                "modern-only client that cannot fall back.",
-                header_value,
-                ", ".join(SUPPORTED_PROTOCOL_VERSIONS),
-            )
+            # Telemetry, per-origin and level-graded — see the comment on
+            # _record_unsupported_version_rejection(). The one-off is the
+            # healthy handshake and lands at INFO; a run of them from one origin
+            # is the documented trigger for dual-era support and escalates once
+            # per window. Both name the origin, without which "N rejections"
+            # cannot distinguish one client retrying from N clients each doing
+            # the normal thing once.
+            origin = self._rejection_origin()
+            count, escalate = _record_unsupported_version_rejection(origin)
+            if escalate:
+                logger.warning(
+                    "MCP client at origin %r has been rejected %d times in %ds "
+                    "for unsupported MCP-Protocol-Version %r (supported: %s). "
+                    "It is retrying rather than falling back to `initialize`, "
+                    "which is what a MODERN-ONLY client does. This is the "
+                    "documented trigger for adding dual-era support — see "
+                    "thoughts/todo/mcp-2026-07-28-dual-era-support.md.",
+                    origin,
+                    count,
+                    int(_UNSUPPORTED_VERSION_WINDOW_SECONDS),
+                    header_value,
+                    ", ".join(SUPPORTED_PROTOCOL_VERSIONS),
+                )
+            elif count == 1:
+                logger.info(
+                    "Rejecting unsupported MCP-Protocol-Version %r from origin "
+                    "%r (supported: %s). A single rejection is the normal "
+                    "legacy-server handshake; the client should now fall back "
+                    "to `initialize`.",
+                    header_value,
+                    origin,
+                    ", ".join(SUPPORTED_PROTOCOL_VERSIONS),
+                )
             self.response.set_status(400, "Bad Request")
             return self._create_jsonrpc_error(
                 request_id,
@@ -1452,6 +1542,45 @@ class MCPHandler(BaseHandler):
 
         self._negotiated_version = header_value
         return None
+
+    def _rejection_origin(self) -> str:
+        """Best available "which client is this" label, on a pre-auth path.
+
+        **Not `remote_addr`, and that is deliberate.** Two call sites in this
+        codebase read ``getattr(self.request, "remote_addr", "unknown")``, but
+        nothing ever *sets* it: ``AWWebObj``/``AWRequest`` take only url, params,
+        body, headers and cookies, and neither the Flask nor the FastAPI
+        integration passes an address. Both existing reads therefore always
+        evaluate to the literal ``"unknown"``. Following that pattern here would
+        have produced a constant, which is worse than no field — it looks like
+        an origin.
+
+        So the origin is built from headers that genuinely arrive:
+        ``Mcp-Session-Id`` when the client sends one (per-connection, and the
+        most specific thing available), otherwise the ``User-Agent``, which is
+        what actually names the client *implementation* — and "which client
+        implementation went modern-only" is the question this telemetry exists
+        to answer.
+
+        Both are client-supplied and therefore spoofable. That is acceptable
+        precisely because nothing here is a security decision: a spoofed origin
+        can only mislabel a log line, and the counter it feeds is capped.
+        """
+        headers = getattr(self.request, "headers", None) or {}
+        session_id = self._resolve_transport_session_id()
+        if session_id:
+            return f"session:{session_id[:64]}"
+        user_agent = ""
+        if isinstance(headers, dict):
+            for key, value in headers.items():
+                if isinstance(key, str) and key.lower() == "user-agent":
+                    user_agent = str(value)
+                    break
+        else:  # pragma: no cover - framework header objects are dict-like here
+            user_agent = str(headers.get("User-Agent", "") or "")
+        if user_agent:
+            return f"ua:{user_agent[:64]}"
+        return "unidentified"
 
     def _resolve_transport_session_id(self) -> str | None:
         """Per-MCP-connection id from the ``Mcp-Session-Id`` header, else ``None``.

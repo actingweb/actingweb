@@ -1,0 +1,94 @@
+# Whole-list rewrites are not crash-atomic (3.14)
+
+`compact()` in both storage formats rewrites a list's rows in place: survivors
+are written to their new positions before the old rows are retired, so an
+interruption leaves a copy at both. Supersedes
+`thoughts/todo/v2-compact-staged-commit.md`, which was deleted when
+`thoughts/plans/2026-08-15-property-list-metadata-integrity.md` landed the
+adjacent fixes and deferred this one.
+
+**Status:** Open, deferred from 3.13.0 GA deliberately. rc6 documents the window
+in the migration guide, the property-lists guide and both docstrings; the damage
+is *visible* in the data (`length` goes to roughly `2n` for v2; `verify()`'s
+adjacent byte-identical heuristic catches v1) and re-running `--repair` does not
+remove it.
+
+**Severity:** Medium. Reachability is low — `compact()` is an operator action,
+not on any request path — and the failure is loud. It was scoped as a GA blocker
+on the argument that GA triggers fleet-wide `--repair` runs; that argument is
+still true, but two candidate designs failed adversarial review, and shipping a
+third under time pressure was judged worse than shipping the documented window.
+
+## Two designs already died here — read this before proposing a third
+
+**A lease row carrying a recovery journal.** Cut because both candidate payloads
+destroy data that today's journal-less re-run preserves.
+
+- *v1:* sources `[1,2,3,4]`, targets `0..3`, rows `1:b 2:c 3:d 4:e`. Write
+  `0:=b`, write `1:=c`, crash. Resume re-reads the sources → `[c,c,d,e]`, **`b`
+  destroyed**. A re-run today yields `[b,c,c,d,e]` — duplicate visible, nothing
+  lost. Sound resume needs an *exact* per-item cursor (a resume at cursor `k` may
+  read `sources[k:]` because no target `>= k` has been written yet); a
+  checkpointed-every-N cursor is not sufficient.
+- *v2:* classifying a rank as "new" iff it is in
+  `generate_n_keys_between(None, None, n)` fails both ways. A list built by
+  repeated `insert(0, …)` has no old rank in the target set, so recovery deletes
+  every uncopied row. And where old ranks *are* in the target set — exactly why
+  the nudge branch at `property_list.py:1659-1672` exists — recovery keeps stale
+  rows as authoritative and **silently permutes** the list.
+
+**Stage-and-flip: build a complete copy in an inactive namespace, commit with one
+metadata write naming the active namespace.** Its core claim held — single-runner
+crash atomicity, a clean v2 crash matrix at all four steps, re-run convergence,
+and the rank-collision retry loop becomes unnecessary. Cut on three findings, the
+second of which is the most valuable constraint any of this produced.
+
+1. **No concurrency required to break it.** Alternating markers mean a compacted
+   list *rests* on the scratch marker. `migrate_to_v2()`'s commit never writes
+   `item_marker`, so the documented `--repair` → `--migrate` sequence produces
+   `{format:2, item_marker:"%"}`, and surviving `%{i}` rows read as v2 items
+   (`_v2_is_rank("0")` is True — digits are in the base62 alphabet) sorting
+   `0,1,10,11,2,…`: silently permuted, `verify()` reports healthy.
+2. **`fetch_all_including_lists` is a paginated DynamoDB `Query`, not a
+   snapshot.** Sort order puts a scratch range before `-meta`, so one dump can
+   miss the staged rows *and* pick up the flipped marker — `GET
+   /properties/<list>` returns 200 with an empty array, with a single writer.
+   Today the same page skew yields *duplicates*: visible, and caught by
+   `verify()`. **Any scheme that stores "which namespace is live" in the item
+   partition converts a visible failure into an invisible one on the default
+   backend.** PostgreSQL is immune (single `SELECT`, one MVCC snapshot).
+3. **Cache-derived namespaces.** Resolving the namespace from `_meta_cache` turns
+   a stale cache from a wrong-*format* problem into a wrong-*namespace* one:
+   `len()` → 0, `to_list()` → `[]` with no error, `append()` into a dead
+   namespace, unbounded for any retained `ListProperty`.
+
+## Constraints any third design must satisfy
+
+- **No CAS exists on `DbProperty`.** Only `create_if_not_exists` and
+  `delete_if_value_equals` (`db/protocols.py:229`, `:256`). Read-modify-write on
+  the metadata row is therefore not atomic against a concurrent writer, which is
+  what broke stage-and-flip's commit under concurrency. Precedent for the missing
+  primitive is one protocol over: `DbAttributeProtocol.conditional_update_attr`
+  (`db/protocols.py:925-950`).
+- **DynamoDB transactions cap at 100 actions**, below the list sizes that need
+  rebalancing — the same reason `thoughts/plans/2026-08-08-property-list-index-integrity.md`
+  ruled them out for the original shift-loop fix.
+- **`length` is an absolute value with more than one writer.** Several reviewed
+  failures traced to a mutation computing `length` against one view and merging
+  it into metadata describing another. v2 avoids this by storing no length.
+- **v1 has no range read.** "The inactive namespace" has no defined extent under
+  v1, and index enumeration over the active length cannot bound whatever a
+  crashed run left. A range sweep instead needs a `^\d+$` shape filter — the v1
+  analogue of `_v2_is_rank` — or it deletes a sibling list's rows.
+- **Prefer a visible failure to an invisible one.** This is the principle both
+  cut designs violated, and it is why the current duplicate residue, for all its
+  awkwardness, was kept in the first place.
+
+## Related
+
+- `thoughts/plans/2026-08-15-property-list-metadata-integrity.md` — the GA plan
+  that deferred this; its "Designs cut" section is the long form of the above.
+- `thoughts/todo/attribute-list-shift-design.md` — INDEX row 4, decided to
+  sequence after this work, and it inherits this gap if done first.
+- `thoughts/todo/property-fetch-reads-whole-partition.md` — the same
+  whole-partition read that makes constraint 2 bite.

@@ -1,5 +1,14 @@
 # `compact()` needs a recoverable commit protocol (BOTH formats)
 
+> **Superseded 2026-08-15 by
+> `thoughts/todo/whole-list-rewrite-atomicity.md`.** Two designs — a journal and
+> a stage-and-flip commit — were written against this file and both failed
+> adversarial review; the work is deferred to 3.14 and the successor todo
+> carries the constraints they established, which are the valuable part. This
+> file is kept only for its links and will be deleted when
+> `thoughts/plans/2026-08-15-property-list-metadata-integrity.md` lands. **Read
+> the successor, not the options below.**
+
 `ListProperty._v2_compact()` rebalances a v2 list's fractional rank keys by
 writing every item under a fresh, evenly-spaced rank and then deleting the old
 rows in a second pass. A crash between those two passes leaves both copies of

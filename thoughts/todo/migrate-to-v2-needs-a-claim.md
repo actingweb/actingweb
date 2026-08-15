@@ -1,5 +1,14 @@
 # `migrate_to_v2()` still has an unguarded window before its first write
 
+> **Planned 2026-08-15 —
+> `thoughts/plans/2026-08-15-property-list-metadata-integrity.md`.** That plan
+> does **not** take the claim row this file argues for, and none of the three
+> options below survived. It closes the *unbounded* variant of this window (a
+> stale metadata cache writing back over a completed migration — a worse trace
+> than the one below, found during review) and then **accepts** the residual
+> two-query window as documented last-writer-wins at list granularity. Read the
+> plan's "Decisions Made" and "Designs cut" before reopening this.
+
 `ListProperty.migrate_to_v2()` guards against a concurrent migration by
 reading the stored format twice: once before deciding the list is v1, and
 once more — directly from the meta row, not through the cache — immediately

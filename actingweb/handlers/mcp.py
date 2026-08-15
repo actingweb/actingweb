@@ -32,6 +32,7 @@ from ..mcp.protocol import (  # noqa: E402
     is_supported_protocol_version,
     negotiate_protocol_version,
     supports_structured_content,
+    unsupported_version_message,
 )
 from ..runtime_context import RuntimeContext  # noqa: E402
 from .base_handler import BaseHandler  # noqa: E402
@@ -1415,11 +1416,38 @@ class MCPHandler(BaseHandler):
             return None
 
         if not is_supported_protocol_version(header_value):
+            # DO NOT "fix" this to a spec-shaped -32022 (UnsupportedProtocolVersion)
+            # with a data.supported array. This response IS the signal dual-era
+            # clients use to detect a legacy-era server: the 2026-07-28 revision
+            # says a code outside the MCP-reserved -32020..-32099 range means
+            # "anything else identifies a legacy server", and the client then
+            # falls back to `initialize`. Answering -32022 instead identifies us
+            # as a MODERN server, so the client stops falling back and retries a
+            # modern-shaped request declaring a version that requires
+            # `initialize` — incoherent, and a working fallback becomes a retry
+            # loop. Supported versions go in the message string (which no client
+            # branches on) and never in `data`.
+            # thoughts/todo/mcp-2026-07-28-dual-era-support.md
+            #
+            # WARNING, not debug, deliberately: ONE of these per client origin is
+            # the healthy dual-era handshake, but a *sustained* stream from one
+            # origin means a client is retrying rather than falling back — i.e.
+            # it is modern-only, which is the documented trigger for taking on
+            # dual-era support. That trigger is only observable if the rejection
+            # is visible in ordinary telemetry.
+            logger.warning(
+                "Rejecting unsupported MCP-Protocol-Version %r (supported: %s). "
+                "A single rejection per client is the normal legacy-server "
+                "handshake; a sustained stream from one origin means a "
+                "modern-only client that cannot fall back.",
+                header_value,
+                ", ".join(SUPPORTED_PROTOCOL_VERSIONS),
+            )
             self.response.set_status(400, "Bad Request")
             return self._create_jsonrpc_error(
                 request_id,
                 -32600,
-                f"Unsupported MCP-Protocol-Version: {header_value}",
+                unsupported_version_message(header_value),
             )
 
         self._negotiated_version = header_value

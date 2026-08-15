@@ -45,8 +45,9 @@ when?** That is unknown and unverifiable from public sources as of 2026-08-13.
    `MCP-Protocol-Version: 2026-07-28` (or later). One per client origin is
    normal and healthy — that *is* the fallback handshake. A *sustained* stream
    from the same origin means a client is retrying rather than falling back,
-   i.e. it is modern-only or mis-implements the fallback. **Note this currently
-   logs at debug level only** — see "Cheap hardening" below.
+   i.e. it is modern-only or mis-implements the fallback. **Logged at WARNING
+   since 2026-08-15** — before that it was not logged at all, so this criterion
+   could only have fired via a user report. See "Cheap hardening" below.
 3. **A user reports an MCP client that can no longer connect** and the trace
    shows no `initialize` ever arriving.
 4. **We want a feature that only exists in the modern revision** — most
@@ -76,10 +77,13 @@ requires `initialize`. A working fallback becomes a retry loop.
 
 `-32600` without `data.supported` is the correct legacy-only signal. It was
 written as ordinary spec compliance, not as a deliberate era signal, and **no
-test asserts it in that role** — `tests/test_mcp_wire_shape.py` covers version
-gating for `structuredContent`, not this.
+test asserted it in that role** until 2026-08-15 —
+`tests/test_mcp_version_negotiation.py` asserted the 400 and the code, but not
+the absence of `data`, which is the half a `-32022` "fix" would change.
+`tests/test_mcp_dual_era_signal.py` now guards it, and the rejection site
+carries the reasoning inline so it is visible to whoever edits it.
 
-## Cheap hardening (does not require picking up the full work)
+## Cheap hardening — DONE 2026-08-15
 
 Each is independent of the dual-era decision. **Decided 2026-08-14** (owner
 walkthrough): **do all three.** Item 1 is the one that matters — it is what
@@ -87,15 +91,28 @@ stops a well-meaning `-32022` "fix" from breaking every dual-era client — and
 item 3 is what makes criterion 2 above observable in telemetry rather than via
 user reports. Item 2 stays in the `message` string; `data.supported` is the trap.
 
-1. **Regression test** asserting HTTP 400 + `-32600` **without**
-   `data.supported` for an unsupported future version, commented as the
-   dual-era fallback trigger. Guards the trap above.
-2. **Name supported versions in the error `message` string** (not
-   `data.supported`). The spec applies this reasoning to the mirror-image case:
-   a server SHOULD name its versions because for a client with no fall-forward
-   *"this message may be the only diagnostic they can surface to users."*
-3. **Raise the log level** on unsupported-version rejections so criterion 2
-   above is observable in telemetry rather than via user reports.
+**All three landed 2026-08-15.** The rest of this file is unchanged and still
+open: the hardening protects the current behaviour, it does not implement any
+part of the modern revision. Criterion 2 above is now the *observable* trigger
+it was written to be, which it was not before.
+
+1. ~~**Regression test**~~ **Done** — `tests/test_mcp_dual_era_signal.py`. It
+   asserts the *absence* of `data`, not just the presence of `-32600`, plus
+   that the code falls outside the whole reserved `-32020`–`-32099` range
+   rather than differing from one tempting constant. Verified non-vacuous by
+   making the exact change the trap describes (`-32022` +
+   `data.supported`): 4 assertions fail. The module docstring carries the
+   reasoning, because a guard nobody understands gets deleted.
+2. ~~**Name supported versions in the error `message` string**~~ **Done** —
+   `unsupported_version_message()` in `actingweb/mcp/protocol.py`, next to
+   `SUPPORTED_PROTOCOL_VERSIONS` so the two cannot drift. The docstring says
+   why the versions must not migrate to `data`.
+3. ~~**Raise the log level**~~ **Done**, though the premise was slightly off:
+   the rejection did not log at debug, it **did not log at all**. It now logs
+   at WARNING, naming the supported versions and stating in the message itself
+   that one rejection is healthy and a sustained stream is the trigger — the
+   operator reading the line is the person who needs criterion 2, and they
+   should not have to find this file to apply it.
 
 ## Scope when it is picked up
 

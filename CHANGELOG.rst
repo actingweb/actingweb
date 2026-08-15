@@ -111,6 +111,24 @@ CHANGED
   lifted so CI can confirm or refute that, rather than leaving two deletion
   assertions dark on one backend indefinitely.
 
+- **The MCP unsupported-protocol-version rejection now names the supported
+  versions and logs at WARNING.** A client sending an
+  ``MCP-Protocol-Version`` this server does not speak still gets HTTP 400 with
+  JSON-RPC ``-32600`` and no ``data`` payload — that response shape is
+  deliberately unchanged, because it is the signal dual-era MCP clients use to
+  recognise a legacy-era server and fall back to ``initialize``. What changed:
+  the error ``message`` now lists the versions that would have worked, which
+  for a client that cannot fall back is the only diagnostic it can show a
+  user; and the rejection is logged at all (it previously was not), at
+  WARNING, so a *sustained* stream from one origin — a client retrying instead
+  of falling back — is visible in telemetry rather than arriving as a user
+  report.
+
+  The response code and the absence of ``data.supported`` are now covered by
+  regression tests that state why, since "fixing" this to a spec-shaped
+  ``-32022`` with ``data.supported`` would silently convert every dual-era
+  client's working fallback into a retry loop.
+
 ADDED
 ~~~~~
 

@@ -49,8 +49,8 @@ and repair tools themselves not crash-safe.
 | Tier | Items | Note |
 | --- | --- | --- |
 | **Gated GA — LANDED 2026-08-15** | `thoughts/plans/2026-08-15-property-list-metadata-integrity.md` (`status: done`) | **Not what rows 1+2 asked for.** Three review passes over two candidate designs surfaced something worse than the crash windows they targeted: a concurrent `append()` writes stale cached metadata back over a completed migration, reverting the format flip and **destroying the whole list on ordinary traffic**. Previously unfiled. The plan landed that plus the re-run non-convergence of both format-changing rewrites, closed row 1 by an accepted trade, and deferred row 2 to 3.14. Rows 1 and 2 are gone from §1 as a result; row 2 survives as row 9b |
-| **Gating question, not a gating fix** | Rows 3 + 10's shared instrumentation branch | Start **in parallel** — CI turnaround is its latency. If it shows the DELETE matched rows but did not commit, the PG backend can drop a committed write under concurrency and this becomes a hard blocker needing lead time. If it shows 0 rows matched or a wrong `search_path`, it is test infra and does not gate |
-| **In GA scope** | Rows 6, 11, 8, and the `dynamodb-known-next` re-verification pass | Small independent branches. The re-verification pass was already decided as GA work; run it *after* the others, so "the settled codebase" is true when you walk the nine items |
+| **Gating question, ANSWERED 2026-08-15** | Rows 3 + 10's shared instrumentation branch (#128) | It did not gate: the quarantine was lifted and the postgres matrix has been green on every run since, across four PRs. Both ranked hypotheses had been removed by #115 and #117 without anyone noticing. Original plan: start **in parallel** — CI turnaround is its latency. If it shows the DELETE matched rows but did not commit, the PG backend can drop a committed write under concurrency and this becomes a hard blocker needing lead time. If it shows 0 rows matched or a wrong `search_path`, it is test infra and does not gate |
+| **In GA scope — ALL LANDED 2026-08-15** | Rows 6, 11, 8, and the `dynamodb-known-next` re-verification pass | Grouped per subsystem rather than as the four independent branches this row planned: #129 (MCP protocol signal, row 11), #130 (MCP caches and hook metadata, rows 6+8), then the re-verification pass last so "the settled codebase" was true when the nine items were walked. Every review comment on all three PRs was actioned; two were real defects the reviews caught rather than restatements |
 | **At GA, not before** | Row 5's re-measurement | The decision is to measure against GA before designing. First post-GA action; the fix is 3.14 |
 | **Not GA** | Row 9b ([whole-list rewrite atomicity](whole-list-rewrite-atomicity.md), the former row 2), rows 4, 9, 7's guard, 12, 13 | Row 2 was **deferred on 2026-08-15** after two designs failed adversarial review — rc6 already documents the window, the damage is visible, and `verify()` catches it. Shipping a third design under GA time pressure was judged worse. Row 4 sequences after it either way. Row 9 is post-incident tooling. Rows 12 and 13 are blocked, triggers unfired |
 
@@ -86,11 +86,12 @@ an rc7 soak the earlier reading — but the migrate/repair machinery was not
 restructured in the end, so the case for another pre-release fell away. The
 maintainer's call: the next tag is **`v3.13.0`**.
 
-That does not make the metadata-integrity PR the release PR. Rows 6, 11 and 8
-are still In GA scope and unlanded, so the version bump and the `Unreleased` ->
-`v3.13.0` rename ride in whichever PR is last — per `CLAUDE.md`, the bump goes
-in the release PR itself and the tag is pushed to master afterwards. Until then
-this work sits under `Unreleased` like any other change.
+**All GA-scope work landed on 2026-08-15** (#128, #129, #130, and this
+re-verification), so the bump does not ride in a feature PR after all: it goes
+in a **dedicated release PR** that also consolidates the six `rc` changelog
+sections into one `v3.13.0` section, dropping the rc-to-rc churn that never
+existed in a released version. Per `CLAUDE.md` the bump goes in that PR and the
+tag is pushed to master afterwards.
 
 ## 1. Do next
 
@@ -98,7 +99,7 @@ Real problems, in production or under it, with a known shape.
 
 | # | Item | Impact of doing it | Why now |
 | --- | --- | --- | --- |
-| 3 | [Postgres parallel DELETE not persisting](2026-06-15-postgres-parallel-delete-not-persisting.md) | Answers whether the PG backend can silently drop a committed `DELETE` under concurrency, and lifts the quarantine on two assertions currently dark on postgresql | Open since June with no root cause — but the **decisive step is cheap and nobody has run it**: log `cur.rowcount` and `search_path` from `delete_attr` in CI, and the leading hypothesis (a pooled connection contaminated by the `property_lookup_pkey` error) either falls or stands. **Decided 2026-08-14: one instrumentation branch covering this and row 10** — same matrix, and row 10's process-global psycopg pool is this row's leading hypothesis. **Ran 2026-08-15**, and it found something first: both ranked hypotheses had their proximate mechanism removed by #115 and #117 after this was filed. The branch therefore lifts the quarantine *and* instruments, so a green matrix closes it with evidence and a red one names the mechanism in the first failing run. Awaiting the CI verdict |
+| 3 | [Postgres parallel DELETE not persisting](2026-06-15-postgres-parallel-delete-not-persisting.md) | Answers whether the PG backend can silently drop a committed `DELETE` under concurrency, and lifts the quarantine on two assertions currently dark on postgresql | Open since June with no root cause — but the **decisive step is cheap and nobody has run it**: log `cur.rowcount` and `search_path` from `delete_attr` in CI, and the leading hypothesis (a pooled connection contaminated by the `property_lookup_pkey` error) either falls or stands. **Decided 2026-08-14: one instrumentation branch covering this and row 10** — same matrix, and row 10's process-global psycopg pool is this row's leading hypothesis. **Ran 2026-08-15**, and it found something first: both ranked hypotheses had their proximate mechanism removed by #115 and #117 after this was filed. The branch therefore lifts the quarantine *and* instruments, so a green matrix closes it with evidence and a red one names the mechanism in the first failing run. **Verdict 2026-08-15: green**, on every run across four PRs, zero reruns. Not proof of a root cause — proof the symptom is gone and the quarantine was obsolete. Diagnostics stay on in CI to catch a recurrence |
 
 ## 2. High leverage
 
@@ -147,7 +148,7 @@ decisions being re-litigated.
 
 | Item | What it holds |
 | --- | --- |
-| [DynamoDB known-next](dynamodb-known-next.md) | 9 items deferred from the v3.13 scalability plan — batch writes, the `consistent_read` audit, `SubscriptionDiff` seqnr ordering, import-time table-name freezing. Item 9 is row 7 above; row 5 is the adjacent per-partition defect. Line references are from `29783f8` and have **not** been re-verified since July — **decided 2026-08-14: fold a re-verification pass into the 3.13.0 GA work**, when the codebase settles |
+| [DynamoDB known-next](dynamodb-known-next.md) | 9 items deferred from the v3.13 scalability plan — batch writes, the `consistent_read` audit, `SubscriptionDiff` seqnr ordering, import-time table-name freezing. Item 9 is row 7 above; row 5 is the adjacent per-partition defect. Line references are from `29783f8` and have **not** been re-verified since July — **decided 2026-08-14: fold a re-verification pass into the 3.13.0 GA work**, when the codebase settles. **Done 2026-08-15** against `6187636`, after the last GA branch landed: all nine still stand, none silently fixed, item 3 is 27 sites rather than ~22 |
 | [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | 8 items scoped out of the trust-cache plan by name. §1 is row 6 above. §5 is worth reading even if never actioned: it records *why* the surviving substring peer-id match on the deletion path is not the bug the resolver fix closed — server-generated high-entropy client ids make it a collision, not a steerable attack |
 
 ---

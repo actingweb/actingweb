@@ -4,12 +4,86 @@
 `thoughts/plans/2026-07-23-dynamodb-scalability.md` (scalability
 evaluator findings, verified against the code at the time). These were
 deliberately deferred — each needs design work or carries behavioural
-risk disproportionate to the v3.13 release. Line references are from
-commit `29783f8`; re-verify before implementing.
+risk disproportionate to the v3.13 release. Line references were from commit
+`29783f8` and were already wrong by the time anyone looked; **see the
+re-verification below, which is current as of 2026-08-15.**
 
 **Decided 2026-08-14** (owner walkthrough): fold that re-verification into the
 **3.13.0 GA** work — walk all nine items against the settled codebase and
 refresh the line references then, rather than per-item at pick-up time.
+
+## Re-verified 2026-08-15 against `6187636`
+
+All nine walked against the GA codebase, after the last of the GA branches
+landed, so "the settled codebase" is true rather than aspirational. **All nine
+still stand and none has been silently fixed.** One (item 3) is measurably
+larger than the original note said. What changed is confidence in the list
+rather than its contents — which is the outcome the re-verification was for, not
+a disappointing one. Specifics:
+
+- **Item 1 stands, and got slightly worse** (see its own note below).
+  `batch_write` / `BatchWriteItem` still appear nowhere in the package.
+- **Item 2 half stands, and the half that is gone matters.** The per-item N+1
+  is unchanged: `ListProperty.__getitem__` still does a fresh accessor plus a
+  `GetItem` per item, on both formats. **The `__delitem__` O(N) shift is gone
+  for v2 lists.** `_v2_delitem()` deletes exactly one ranked row and then says
+  so in the code — *"a single row delete IS the whole operation under v2 — no
+  shift loop"*. So the shift cost survives only on legacy v1 lists, which the
+  migration tools exist to retire.
+
+  This correction matters more than a tally: the original item proposes
+  "tombstones or stable item ids instead of positional `list:<name>-<i>`" as
+  the fix, and **that is what fractional rank keys already are.** Reading the
+  item as written would send someone to redesign a key layout that shipped in
+  3.13. What remains for item 2 is the item cache with staleness semantics,
+  and nothing else. Caught by Codex review on PR #131.
+- **Item 3's count is now 27, not ~22**, across eight `db/dynamodb` modules
+  (`attribute.py` 8, `property_lookup.py` 4, `subscription_diff.py` 4,
+  `property.py` 3, `subscription.py` 3, `trust.py` 3, `actor.py` 1,
+  `peertrustee.py` 1). The growth is from work that legitimately needed strong
+  reads, so the audit's shape is unchanged — but anyone scoping it should
+  budget for a quarter more sites than the original note implied.
+- **Item 4 stands.** `subscription_diff.get()` still takes an optional `seqnr`
+  and still scans the `subid:` prefix in memory; the range key is still an
+  unpadded lexicographic string.
+- **Item 5 stands and its premise has expired.** The entry says "no in-library
+  callers (public API only)". That is **no longer true**: both
+  `actingweb/maintenance/migrate_property_lists.py` and
+  `actingweb/maintenance/verify_property_lists.py` call
+  `get_actor_list(config).fetch()` to enumerate the fleet. Those are the two
+  operator tools GA exists to make safe to run, so the unpaginated full-table
+  scan is now on a real operational path, not a hypothetical one — and it is
+  the path whose input size grows with the deployment. The `fetch()` docstring
+  does carry an explicit "Admin/maintenance use only … deliberate full-table
+  Scan, O(table size) and unpaginated — do not call it on a serving path"
+  warning, which the maintenance callers honour; a sweep is not a serving path.
+  But "add a limit/cursor API before anyone uses it at scale" has quietly
+  become "before the next fleet sweep on a large table". Caught by Codex review
+  on PR #131.
+- **Item 6 stands, unchanged.** `table_name = os.getenv("AWS_DB_PREFIX", …)`
+  is still evaluated in each model's `class Meta` body at import time.
+- **Item 7 stands.** `is_token_in_db` is still the GSI-based uniqueness check.
+- **Item 8 stands.** Both backends still do the read-then-write lookup update
+  (`property.py`); PostgreSQL has since gained an in-transaction variant
+  (`_update_lookup_entry_in_transaction`), which narrows the window on that
+  backend only and leaves DynamoDB's exactly as described.
+- **Item 9 stands at both call sites, and "only the cost half is open" would
+  be wrong.** `if not self.subs_list` remains at `actor.py:1351` (the
+  trust-deletion sibling, item 3 of the linked todo) and `actor.py:1620`
+  (`get_subscriptions()`). The invalidation fix is present and visible —
+  `self.subs_list = None` at three sites — but it only refreshes the `Actor`
+  instance the create or delete happened on. A **different process** can still
+  hold a truthy stale `subs_list`, and the trust-deletion site then skips the
+  fetch and can leave a subscription created elsewhere undeleted. So a
+  correctness residue survives alongside the cost one, exactly as item 3 of
+  `thoughts/todo/subs-list-cache-asymmetry.md` records. Item 4 of that file was
+  half-answered on 2026-08-15 (see it); the guard stays blocked. Caught by
+  Codex review on PR #131.
+
+**Line references are deliberately not re-pinned to specific numbers** for items
+whose anchors are stable by name. Pinning them is what made this list go stale
+in the first place: `29783f8`'s numbers were wrong within weeks. Where a number
+appears above it is because the identifier alone is ambiguous.
 
 ## 1. batch_write for delete loops
 `batch_write`/`BatchWriteItem` is used nowhere. Item-by-item serial

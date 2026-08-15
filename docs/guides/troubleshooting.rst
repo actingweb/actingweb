@@ -55,7 +55,8 @@ MCP client sees an empty tool list or ``-32003`` after upgrading
   request — check the logs over a short window, not just the exact moment
   you reproduce the symptom.
 - **Fix**: Work through the pre-upgrade checklist in
-  ``docs/migration/v3.13.rst`` ("Security fix in rc3") — it covers finding
+  ``docs/migration/v3.13.rst`` ("Security: MCP trust-cache authorization
+  bypass") — it covers finding
   at-risk trust rows, auditing Flask resource URIs against your trust
   type's allowed patterns, and what happens to per-peer permission
   overrides when a client re-authorizes. In most cases the client simply
@@ -77,7 +78,8 @@ MCP tool's structured data disappeared after upgrading
   deliberate migration, not an error.
 - **Fix**: Nest the data under an explicit ``structuredContent`` key, and keep
   the same object serialized in a text ``content`` block so clients that ignore
-  ``structuredContent`` still receive it. See the ``rc4`` section of
+  ``structuredContent`` still receive it. See "MCP: ``structuredContent`` is
+  now opt-in" in
   ``docs/migration/v3.13.rst``. If the tool's real payload is prose, returning
   prose alone is now the correct shape.
 - **Note when verifying with ``curl``**: a request with no

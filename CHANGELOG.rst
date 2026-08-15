@@ -846,6 +846,20 @@ FIXED
 DOCUMENTATION
 ~~~~~~~~~~~~~
 
+- **The migration guide is organised by where you are upgrading from, not by
+  which release candidate added what.** ``docs/migration/v3.13.rst`` had grown
+  five sections titled "Behaviour change in rcN", each opening with a note
+  telling you to read every section between your version and the target. That
+  works while the rcs are current and stops working the moment they are one
+  release. It now opens with a **Start here** section giving two paths — from
+  ``3.12.x`` (do all four pieces of work, in the stated order, because two have
+  pre-upgrade steps) and from a release candidate (a table saying exactly what
+  is left to do for each of ``rc1`` through ``rc6``) — followed by what changed
+  after ``rc6`` for anyone tracking the pre-releases. The four work sections
+  are named for what they cover rather than for the rc that introduced them,
+  and the DynamoDB material is now nested under its own heading instead of
+  sitting as a flat run of peers titled "Overview".
+
 - **New page: Actor Deletion Semantics** (``docs/reference/actor-deletion.rst``).
   States the contract that previously had to be read out of the source: the
   exact deletion order and why the actor row goes last, that ``get_by_id()``

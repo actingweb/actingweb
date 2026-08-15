@@ -4,12 +4,62 @@
 `thoughts/plans/2026-07-23-dynamodb-scalability.md` (scalability
 evaluator findings, verified against the code at the time). These were
 deliberately deferred — each needs design work or carries behavioural
-risk disproportionate to the v3.13 release. Line references are from
-commit `29783f8`; re-verify before implementing.
+risk disproportionate to the v3.13 release. Line references were from commit
+`29783f8` and were already wrong by the time anyone looked; **see the
+re-verification below, which is current as of 2026-08-15.**
 
 **Decided 2026-08-14** (owner walkthrough): fold that re-verification into the
 **3.13.0 GA** work — walk all nine items against the settled codebase and
 refresh the line references then, rather than per-item at pick-up time.
+
+## Re-verified 2026-08-15 against `6187636`
+
+All nine walked against the GA codebase, after the last of the GA branches
+landed, so "the settled codebase" is true rather than aspirational. **All nine
+still stand and none has been silently fixed.** One (item 3) is measurably
+larger than the original note said. What changed is confidence in the list
+rather than its contents — which is the outcome the re-verification was for, not
+a disappointing one. Specifics:
+
+- **Item 1 stands, and got slightly worse** (see its own note below).
+  `batch_write` / `BatchWriteItem` still appear nowhere in the package.
+- **Item 2 stands.** `ListProperty.__getitem__` and `__delitem__` are still
+  where they were (`property_list.py`), and the v2 fractional-rank format did
+  not remove either cost: v2 fixed the *corruption* class, not the per-item
+  round trips.
+- **Item 3's count is now 27, not ~22**, across eight `db/dynamodb` modules
+  (`attribute.py` 8, `property_lookup.py` 4, `subscription_diff.py` 4,
+  `property.py` 3, `subscription.py` 3, `trust.py` 3, `actor.py` 1,
+  `peertrustee.py` 1). The growth is from work that legitimately needed strong
+  reads, so the audit's shape is unchanged — but anyone scoping it should
+  budget for a quarter more sites than the original note implied.
+- **Item 4 stands.** `subscription_diff.get()` still takes an optional `seqnr`
+  and still scans the `subid:` prefix in memory; the range key is still an
+  unpadded lexicographic string.
+- **Item 5 stands, and is now clearly labelled in the code** — `DbActorList.fetch()`
+  carries an explicit "Admin/maintenance use only … deliberate full-table Scan,
+  O(table size) and unpaginated — do not call it on a serving path" docstring.
+  That is the v3.13 docs note the original entry mentions, now inline. Still no
+  limit/cursor API.
+- **Item 6 stands, unchanged.** `table_name = os.getenv("AWS_DB_PREFIX", …)`
+  is still evaluated in each model's `class Meta` body at import time.
+- **Item 7 stands.** `is_token_in_db` is still the GSI-based uniqueness check.
+- **Item 8 stands.** Both backends still do the read-then-write lookup update
+  (`property.py`); PostgreSQL has since gained an in-transaction variant
+  (`_update_lookup_entry_in_transaction`), which narrows the window on that
+  backend only and leaves DynamoDB's exactly as described.
+- **Item 9 stands, at both call sites.** `if not self.subs_list` remains at
+  `actor.py:1351` (the trust-deletion sibling, item 3 of the linked todo) and
+  `actor.py:1620` (`get_subscriptions()`). The rc2 invalidation fix is present
+  and visible — `self.subs_list = None` at three sites — so only the *cost* half
+  is open, exactly as `thoughts/todo/subs-list-cache-asymmetry.md` records. Its
+  item 4 was half-answered on 2026-08-15 (see that file); the guard itself stays
+  blocked.
+
+**Line references are deliberately not re-pinned to specific numbers** for items
+whose anchors are stable by name. Pinning them is what made this list go stale
+in the first place: `29783f8`'s numbers were wrong within weeks. Where a number
+appears above it is because the identifier alone is ambiguous.
 
 ## 1. batch_write for delete loops
 `batch_write`/`BatchWriteItem` is used nowhere. Item-by-item serial

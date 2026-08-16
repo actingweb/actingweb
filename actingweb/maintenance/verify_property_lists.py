@@ -324,9 +324,11 @@ def main() -> int:
             "with --repair, also compact a v1 list that is damaged AND carries "
             "rows of the v2 format. That combination is a REVERTED MIGRATION, "
             "not an ordinary hole: the items are probably intact in the v2 "
-            "rows, and compacting reports the list healthy while stranding "
-            "them. Refused by default; pass this only after deciding to "
-            "abandon those items"
+            "rows. Compacting does not delete them -- it makes the list report "
+            "HEALTHY while they become unreferenced, so the warning that they "
+            "matter disappears and the NEXT clear()/delete()/migrate re-run "
+            "sweeps them for real. Pass this only after extracting those rows, "
+            "or after deciding to abandon them"
         ),
     )
     parser.add_argument(

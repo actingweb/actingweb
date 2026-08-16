@@ -2060,6 +2060,14 @@ class ListProperty:
                 pre-revert metadata, or reading the v2 rows out by hand --
                 and the question does not arise.
 
+                Note this is one step removed from deletion rather than
+                deletion itself, which is what makes it sharper than it
+                looks: the v2 rows survive this call. What it removes is
+                the *report* that they matter -- the list goes from loudly
+                unhealthy to healthy -- so the next
+                ``clear()``/``delete()``/migrate re-run sweeps them with
+                nothing left to say they were the data.
+
         Returns:
             The ``verify()`` report this call acted on (taken before any
             write). On a refusal, that report plus ``compacted: False``

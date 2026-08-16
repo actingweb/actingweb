@@ -85,53 +85,30 @@ the absence of `data`, which is the half a `-32022` "fix" would change.
 `tests/test_mcp_dual_era_signal.py` now guards it, and the rejection site
 carries the reasoning inline so it is visible to whoever edits it.
 
-## Cheap hardening — DONE 2026-08-15
+## Cheap hardening — DONE 2026-08-15 (#129)
 
-Each is independent of the dual-era decision. **Decided 2026-08-14** (owner
-walkthrough): **do all three.** Item 1 is the one that matters — it is what
-stops a well-meaning `-32022` "fix" from breaking every dual-era client — and
-item 3 is what makes criterion 2 above observable in telemetry rather than via
-user reports. Item 2 stays in the `message` string; `data.supported` is the trap.
+All three landed: the regression test (`tests/test_mcp_dual_era_signal.py`,
+which asserts the *absence* of `data` and that the code falls outside the whole
+reserved `-32020`–`-32099` range), the supported versions named in the error
+`message` via `unsupported_version_message()` in `actingweb/mcp/protocol.py`,
+and origin-graded logging of the rejection. None of it implements any part of
+the modern revision — it protects the current behaviour and makes criterion 2
+observable.
 
-**All three landed 2026-08-15.** The rest of this file is unchanged and still
-open: the hardening protects the current behaviour, it does not implement any
-part of the modern revision. Criterion 2 above is now the *observable* trigger
-it was written to be, which it was not before.
+Two facts from that work that outlive it:
 
-1. ~~**Regression test**~~ **Done** — `tests/test_mcp_dual_era_signal.py`. It
-   asserts the *absence* of `data`, not just the presence of `-32600`, plus
-   that the code falls outside the whole reserved `-32020`–`-32099` range
-   rather than differing from one tempting constant. Verified non-vacuous by
-   making the exact change the trap describes (`-32022` +
-   `data.supported`): 4 assertions fail. The module docstring carries the
-   reasoning, because a guard nobody understands gets deleted.
-2. ~~**Name supported versions in the error `message` string**~~ **Done** —
-   `unsupported_version_message()` in `actingweb/mcp/protocol.py`, next to
-   `SUPPORTED_PROTOCOL_VERSIONS` so the two cannot drift. The docstring says
-   why the versions must not migrate to `data`.
-3. ~~**Raise the log level**~~ **Done**, though the premise was off twice
-   over. First, the rejection did not log at debug — it **did not log at all**.
-   Second, "raise the log level" was the wrong shape, and review on #129
-   surfaced why: the rejection is answered on an **unauthenticated** path, so
-   an unconditional WARNING is a log-volume and alert-noise lever any anonymous
-   caller can pull, and it buries the actionable case among the healthy ones.
-
-   What landed instead grades by origin: a lone rejection is the healthy
-   handshake and logs at INFO; a run of five from the same origin inside a
-   five-minute window escalates to WARNING **once**, naming the origin and this
-   file. Criterion 2 above is a statement about *sustained traffic from one
-   origin*, so this makes the criterion itself the thing that fires, rather than
-   asking an operator to reconstruct it from a pile of identical lines.
-
-   Note on the origin: `remote_addr` is **not** available. Two call sites read
-   `getattr(self.request, "remote_addr", "unknown")`, but nothing ever sets it —
-   `AWWebObj`/`AWRequest` take only url, params, body, headers and cookies, and
-   neither integration passes an address, so both existing reads always evaluate
-   to the literal `"unknown"`. The origin is therefore `Mcp-Session-Id` when
-   present, else the `User-Agent` — which is also the field that actually names
-   the client *implementation*, i.e. the thing criterion 1 asks you to watch.
-   Both are client-supplied and spoofable, which is acceptable because nothing
-   here is a security decision and the counter is capped.
+- **The rejection escalates by origin, not by volume.** A lone rejection logs at
+  INFO (it is the healthy handshake); five from one origin inside five minutes
+  warn once, naming the origin. An unconditional WARNING was rejected because
+  the path is unauthenticated — any anonymous caller could pull it as an
+  alert-noise lever, burying the actionable case.
+- **`remote_addr` does not exist on this request object.** `AWWebObj`/`AWRequest`
+  carry only url, params, body, headers and cookies, and neither integration
+  sets an address, so the two call sites reading
+  `getattr(self.request, "remote_addr", "unknown")` always evaluate to
+  `"unknown"`. Origin is `Mcp-Session-Id` when present, else `User-Agent` —
+  which is also the field naming the client implementation criterion 1 asks you
+  to watch.
 
 ## Scope when it is picked up
 

@@ -151,9 +151,12 @@ cache-lifetime question — not the guard.** Deciding whether `_actor_cache` hol
 only identity/auth context with the `Actor` rebuilt per request, or whether
 instance caches need an explicit request-boundary reset, is what unblocks item 2
 *and* de-risks every future instance-level memo. The guard alone was rejected as
-trading a bounded cost bug for an unbounded correctness one. Pair the work with
-§1 of `thoughts/todo/mcp-cache-lifecycle-and-revocation.md` — same module, and
-the eviction wiring depends on what the cache ends up holding.
+trading a bounded cost bug for an unbounded correctness one.
+
+The half of item 4 that §1 of
+`thoughts/todo/mcp-cache-lifecycle-and-revocation.md` needed was answered on
+2026-08-15 and that work landed, so this no longer pairs with anything — the
+*should* is now this file's alone to answer.
 
 1. ~~**Centralise invalidation.**~~ **DONE in rc2** — `create_subscription()`
    resets `self.subs_list`. The hand-rolled reset at
@@ -172,11 +175,11 @@ the eviction wiring depends on what the cache ends up holding.
    `thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md`
    establishes that it *does*: `_actor_cache` stores a live `ActorInterface`,
    keyed by actor id, on a **sliding** TTL, shared across requests and across
-   users of the container. That was the half row 6 needed, and it is enough to
-   make row 6's eviction correct regardless of how the rest is decided. What
-   remains open is the *should* — identity-only with the `Actor` rebuilt per
-   request, versus an explicit request-boundary reset — which INDEX §0 assigns
-   to 3.14, and item 2 below stays blocked on it. Fixing invalidation inside `create_subscription()` closes the
+   users of the container. That was the half the MCP revocation work needed, and it is enough to
+   make the revocation-eviction work (#130) correct regardless of how the rest
+   is decided. What remains open is the *should* — identity-only with the
+   `Actor` rebuilt per request, versus an explicit request-boundary reset. That
+   question is now this file's alone, and item 2 below stays blocked on it. Fixing invalidation inside `create_subscription()` closes the
    window for one process, but `handlers/mcp.py`'s `_actor_cache` shares an
    `Actor` across requests *and across users of that container*, so any
    future instance-level memo inherits the same hazard. Either the MCP cache

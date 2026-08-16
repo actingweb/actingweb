@@ -13,53 +13,21 @@ correctness/robustness issues found along the way.
 (research Patch 5, "cache lifecycle"), plus items discovered while
 implementing Phases 1–4 of the plan above.
 
-## 1. Revocation does not evict the MCP caches (research C7) — DONE 2026-08-15
+## 1. Revocation does not evict the MCP caches (research C7) — DONE (#130)
 
-`MCPHandler.clear_token_from_cache()` (`actingweb/handlers/mcp.py`) has
-exactly **one** caller: the logout handler
-(`actingweb/handlers/oauth2_endpoints.py:861`). None of the other paths that
-should invalidate a client's cached identity call it:
+**Landed 2026-08-15**, single-process eviction on every revocation path:
+`TokenManager.revoke_token()`, `OAuthSession.revoke_all_tokens()`,
+`Trust.delete()`, and both the store and delete paths of
+`TrustPermissionStore`, via the lazy shims in `actingweb/mcp/invalidation.py`.
 
-- `TokenManager.revoke_token()` (`actingweb/oauth2_server/token_manager.py:304`)
-- `revoke_all_tokens()` (same file)
-- `/oauth/revoke` endpoint
-- Trust deletion (any path — peer-initiated, admin-initiated, or
-  actor-initiated)
-- Trust modification (e.g. permission downgrade via
-  `TrustPermissionStore`)
+**Eviction is actor-wide, not `_trust_cache`-keyed as this file originally
+proposed.** `_actor_cache` holds a live `ActorInterface` carrying the trust list
+itself, so dropping the tuple alone leaves the shared wrapper serving stale
+trust — see
+`thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md`. Anyone
+adding a seventh cache or a new revocation path inherits that constraint.
 
-A token revoked, or a trust relationship deleted/downgraded, through any of
-these paths still authenticates/authorizes from a warm process for up to the
-5-minute token-cache TTL (`_cache_ttl` in `mcp.py`). This is a **staleness**
-window, not the cross-client bypass the parent plan fixed — a revoked
-client still only ever gets *its own* prior permissions, not someone else's.
-
-**Decided 2026-08-14** (owner walkthrough): **do both halves** — token-keyed
-eviction on `revoke_token`, `revoke_all_tokens` and `/oauth/revoke`, *and*
-direct `_trust_cache` eviction on trust deletion and permission downgrade. That
-closes everything a single process can close. §2 (cross-process) is explicitly
-**not** a blocker for this. Sequence alongside item 4 of
-`thoughts/todo/subs-list-cache-asymmetry.md` — same cache module, and the
-actor-cache lifetime question decides what is left to evict.
-
-**Landed 2026-08-15.** Eviction is wired into `TokenManager.revoke_token()`,
-`OAuthSession.revoke_all_tokens()`, `Trust.delete()`, and both the store and
-delete paths of `TrustPermissionStore`. `actingweb/mcp/invalidation.py` holds the
-two shims callers use — the import of the handler is lazy and failure-tolerant,
-because these are core modules calling into an optional higher layer and a
-revocation must never fail because a cache could not be told about it.
-
-**The scope decision this asked for went the other way, and the reason is
-recorded in `thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md`.**
-This file suggested evicting the `_trust_cache` tuple alone for trust changes,
-"without touching `_token_cache`/`_actor_cache`". That is unsound: `_actor_cache`
-holds a live `ActorInterface`, which carries the trust list itself, so dropping
-the tuple leaves the shared wrapper serving stale trust. Eviction is therefore
-actor-wide on every path — which is also what `clear_token_from_cache()` already
-concluded for itself ("actor-wide by design").
-
-Answering that question on paper first was an INDEX §0 sequencing requirement,
-and it changed the implementation rather than confirming it.
+§2 below is the part that stays open: none of this crosses a process boundary.
 
 ## 2. No cross-process invalidation
 

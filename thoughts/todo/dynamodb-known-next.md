@@ -80,6 +80,10 @@ a disappointing one. Specifics:
   half-answered on 2026-08-15 (see it); the guard stays blocked. Caught by
   Codex review on PR #131.
 
+**#132 (the v3.13.0 tag) postdates this pass** and affects no item: it added a
+repair refusal and a stale-format warning to `property_list.py` /
+`verify_property_lists.py`, no new delete loop or read path.
+
 **Line references are deliberately not re-pinned to specific numbers** for items
 whose anchors are stable by name. Pinning them is what made this list go stale
 in the first place: `29783f8`'s numbers were wrong within weeks. Where a number

@@ -110,6 +110,10 @@ second of which is the most valuable constraint any of this produced.
 
 ## Adjacent residual: mutations dispatch on a cached format (found 2026-08-16)
 
+**This section is NOT deferred** — it is INDEX row 9c, in "Do next", while the
+rest of the file is row 9b. Reachable only during a migration, which is what GA
+triggers fleet-wide, so it is live now and quiet later.
+
 Consumer verification of 3.13.0 GA reproduced a second, smaller consequence of
 the same missing primitive. A `ListProperty` retained across a migration
 dispatches its next mutation on its **cached** `format`, so a v1-shaped item

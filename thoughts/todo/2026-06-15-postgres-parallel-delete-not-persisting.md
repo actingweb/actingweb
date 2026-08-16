@@ -4,7 +4,7 @@
 **Status:** **Symptom gone, root cause never found.** Both leading hypotheses
 had their proximate mechanism removed by unrelated work (#115, #117); the
 quarantine was lifted on 2026-08-15 and the postgres matrix has been green on
-every run since, across four PRs, with zero reruns. That is evidence the
+every run since, across five PRs (#128 through #132), with zero reruns. That is evidence the
 symptom is gone, **not** evidence of a diagnosis — so this file stays rather
 than being deleted, and `ACTINGWEB_PG_DELETE_DIAGNOSTICS` stays on in CI to
 name the mechanism if it ever returns. Delete this file after a few weeks of

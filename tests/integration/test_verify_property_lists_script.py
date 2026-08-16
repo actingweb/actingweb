@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from actingweb.db import get_property
+from actingweb.db import get_property, get_property_list
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
 
@@ -133,6 +133,65 @@ class TestSweepActor:
         fresh = test_actor.property_lists.sweep_test_list_2
         assert fresh.verify()["healthy"] is True
         assert fresh.to_list() == ["a", "c"]
+
+    def test_repair_refuses_a_reverted_migration_and_warns(self, test_actor, caplog):
+        """The operator path must not bless a reverted migration as healthy.
+
+        Found by consumer verification against 3.13.0 GA. The shape — v1
+        metadata with a stale length, no v1 rows, items alive in v2 rows —
+        used to be repaired into an empty list reporting ``healthy``, with the
+        only surviving copy left as residue for the next sweep to delete.
+        """
+        import logging
+
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        name = "reverted_list"
+        _seed_v1_list(test_actor.config, test_actor.id, name, ["a", "b", "c"])
+        assert (
+            test_actor.property_lists.reverted_list.migrate_to_v2()["migrated"] is True
+        )
+
+        # Put the pre-flip v1 metadata dict back over the flipped row: what a
+        # concurrent write landing inside the read-modify-write gap does.
+        db = get_property(test_actor.config)
+        raw = db.get(actor_id=test_actor.id, name=f"list:{name}-meta")
+        assert raw is not None
+        meta = json.loads(raw)
+        meta["format"] = 1
+        meta["length"] = 3
+        assert get_property(test_actor.config).set(
+            actor_id=test_actor.id, name=f"list:{name}-meta", value=json.dumps(meta)
+        )
+
+        with caplog.at_level(logging.INFO, logger="verify_property_lists"):
+            checked, unhealthy, errored = script.sweep_actor(
+                test_actor.id,
+                test_actor.config,
+                repair=True,
+                limiter=script.RateLimiter(0),
+            )
+
+        assert checked >= 1
+        assert errored == 0
+        assert unhealthy >= 1, "a refused list must be reported as still unhealthy"
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "REVERTED MIGRATION" in messages
+        assert "Do NOT sweep them" in messages
+        # And it must NOT be the old advice, which pointed at the sweep that
+        # deletes the surviving copy.
+        assert "Harmless to reads" not in messages
+
+        # The items are still there, still reachable by recovery.
+        rows = (
+            get_property_list(test_actor.config).fetch_all_including_lists(
+                actor_id=test_actor.id
+            )
+            or {}
+        )
+        v2_rows = [k for k in rows if k.startswith(f"list:{name}-#")]
+        assert len(v2_rows) == 3
 
     def test_v2_lists_swept_alongside_v1_without_crashing(self, test_actor):
         """A v2 list's verify() report has a different shape than v1's

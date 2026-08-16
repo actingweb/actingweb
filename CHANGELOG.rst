@@ -425,6 +425,43 @@ CHANGED
 - A successful migration that closed holes (only reachable via
   ``--migrate-damaged``) now logs at WARNING rather than INFO.
 
+- **``--repair`` refuses a reverted migration instead of blessing it as
+  healthy.** A v1 list that is damaged **and** carries rows of the v2 storage
+  format is not an ordinary hole: it is a list whose migration was reverted,
+  with its items alive in the v2 rows and the v1 range empty. ``compact()``
+  used to rewrite that empty range, set the length to what it found, report
+  the list **healthy**, and leave the only surviving copy as unreferenced
+  residue for the next ``clear()``/``delete()``/migrate re-run to sweep — the
+  same unreportable loss the entry above refuses damaged lists to avoid, in
+  the other operator tool.
+
+  ``compact()`` now refuses that combination and says why;
+  ``allow_reverted=True`` (``actingweb-verify-property-lists
+  --repair-reverted``) is the deliberate override, mirroring
+  ``--migrate-damaged``. The verifier's log line for foreign-format rows
+  splits accordingly: on a healthy list it still reports inert residue and how
+  to clear it; on a damaged v1 list it now **warns** that those rows are
+  probably the data and that sweeping or repairing destroys them. The previous
+  text said "harmless to reads; clear it by re-running --migrate"
+  unconditionally, which in this shape was an instruction to delete the only
+  surviving copy.
+
+- **A write from a ``ListProperty`` held across a migration is no longer
+  silent.** Such an instance dispatches on its cached storage format, so the
+  item lands in a row of the old shape that readers of the new format never
+  return — and ``verify()`` reports the list **healthy**, because the row
+  surfaces only as ``foreign_format_rows``, which is documented as inert
+  residue. It now logs a WARNING naming the list, both formats, and what to
+  do. Bounded to one write per retained instance: the metadata write refreshes
+  the cache, so the instance self-corrects from there. The write itself is
+  still lost — closing that needs dispatch on a fresh metadata read, which is
+  deferred.
+
+  This needs an instance retained *across* a migration.
+  ``PropertyListStore.__getattr__`` builds a fresh ``ListProperty`` on every
+  attribute access, so ordinary ``actor.property_lists.<name>`` use has a
+  one-request window rather than a process-lifetime one.
+
 - **Each list mutation now costs one additional point read.** Merging into a
   fresh read of the metadata row is what makes the fix above work, and it is
   not free: where a mutation previously wrote metadata from cache, it now reads

@@ -103,6 +103,17 @@ two are worth knowing about:
   process until its TTL expires. If your threat model depended on the old
   behaviour being instantaneous, it never was.
 
+- **A repair-tool guard, added after consumer verification of GA.**
+  ``--repair`` now refuses a v1 list that is damaged *and* carries v2-format
+  rows, because that combination is a reverted migration rather than a hole,
+  and repairing it strands the data while reporting success. If you swept with
+  ``--repair`` on ``rc5`` or ``rc6``, see the warning under "Step 2" above.
+- **A stale-instance write now warns.** A ``ListProperty`` retained across a
+  migration writes its next item in the old format's row shape, where nothing
+  reads it — and ``verify()`` calls the list healthy. That now logs a WARNING.
+  It affects code that stashes the list object; ordinary
+  ``actor.property_lists.<name>`` access builds a fresh one per use.
+
 The other two are an opt-in PostgreSQL diagnostic
 (``ACTINGWEB_PG_DELETE_DIAGNOSTICS``, off by default) and a change in how
 unsupported-``MCP-Protocol-Version`` rejections are logged: a lone rejection is
@@ -194,6 +205,28 @@ Step 2: repair what it found
 ``--repair`` calls ``compact()``, which rewrites the surviving rows densely,
 removes orphans, corrects the recorded length, and preserves
 ``description``/``explanation``/``created_at``. It closes holes.
+
+**It refuses a reverted migration, by design.** A v1 list that is damaged
+**and** reports ``foreign_format_rows > 0`` is not an ordinary hole. It is a
+list whose migration to v2 was reverted: the v1 rows are gone, the metadata
+still claims v1 with the old length, and **the items are almost certainly
+alive in the v2 rows**. Compacting it would rewrite the empty v1 range, set
+the length to what it found, report the list healthy, and leave the only
+surviving copy as unreferenced residue for the next
+``clear()``/``delete()``/migrate re-run to sweep.
+
+So ``--repair`` skips those lists, logs a WARNING naming the shape, and counts
+them as still unhealthy. Recover them first — the v2 rows are readable
+directly, and re-running the migration against corrected metadata restores the
+list. ``--repair-reverted`` overrides the refusal and is the wrong answer
+unless you have looked at the rows and decided to abandon them.
+
+.. warning::
+
+   Earlier releases logged those rows at INFO as "harmless to reads; clear it
+   by re-running ``--migrate``". In this shape that advice deletes the data.
+   If you ran a sweep on ``3.13.0rc5`` or ``rc6`` and acted on that line,
+   check the affected lists before assuming they are empty by design.
 
 **It does not resolve duplicates, by design.** A duplicate always means an
 item was destroyed; collapsing one copy would bless that loss as intentional

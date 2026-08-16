@@ -108,6 +108,29 @@ second of which is the most valuable constraint any of this produced.
   cut designs violated, and it is why the current duplicate residue, for all its
   awkwardness, was kept in the first place.
 
+## Adjacent residual: mutations dispatch on a cached format (found 2026-08-16)
+
+Consumer verification of 3.13.0 GA reproduced a second, smaller consequence of
+the same missing primitive. A `ListProperty` retained across a migration
+dispatches its next mutation on its **cached** `format`, so a v1-shaped item
+row is written into a list that is now v2. The item is unreachable, `verify()`
+reports the list **healthy** (the row surfaces only as `foreign_format_rows`,
+documented as inert residue), and the instance self-corrects afterwards because
+the metadata write refreshes its cache — so it is exactly one write per
+retained instance.
+
+GA ships a WARNING at the mismatch, which makes it visible but does not save
+the write. **The fix is to dispatch on a fresh metadata read rather than the
+cache**, and it may be close to free: a mutation already pays one fresh read in
+`_save_metadata()`, so moving that read to *before* the dispatch and merging
+into the dict it returned trades one gap for another rather than adding a round
+trip. It was not attempted at the 3.13.0 tag point because it changes the hot
+write path.
+
+Note the interaction with this file's main subject: reading before dispatch
+does not close the read-modify-write gap, it just stops the *format decision*
+being made from arbitrarily stale state. Closing the gap still needs the CAS.
+
 ## Related
 
 - `thoughts/plans/2026-08-15-property-list-metadata-integrity.md` — the GA plan

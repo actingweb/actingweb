@@ -56,15 +56,16 @@ settles for this list, in one place, so no row has to re-explain it:
   postgres matrix has been green on every run since. Row 3 is now *waiting*, not
   *working* — it moved to §5.
 - **Row 5's re-measurement was scheduled "at GA, not before".** GA has happened,
-  so it is now the first thing in §1.
+  so it is live and sits in §1, behind only row 9c.
 
 **GA-day finding.** Consumer verification of the tag (actingweb_mcp) reproduced
-two defects in the property-list tooling, both fixed inside #132: `--repair`
-blessing a *reverted* migration as healthy and stranding the only surviving copy
-of the data, and a write from a `ListProperty` held across a migration landing
-silently in a row shape the current format never reads. The second one's *real*
-fix — dispatch on a fresh metadata read instead of the cached format — was not
-attempted at a tag point, and is **row 9c** below.
+two defects in the property-list tooling, and #132 closed **one** of them:
+`--repair` blessing a *reverted* migration as healthy and stranding the only
+surviving copy of the data now refuses. The second — a write from a
+`ListProperty` held across a migration landing silently in a row shape the
+current format never reads — got a WARNING and nothing more: **the write is
+still lost.** Its real fix, dispatching on a fresh metadata read instead of the
+cached format, was not attempted at a tag point and is **row 9c** below.
 
 ## 1. Do next
 

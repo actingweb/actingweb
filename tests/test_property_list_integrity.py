@@ -2257,3 +2257,219 @@ class TestMigrationRollbackDoesNotEatASuccessorList:
             "rows this migration wrote, and that nobody else touched, must "
             "still be rolled back"
         )
+
+
+def _seed_reverted_migration(store, actor_id, name, items):
+    """Build the shape a format-reverted migration leaves behind.
+
+    Metadata claims v1 with the pre-migration length, the v1 item rows are
+    gone (migration's last step deleted them), and the items are alive in v2
+    rows. Reachable two ways: a concurrent write landing inside
+    ``_save_metadata()``'s read-modify-write gap, and any list left this way
+    by a ``v3.13.0rc5``/``rc6`` migration.
+    """
+    import fractional_indexing as fi
+
+    ranks = fi.generate_n_keys_between(None, None, len(items))
+    for rank, item in zip(ranks, items, strict=True):
+        store[(actor_id, f"list:{name}-#{rank}")] = json.dumps(item)
+    store[(actor_id, f"list:{name}-meta")] = json.dumps(
+        {
+            "length": len(items),
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+            "item_type": "json",
+            "chunk_size": 1,
+            "version": "1.0",
+            "description": "",
+            "explanation": "",
+        }
+    )
+
+
+class TestCompactRefusesARevertedMigration:
+    """``--repair`` must not bless a reverted migration as healthy.
+
+    Found by consumer verification against 3.13.0 GA, and reproduced before
+    fixing: ``verify()`` reported the list unhealthy with
+    ``foreign_format_rows > 0``, reads raised loudly, and then ``compact()``
+    rewrote the empty v1 range, set the length to 0, and reported the list
+    **healthy** — with the only surviving copy left as unreferenced residue
+    for the next ``clear()``/``delete()``/migrate re-run to sweep.
+
+    That is the same unreportable loss ``migrate_to_v2()`` refuses damaged
+    lists to avoid, in the other operator tool.
+    """
+
+    NAME = "reverted"
+    ITEMS = ["alpha", "beta", "gamma"]
+
+    def _prepare(self, monkeypatch):
+        store = {}
+        _seed_reverted_migration(store, "actor1", self.NAME, self.ITEMS)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(store),
+        )
+        return store
+
+    def test_the_shape_is_detected_as_damaged_with_foreign_rows(
+        self, monkeypatch
+    ) -> None:
+        store = self._prepare(monkeypatch)
+        report = ListProperty(
+            actor_id="actor1", name=self.NAME, config=object()
+        ).verify()
+        assert report["healthy"] is False
+        assert report["missing_indices"] == [0, 1, 2]
+        assert report["foreign_format_rows"] == 3
+        assert len([k for k in store if "-#" in k[1]]) == 3
+
+    def test_compact_refuses_and_says_why(self, monkeypatch) -> None:
+        self._prepare(monkeypatch)
+        result = ListProperty(
+            actor_id="actor1", name=self.NAME, config=object()
+        ).compact()
+        assert result["compacted"] is False
+        assert result["reason"] == "reverted_migration"
+
+    def test_the_override_strands_the_data_and_reports_healthy(
+        self, monkeypatch
+    ) -> None:
+        """What the refusal is protecting against, asserted rather than argued.
+
+        ``compact()`` does not itself delete the v2 rows — it rewrites the
+        (empty) v1 range. The harm is what it leaves: a list that reports
+        **healthy** and reads **empty** while its contents sit in rows nothing
+        references, waiting for the next ``clear()``/``delete()``/migrate
+        re-run to sweep them. Loss with nothing left to report it, which is
+        exactly the trade ``migrate_to_v2(allow_damaged=...)`` gates on.
+        """
+        store = self._prepare(monkeypatch)
+        ListProperty(actor_id="actor1", name=self.NAME, config=object()).compact(
+            allow_reverted=True
+        )
+
+        after = ListProperty(actor_id="actor1", name=self.NAME, config=object())
+        assert after.verify()["healthy"] is True
+        assert after.to_list() == []
+        # The items are still on disk — unreachable, and no longer reported as
+        # a problem by anything.
+        stranded = sorted(json.loads(v) for k, v in store.items() if "-#" in k[1])
+        assert stranded == sorted(self.ITEMS)
+
+    def test_the_list_stays_loudly_unhealthy(self, monkeypatch) -> None:
+        """A refusal must not quietly look like a successful repair."""
+        self._prepare(monkeypatch)
+        ListProperty(actor_id="actor1", name=self.NAME, config=object()).compact()
+        after = ListProperty(
+            actor_id="actor1", name=self.NAME, config=object()
+        ).verify()
+        assert after["healthy"] is False
+        assert after["foreign_format_rows"] == 3
+
+    def test_allow_reverted_is_the_deliberate_override(self, monkeypatch) -> None:
+        self._prepare(monkeypatch)
+        result = ListProperty(
+            actor_id="actor1", name=self.NAME, config=object()
+        ).compact(allow_reverted=True)
+        assert result.get("compacted") is not False
+
+    def test_an_ordinary_hole_still_compacts(self, monkeypatch) -> None:
+        """The gate must be narrow: damage alone is not a reverted migration.
+
+        Without the ``foreign_format_rows`` half of the condition this would
+        refuse every damaged list and break repair entirely.
+        """
+        store = {}
+        _seed_list(store, "actor1", "ordinary", ["a", "b", "c"])
+        del store[("actor1", "list:ordinary-1")]
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(store),
+        )
+        result = ListProperty(
+            actor_id="actor1", name="ordinary", config=object()
+        ).compact()
+        assert result.get("compacted") is not False
+        assert ListProperty(
+            actor_id="actor1", name="ordinary", config=object()
+        ).to_list() == ["a", "c"]
+
+
+class TestAStaleFormatWriteIsLoud:
+    """A write from an instance retained across a migration must not be silent.
+
+    Also from consumer verification: the item lands in a row of the format
+    the instance believed, which readers of the current format never return.
+    ``verify()`` reports the list **healthy** — the row shows up only as
+    ``foreign_format_rows``, which is documented as inert residue. So before
+    this warning the only trace was a DEBUG line.
+    """
+
+    def test_appending_from_a_stale_instance_warns(self, monkeypatch, caplog) -> None:
+        import logging
+
+        store = {}
+        _seed_list(store, "actor1", "held", ["alpha", "beta"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(store),
+        )
+
+        stale = ListProperty(actor_id="actor1", name="held", config=object())
+        assert stale.to_list() == ["alpha", "beta"]  # caches format v1
+
+        ListProperty(actor_id="actor1", name="held", config=object()).migrate_to_v2()
+
+        with caplog.at_level(logging.WARNING, logger="actingweb.property_list"):
+            stale.append("gamma")
+
+        assert any(
+            "believed the storage format was v1" in r.getMessage()
+            for r in caplog.records
+        ), "a write against a migrated-away format must not be silent"
+
+    def test_the_instance_self_corrects_after_the_warning(self, monkeypatch) -> None:
+        """Bounded to one write: the metadata write refreshes the cache."""
+        store = {}
+        _seed_list(store, "actor1", "held", ["alpha", "beta"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(store),
+        )
+        stale = ListProperty(actor_id="actor1", name="held", config=object())
+        stale.to_list()
+        ListProperty(actor_id="actor1", name="held", config=object()).migrate_to_v2()
+
+        stale.append("gamma")  # lost to v1-shaped row
+        stale.append("delta")  # must land correctly
+
+        assert (
+            "delta"
+            in ListProperty(actor_id="actor1", name="held", config=object()).to_list()
+        )
+
+    def test_no_warning_when_nothing_changed_underneath(
+        self, monkeypatch, caplog
+    ) -> None:
+        import logging
+
+        store = {}
+        _seed_list(store, "actor1", "quiet", ["alpha"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
+        monkeypatch.setattr(
+            "actingweb.property_list.get_property_list",
+            lambda config: _FakePropertyList(store),
+        )
+        lp = ListProperty(actor_id="actor1", name="quiet", config=object())
+        lp.to_list()
+        with caplog.at_level(logging.WARNING, logger="actingweb.property_list"):
+            lp.append("beta")
+        assert not [
+            r for r in caplog.records if "believed the storage format" in r.getMessage()
+        ]

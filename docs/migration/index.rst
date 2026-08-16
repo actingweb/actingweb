@@ -23,13 +23,15 @@ Version Migrations
 ==================
 
 **v3.13 Migration**
-   Guide for upgrading to ActingWeb 3.13, covering the DynamoDB scalability
-   work (``rc1``/``rc2``), the MCP trust-cache authorization fix (``rc3``),
-   the MCP ``structuredContent`` behaviour change in ``rc4``, the
-   property-list changes in ``rc5``, and migration's refusal to convert
-   damaged lists in ``rc6``. **If you use list properties, read the ``rc5``
-   section before upgrading** — list reads now fail loudly on pre-existing
-   data damage that earlier releases silently skipped past, so sweeping and
+   Guide for upgrading to ActingWeb 3.13. It covers four largely independent
+   pieces of work — the DynamoDB scalability change and its **required**
+   reverse-lookup backfill, an MCP trust-cache authorization fix, the MCP
+   ``structuredContent`` behaviour change, and the property-list storage
+   format — and opens with a "Start here" section that says which of them
+   apply depending on whether you are coming from 3.12.x or from one of the
+   3.13 release candidates. **If you use list properties, do the sweep in
+   step 1 before upgrading** — list reads now fail loudly on pre-existing data
+   damage that earlier releases silently skipped past, so sweeping and
    repairing comes first.
 
 **v3.11 Migration**

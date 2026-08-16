@@ -140,6 +140,7 @@ def sweep_actor(
     repair: bool,
     limiter: RateLimiter,
     identity_key: str | None = None,
+    repair_reverted: bool = False,
 ) -> tuple[int, int, int]:
     """Verify (and optionally repair) every list belonging to one actor.
 
@@ -170,6 +171,10 @@ def sweep_actor(
             errored += 1
             continue
 
+        # v1 and v2 reports carry different fields, and the foreign-row
+        # handling below branches on the format, so resolve it first.
+        is_v2 = report.get("format") == 2
+
         # Rows of the OTHER storage format sharing this list's name: what an
         # interrupted migration or downgrade leaves. Not a health failure --
         # they are inert to every reader of the current format, and the
@@ -177,13 +182,39 @@ def sweep_actor(
         # an operator runs that would ever surface them, and the remedy is a
         # command rather than a manual repair. So: say it, then move on.
         if report.get("foreign_format_rows"):
-            logger.info(
-                f"actor={actor_id} list={name}: {report['foreign_format_rows']} "
-                f"row(s) of the other storage format present -- residue from "
-                f"an interrupted migration/downgrade. Harmless to reads; "
-                f"clear it by re-running actingweb-migrate-property-lists "
-                f"--migrate"
+            # Two very different situations share this field, and the
+            # difference decides whether those rows are junk or the data.
+            #
+            # On a HEALTHY list they are residue from an interrupted
+            # migration or downgrade: inert, and cleared by a re-run.
+            #
+            # On a DAMAGED v1 list they are almost certainly the list --
+            # a migration that got format-reverted, with the items alive in
+            # the v2 rows and the v1 range empty. Telling an operator to
+            # "clear it by re-running --migrate" there is telling them to
+            # delete the only surviving copy. This line used to say exactly
+            # that, unconditionally.
+            reverted = not is_v2 and (
+                report["missing_indices"] or report["orphan_indices"]
             )
+            if reverted:
+                logger.warning(
+                    f"actor={actor_id} list={name}: DAMAGED **and** carrying "
+                    f"{report['foreign_format_rows']} row(s) of the v2 storage "
+                    f"format. This is a REVERTED MIGRATION, not an ordinary "
+                    f"hole -- the items are probably intact in those v2 rows. "
+                    f"Do NOT sweep them and do NOT run --repair on this list: "
+                    f"both destroy the only surviving copy and leave the list "
+                    f"reporting healthy. Recover first."
+                )
+            else:
+                logger.info(
+                    f"actor={actor_id} list={name}: {report['foreign_format_rows']} "
+                    f"row(s) of the other storage format present -- residue from "
+                    f"an interrupted migration/downgrade. Inert to readers of "
+                    f"this list's format; clear it by re-running "
+                    f"actingweb-migrate-property-lists --migrate"
+                )
 
         if report["healthy"]:
             continue
@@ -193,8 +224,6 @@ def sweep_actor(
         # present); v2 lists structurally cannot (position is always
         # derived from what's present), so their report carries rank-length
         # info instead. See ListProperty.verify()/._v2_verify().
-        is_v2 = report.get("format") == 2
-
         if is_v2:
             logger.warning(
                 f"actor={actor_id} list={name}: UNHEALTHY (v2) "
@@ -257,10 +286,17 @@ def sweep_actor(
             continue
 
         try:
-            list_prop.compact()
+            compact_report = list_prop.compact(allow_reverted=repair_reverted)
         except Exception as e:
             logger.error(f"actor={actor_id} list={name}: compact() failed: {e}")
             errored += 1
+            continue
+
+        if compact_report.get("compacted") is False:
+            # compact() refused a reverted migration and said why. Counted
+            # as still-unhealthy rather than errored: nothing failed, the
+            # tool declined to make it worse.
+            unhealthy_after += 1
             continue
 
         post = list_prop.verify(identity_key=identity_key)
@@ -280,6 +316,20 @@ def main() -> int:
         "--repair",
         action="store_true",
         help="invoke compact() on unhealthy lists (default: dry-run report only)",
+    )
+    parser.add_argument(
+        "--repair-reverted",
+        action="store_true",
+        help=(
+            "with --repair, also compact a v1 list that is damaged AND carries "
+            "rows of the v2 format. That combination is a REVERTED MIGRATION, "
+            "not an ordinary hole: the items are probably intact in the v2 "
+            "rows. Compacting does not delete them -- it makes the list report "
+            "HEALTHY while they become unreferenced, so the warning that they "
+            "matter disappears and the NEXT clear()/delete()/migrate re-run "
+            "sweeps them for real. Pass this only after extracting those rows, "
+            "or after deciding to abandon them"
+        ),
     )
     parser.add_argument(
         "--rps",
@@ -329,7 +379,12 @@ def main() -> int:
         if not actor_id or checkpoint.is_done(actor_id):
             continue
         checked, unhealthy, errored = sweep_actor(
-            actor_id, config, args.repair, limiter, args.identity_key
+            actor_id,
+            config,
+            args.repair,
+            limiter,
+            args.identity_key,
+            repair_reverted=args.repair_reverted,
         )
         total_checked += checked
         total_unhealthy += unhealthy

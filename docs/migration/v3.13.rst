@@ -2,52 +2,144 @@
 Migrating to ActingWeb 3.13
 ===========================
 
-Behaviour change in rc6: migration refuses damaged lists
-========================================================
+Start here
+==========
+
+3.13 bundles four largely independent pieces of work: a **property-list**
+storage change with pre-upgrade steps, an **MCP** behaviour change, an **MCP
+security fix**, and a **DynamoDB scalability** change with a required backfill.
+Which of them you need depends only on where you are coming from.
+
+Upgrading from 3.12.x or earlier
+--------------------------------
+
+**Do all four sections, and do them in the order below**, because two of them
+have work that must happen *before* you deploy the new version:
+
+1. **Property lists** — step 1 sweeps for pre-existing damage and **must run
+   on the old version**. 3.13 turns damage that was previously invisible into
+   a visible error, so a sweep afterwards tells you less than a sweep before.
+2. **Security: MCP trust-cache bypass** — the "find trust rows that predate
+   exact resolver matching" audit is also a before-you-upgrade step.
+3. **DynamoDB scalability** — the reverse-lookup backfill is **required** for
+   any deployment using reverse lookup, and has a rollback window worth
+   understanding before you start.
+4. **MCP structuredContent** and the remaining behaviour changes — these need
+   code changes on your side if you are affected, but no pre-upgrade sweep.
+
+If you do not use list properties, do not expose MCP, and do not use reverse
+lookup, the only thing left that can affect you is "Property reads now raise
+on backend faults" — read that and you are done.
+
+Upgrading from a 3.13 release candidate
+---------------------------------------
+
+Do the sections that were added after the rc you are running. Nothing in this
+table is optional for the rcs it names — the earlier rcs' pre-upgrade steps
+still apply if you never did them.
+
+Every row names sections by their exact title, so the table works as a
+checklist and not only as prose.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 82
+
+   * - You are on
+     - Still to do
+   * - ``rc1``
+     - Everything except the reverse-lookup **backfill**, which you have
+       already run: ``Property lists``, ``Migration refuses damaged lists``,
+       ``Security: MCP trust-cache authorization bypass`` and ``MCP:
+       structuredContent is now opt-in`` are all new to you. Also re-read the
+       rest of the DynamoDB section, because three of its changes touch a code
+       path rather than only docs: ``register_diffs()`` now resolves
+       subscriptions before consulting suspension state,
+       ``create_subscription()`` invalidates the actor's cached subscription
+       list, and actor deletion writes a tombstone before the wipe begins.
+   * - ``rc2``
+     - Everything except the DynamoDB section, whose backfill you have already
+       run: ``Property lists``, ``Migration refuses damaged lists``,
+       ``Security: MCP trust-cache authorization bypass`` and ``MCP:
+       structuredContent is now opt-in`` are all new to you.
+   * - ``rc3``
+     - ``Property lists``, ``Migration refuses damaged lists`` and ``MCP:
+       structuredContent is now opt-in``. **Run the step-1 sweep before
+       upgrading** — see the ``rc4`` row for why.
+   * - ``rc4``
+     - ``Property lists`` and ``Migration refuses damaged lists``. **Run the
+       step-1 sweep before upgrading**: you are on the last release that hides
+       pre-existing list damage. 3.13.0 surfaces it as a 409 instead of
+       silently compacting past it, so a list that has been quietly broken for
+       months starts erroring the moment you deploy — and the sweep is easier
+       to reason about before that than after.
+   * - ``rc5``
+     - ``Migration refuses damaged lists``, plus "What changed after ``rc6``"
+       below.
+   * - ``rc6``
+     - Only "What changed after ``rc6``" below.
+
+What changed after ``rc6``
+--------------------------
+
+Between ``rc6`` and ``3.13.0`` the release gained four changes. **None
+requires operator action, and there is no data migration between them** — but
+two are worth knowing about:
+
+- **A list-metadata fix that matters if you are mid-migration.** Before
+  ``3.13.0``, a concurrent write could put ``format: 1`` back over a completed
+  migration's format flip by writing a whole cached metadata dictionary back;
+  migration then deleted the v1 rows and the list read back **empty, with no
+  error**. If you have been running ``actingweb-migrate-property-lists``
+  against a live deployment on ``rc5`` or ``rc6``, run
+  ``actingweb-verify-property-lists`` once after upgrading. There is no repair
+  step to run — the fix is preventative — but a list that was destroyed this
+  way is already gone and you would rather know.
+- **MCP revocation now evicts the in-process caches.** A revoked token, a
+  deleted trust relationship or a downgraded permission previously kept
+  working from a warm process for up to five minutes. It no longer does,
+  **within the process that served the revocation** — a multi-worker or
+  multi-container deployment still serves the stale answer from every *other*
+  process until its TTL expires. If your threat model depended on the old
+  behaviour being instantaneous, it never was.
+
+- **A repair-tool guard, added after consumer verification of GA.**
+  ``--repair`` now refuses a v1 list that is damaged *and* carries v2-format
+  rows, because that combination is a reverted migration rather than a hole,
+  and repairing it strands the data while reporting success. If you swept with
+  ``--repair`` on ``rc5`` or ``rc6``, see the warning under "Step 2" above.
+- **A stale-instance write now warns.** A ``ListProperty`` retained across a
+  migration writes its next item in the old format's row shape, where nothing
+  reads it — and ``verify()`` calls the list healthy. That now logs a WARNING.
+  It affects code that stashes the list object; ordinary
+  ``actor.property_lists.<name>`` access builds a fresh one per use.
+
+The other two are an opt-in PostgreSQL diagnostic
+(``ACTINGWEB_PG_DELETE_DIAGNOSTICS``, off by default) and a change in how
+unsupported-``MCP-Protocol-Version`` rejections are logged: a lone rejection is
+now INFO rather than unlogged, and a sustained run from one origin escalates to
+WARNING once. If you alert on WARNING from ``actingweb.handlers.mcp``, that is
+a new line you may see — it means a client is retrying instead of falling back,
+which is worth investigating rather than silencing.
+
+.. warning::
+
+   **A green test suite is not evidence this release landed correctly.** The
+   read-path and capacity fixes are invisible to functional tests — they
+   change how much a request costs, not what it returns. Use the
+   operation-profile recipe in "Proving the fixes actually landed" at the end
+   of this document to confirm them against your own hot paths.
+
+Property lists: storage format, repair, and fail-fast reads
+===========================================================
 
 .. note::
 
-   This is a refinement of the ``rc5`` property-list work below, and only
-   affects you if you run ``actingweb-migrate-property-lists`` (step 4). If
-   you are upgrading from a release older than ``rc5``, read the ``rc5``
-   section first — it is the one with the pre-upgrade steps.
-
-``actingweb-migrate-property-lists --migrate`` and
-``ListProperty.migrate_to_v2()`` now **refuse a list with holes or orphans**,
-and the dry run reports those lists as needing repair instead of counting
-them as "would migrate". A dry run that finds any exits ``1``.
-
-The reason is that migrating damaged data is not just lossy, it is
-*unreportably* lossy. Migration renumbers the surviving rows, so the hole is
-gone afterwards — and so is the evidence. The migrated list verifies healthy,
-and nothing remains to say an item ever went missing. In ``rc5`` the dry run
-said nothing about holes at all, so a sweep over a fleet containing one could
-report "0 refused, 0 errors" and an operator would proceed in good faith,
-past the last moment at which the damage was still visible.
-
-Lazy migration already refused damaged lists in ``rc5``, for exactly this
-reason. ``rc6`` applies the same rule to the deliberate path.
-
-What to do: **repair first** (step 2), then migrate. If you have looked at
-the damage and decided to migrate anyway, ``--migrate-damaged`` (or
-``migrate_to_v2(allow_damaged=True)``) does it, and says clearly in the log
-what it is giving up.
-
-Duplicate residue is **not** affected — it never blocked migration and still
-does not. A duplicate stays visible after conversion, because v2's
-``verify()`` reports duplicates just as v1's does, so migrating it destroys
-no evidence. Only holes and orphans gate.
-
-Behaviour change in rc5: property-list storage, repair, and fail-fast reads
-===========================================================================
-
-.. note::
-
-   This section covers ``v3.13.0rc5``. It is independent of the ``rc4`` MCP
-   change and the ``rc3``/``rc1``/``rc2`` sections below. It applies to every
-   deployment that uses **list properties** (``actor.property_lists.*``,
-   ``/properties/<name>`` on a list). If you use only scalar properties, read
-   just "Property reads now raise on backend faults" below and skip the rest.
+   Applies to every deployment that uses **list properties**
+   (``actor.property_lists.*``, ``/properties/<name>`` on a list), and is
+   independent of the MCP and DynamoDB sections. If you use only scalar
+   properties, read just "Property reads now raise on backend faults" below
+   and skip the rest.
 
 Read this section before upgrading, not after. One of the changes turns
 pre-existing, previously-invisible data damage into a visible error, so the
@@ -65,14 +157,15 @@ transaction, so an interruption anywhere in the middle left a hole, a
 duplicate, or a length that disagreed with reality — and reads silently
 compacted past the damage, so nothing ever surfaced it.
 
-rc5 fixes the write paths, adds repair tooling, makes reads fail loudly
+3.13 fixes the write paths, adds repair tooling, makes reads fail loudly
 instead of quietly, and introduces a storage format in which the whole class
 of defect is structurally impossible.
 
 Step 1: sweep for existing damage BEFORE upgrading
 --------------------------------------------------
 
-Any list damaged by the old code is still damaged. rc4 hid that; rc5 will
+Any list damaged by the old code is still damaged. Releases before 3.13 hid
+that; 3.13 will
 not. Find out what you have first::
 
     actingweb-verify-property-lists
@@ -113,6 +206,28 @@ Step 2: repair what it found
 removes orphans, corrects the recorded length, and preserves
 ``description``/``explanation``/``created_at``. It closes holes.
 
+**It refuses a reverted migration, by design.** A v1 list that is damaged
+**and** reports ``foreign_format_rows > 0`` is not an ordinary hole. It is a
+list whose migration to v2 was reverted: the v1 rows are gone, the metadata
+still claims v1 with the old length, and **the items are almost certainly
+alive in the v2 rows**. Compacting it would rewrite the empty v1 range, set
+the length to what it found, report the list healthy, and leave the only
+surviving copy as unreferenced residue for the next
+``clear()``/``delete()``/migrate re-run to sweep.
+
+So ``--repair`` skips those lists, logs a WARNING naming the shape, and counts
+them as still unhealthy. Recover them first — the v2 rows are readable
+directly, and re-running the migration against corrected metadata restores the
+list. ``--repair-reverted`` overrides the refusal and is the wrong answer
+unless you have looked at the rows and decided to abandon them.
+
+.. warning::
+
+   Earlier releases logged those rows at INFO as "harmless to reads; clear it
+   by re-running ``--migrate``". In this shape that advice deletes the data.
+   If you ran a sweep on ``3.13.0rc5`` or ``rc6`` and acted on that line,
+   check the affected lists before assuming they are empty by design.
+
 **It does not resolve duplicates, by design.** A duplicate always means an
 item was destroyed; collapsing one copy would bless that loss as intentional
 rather than surface it. Duplicates are reported and left for you to decide
@@ -149,7 +264,7 @@ gone.
    nice-to-have. What 3.13 *does* guarantee is that such a write can no
    longer corrupt the list's **format** *from a stale cache*: a concurrent
    write updates only the metadata fields it changes, merged into a fresh
-   read. In ``rc6`` and earlier it wrote a whole cached dictionary back,
+   read. In ``v3.13.0rc6`` and earlier it wrote a whole cached dictionary back,
    putting ``format: 1`` over a completed migration, and the result was total
    silent loss — see the CHANGELOG.
 
@@ -169,7 +284,7 @@ list's recorded length is missing from storage. Every HTTP path that serves
 list content returns **409** with
 ``{"error": "list_corrupted", "list": ..., "detail": ..., "remedy": "compact"}``.
 
-This is the change that makes step 1 non-optional: a hole that rc4 silently
+This is the change that makes step 1 non-optional: a hole that earlier releases silently
 skipped becomes a raised exception or a 409. Audit your call sites — anything
 that reads a list and cannot tolerate an exception needs a
 ``ListCorruptionError`` handler, and the underlying list needs repairing::
@@ -207,7 +322,7 @@ Step 4: decide when lists are allowed to change format
 
 .. danger::
 
-   **Automatic conversion of existing lists is OFF by default in rc5**
+   **Automatic conversion of existing lists is OFF by default**
    (``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH=0``). Leave it that way for this
    release's deployment: no list changes format, so rolling back stays a
    pure code rollback with no data to reconcile. Convert later, deliberately.
@@ -216,7 +331,7 @@ Step 4: decide when lists are allowed to change format
    v2 with no action from you. Only the conversion of data you already have
    waits for your go-ahead.
 
-   The reason is not latency, it is rollback. A pre-rc5 process does not
+   The reason is not latency, it is rollback. A pre-3.13 process does not
    error on a migrated list -- it reads it as **empty**, silently. The
    metadata row still exists, so the list "exists"; a v2 list stores no
    ``length`` field, and an older reader takes the absence as zero. A write
@@ -238,7 +353,7 @@ Step 4: decide when lists are allowed to change format
    become v2 until every process that might serve it can read v2, including
    the release you would roll back to.**
 
-Once rc5 has been live long enough that rollback is off the table, migrate
+Once 3.13 has been live long enough that rollback is off the table, migrate
 as a deliberate operator action::
 
     actingweb-migrate-property-lists              # dry run
@@ -249,7 +364,7 @@ the gate.** Migration refuses a list with holes or orphans, and the dry run
 names them and exits ``1``; a dry run that exits ``0`` is telling you the
 migration has nothing to trip over. This matters more than it sounds:
 migration renumbers survivors, so a hole that goes through it stops existing
-*and* stops being reportable. See the rc6 section at the top.
+*and* stops being reportable. See "Migration refuses damaged lists" below.
 
 Step 5: understand the new storage format
 -----------------------------------------
@@ -341,17 +456,49 @@ Repair API, if you would rather not use the scripts
 there: detecting and rebalancing sort keys that have grown long from repeated
 inserts at the same position.
 
-Behaviour change in rc4: MCP ``structuredContent`` is now opt-in
-=================================================================
+Migration refuses damaged lists
+===============================
 
 .. note::
 
-   This section covers the ``v3.13.0rc4`` behaviour change. It is independent
-   of the ``rc5`` property-list changes above, the ``rc3`` security fix and
-   the ``rc1``/``rc2`` DynamoDB-scalability steps below — read every section
-   that falls between the version you are on and the version you are
-   upgrading to. It applies only if you expose MCP tools; if you do not, skip
-   to the next section.
+   A refinement of the property-list steps above, and it only affects you if
+   you run ``actingweb-migrate-property-lists`` (step 4). Do the steps above
+   first — they are the ones with the pre-upgrade work.
+
+``actingweb-migrate-property-lists --migrate`` and
+``ListProperty.migrate_to_v2()`` now **refuse a list with holes or orphans**,
+and the dry run reports those lists as needing repair instead of counting
+them as "would migrate". A dry run that finds any exits ``1``.
+
+The reason is that migrating damaged data is not just lossy, it is
+*unreportably* lossy. Migration renumbers the surviving rows, so the hole is
+gone afterwards — and so is the evidence. The migrated list verifies healthy,
+and nothing remains to say an item ever went missing. An earlier form of the
+dry run said nothing about holes at all, so a sweep over a fleet containing one
+could report "0 refused, 0 errors" and an operator would proceed in good faith,
+past the last moment at which the damage was still visible.
+
+Lazy migration has always refused damaged lists, for exactly this reason. The
+deliberate path now applies the same rule.
+
+What to do: **repair first** (step 2), then migrate. If you have looked at
+the damage and decided to migrate anyway, ``--migrate-damaged`` (or
+``migrate_to_v2(allow_damaged=True)``) does it, and says clearly in the log
+what it is giving up.
+
+Duplicate residue is **not** affected — it never blocked migration and still
+does not. A duplicate stays visible after conversion, because v2's
+``verify()`` reports duplicates just as v1's does, so migrating it destroys
+no evidence. Only holes and orphans gate.
+
+MCP: ``structuredContent`` is now opt-in
+========================================
+
+.. note::
+
+   Applies only if you expose MCP tools. If you do not, skip to the next
+   section. Independent of the property-list section above and the security
+   and DynamoDB sections below.
 
 What changed
 ------------
@@ -441,19 +588,16 @@ Two related fixes in the same release
   that ``output_schema`` and ``structuredContent`` are independent — declaring
   a schema has never caused structured output to be emitted.
 
-Security fix in rc3: MCP trust-cache authorization bypass
-===========================================================
+Security: MCP trust-cache authorization bypass
+==============================================
 
 .. note::
 
-   This section covers the ``v3.13.0rc3`` security fix. It applies **in
-   addition to** the DynamoDB-scalability migration steps later in this
-   document (``rc1``/``rc2``) and the ``rc4`` MCP change above — read every
-   section between the version you are on and the version you are upgrading
-   to. If you are only running MCP with a single client per actor,
-   most of this section does not apply to you, but the ``resources/read``
-   and resolver-matching items below can still be relevant; read the
-   summary before skipping ahead.
+   **Read this even if you skipped the MCP section above.** It applies in
+   addition to every other section here. If you run MCP with a single client
+   per actor, most of it does not apply to you — but the ``resources/read``
+   and resolver-matching items still can, so read the summary before skipping
+   ahead.
 
 See the ``SECURITY`` section of ``CHANGELOG.rst`` for what changed and why.
 This section is the operational checklist: what to check *before*
@@ -535,16 +679,15 @@ entirely on the legacy peer-id fallback described in step 1 — so a row
 that fails the step-1 check does not "self-heal" on its own until the
 client goes through the OAuth2 flow again, not just makes another API call.
 
-Overview
-========
+DynamoDB scalability: reverse lookup, capacity, and table management
+====================================================================
 
 .. note::
 
-   This "Overview" and everything below it describes the ``rc1``/``rc2``
-   DynamoDB-scalability content of the 3.13 line. The ``rc3`` security fix and
-   the ``rc4`` MCP ``structuredContent`` change covered above are separate,
-   later additions to the same release line — read all three sections if you
-   are upgrading from before ``rc1``.
+   This section and everything below it is the DynamoDB-scalability half of
+   3.13, and it is the one with the **required backfill**. It is independent
+   of the property-list, MCP and security sections above; upgrading from
+   3.12.x means doing all of them.
 
 ActingWeb 3.13 is a **DynamoDB scalability release**. It fixes two measured
 superlinear cost defects (full-table scans on per-actor reads; a
@@ -580,7 +723,7 @@ How urgent that step is depends on how your app resolves the logged-in user
    Local or a real table; see `Rehearse the migration first`_.
 
 Which deployment am I?
-======================
+----------------------
 
 Find your row; do what its column says. "Implicit legacy" means you never
 called ``with_legacy_property_index()`` and never set
@@ -621,7 +764,7 @@ called ``with_legacy_property_index()`` and never set
      - None.
 
 Rehearse the migration first
-============================
+----------------------------
 
 The backfill is the riskiest step in this release and it is easy to treat as
 a one-shot production procedure. It isn't: the **whole** migration — new-table
@@ -651,7 +794,7 @@ An operator who has done this once is not doing it for the first time in
 production.
 
 Required: run the backfill (all upgrading deployments using reverse lookup)
-===========================================================================
+---------------------------------------------------------------------------
 
 The lookup table is **derived data**; the properties table is the source
 of truth. The script rebuilds the v2 table from it — streaming,
@@ -704,7 +847,7 @@ Verify, then clean up:
    the index.
 
 Rollback — check *before* you upgrade
-=====================================
+-------------------------------------
 
 Setting ``USE_PROPERTY_LOOKUP_TABLE=false`` (or
 ``with_legacy_property_index(enable=True)``) restores the legacy path. (3.13
@@ -726,7 +869,7 @@ the fluent builder — the rollback now actually works.)
    delete the GSI in the cleanup step above.)
 
 Direct use of the lookup accessor degrades during the migration window
-======================================================================
+----------------------------------------------------------------------
 
 The three-tier read path (v2 → deprecated v1 → legacy GSI) lives in
 ``DbProperty.get_actor_id_from_property()``. Code that constructs
@@ -742,7 +885,7 @@ usual offenders. Audit yours: resolve actors through
 carries the fallbacks.
 
 Recommended: convert old auto-created tables to on-demand billing
-=================================================================
+-----------------------------------------------------------------
 
 Tables the library auto-created before 3.13 are PROVISIONED with tiny
 capacities — typically ``<prefix>_property_lookup`` (2 RCU / 1 WCU: a
@@ -760,7 +903,7 @@ Convert them in place::
   ``aws dynamodb list-tables`` + ``describe-table``.
 
 Recommended: disable auto-creation in production
-================================================
+------------------------------------------------
 
 If your tables are managed by CloudFormation/Terraform, turn off the
 library's table auto-creation and slim the runtime role::
@@ -823,7 +966,7 @@ have one, honour the same switch rather than restoring the permission::
         ...  # tables are managed externally — skip the probe
 
 Proving the fixes actually landed
-=================================
+---------------------------------
 
 Both headline fixes are invisible to functional tests: a ``Scan`` → ``Query``
 conversion returns identical data, and removing ``DescribeTable`` calls
@@ -891,7 +1034,7 @@ residual. Make sure the measurement window contains a cold start, or the zero
 is vacuous.
 
 Behaviour changes to be aware of
-================================
+--------------------------------
 
 - **Reverse-lookup matching is now (name, value)**, not value-only: the
   legacy GSI matched on value alone, so a value shared across *different*

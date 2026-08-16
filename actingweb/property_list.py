@@ -499,8 +499,46 @@ class ListProperty:
             # check that creating a list must go through.
             stored = dict(self._load_metadata())
 
+        stored_format = int(stored.get("format", 1) or 1)
+
+        # Did this instance dispatch the mutation it is now recording against
+        # a format the list no longer has?
+        #
+        # The write itself is already done by the time we get here -- append()
+        # stores the item row, then calls this -- so an item written by a
+        # stale v1 instance into a list that is now v2 is sitting in a
+        # v1-shaped row that no v2 reader will ever return. It is not lost
+        # data, it is unreachable data, and until this warning existed the
+        # only trace was a DEBUG line and a `foreign_format_rows` count that
+        # verify() reports while calling the list HEALTHY.
+        #
+        # Self-limiting: _replace_metadata() below caches the merged row, so
+        # this instance's NEXT mutation dispatches correctly. One write per
+        # retained instance, which is why this warns rather than raises --
+        # the caller's operation succeeded, it just landed somewhere nothing
+        # reads. Found by consumer verification against 3.13.0 GA.
+        if self._meta_cache is not None:
+            believed_format = int(self._meta_cache.get("format", 1) or 1)
+            if believed_format != stored_format:
+                logger.warning(
+                    "List '%s' (actor %s): this instance believed the storage "
+                    "format was v%d but the stored row says v%d -- it was "
+                    "migrated by someone else while this instance was held. "
+                    "Any item this operation wrote went into a v%d-shaped row "
+                    "that v%d readers do not see; verify() will still report "
+                    "the list healthy, and the row shows up only as "
+                    "foreign_format_rows. Re-issue the write. This instance "
+                    "self-corrects from here.",
+                    self.name,
+                    self.actor_id,
+                    believed_format,
+                    stored_format,
+                    believed_format,
+                    stored_format,
+                )
+
         meta = dict(stored)
-        if int(meta.get("format", 1) or 1) == 2:
+        if stored_format == 2:
             updates = {k: v for k, v in updates.items() if k != "length"}
         meta.update(updates)
         for field in remove:
@@ -1960,7 +1998,7 @@ class ListProperty:
         self._v2_rank_cache = sorted(written_ranks)
         return report
 
-    def compact(self) -> dict[str, Any]:
+    def compact(self, allow_reverted: bool = False) -> dict[str, Any]:
         """Repair holes and orphans by rewriting the list densely.
 
         v2: rebalances rank keys -- see ``_v2_compact()``.
@@ -1999,14 +2037,62 @@ class ListProperty:
         Prefer running repair when the actor is not taking writes, and
         re-run ``verify()`` afterwards rather than assuming success.
 
+        REFUSES A REVERTED MIGRATION. A v1 list that is damaged **and**
+        has ``foreign_format_rows > 0`` is not an ordinary hole: it is a
+        list whose migration to v2 was reverted, and its items are
+        probably alive in the v2 rows. Compacting it would rewrite the
+        (empty) v1 range, set the length to what it found, report the
+        list **healthy**, and strand the only surviving copy as residue
+        for the next ``clear()``/``delete()``/migrate re-run to sweep.
+        That is the same unreportable loss ``migrate_to_v2()`` refuses
+        damaged lists to avoid, in the other tool -- so this refuses too,
+        and ``allow_reverted=True`` is the deliberate override.
+
+        Found by consumer verification against 3.13.0 GA, not by the
+        library's own tests: the shape needs a migration that got
+        reverted, which no unit test built.
+
+        Args:
+            allow_reverted: compact a v1 list that has rows of the other
+                storage format, accepting that the items in them stop
+                being reachable and stop being reported. Off by default.
+                Recover first -- re-running ``migrate_to_v2()`` on the
+                pre-revert metadata, or reading the v2 rows out by hand --
+                and the question does not arise.
+
+                Note this is one step removed from deletion rather than
+                deletion itself, which is what makes it sharper than it
+                looks: the v2 rows survive this call. What it removes is
+                the *report* that they matter -- the list goes from loudly
+                unhealthy to healthy -- so the next
+                ``clear()``/``delete()``/migrate re-run sweeps them with
+                nothing left to say they were the data.
+
         Returns:
             The ``verify()`` report this call acted on (taken before any
-            write).
+            write). On a refusal, that report plus ``compacted: False``
+            and ``reason``.
         """
         if self._is_v2():
             return self._v2_compact()
 
         report = self.verify()
+
+        damaged = bool(report["missing_indices"] or report["orphan_indices"])
+        if damaged and report["foreign_format_rows"] and not allow_reverted:
+            logger.error(
+                "Refusing to compact list '%s' for actor %s: it is damaged AND "
+                "carries %d row(s) of the v2 storage format. That combination "
+                "means a migration was reverted, not that the list has an "
+                "ordinary hole -- the items are probably intact in the v2 rows, "
+                "and compacting would report this list healthy while stranding "
+                "them. Recover the v2 rows first. Pass allow_reverted=True "
+                "(--repair-reverted) only after deciding to abandon them.",
+                self.name,
+                self.actor_id,
+                report["foreign_format_rows"],
+            )
+            return {**report, "compacted": False, "reason": "reverted_migration"}
 
         if not self._db:
             raise RuntimeError("No database connection available")

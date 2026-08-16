@@ -5,604 +5,44 @@ CHANGELOG
 Unreleased
 ----------
 
-.. note::
-
-   Closes a data-loss defect in list properties that ordinary application
-   traffic could trigger. **Any deployment that has migrated, or intends to
-   migrate, property lists to the v2 storage format should take this.**
-
-FIXED
-~~~~~
-
-- **A concurrent write could revert a completed list migration and destroy
-  the entire list.** Metadata was persisted by writing a whole cached
-  metadata dictionary back, so a ``ListProperty`` instance that had read a
-  list before it was migrated would put ``format: 1`` back over the
-  migration's ``format: 2`` flip on its next ``append()``, ``insert()``,
-  ``clear()`` or ``delete()``. Metadata then claimed v1 while every item
-  lived in v2 rows nothing read — and migration's final step deletes the v1
-  rows. The list read back as **empty, with no error anywhere**. No
-  interruption or operator action was required: an ordinary write racing an
-  ordinary migration was enough, and because the metadata cache only clears
-  on an explicit invalidation, an instance an application holds on to stayed
-  dangerous **indefinitely**, not for one round trip.
-
-  Metadata writes now name the fields they change and merge them into a
-  fresh read of the stored row, so ``format`` is never carried over from a
-  cached view. ``length`` is likewise never written into a v2 row, ``clear()``
-  and ``delete()`` dispatch on the stored format rather than a cached one,
-  and a write whose metadata row has vanished (a concurrent ``delete()``
-  won) is skipped rather than recreating the list from stale state.
-
-  **This narrows the window rather than closing it, and the difference is
-  worth being precise about.** What is gone is the unbounded variant: a
-  retained instance could previously revert a migration that finished
-  arbitrarily long ago. What remains is the gap between reading the metadata
-  row and writing it back — two adjacent operations — because neither
-  backend's ``DbProperty`` offers a compare-and-set to condition the write
-  on. That residue is accepted and deferred, not overlooked; quiescing writes
-  during a migration is still what closes it.
-
-- **An interrupted format change left rows behind permanently, and
-  re-running did not clean them up.** Both ``migrate_to_v2()`` and the
-  emergency ``--downgrade`` write the new format's rows, flip metadata, then
-  delete the old format's rows. A crash between the flip and the delete left
-  the old rows in place — and every re-run saw the list already in the
-  target format and returned before reaching its own cleanup.
-  ``migrate_to_v2()``'s docstring claimed the opposite. Worse, the bulk
-  script skipped such a list without calling ``migrate_to_v2()`` at all, so
-  the cleanup was unreachable from the command operators actually run.
-
-  New ``ListProperty.sweep_foreign_format_rows()`` removes rows belonging to
-  the format a list is no longer in, and is now called from both re-run
-  paths, from the bulk script's already-migrated branch, and from
-  ``clear()`` and ``delete()``. The residue was inert to readers, which is
-  why it went unnoticed — but it outlived the list: ``exists()`` and
-  ``list_all()`` key off the metadata row, so a deleted list's residue was
-  invisible right up until a new list was created under the same name and
-  adopted it as its own items.
-
-- **``migrate_to_v2()`` no longer recreates a metadata row that was deleted
-  while it was running.** A list deleted mid-migration was resurrected in v2
-  form out of rows the migration had just written. The migration now rolls
-  its own writes back and returns ``reason: "deleted_concurrently"``, which
-  the bulk script reports without counting as a refusal.
-
-- ``_invalidate_cache()`` now clears the v2 rank cache along with the
-  metadata cache. The two are coupled — ranks are only meaningful for the
-  format the metadata reports — and nothing enforced it.
-
-CHANGED
-~~~~~~~
-
-- ``verify()`` reports ``foreign_format_rows`` in both storage formats: how
-  many rows of the *other* format share this list's name. Informational
-  only — it does not affect ``healthy``, because the rows are inert to every
-  reader of the current format and the sweep above removes them without
-  operator involvement.
-
-- **Each list mutation now costs one additional point read.** Merging into a
-  fresh read of the metadata row is what makes the fix above work, and it is
-  not free: where a mutation previously wrote metadata from cache, it now reads
-  the row first. One extra round trip per ``append()``/``insert()``/``pop()``/
-  ``remove()``/``__setitem__()``/``__delitem__()``, on both backends. The
-  alternative is a compare-and-set primitive neither backend's ``DbProperty``
-  exposes; correctness was preferred over the round trip, and the trade is
-  recorded rather than buried.
-
-- The migration and property-list guides now state what a whole-list rewrite
-  does and does not exclude. Nothing locks out a concurrent application
-  write, so "run repair when the actor is not taking writes" remains a real
-  requirement; what is now guaranteed is that such a write cannot change the
-  list's storage format. Two concurrent migrations resolve to
-  last-writer-wins at whole-list granularity — accepted and documented
-  rather than prevented.
-
-- **Two OAuth2 client-deletion assertions run on PostgreSQL again.**
-  ``test_trust_oauth_integration.py``'s
-  ``TestTrustDeletionOnClientDeletion`` tests were quarantined on the
-  PostgreSQL backend from 2026-06-15 because a per-actor attribute ``DELETE``
-  intermittently did not persist under the parallel CI matrix. Both mechanisms
-  the investigation ranked highest have since been removed by unrelated work —
-  ``DbPropertyLookup.create()``, the one ``INSERT`` that could abort a pooled
-  connection's transaction with ``property_lookup_pkey``, gained ``ON
-  CONFLICT``; and the connection pool now rebuilds rather than serving a mix
-  of connections bound to different ``search_path`` values. The quarantine is
-  lifted so CI can confirm or refute that, rather than leaving two deletion
-  assertions dark on one backend indefinitely.
-
-- **The MCP unsupported-protocol-version rejection now names the supported
-  versions and logs at WARNING.** A client sending an
-  ``MCP-Protocol-Version`` this server does not speak still gets HTTP 400 with
-  JSON-RPC ``-32600`` and no ``data`` payload — that response shape is
-  deliberately unchanged, because it is the signal dual-era MCP clients use to
-  recognise a legacy-era server and fall back to ``initialize``. What changed:
-  the error ``message`` now lists the versions that would have worked, which
-  for a client that cannot fall back is the only diagnostic it can show a
-  user; and the rejection is logged at all, which it previously was not.
-
-  The logging is graded per origin rather than uniform, because the rejection
-  is answered on an **unauthenticated** path. A lone rejection is the normal
-  legacy-server handshake and is recorded at INFO; only a sustained run from
-  the same origin — a client retrying instead of falling back, i.e. a
-  modern-only client — escalates to WARNING, once per origin per five-minute
-  window. That keeps the actionable signal visible without handing anonymous
-  callers a log-volume lever, and it makes the "one-off versus sustained"
-  judgement in code instead of leaving it to whoever reads the logs. Origin is
-  taken from ``Mcp-Session-Id`` or the ``User-Agent``; the number of tracked
-  origins is capped.
-
-  The response code and the absence of ``data.supported`` are now covered by
-  regression tests that state why, since "fixing" this to a spec-shaped
-  ``-32022`` with ``data.supported`` would silently convert every dual-era
-  client's working fallback into a retry loop.
-
-- **Revoking a token, deleting a trust relationship or downgrading a permission
-  now evicts the MCP caches.** ``MCPHandler.clear_token_from_cache()`` had
-  exactly one caller — the logout handler — so every other path that
-  invalidates a client's identity or authorization left the in-process MCP
-  caches serving the old answer for up to their five-minute TTL. A revoked
-  token kept authenticating, a deleted trust kept authorizing, and a narrowed
-  permission kept being honoured at the old level, from any warm process.
-
-  Eviction is now wired into ``TokenManager.revoke_token()``, the SPA session
-  paths ``revoke_access_token()`` / ``revoke_refresh_token()`` (which is what
-  ``/oauth/revoke`` reaches), ``revoke_token_chain()`` (the refresh-token-reuse
-  theft response), ``revoke_all_tokens()``, trust deletion, and both the store
-  and delete paths of ``TrustPermissionStore``. It is actor-wide by necessity
-  rather than scoped to one client: the cached ``ActorInterface`` carries the
-  trust list itself, so evicting a single ``(actor, client)`` entry would leave
-  the shared wrapper answering from stale state. One consequence worth knowing:
-  any permission change on one client invalidates the cache for every MCP
-  client connected to that actor.
-
-  Eviction alone would not have been enough. A request that read a token from
-  storage just before the revocation could write what it read back into the
-  cache just after, reviving the credential for a full TTL while the eviction
-  reported success. A generation counter, bumped by every eviction and
-  snapshotted by each request before the reads that feed the caches, makes such
-  a request decline to populate them.
-
-  **This closes the window within one process only.** Every MCP cache is a
-  module global, so a multi-worker or multi-container deployment still serves
-  the stale entry from every *other* process until its TTL expires. Closing
-  that needs a shared invalidation channel and is not attempted here.
-
-- **``tools/list`` now warns when a hook's ``output_schema`` will not be
-  advertised.** ``outputSchema`` comes solely from ``@mcp_tool``; a schema
-  passed to ``@app.action_hook(..., output_schema=...)`` or derived from a
-  ``TypedDict`` return annotation is stored separately and never bridged, so an
-  author who declares one either of those ways gets silence rather than an
-  advertised schema — and the missing-``structuredContent`` warning stays quiet
-  for them too, because it is gated on the same metadata. The warning fires once
-  per tool per process, at listing time.
-
-  Deliberately a warning and not a merge: merging would newly advertise
-  ``outputSchema`` for every ``TypedDict``-annotated tool, and each one that
-  does not also return ``structuredContent`` would begin failing on
-  spec-conforming clients. That decision belongs with the ``structuredContent``
-  work and is not foreclosed here.
-
-ADDED
-~~~~~
-
-- **Opt-in diagnostics for the PostgreSQL attribute ``DELETE`` path.** Set
-  ``ACTINGWEB_PG_DELETE_DIAGNOSTICS=1`` to log, per attribute delete, the
-  statement's ``rowcount``, the deleting connection's resolved schema and
-  ``search_path``, and a post-commit re-read on a freshly checked-out
-  connection. That combination distinguishes a delete that matched no rows
-  (wrong schema or wrong key) from one that matched and did not persist — the
-  question the quarantine above left unanswered for two months. Off by
-  default. When on it costs a savepoint-wrapped schema read plus a post-commit
-  re-read per delete, and cannot affect the delete it observes: the schema read
-  runs *before* the ``DELETE`` and inside a savepoint, because a server-side
-  failure there would otherwise abort the transaction and turn the later commit
-  into a silent rollback — the exact defect the diagnostics exist to find.
-
+v3.13.0: August 15, 2026
+------------------------
 
 .. note::
 
-   ``compact()`` crash atomicity is **not** addressed here and is deferred.
-   The ``rc6`` warning boxes describing that window stand: the damage it
-   leaves is visible in the data and ``verify()`` catches it.
+   **This is the consolidated release. It supersedes ``v3.13.0rc1`` through
+   ``v3.13.0rc6``, whose separate sections have been merged here.** Changes
+   that existed only between release candidates — defects introduced by one
+   pre-release and fixed by the next — are deliberately not listed: nothing
+   released before ``v3.13.0`` ever exhibited them, so they are noise for
+   anyone upgrading from ``v3.12.0``. If you pinned an rc and want the
+   intermediate history, it is in the git log for ``CHANGELOG.rst``.
 
-v3.13.0rc6: August 9, 2026
---------------------------
+.. warning::
 
-.. note::
+   **Upgrading from ``v3.12.0`` requires reading three things**, in this
+   order, because two of them change behaviour rather than only fixing it:
 
-   Refines the ``rc5`` property-list work: bulk migration now refuses lists
-   with holes or orphans instead of silently closing them. Only affects
-   deployments that run ``actingweb-migrate-property-lists``.
+   1. The **SECURITY** section below. An MCP authorization bypass affected
+      every release from ``v3.3`` (2025-10-04) onwards. The library cannot
+      tell you whether it was exploited in your deployment; the migration
+      guide says what to check.
+   2. The three entries marked **Breaking** under CHANGED — the
+      ``/properties/<name>/items`` response shape, list reads failing fast on
+      corruption instead of silently compacting, and out-of-bounds ``PUT``
+      now returning 404.
+   3. ``docs/migration/v3.13.rst``, in full. In particular: **a green test
+      suite is not evidence this release landed correctly.** The read-path
+      and capacity fixes are invisible to functional tests, and the guide
+      gives an operation-profile recipe for confirming them against your own
+      hot paths.
 
-CHANGED
-~~~~~~~
-
-- **Migration now refuses a damaged list.**
-  ``actingweb-migrate-property-lists --migrate`` and
-  ``ListProperty.migrate_to_v2()`` refuse a list whose ``verify()`` reports
-  missing or orphaned indices, and the dry run reports those lists as
-  needing repair rather than counting them as "would migrate" — it exits
-  ``1`` when any exist, so ``0`` means the migration has nothing to trip
-  over. Migrating damaged data is not merely lossy but *unreportably*
-  lossy: migration renumbers the survivors, so afterwards the hole is
-  gone, the list verifies healthy, and nothing is left to say an item was
-  destroyed. In ``rc5`` the dry run warned about duplicate residue and said
-  nothing whatsoever about holes, so a sweep over a fleet containing one
-  could report "0 refused, 0 errors" and an operator would proceed past the
-  last moment the damage was visible. Lazy migration already refused
-  damaged lists on exactly these grounds; this applies the same rule to the
-  deliberate path. Repair first
-  (``actingweb-verify-property-lists --repair``), or pass
-  ``--migrate-damaged`` / ``migrate_to_v2(allow_damaged=True)`` to migrate
-  anyway — which logs what it is giving up.
-
-  Duplicate residue is unaffected and still migrates: it stays visible
-  after conversion, since a v2 list's ``verify()`` reports duplicates the
-  same way a v1 list's does, so migrating it destroys no evidence. Only
-  holes and orphans gate.
-- A successful migration that closed holes (only reachable via
-  ``--migrate-damaged``) now logs at WARNING rather than INFO.
-
-DOCUMENTATION
-~~~~~~~~~~~~~
-
-- **Documented that ``compact()`` is not crash-safe in either storage
-  format, and that an interrupted repair leaves damage repair will not
-  itself fix.** Only the v2 rank-rebalance window was documented in
-  3.13.0rc5; the v1 path -- the one every upgrading operator runs via
-  ``actingweb-verify-property-lists --repair`` -- has the same shape.
-  Survivors are written to their new positions before the tail rows are
-  deleted, so an interruption leaves a copy at both, with the stored length
-  unchanged: the list reads back with **no error**. ``verify()`` catches it
-  through the adjacent-duplicate heuristic, but re-running ``--repair``
-  will not remove the copy, because duplicates are preserved by design --
-  including the one the interrupted repair created. Now covered in the
-  migration guide's repair step (where operators are told to run it), the
-  property-lists guide, and ``compact()``'s docstring, with a regression
-  test pinning the measured interruption states. No behaviour change.
-- Corrected two stale statements about lazy migration, left behind when its
-  default changed to off in 3.13.0rc5: the downgrade-ordering warning
-  described a 50-item list as "by definition a lazy-migration candidate"
-  (true only where an operator has raised the limit), and the bulk script's
-  own docstring still opened by describing lazy migration as the normal
-  path.
-
-v3.13.0rc5: August 9, 2026
---------------------------
-
-.. note::
-
-   This release changes the ``/properties/<name>/items`` GET response shape,
-   makes list-property reads fail fast on corruption (409 instead of a
-   silently compacted result), enforces the spec's PUT bounds rule, and
-   changes the on-disk storage format for NEW list properties (v2,
-   fractional rank keys). See the CHANGED entries below.
-
-CHANGED
-~~~~~~~
-
-- **New list properties now use a v2 storage format (fractional rank
-  keys) instead of dense integer indices.** Delete and insert are now a
-  single conditional write each instead of a shift loop over every
-  following item -- the interrupted-shift corruption class Phases 1-3
-  hardened against structurally cannot occur in a v2 list, because there
-  is no separate stored ``length`` a row could disagree with; position is
-  always derived by sorting present rows. ``to_list()``/``slice()``/
-  iteration remain a single query regardless of list size. Existing lists
-  are untouched and keep working exactly as before (the v1 format,
-  including everything Phases 1-3 hardened, is fully supported
-  indefinitely) until migrated. New list names may no longer contain
-  ``#`` (reserved for internal storage keys) -- ``ListProperty`` raises
-  ``ValueError`` immediately on first use of such a name; existing v1
-  lists already named this way are unaffected. ``list:``-prefixed
-  property names are now also structurally excluded from the
-  property-lookup table sync, regardless of configuration.
-  ``scripts/verify_property_lists.py`` now understands both formats --
-  v2's "unhealthy" signal is rank keys approaching the length cap
-  (``compact()`` rebalances them), not holes/orphans, which are
-  structurally impossible under v2.
-- **Existing v1 lists migrate to v2 automatically and gradually.** Small
-  lists (<= 50 items) migrate lazily the next time they're mutated
-  (``append``/``insert``/item ``__setitem__``/``__delitem__``); a failed
-  lazy migration is logged and the original mutation still succeeds as
-  v1 -- migration is a background upgrade, never a reason an ordinary
-  write can fail. Larger lists stay fully functional as v1 until swept by
-  the new ``scripts/migrate_property_lists.py`` (dry-run by default;
-  ``--migrate`` to perform it; reports refused names and duplicate
-  residue; ``--downgrade ACTOR_ID/list_name`` is an emergency-only v2->v1
-  converter for rollback scenarios). ``ListProperty.migrate_to_v2()`` is
-  idempotent and safe to interrupt and re-run at any point, including
-  across concurrent v1 mutations between attempts.
-- **Breaking: list-property reads now fail fast on corruption instead of
-  silently compacting past it.** ``ListProperty.to_list()``, ``.slice()``
-  and ``.to_list_from_rows()`` raise ``ListCorruptionError`` (an
-  ``IndexError`` subclass) when an item within the list's recorded length
-  is missing from storage, matching ``AttributeList``'s existing contract.
-  Every HTTP path that serves list content (``GET /properties/<name>``,
-  ``?format=full``, ``?metadata=true``, ``GET/POST /properties/<name>/items``,
-  the bulk list-item POST, list DELETE) now returns **409 Conflict** with
-  ``{"error": "list_corrupted", "list": ..., "detail": ..., "remedy": "compact"}``
-  instead of a 500 or a quietly-wrong compacted response. Repair with
-  ``ListProperty.compact()`` (see ADDED below) before retrying.
-- **Breaking: ``GET /properties/<name>/items`` response shape changed.**
-  Was a bare JSON array (identical to ``GET /properties/<name>``); is now
-  ``{"items": [{"index": i, "item": ...}, ...], "count": n}``. ``index`` is
-  the storage index, matching what ``action=update``/``action=delete``
-  already expect in ``item_index`` — GET and POST are now consistent with
-  each other. Flask gained this route for the first time (parity with
-  FastAPI, which already had it).
-- **Breaking: ``PUT /properties/<name>?index=N`` beyond the list length now
-  returns 404** instead of silently padding the list with ``None`` up to
-  ``N`` (an unbounded-write DoS vector as well as a spec violation — the
-  spec requires 404 for ``index > length``; ``index == length`` still MAY
-  append). ``docs/protocol/actingweb-spec.rst`` "List Property PUT".
-- The bulk list-item POST (``POST /properties`` with a
-  ``{"items": [{"index": N, ...}]}``-shaped list value) now applies every
-  update before any delete, regardless of the order items appear in the
-  request, then applies deletes in descending index order. Previously,
-  processing in request order meant a delete appearing before an update in
-  the same batch could shift the update onto the wrong item. All indices
-  in a batch are now interpreted against the list as it stood before the
-  batch, consistently.
-- **The bulk list-item POST now rejects an update index beyond the end of
-  the list with 400**, the same rule ``PUT ?index=N`` follows. A batch may
-  still populate a list with consecutive indices (``0, 1, 2, …``) — the
-  bound advances with each append the batch performs — but it can no longer
-  name an arbitrary index and have the gap padded with ``None`` one row at a
-  time, which turned a single request into as many database writes as the
-  index was large. The whole batch is validated before anything is written.
-
-- **``verify()`` accepts an ``identity_key``**, adding a
-  ``duplicate_identities`` report that catches duplicates the existing
-  byte-adjacency heuristic structurally cannot. That heuristic is blind two
-  ways, and both were hit in a real deployment: it stops finding a duplicate
-  the moment either copy is edited (so it misses exactly the lists that have
-  been used since the damage), and it only looks at neighbouring rows (so it
-  missed the same ``id`` at positions 31 and 36 and called the list healthy).
-  ``duplicate_identities`` compares the identifying field across the whole
-  list and survives later edits, and the report carries
-  ``identity_checked_count`` so an empty result is distinguishable from a
-  mistyped key that compared nothing. Both sweep tools gained
-  ``--identity-key``; the migrate tool's dry-run duplicate warning
-  previously used only the unreliable comparison.
-- **The operator tools now ship with the library** as the console commands
-  ``actingweb-verify-property-lists`` and
-  ``actingweb-migrate-property-lists`` (implementation moved to
-  ``actingweb.maintenance``; ``scripts/`` keeps thin wrappers). They were
-  previously absent from the wheel, which mattered once converting existing
-  lists became an explicit operator step rather than something that
-  happened on its own.
-- **Both sweep scripts now print the backend, region/host and table prefix
-  they are about to operate on**, and warn when ``AWS_DB_PREFIX`` is an unset
-  default. The library defaults it to ``demo_actingweb``; running a sweep
-  without the application's environment could silently target a different
-  deployment and report it clean, which looks exactly like good news.
-- ``scripts/verify_property_lists.py`` no longer deletes the checkpoint file
-  on a clean **read-only** run — it is now gated on ``--repair``, matching
-  the migrate script. A dry run could previously remove the resume state of
-  an interrupted ``--repair``.
-
-- **Lazy migration now refuses a list that ``verify()`` reports as
-  unhealthy**, logging what it found and how to fix it, instead of
-  migrating it. Migration closes holes in flight and reports what it
-  closed, which is right for an operator running
-  ``scripts/migrate_property_lists.py`` and reading the output — but doing
-  it silently under an ordinary ``append()`` destroyed the evidence: the
-  hole disappeared, the lost item stayed lost, duplicate residue was
-  promoted to real data, and ``verify()`` began reporting the list healthy.
-  Repair (``compact()`` or ``verify_property_lists.py --repair``) is now
-  always an explicit operator action; damaged lists keep serving v1 and
-  keep raising ``ListCorruptionError`` until then.
-- **Automatic conversion of existing lists to the v2 format is OFF by
-  default**, controlled by the new ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``
-  environment variable (default ``0``; set a positive number to allow v1
-  lists of at most that size to convert on their next write, or use
-  ``scripts/migrate_property_lists.py``). **This does not make v2 opt-in** —
-  every list created after upgrading is v2 with no operator action; only the
-  conversion of pre-existing data waits for a deliberate decision. The
-  default is off because it is a **rollback-safety control** before it is a
-  latency one. A pre-3.13.0rc5 process does not
-  error on a migrated list — it reads it as *empty*, because a v2 list
-  stores no ``length`` field and an older reader takes the absence as zero;
-  a write from that process then forks the list across both formats with
-  nothing reporting an error, and ``--downgrade`` cannot reconcile a forked
-  list. Deployment gives a brief mixed-version window; **rollback gives
-  none** — every list that migrated before the rollback reads as empty
-  afterwards, recoverable only one list at a time. With the limit at 0 the
-  release changes no data, so rolling back is a pure code rollback.
-  Secondarily: migration is synchronous, so one ``append()`` to a 40-item
-  list performs the whole migration — dozens of sequential writes plus two
-  full-partition reads — inside that request. The library logs one INFO per
-  process the first time it encounters a v1 list while conversion is
-  disabled, naming the script, so "off" does not quietly become "never".
-- ``ListProperty.storage_format()`` (new, public) returns 1 or 2 from a
-  single point read. ``scripts/migrate_property_lists.py`` now uses it
-  instead of ``verify()`` for format detection, which was fetching the
-  actor's entire property partition once per list.
-
-FIXED
-~~~~~
-
-- **``list.index()`` semantics for negative ``start``/``stop``.**
-  ``index(value, -1)`` could previously return ``-1`` as an index (the loop
-  ran ``range(-1, n)`` and then indexed negatively). Both storage formats
-  now normalize bounds exactly as ``list.index`` does, through one shared
-  helper so they cannot diverge across a migration.
-- **``pop()`` and ``remove()`` now delete conditionally on the value they
-  read.** Resolving the item's storage key once was not enough: a
-  concurrent assignment to that same key between the read and the delete
-  would discard the other writer's value while reporting the one this
-  caller saw — an outcome corresponding to no serial ordering of the two
-  operations. Both now use the new
-  ``DbPropertyProtocol.delete_if_value_equals()`` and re-resolve on a
-  failed condition, so ``pop()`` always returns exactly what it removed and
-  ``remove()`` always removes exactly what it matched.
-  ``__delitem__``/``__setitem__`` remain unconditional by design.
-- ``pop()`` on a v2 list no longer raises ``pop from empty list`` against a
-  list another writer has appended to (the empty check consulted a cached
-  length before the v2 path could refresh it).
-- **A v2 list could read, and delete, a legacy ``#``-named sibling list's
-  rows.** New list names may not contain ``#``, but lists created before
-  this release may, and migration deliberately refuses them so they keep
-  serving as v1. Such a list's rows (e.g. ``list:foo-#bar-0`` for a list
-  named ``foo-#bar``) sort inside the storage range a v2 list named ``foo``
-  reads, so ``foo`` returned the sibling's items as its own and
-  ``foo.clear()``/``foo.delete()``/migrating ``foo`` deleted the sibling's
-  rows. Every consumer of that range now additionally requires the key to
-  be a well-formed rank.
-- **``ListProperty.migrate_to_v2()`` could destroy an already-migrated
-  list.** It decided "this list is still v1" from possibly-cached metadata;
-  if another instance had migrated the list in the meantime, the v1 rows
-  were gone, so the migration saw an all-holes list, deleted the
-  now-authoritative v2 rows as leftover scratch, and wrote an empty list
-  over them. Metadata is now re-read from storage before that decision and
-  re-checked once more immediately before the first destructive write.
-- **v2 item ``__setitem__``/``__delitem__`` could act on a stale position
-  map.** Both resolved a position through a per-instance rank-key cache that
-  could be arbitrarily old on a long-lived instance; if another writer had
-  inserted an item earlier in the list, position ``i`` no longer named the
-  same row and the wrong item was overwritten or deleted. Both now re-read
-  the rank keys before committing. (``append``/``insert`` keep using the
-  cache — their conditional writes bound the effect to where an item lands,
-  never to destroying a different one.)
-- **``scripts/migrate_property_lists.py`` and
-  ``scripts/verify_property_lists.py`` checkpointed actors whose lists had
-  not actually been dealt with.** An actor with an errored or refused list
-  (migration) or one still unhealthy after ``--repair`` (verification) was
-  marked complete, so the next run skipped it, observed no problems, deleted
-  the checkpoint and exited 0 — reporting success over work that was never
-  done. Only fully successful actors are checkpointed now.
-
-- **``ListProperty.insert()`` destroyed data on every call into a non-empty
-  list on DynamoDB.** ``insert()`` reused one cached ``DbProperty`` handle
-  across its whole shift loop instead of taking a fresh handle per
-  get()/set() like every other list method; on DynamoDB this caused each
-  shifted row to be overwritten with the last value read instead of its
-  own. Fixed both at the call site (fresh handles, matching the rest of the
-  class) and in the DynamoDB and PostgreSQL backends' ``DbProperty.get()``/
-  ``set()`` (a cached handle for a different ``(actor_id, name)`` is now
-  always discarded rather than reused).
-- **Backend read/write failures on property (and property-list item) storage
-  were silently swallowed as absence or as a no-op.** ``DbProperty.get()``
-  now raises ``actingweb.db.exceptions.DbError`` on a genuine backend fault
-  instead of returning ``None`` (``None`` means the row does not exist, and
-  only that, on both backends). Every ``ListProperty`` mutation
-  (``append``, ``__setitem__``, ``__delitem__``, ``insert``, ``clear``,
-  ``delete``, metadata writes) now checks ``set()``'s return value and
-  raises ``RuntimeError`` instead of continuing past a failed write. This is
-  a breaking change for any code that relied on a backend fault degrading
-  to ``None``/no-op on a property read/write.
-- Backend exception text no longer reaches HTTP error responses from the
-  list-property handlers (``PUT``/POST/DELETE on ``/properties/<name>`` and
-  ``/properties/<name>/items``) — the client sees a generic message; the
-  original exception is still logged server-side.
-- Unparsable list metadata no longer self-heals into a fresh empty list
-  (which orphaned every existing item row with no way back to them) —
-  ``ListProperty`` now raises ``ValueError`` instead, and the row is left
-  untouched for repair.
-
-ADDED
-~~~~~
-
-- **Property-list repair primitives.** ``ListProperty.verify()`` reports a
-  list's health (holes, orphan rows, a duplicate-value heuristic) without
-  modifying anything; ``ListProperty.compact()`` closes holes and removes
-  orphans in one pass while preserving ``description``/``explanation``/
-  ``created_at`` (unlike the previous ``clear()`` + ``extend()`` workaround,
-  which reset them). Duplicate residue is reported but never rewritten — a
-  duplicate value always means a destroyed item, and silently collapsing
-  one copy would bless the data loss as intentional. Both are also
-  available through ``actor.property_lists.<name>.verify()``/``.compact()``.
-  New operator script: ``scripts/verify_property_lists.py`` (dry-run by
-  default; ``--repair`` invokes ``compact()`` on unhealthy lists).
-
-v3.13.0rc4: August 3, 2026
---------------------------
-
-.. note::
-
-   This release changes documented MCP behaviour that shipped in the stable
-   ``v3.11.0`` and ``v3.12.0`` releases. If you expose MCP tools, read
-   ``docs/migration/v3.13.rst`` before upgrading. The migration is a no-op
-   against the older releases, so you can update your hooks first and upgrade
-   afterwards.
-
-CHANGED
-~~~~~~~
-
-- **MCP ``structuredContent`` is now opt-in.** ``tools/call`` results emit
-  ``structuredContent`` only when a tool hook sets that key explicitly, and only
-  when its value is a JSON object. Extra top-level keys are **no longer promoted**
-  into ``structuredContent``.
-
-  Why this changed: at least one major MCP client discards **every** text content
-  block when ``structuredContent`` is present on a result. Under the previous
-  behaviour, adding a single scalar key to a hook's return value silently deleted
-  that tool's entire prose payload — the model received only the promoted keys,
-  and nothing in the protocol reported the loss to either side. Neither reference
-  server implementation promotes individual keys: the SDK's low-level server emits
-  ``structuredContent`` only when ``content`` is its exact serialization, and
-  FastMCP only for a declared return model.
-
-  This is also a hardening improvement. A hook doing
-  ``return {"content": [...], **rel.to_dict()}`` was shipping the trust row's
-  ``secret`` to the model; ``properties.to_dict()`` can likewise carry
-  ``oauth_token`` / ``oauth_refresh_token``. Only an explicitly named
-  ``structuredContent`` now leaves the process. Note the win is scoped to the
-  ``content`` branch — the legacy text-wrap path still stringifies the whole dict.
-
-  Migration: nest the data you want structured under an explicit
-  ``structuredContent`` key, and keep the same object serialized in a text
-  ``content`` block (the spec's backwards-compatibility guidance — some clients
-  ignore ``structuredContent`` entirely). For tools whose payload is prose, drop
-  the extras instead. The explicit passthrough already exists in ``v3.11.0`` and
-  ``v3.12.0``, so migrated hooks produce identical output on both, and no
-  coordinated deploy is needed.
-
-FIXED
-~~~~~
-
-- **MCP: an explicit ``isError`` is now honoured on the legacy text-wrap path.**
-  A hook returning ``{"isError": True, "error": "boom"}`` with no ``content`` key
-  previously reached the wire with no ``isError`` field at all, so the failure was
-  reported to the client as a **success**. ``isError`` is honoured only when the
-  hook sets it — it is never inferred from an ``"error"`` key or any other shape
-  heuristic, so applications that return ``{"error": ...}`` on their normal error
-  path see no change. The ``str(result)`` text serialization is unchanged, so
-  ``isError`` appears both inside that text and as a wire field.
-
-ADDED
-~~~~~
-
-- **MCP: a warning when a tool declares ``output_schema`` but returns no
-  ``structuredContent``.** Spec-conforming clients reject such a result outright
-  (``Tool X has an output schema but did not return structured content``), which
-  was already broken before this release for anyone declaring a schema — the
-  library advertises ``outputSchema`` in ``tools/list`` but never consulted it at
-  call time. The warning fires once per tool per process, at call time, and only
-  when the negotiated protocol version supports structured content, so a
-  correctly-written hook talking to an older client never trips it.
-  ``output_schema`` and ``structuredContent`` remain independent: declaring a
-  schema has never caused structured output to be emitted, and the library still
-  does not validate ``structuredContent`` against a declared schema.
-- **MCP: a warning when ``structuredContent`` is set to a non-object.** MCP
-  requires a JSON object there; a list, string or number was previously dropped
-  silently. ``None`` is exempt and stays silent — it carries no payload, both
-  reference clients read a null ``structuredContent`` as absent, and
-  ``{"structuredContent": value or None}`` is a legitimate way to express
-  "nothing structured this time". In that case the key is omitted from the
-  response rather than emitted as ``null``.
-
-v3.13.0rc3: August 1, 2026
---------------------------
-
-.. note::
-
-   **Security fix — please re-run any escalation/authorization tests before
-   pinning to this release.** MCP deployments serving more than one client
-   per actor should read the ``SECURITY`` section below in full and consult
-   ``docs/migration/v3.13.rst`` before upgrading.
+   **Two operator tools ship with this release** —
+   ``actingweb-verify-property-lists`` and
+   ``actingweb-migrate-property-lists``. Automatic conversion of existing
+   lists to the v2 storage format is **off by default**; read the migration
+   guide before turning it on, and note that ``compact()`` is documented as
+   not crash-safe (see DOCUMENTATION).
 
 SECURITY
 ~~~~~~~~
@@ -618,7 +58,7 @@ SECURITY
   after a read-write client authenticated against the same actor. The
   trust cache is now keyed by ``(actor_id, client_id)``, closing the bypass.
   **Affected versions:** every release since ``v3.3`` (2025-10-04) through
-  ``v3.13.0rc2``, roughly ten months. The library cannot detect whether this
+  ``v3.13.0rc2``, roughly ten months (i.e. fixed in this release). The library cannot detect whether this
   was exploited in your deployment; see the migration guide for what to
   check.
 
@@ -669,181 +109,6 @@ SECURITY
   any trust row touched while the cache-crossing bug was live. Current
   values self-heal on that client's next request after upgrading (current
   state, not history — the metadata is a live cache with no audit trail).
-
-- **Still open, deferred:** revoking a token or modifying a trust
-  relationship does not evict the corresponding cache entries, so a revoked
-  token or a just-changed permission can still authenticate/apply from a
-  warm process for up to the 5-minute token cache TTL. Tracked in
-  ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``.
-
-FIXED
-~~~~~
-
-- **Config-bound singletons no longer serve one application's state to
-  another.** ``get_actingweb_oauth2_server()``,
-  ``get_mcp_client_registry()``, ``get_actingweb_token_manager()``,
-  ``get_oauth2_state_manager()``, ``get_permission_evaluator()``,
-  ``get_registry()`` (trust types), ``get_trust_permission_store()``,
-  ``get_peer_permission_store()``, ``get_peer_profile_store()`` and
-  ``get_cached_capabilities_store()`` each take a ``config`` argument but,
-  once built, ignored it — they bound to the **first** config the process
-  ever passed and returned that instance to every later caller. (One of them
-  documented this explicitly: "config parameter kept for interface
-  consistency but not used".) Any process hosting more than one ActingWeb
-  application therefore had the second application silently using the
-  first's configuration, **including its database backend**. The observed
-  consequence: MCP dynamic client registration wrote a trust row to one
-  backend while trust resolution read another, so the client's trust was
-  never found. Under the old fail-open behavior that granted the client
-  *full access*; under the fail-closed behavior above it returns ``-32003``.
-  Each getter now rebuilds when handed a different ``Config`` instance, and
-  still returns the cached instance for the same one. Single-application
-  deployments — the overwhelming majority — are unaffected either way.
-
-  Note that ``ActingWebOAuth2Server`` *composes* three of these, so rebinding
-  the server alone was not sufficient: ``client_registry``, ``token_manager``
-  and ``state_manager`` had to rebind too. ``get_oauth2_state_manager()``
-  re-reads its encryption key from the new config's system actor on rebind;
-  the key is stored rather than generated, so it is stable.
-
-CHANGED
-~~~~~~~
-
-- **``RuntimeContext`` is now genuinely request-scoped, and
-  ``set_custom_context()`` no longer persists across requests.** Runtime
-  context (MCP/OAuth2/web) was stored as a mutable attribute on the actor
-  object, while the MCP handler deliberately hands the *same* cached
-  ``ActorInterface`` to every request for a hot actor — so context could
-  leak between requests and, under concurrency, between callers. It is now
-  stored in a ``contextvars.ContextVar`` keyed by actor id (task-local
-  under asyncio, thread-local under a WSGI worker), and the Flask and
-  FastAPI integrations clear it at the end of every request including when
-  a handler raises. The public API (``RuntimeContext(actor)`` and all its
-  getters/setters) is unchanged, and read-only use inside request-scoped
-  hooks needs no changes. **The one behavior change for application code:**
-  data written with ``set_custom_context()`` is gone by the next request,
-  even against the same actor object. If your hooks used it as a
-  cross-request cache rather than as request-scoped data, move that to
-  actor properties or the caching guide's patterns
-  (``docs/guides/caching.md``). See ``docs/guides/hooks.rst``.
-
-- **``tools/call`` permission checks now pass ``operation="use"`` on
-  FastAPI, matching Flask.** The async handler passed ``"invoke"`` while
-  the sync handler passed ``"use"``, a transport-dependent divergence. It
-  is unread by every trust type shipped with ActingWeb (they express
-  ``tools`` as allowed/denied lists, which do not consult ``operation``),
-  so this changes nothing unless your application defines a
-  patterns/operations-based tools rule — in which case a rule that
-  matched ``invoke`` on FastAPI must now match ``use``.
-
-v3.13.0rc2: July 26, 2026
--------------------------
-
-Everything from ``v3.13.0rc1`` (July 24, 2026), plus the items marked
-*(since rc1)* below — all from the first consumer to run a real production
-upgrade on the release candidate.
-
-.. note::
-
-   **rc1 deployments should re-validate before pinning to rc2.** Three changes
-   touch a code path rather than only docs: ``register_diffs()`` now resolves
-   subscriptions before consulting suspension state, ``create_subscription()``
-   invalidates the actor's cached subscription list, and **actor deletion now
-   writes a tombstone before the wipe begins** (one extra write per deletion;
-   no change to any read path). All are argued below and covered by the suite,
-   but the lesson of this release is that read-path changes are invisible to
-   functional tests — use the operation-profile recipe in
-   ``docs/migration/v3.13.rst`` to confirm the profile on your own hot paths.
-
-ADDED
-~~~~~
-
-- **DynamoDB table auto-creation can now be disabled** for deployments that
-  manage tables via infrastructure-as-code: set
-  ``AWS_DB_AUTO_CREATE_TABLES=false`` or call
-  ``with_dynamodb(auto_create_tables=False)``. With auto-creation off, the
-  library never calls ``DescribeTable``/``CreateTable``, so both permissions
-  can be dropped from the runtime IAM role.
-
-- *(since rc1)* **Actor deletion tombstones and a tri-state deletion check.**
-  ``ActorInterface.get_deletion_status(actor_id, config)`` returns
-  ``DeletionStatus.DELETED`` / ``NOT_DELETED`` / ``UNKNOWN`` from a tombstone
-  written *before* the ``actor_deleted`` hook runs — so an external call made
-  from that hook, and any provider callback racing it, already sees
-  ``DELETED`` — and retained for 30 days, past every provider's webhook retry
-  window.
-
-  This exists because a guard of the form "skip this work if the actor no
-  longer exists" could not be written correctly. ``Actor.delete()`` removes the
-  actor row **last**, so ``get_by_id()`` keeps returning a live actor for the
-  entire wipe: the check fails **open** in exactly the window it matters,
-  which the documented cleanup pattern enters deliberately (``actor_deleted``
-  cancels an external subscription; the provider's callback races the wipe).
-  Checking harder is not available either, because ``get_by_id()`` returns
-  ``None`` for a deleted actor *and* for a failed read — so the same guard
-  fails **closed** on a throttle, which for a paid-subscription webhook means
-  the customer paid and silently never got access. A consumer hit both:
-  4 attribute rows in production belonged to fully deleted accounts.
-
-  A tombstone is *positive* evidence, so it has a safe failure direction:
-  ``UNKNOWN`` means proceed, costing at most one orphan row an operator sweep
-  can find, rather than dropping work for a paying customer. The read is a
-  single strongly-consistent point read — measured at exactly one ``GetItem``,
-  not asserted. Tombstones live under a reserved id that is never itself an
-  actor, so no deletion can destroy them, and expired ones are filtered at
-  read time so TTL means the same thing on both backends. Re-creating an actor
-  clears its tombstone (``create(actor_id=...)`` accepts a caller-supplied id).
-
-  The actor row deliberately still goes last. Deleting it first would make
-  existence checks fail closed rather than open, but "missing" is
-  indistinguishable from "read failed" anyway, and it would cost the two
-  properties that ordering buys: deletion stays retriable if a wipe step
-  fails, and rows are never briefly classifiable as orphaned. The tombstone
-  answers the question without that trade.
-
-- *(since rc1)* **``actor_deleted_complete`` lifecycle hook**, fired after the
-  wipe completes with ``actor=None`` and ``actor_id=<id>``. There was
-  previously nowhere to put "do this once the actor is definitely gone", which
-  forced applications into the race above by design: ``actor_deleted`` is the
-  only place the actor's data is readable, so it was also the only place to
-  act on it. Now the work splits — read in ``actor_deleted``, act in
-  ``actor_deleted_complete`` — which removes the race at its source
-  independently of the tombstone. The absent ``ActorInterface`` is the point,
-  not an omission.
-
-- *(since rc1)* **``get_attr_strict()`` on both attribute backends** —
-  a point read that raises on infrastructure errors instead of collapsing them
-  into ``None``, and treats an expired row as absent. Used by the tombstone
-  read; available to applications with the same need. Building the tombstone
-  read on ``get_attr()`` would have reintroduced the very bug it fixes.
-
-  **Custom backend implementers:** this method is now part of
-  ``DbAttributeProtocol``, which is ``@runtime_checkable`` — an out-of-tree
-  attribute backend must add ``get_attr_strict()`` to keep satisfying
-  ``isinstance()`` checks against the protocol. Both bundled backends
-  implement it.
-
-- *(since rc1)* **Operator-facing table verifier:**
-  ``python -m actingweb.db.verify_tables`` reports which required DynamoDB
-  tables exist and which are missing. With auto-creation disabled, "all
-  tables exist" becomes a precondition the library deliberately no longer
-  checks (an existence check would cost an ``AccessDenied`` per accessor
-  construction on a slimmed role), and the required set previously had to be
-  read out of the source. Run it out-of-band with operator credentials —
-  it only reads, never creates, and adds nothing to the request path.
-  ``--list`` prints the names without calling AWS. Exit codes: ``0`` all
-  present, ``1`` one or more missing, ``2`` the check could not run. The
-  same list now drives table pre-warm, so what the library creates and what
-  operators are told to pre-create cannot drift apart.
-
-- *(since rc1)* **``auto_create_enabled()`` is public API**
-  (``from actingweb.db.dynamodb import auto_create_enabled``). Dropping
-  ``DescribeTable``/``CreateTable`` from the runtime role affects the whole
-  role, not just the library, so application code that probes its own tables
-  (boto3 ``table.load()``/``describe_table``, pynamodb ``exists()``) needs
-  the same switch — previously it had to re-implement the environment
-  parsing. ``set_auto_create()`` and ``reset_ensure_cache()`` are exported
-  alongside it.
 
 CHANGED
 ~~~~~~~
@@ -931,23 +196,505 @@ CHANGED
   concurrently at Flask/FastAPI integration time instead of serially on the
   first request.
 
-FIXED
+- **``RuntimeContext`` is now genuinely request-scoped, and
+  ``set_custom_context()`` no longer persists across requests.** Runtime
+  context (MCP/OAuth2/web) was stored as a mutable attribute on the actor
+  object, while the MCP handler deliberately hands the *same* cached
+  ``ActorInterface`` to every request for a hot actor — so context could
+  leak between requests and, under concurrency, between callers. It is now
+  stored in a ``contextvars.ContextVar`` keyed by actor id (task-local
+  under asyncio, thread-local under a WSGI worker), and the Flask and
+  FastAPI integrations clear it at the end of every request including when
+  a handler raises. The public API (``RuntimeContext(actor)`` and all its
+  getters/setters) is unchanged, and read-only use inside request-scoped
+  hooks needs no changes. **The one behavior change for application code:**
+  data written with ``set_custom_context()`` is gone by the next request,
+  even against the same actor object. If your hooks used it as a
+  cross-request cache rather than as request-scoped data, move that to
+  actor properties or the caching guide's patterns
+  (``docs/guides/caching.md``). See ``docs/guides/hooks.rst``.
+
+- **``tools/call`` permission checks now pass ``operation="use"`` on
+  FastAPI, matching Flask.** The async handler passed ``"invoke"`` while
+  the sync handler passed ``"use"``, a transport-dependent divergence. It
+  is unread by every trust type shipped with ActingWeb (they express
+  ``tools`` as allowed/denied lists, which do not consult ``operation``),
+  so this changes nothing unless your application defines a
+  patterns/operations-based tools rule — in which case a rule that
+  matched ``invoke`` on FastAPI must now match ``use``.
+
+- **MCP ``structuredContent`` is now opt-in.** ``tools/call`` results emit
+  ``structuredContent`` only when a tool hook sets that key explicitly, and only
+  when its value is a JSON object. Extra top-level keys are **no longer promoted**
+  into ``structuredContent``.
+
+  Why this changed: at least one major MCP client discards **every** text content
+  block when ``structuredContent`` is present on a result. Under the previous
+  behaviour, adding a single scalar key to a hook's return value silently deleted
+  that tool's entire prose payload — the model received only the promoted keys,
+  and nothing in the protocol reported the loss to either side. Neither reference
+  server implementation promotes individual keys: the SDK's low-level server emits
+  ``structuredContent`` only when ``content`` is its exact serialization, and
+  FastMCP only for a declared return model.
+
+  This is also a hardening improvement. A hook doing
+  ``return {"content": [...], **rel.to_dict()}`` was shipping the trust row's
+  ``secret`` to the model; ``properties.to_dict()`` can likewise carry
+  ``oauth_token`` / ``oauth_refresh_token``. Only an explicitly named
+  ``structuredContent`` now leaves the process. Note the win is scoped to the
+  ``content`` branch — the legacy text-wrap path still stringifies the whole dict.
+
+  Migration: nest the data you want structured under an explicit
+  ``structuredContent`` key, and keep the same object serialized in a text
+  ``content`` block (the spec's backwards-compatibility guidance — some clients
+  ignore ``structuredContent`` entirely). For tools whose payload is prose, drop
+  the extras instead. The explicit passthrough already exists in ``v3.11.0`` and
+  ``v3.12.0``, so migrated hooks produce identical output on both, and no
+  coordinated deploy is needed.
+
+- **New list properties now use a v2 storage format (fractional rank
+  keys) instead of dense integer indices.** Delete and insert are now a
+  single conditional write each instead of a shift loop over every
+  following item -- the interrupted-shift corruption class Phases 1-3
+  hardened against structurally cannot occur in a v2 list, because there
+  is no separate stored ``length`` a row could disagree with; position is
+  always derived by sorting present rows. ``to_list()``/``slice()``/
+  iteration remain a single query regardless of list size. Existing lists
+  are untouched and keep working exactly as before (the v1 format,
+  including everything Phases 1-3 hardened, is fully supported
+  indefinitely) until migrated. New list names may no longer contain
+  ``#`` (reserved for internal storage keys) -- ``ListProperty`` raises
+  ``ValueError`` immediately on first use of such a name; existing v1
+  lists already named this way are unaffected. ``list:``-prefixed
+  property names are now also structurally excluded from the
+  property-lookup table sync, regardless of configuration.
+  ``scripts/verify_property_lists.py`` now understands both formats --
+  v2's "unhealthy" signal is rank keys approaching the length cap
+  (``compact()`` rebalances them), not holes/orphans, which are
+  structurally impossible under v2.
+
+- **Existing v1 lists migrate to v2 automatically and gradually.** Small
+  lists (<= 50 items) migrate lazily the next time they're mutated
+  (``append``/``insert``/item ``__setitem__``/``__delitem__``); a failed
+  lazy migration is logged and the original mutation still succeeds as
+  v1 -- migration is a background upgrade, never a reason an ordinary
+  write can fail. Larger lists stay fully functional as v1 until swept by
+  the new ``scripts/migrate_property_lists.py`` (dry-run by default;
+  ``--migrate`` to perform it; reports refused names and duplicate
+  residue; ``--downgrade ACTOR_ID/list_name`` is an emergency-only v2->v1
+  converter for rollback scenarios). ``ListProperty.migrate_to_v2()`` is
+  idempotent and safe to interrupt and re-run at any point, including
+  across concurrent v1 mutations between attempts.
+
+- **Breaking: list-property reads now fail fast on corruption instead of
+  silently compacting past it.** ``ListProperty.to_list()``, ``.slice()``
+  and ``.to_list_from_rows()`` raise ``ListCorruptionError`` (an
+  ``IndexError`` subclass) when an item within the list's recorded length
+  is missing from storage, matching ``AttributeList``'s existing contract.
+  Every HTTP path that serves list content (``GET /properties/<name>``,
+  ``?format=full``, ``?metadata=true``, ``GET/POST /properties/<name>/items``,
+  the bulk list-item POST, list DELETE) now returns **409 Conflict** with
+  ``{"error": "list_corrupted", "list": ..., "detail": ..., "remedy": "compact"}``
+  instead of a 500 or a quietly-wrong compacted response. Repair with
+  ``ListProperty.compact()`` (see ADDED below) before retrying.
+
+- **Breaking: ``GET /properties/<name>/items`` response shape changed.**
+  Was a bare JSON array (identical to ``GET /properties/<name>``); is now
+  ``{"items": [{"index": i, "item": ...}, ...], "count": n}``. ``index`` is
+  the storage index, matching what ``action=update``/``action=delete``
+  already expect in ``item_index`` — GET and POST are now consistent with
+  each other. Flask gained this route for the first time (parity with
+  FastAPI, which already had it).
+
+- **Breaking: ``PUT /properties/<name>?index=N`` beyond the list length now
+  returns 404** instead of silently padding the list with ``None`` up to
+  ``N`` (an unbounded-write DoS vector as well as a spec violation — the
+  spec requires 404 for ``index > length``; ``index == length`` still MAY
+  append). ``docs/protocol/actingweb-spec.rst`` "List Property PUT".
+- The bulk list-item POST (``POST /properties`` with a
+  ``{"items": [{"index": N, ...}]}``-shaped list value) now applies every
+  update before any delete, regardless of the order items appear in the
+  request, then applies deletes in descending index order. Previously,
+  processing in request order meant a delete appearing before an update in
+  the same batch could shift the update onto the wrong item. All indices
+  in a batch are now interpreted against the list as it stood before the
+  batch, consistently.
+
+- **The bulk list-item POST now rejects an update index beyond the end of
+  the list with 400**, the same rule ``PUT ?index=N`` follows. A batch may
+  still populate a list with consecutive indices (``0, 1, 2, …``) — the
+  bound advances with each append the batch performs — but it can no longer
+  name an arbitrary index and have the gap padded with ``None`` one row at a
+  time, which turned a single request into as many database writes as the
+  index was large. The whole batch is validated before anything is written.
+
+- **``verify()`` accepts an ``identity_key``**, adding a
+  ``duplicate_identities`` report that catches duplicates the existing
+  byte-adjacency heuristic structurally cannot. That heuristic is blind two
+  ways, and both were hit in a real deployment: it stops finding a duplicate
+  the moment either copy is edited (so it misses exactly the lists that have
+  been used since the damage), and it only looks at neighbouring rows (so it
+  missed the same ``id`` at positions 31 and 36 and called the list healthy).
+  ``duplicate_identities`` compares the identifying field across the whole
+  list and survives later edits, and the report carries
+  ``identity_checked_count`` so an empty result is distinguishable from a
+  mistyped key that compared nothing. Both sweep tools gained
+  ``--identity-key``; the migrate tool's dry-run duplicate warning
+  previously used only the unreliable comparison.
+
+- **The operator tools now ship with the library** as the console commands
+  ``actingweb-verify-property-lists`` and
+  ``actingweb-migrate-property-lists`` (implementation moved to
+  ``actingweb.maintenance``; ``scripts/`` keeps thin wrappers). They were
+  previously absent from the wheel, which mattered once converting existing
+  lists became an explicit operator step rather than something that
+  happened on its own.
+
+- **Both sweep scripts now print the backend, region/host and table prefix
+  they are about to operate on**, and warn when ``AWS_DB_PREFIX`` is an unset
+  default. The library defaults it to ``demo_actingweb``; running a sweep
+  without the application's environment could silently target a different
+  deployment and report it clean, which looks exactly like good news.
+- ``scripts/verify_property_lists.py`` no longer deletes the checkpoint file
+  on a clean **read-only** run — it is now gated on ``--repair``, matching
+  the migrate script. A dry run could previously remove the resume state of
+  an interrupted ``--repair``.
+
+- **Lazy migration now refuses a list that ``verify()`` reports as
+  unhealthy**, logging what it found and how to fix it, instead of
+  migrating it. Migration closes holes in flight and reports what it
+  closed, which is right for an operator running
+  ``scripts/migrate_property_lists.py`` and reading the output — but doing
+  it silently under an ordinary ``append()`` destroyed the evidence: the
+  hole disappeared, the lost item stayed lost, duplicate residue was
+  promoted to real data, and ``verify()`` began reporting the list healthy.
+  Repair (``compact()`` or ``verify_property_lists.py --repair``) is now
+  always an explicit operator action; damaged lists keep serving v1 and
+  keep raising ``ListCorruptionError`` until then.
+
+- **Automatic conversion of existing lists to the v2 format is OFF by
+  default**, controlled by the new ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``
+  environment variable (default ``0``; set a positive number to allow v1
+  lists of at most that size to convert on their next write, or use
+  ``scripts/migrate_property_lists.py``). **This does not make v2 opt-in** —
+  every list created after upgrading is v2 with no operator action; only the
+  conversion of pre-existing data waits for a deliberate decision. The
+  default is off because it is a **rollback-safety control** before it is a
+  latency one. A pre-3.13.0 process does not
+  error on a migrated list — it reads it as *empty*, because a v2 list
+  stores no ``length`` field and an older reader takes the absence as zero;
+  a write from that process then forks the list across both formats with
+  nothing reporting an error, and ``--downgrade`` cannot reconcile a forked
+  list. Deployment gives a brief mixed-version window; **rollback gives
+  none** — every list that migrated before the rollback reads as empty
+  afterwards, recoverable only one list at a time. With the limit at 0 the
+  release changes no data, so rolling back is a pure code rollback.
+  Secondarily: migration is synchronous, so one ``append()`` to a 40-item
+  list performs the whole migration — dozens of sequential writes plus two
+  full-partition reads — inside that request. The library logs one INFO per
+  process the first time it encounters a v1 list while conversion is
+  disabled, naming the script, so "off" does not quietly become "never".
+- ``ListProperty.storage_format()`` (new, public) returns 1 or 2 from a
+  single point read. ``scripts/migrate_property_lists.py`` now uses it
+  instead of ``verify()`` for format detection, which was fetching the
+  actor's entire property partition once per list.
+
+- **Migration now refuses a damaged list.**
+  ``actingweb-migrate-property-lists --migrate`` and
+  ``ListProperty.migrate_to_v2()`` refuse a list whose ``verify()`` reports
+  missing or orphaned indices, and the dry run reports those lists as
+  needing repair rather than counting them as "would migrate" — it exits
+  ``1`` when any exist, so ``0`` means the migration has nothing to trip
+  over. Migrating damaged data is not merely lossy but *unreportably*
+  lossy: migration renumbers the survivors, so afterwards the hole is
+  gone, the list verifies healthy, and nothing is left to say an item was
+  destroyed. An earlier form of the dry run warned about duplicate residue
+  and said nothing whatsoever about holes, so a sweep over a fleet containing one
+  could report "0 refused, 0 errors" and an operator would proceed past the
+  last moment the damage was visible. Lazy migration already refused
+  damaged lists on exactly these grounds; this applies the same rule to the
+  deliberate path. Repair first
+  (``actingweb-verify-property-lists --repair``), or pass
+  ``--migrate-damaged`` / ``migrate_to_v2(allow_damaged=True)`` to migrate
+  anyway — which logs what it is giving up.
+
+  Duplicate residue is unaffected and still migrates: it stays visible
+  after conversion, since a v2 list's ``verify()`` reports duplicates the
+  same way a v1 list's does, so migrating it destroys no evidence. Only
+  holes and orphans gate.
+- A successful migration that closed holes (only reachable via
+  ``--migrate-damaged``) now logs at WARNING rather than INFO.
+
+- **``--repair`` refuses a reverted migration instead of blessing it as
+  healthy.** A v1 list that is damaged **and** carries rows of the v2 storage
+  format is not an ordinary hole: it is a list whose migration was reverted,
+  with its items alive in the v2 rows and the v1 range empty. ``compact()``
+  used to rewrite that empty range, set the length to what it found, report
+  the list **healthy**, and leave the only surviving copy as unreferenced
+  residue for the next ``clear()``/``delete()``/migrate re-run to sweep — the
+  same unreportable loss the entry above refuses damaged lists to avoid, in
+  the other operator tool.
+
+  ``compact()`` now refuses that combination and says why;
+  ``allow_reverted=True`` (``actingweb-verify-property-lists
+  --repair-reverted``) is the deliberate override, mirroring
+  ``--migrate-damaged``. The verifier's log line for foreign-format rows
+  splits accordingly: on a healthy list it still reports inert residue and how
+  to clear it; on a damaged v1 list it now **warns** that those rows are
+  probably the data and that sweeping or repairing destroys them. The previous
+  text said "harmless to reads; clear it by re-running --migrate"
+  unconditionally, which in this shape was an instruction to delete the only
+  surviving copy.
+
+- **A write from a ``ListProperty`` held across a migration is no longer
+  silent.** Such an instance dispatches on its cached storage format, so the
+  item lands in a row of the old shape that readers of the new format never
+  return — and ``verify()`` reports the list **healthy**, because the row
+  surfaces only as ``foreign_format_rows``, which is documented as inert
+  residue. It now logs a WARNING naming the list, both formats, and what to
+  do. Bounded to one write per retained instance: the metadata write refreshes
+  the cache, so the instance self-corrects from there. The write itself is
+  still lost — closing that needs dispatch on a fresh metadata read, which is
+  deferred.
+
+  This needs an instance retained *across* a migration.
+  ``PropertyListStore.__getattr__`` builds a fresh ``ListProperty`` on every
+  attribute access, so ordinary ``actor.property_lists.<name>`` use has a
+  one-request window rather than a process-lifetime one.
+
+- **Each list mutation now costs one additional point read.** Merging into a
+  fresh read of the metadata row is what makes the fix above work, and it is
+  not free: where a mutation previously wrote metadata from cache, it now reads
+  the row first. One extra round trip per ``append()``/``insert()``/``pop()``/
+  ``remove()``/``__setitem__()``/``__delitem__()``, on both backends. The
+  alternative is a compare-and-set primitive neither backend's ``DbProperty``
+  exposes; correctness was preferred over the round trip, and the trade is
+  recorded rather than buried.
+
+- The migration and property-list guides now state what a whole-list rewrite
+  does and does not exclude. Nothing locks out a concurrent application
+  write, so "run repair when the actor is not taking writes" remains a real
+  requirement; what is now guaranteed is that such a write cannot change the
+  list's storage format. Two concurrent migrations resolve to
+  last-writer-wins at whole-list granularity — accepted and documented
+  rather than prevented.
+
+- **The MCP unsupported-protocol-version rejection now names the supported
+  versions and logs at WARNING.** A client sending an
+  ``MCP-Protocol-Version`` this server does not speak still gets HTTP 400 with
+  JSON-RPC ``-32600`` and no ``data`` payload — that response shape is
+  deliberately unchanged, because it is the signal dual-era MCP clients use to
+  recognise a legacy-era server and fall back to ``initialize``. What changed:
+  the error ``message`` now lists the versions that would have worked, which
+  for a client that cannot fall back is the only diagnostic it can show a
+  user; and the rejection is logged at all, which it previously was not.
+
+  The logging is graded per origin rather than uniform, because the rejection
+  is answered on an **unauthenticated** path. A lone rejection is the normal
+  legacy-server handshake and is recorded at INFO; only a sustained run from
+  the same origin — a client retrying instead of falling back, i.e. a
+  modern-only client — escalates to WARNING, once per origin per five-minute
+  window. That keeps the actionable signal visible without handing anonymous
+  callers a log-volume lever, and it makes the "one-off versus sustained"
+  judgement in code instead of leaving it to whoever reads the logs. Origin is
+  taken from ``Mcp-Session-Id`` or the ``User-Agent``; the number of tracked
+  origins is capped.
+
+  The response code and the absence of ``data.supported`` are now covered by
+  regression tests that state why, since "fixing" this to a spec-shaped
+  ``-32022`` with ``data.supported`` would silently convert every dual-era
+  client's working fallback into a retry loop.
+
+- **Revoking a token, deleting a trust relationship or downgrading a permission
+  now evicts the MCP caches.** ``MCPHandler.clear_token_from_cache()`` had
+  exactly one caller — the logout handler — so every other path that
+  invalidates a client's identity or authorization left the in-process MCP
+  caches serving the old answer for up to their five-minute TTL. A revoked
+  token kept authenticating, a deleted trust kept authorizing, and a narrowed
+  permission kept being honoured at the old level, from any warm process.
+
+  Eviction is now wired into ``TokenManager.revoke_token()``, the SPA session
+  paths ``revoke_access_token()`` / ``revoke_refresh_token()`` (which is what
+  ``/oauth/revoke`` reaches), ``revoke_token_chain()`` (the refresh-token-reuse
+  theft response), ``revoke_all_tokens()``, trust deletion, and both the store
+  and delete paths of ``TrustPermissionStore``. It is actor-wide by necessity
+  rather than scoped to one client: the cached ``ActorInterface`` carries the
+  trust list itself, so evicting a single ``(actor, client)`` entry would leave
+  the shared wrapper answering from stale state. One consequence worth knowing:
+  any permission change on one client invalidates the cache for every MCP
+  client connected to that actor.
+
+  Eviction alone would not have been enough. A request that read a token from
+  storage just before the revocation could write what it read back into the
+  cache just after, reviving the credential for a full TTL while the eviction
+  reported success. A generation counter, bumped by every eviction and
+  snapshotted by each request before the reads that feed the caches, makes such
+  a request decline to populate them.
+
+  **This closes the window within one process only.** Every MCP cache is a
+  module global, so a multi-worker or multi-container deployment still serves
+  the stale entry from every *other* process until its TTL expires. Closing
+  that needs a shared invalidation channel and is not attempted here.
+
+- **``tools/list`` now warns when a hook's ``output_schema`` will not be
+  advertised.** ``outputSchema`` comes solely from ``@mcp_tool``; a schema
+  passed to ``@app.action_hook(..., output_schema=...)`` or derived from a
+  ``TypedDict`` return annotation is stored separately and never bridged, so an
+  author who declares one either of those ways gets silence rather than an
+  advertised schema — and the missing-``structuredContent`` warning stays quiet
+  for them too, because it is gated on the same metadata. The warning fires once
+  per tool per process, at listing time.
+
+  Deliberately a warning and not a merge: merging would newly advertise
+  ``outputSchema`` for every ``TypedDict``-annotated tool, and each one that
+  does not also return ``structuredContent`` would begin failing on
+  spec-conforming clients. That decision belongs with the ``structuredContent``
+  work and is not foreclosed here.
+
+ADDED
 ~~~~~
 
-- *(since rc1)* **A failed actor read on DynamoDB was completely silent.**
-  ``DbActor.get()`` caught bare ``Exception`` and returned ``None`` with no log
-  line at any level. The comment said "PynamoDB DoesNotExist", but the clause
-  also swallowed ``ProvisionedThroughputExceededException``, request timeouts,
-  credential errors and ``TableDoesNotExist`` — every one of which then
-  presented to callers as "this actor does not exist". An infrastructure fault
-  causing an existence check to answer "no" was undiagnosable from outside the
-  process. Genuine absence now returns ``None`` quietly as before; anything
-  else logs at ERROR naming the exception type and the consequence. It still
-  returns ``None`` rather than raising: raising would turn every transient
-  throttle across authentication, OAuth2 and MCP into an HTTP 500 on a release
-  already validated in production. Callers needing the distinction should use
-  ``get_deletion_status()``, which reports ``UNKNOWN`` rather than guessing.
-  (PostgreSQL already logged this at ERROR; DynamoDB was the asymmetric one.)
+- **DynamoDB table auto-creation can now be disabled** for deployments that
+  manage tables via infrastructure-as-code: set
+  ``AWS_DB_AUTO_CREATE_TABLES=false`` or call
+  ``with_dynamodb(auto_create_tables=False)``. With auto-creation off, the
+  library never calls ``DescribeTable``/``CreateTable``, so both permissions
+  can be dropped from the runtime IAM role.
+
+- **Actor deletion tombstones and a tri-state deletion check.**
+  ``ActorInterface.get_deletion_status(actor_id, config)`` returns
+  ``DeletionStatus.DELETED`` / ``NOT_DELETED`` / ``UNKNOWN`` from a tombstone
+  written *before* the ``actor_deleted`` hook runs — so an external call made
+  from that hook, and any provider callback racing it, already sees
+  ``DELETED`` — and retained for 30 days, past every provider's webhook retry
+  window.
+
+  This exists because a guard of the form "skip this work if the actor no
+  longer exists" could not be written correctly. ``Actor.delete()`` removes the
+  actor row **last**, so ``get_by_id()`` keeps returning a live actor for the
+  entire wipe: the check fails **open** in exactly the window it matters,
+  which the documented cleanup pattern enters deliberately (``actor_deleted``
+  cancels an external subscription; the provider's callback races the wipe).
+  Checking harder is not available either, because ``get_by_id()`` returns
+  ``None`` for a deleted actor *and* for a failed read — so the same guard
+  fails **closed** on a throttle, which for a paid-subscription webhook means
+  the customer paid and silently never got access. A consumer hit both:
+  4 attribute rows in production belonged to fully deleted accounts.
+
+  A tombstone is *positive* evidence, so it has a safe failure direction:
+  ``UNKNOWN`` means proceed, costing at most one orphan row an operator sweep
+  can find, rather than dropping work for a paying customer. The read is a
+  single strongly-consistent point read — measured at exactly one ``GetItem``,
+  not asserted. Tombstones live under a reserved id that is never itself an
+  actor, so no deletion can destroy them, and expired ones are filtered at
+  read time so TTL means the same thing on both backends. Re-creating an actor
+  clears its tombstone (``create(actor_id=...)`` accepts a caller-supplied id).
+
+  The actor row deliberately still goes last. Deleting it first would make
+  existence checks fail closed rather than open, but "missing" is
+  indistinguishable from "read failed" anyway, and it would cost the two
+  properties that ordering buys: deletion stays retriable if a wipe step
+  fails, and rows are never briefly classifiable as orphaned. The tombstone
+  answers the question without that trade.
+
+- **``actor_deleted_complete`` lifecycle hook**, fired after the
+  wipe completes with ``actor=None`` and ``actor_id=<id>``. There was
+  previously nowhere to put "do this once the actor is definitely gone", which
+  forced applications into the race above by design: ``actor_deleted`` is the
+  only place the actor's data is readable, so it was also the only place to
+  act on it. Now the work splits — read in ``actor_deleted``, act in
+  ``actor_deleted_complete`` — which removes the race at its source
+  independently of the tombstone. The absent ``ActorInterface`` is the point,
+  not an omission.
+
+- **``get_attr_strict()`` on both attribute backends** —
+  a point read that raises on infrastructure errors instead of collapsing them
+  into ``None``, and treats an expired row as absent. Used by the tombstone
+  read; available to applications with the same need. Building the tombstone
+  read on ``get_attr()`` would have reintroduced the very bug it fixes.
+
+  **Custom backend implementers:** this method is now part of
+  ``DbAttributeProtocol``, which is ``@runtime_checkable`` — an out-of-tree
+  attribute backend must add ``get_attr_strict()`` to keep satisfying
+  ``isinstance()`` checks against the protocol. Both bundled backends
+  implement it.
+
+- **Operator-facing table verifier:**
+  ``python -m actingweb.db.verify_tables`` reports which required DynamoDB
+  tables exist and which are missing. With auto-creation disabled, "all
+  tables exist" becomes a precondition the library deliberately no longer
+  checks (an existence check would cost an ``AccessDenied`` per accessor
+  construction on a slimmed role), and the required set previously had to be
+  read out of the source. Run it out-of-band with operator credentials —
+  it only reads, never creates, and adds nothing to the request path.
+  ``--list`` prints the names without calling AWS. Exit codes: ``0`` all
+  present, ``1`` one or more missing, ``2`` the check could not run. The
+  same list now drives table pre-warm, so what the library creates and what
+  operators are told to pre-create cannot drift apart.
+
+- **``auto_create_enabled()`` is public API**
+  (``from actingweb.db.dynamodb import auto_create_enabled``). Dropping
+  ``DescribeTable``/``CreateTable`` from the runtime role affects the whole
+  role, not just the library, so application code that probes its own tables
+  (boto3 ``table.load()``/``describe_table``, pynamodb ``exists()``) needs
+  the same switch — previously it had to re-implement the environment
+  parsing. ``set_auto_create()`` and ``reset_ensure_cache()`` are exported
+  alongside it.
+
+- **MCP: a warning when a tool declares ``output_schema`` but returns no
+  ``structuredContent``.** Spec-conforming clients reject such a result outright
+  (``Tool X has an output schema but did not return structured content``), which
+  was already broken before this release for anyone declaring a schema — the
+  library advertises ``outputSchema`` in ``tools/list`` but never consulted it at
+  call time. The warning fires once per tool per process, at call time, and only
+  when the negotiated protocol version supports structured content, so a
+  correctly-written hook talking to an older client never trips it.
+  ``output_schema`` and ``structuredContent`` remain independent: declaring a
+  schema has never caused structured output to be emitted, and the library still
+  does not validate ``structuredContent`` against a declared schema.
+
+- **MCP: a warning when ``structuredContent`` is set to a non-object.** MCP
+  requires a JSON object there; a list, string or number was previously dropped
+  silently. ``None`` is exempt and stays silent — it carries no payload, both
+  reference clients read a null ``structuredContent`` as absent, and
+  ``{"structuredContent": value or None}`` is a legitimate way to express
+  "nothing structured this time". In that case the key is omitted from the
+  response rather than emitted as ``null``.
+
+- **Property-list repair primitives.** ``ListProperty.verify()`` reports a
+  list's health (holes, orphan rows, a duplicate-value heuristic) without
+  modifying anything; ``ListProperty.compact()`` closes holes and removes
+  orphans in one pass while preserving ``description``/``explanation``/
+  ``created_at`` (unlike the previous ``clear()`` + ``extend()`` workaround,
+  which reset them). Duplicate residue is reported but never rewritten — a
+  duplicate value always means a destroyed item, and silently collapsing
+  one copy would bless the data loss as intentional. Both are also
+  available through ``actor.property_lists.<name>.verify()``/``.compact()``.
+  New operator script: ``scripts/verify_property_lists.py`` (dry-run by
+  default; ``--repair`` invokes ``compact()`` on unhealthy lists).
+
+- **Opt-in diagnostics for the PostgreSQL attribute ``DELETE`` path.** Set
+  ``ACTINGWEB_PG_DELETE_DIAGNOSTICS=1`` to log, per attribute delete, the
+  statement's ``rowcount``, the deleting connection's resolved schema and
+  ``search_path``, and a post-commit re-read on a freshly checked-out
+  connection. That combination distinguishes a delete that matched no rows
+  (wrong schema or wrong key) from one that matched and did not persist — the
+  question the quarantine above left unanswered for two months. Off by
+  default. When on it costs a savepoint-wrapped schema read plus a post-commit
+  re-read per delete, and cannot affect the delete it observes: the schema read
+  runs *before* the ``DELETE`` and inside a savepoint, because a server-side
+  failure there would otherwise abort the transaction and turn the later commit
+  into a silent rollback — the exact defect the diagnostics exist to find.
+
+
+.. note::
+
+   ``compact()`` crash atomicity is **not** addressed here and is deferred.
+   The warning boxes describing that window stand: the damage it
+   leaves is visible in the data and ``verify()`` catches it.
+
+FIXED
+~~~~~
 
 - **Changing an indexed property left its old reverse-lookup row behind on
   DynamoDB.** When an indexed value (e.g. ``email``) was updated through the
@@ -978,7 +725,7 @@ FIXED
   these settings were explicitly configured; precedence is consistently
   explicit builder call > environment variable > library default.
 
-- *(since rc1)* **Every property write issued a subscription-suspension read,
+- **Every property write issued a subscription-suspension read,
   even with no subscribers.** ``register_diffs()`` runs on each write and
   checked suspension *before* fetching subscriptions, so an actor with no
   subscriptions on the target paid a DynamoDB ``GetItem`` **and** the
@@ -991,7 +738,7 @@ FIXED
   ``{GetItem: 1, PutItem: 1, Query: 1}`` — no suspension read, no
   ``DescribeTable``, no ``Scan``.
 
-- *(since rc1)* **A failed subscription-suspension check was indistinguishable
+- **A failed subscription-suspension check was indistinguishable
   from "not suspended".** ``Actor.is_subscription_suspended()`` logged any
   failure at DEBUG and returned ``False``, so a missing suspensions table
   (pynamodb raises ``TableDoesNotExist``, which is *not* ``DoesNotExist``) or
@@ -1008,7 +755,7 @@ FIXED
   and then stay silent through every later failure, including a different
   one. Throttled failures are logged at DEBUG.
 
-- *(since rc1)* **Suspending a target suppressed nothing.**
+- **Suspending a target suppressed nothing.**
   ``suspend_subscriptions("properties")`` — the documented bulk-import usage —
   had no effect on property writes. ``PropertyStore`` registers every diff
   with the property name as the **subtarget**, so the check looked up
@@ -1034,7 +781,7 @@ FIXED
   suspended is still recorded separately, so resuming the target does not
   silently lift it.
 
-- *(since rc1)* **Subscriptions created through the interface layer received
+- **Subscriptions created through the interface layer received
   no diffs for the lifetime of the actor instance.**
   ``Actor.create_subscription()`` did not invalidate the actor's cached
   subscription list (``subs_list``); only the *delete* paths did, and only the
@@ -1048,10 +795,107 @@ FIXED
   ``Actor``, still leaves that instance's list stale until it is rebuilt —
   tracked in ``thoughts/todo/subs-list-cache-asymmetry.md``.
 
+- **Config-bound singletons no longer serve one application's state to
+  another.** ``get_actingweb_oauth2_server()``,
+  ``get_mcp_client_registry()``, ``get_actingweb_token_manager()``,
+  ``get_oauth2_state_manager()``, ``get_permission_evaluator()``,
+  ``get_registry()`` (trust types), ``get_trust_permission_store()``,
+  ``get_peer_permission_store()``, ``get_peer_profile_store()`` and
+  ``get_cached_capabilities_store()`` each take a ``config`` argument but,
+  once built, ignored it — they bound to the **first** config the process
+  ever passed and returned that instance to every later caller. (One of them
+  documented this explicitly: "config parameter kept for interface
+  consistency but not used".) Any process hosting more than one ActingWeb
+  application therefore had the second application silently using the
+  first's configuration, **including its database backend**. The observed
+  consequence: MCP dynamic client registration wrote a trust row to one
+  backend while trust resolution read another, so the client's trust was
+  never found. Under the old fail-open behavior that granted the client
+  *full access*; under the fail-closed behavior above it returns ``-32003``.
+  Each getter now rebuilds when handed a different ``Config`` instance, and
+  still returns the cached instance for the same one. Single-application
+  deployments — the overwhelming majority — are unaffected either way.
+
+  Note that ``ActingWebOAuth2Server`` *composes* three of these, so rebinding
+  the server alone was not sufficient: ``client_registry``, ``token_manager``
+  and ``state_manager`` had to rebind too. ``get_oauth2_state_manager()``
+  re-reads its encryption key from the new config's system actor on rebind;
+  the key is stored rather than generated, so it is stable.
+
+- **MCP: an explicit ``isError`` is now honoured on the legacy text-wrap path.**
+  A hook returning ``{"isError": True, "error": "boom"}`` with no ``content`` key
+  previously reached the wire with no ``isError`` field at all, so the failure was
+  reported to the client as a **success**. ``isError`` is honoured only when the
+  hook sets it — it is never inferred from an ``"error"`` key or any other shape
+  heuristic, so applications that return ``{"error": ...}`` on their normal error
+  path see no change. The ``str(result)`` text serialization is unchanged, so
+  ``isError`` appears both inside that text and as a wire field.
+
+- **``list.index()`` semantics for negative ``start``/``stop``.**
+  ``index(value, -1)`` could previously return ``-1`` as an index (the loop
+  ran ``range(-1, n)`` and then indexed negatively). Both storage formats
+  now normalize bounds exactly as ``list.index`` does, through one shared
+  helper so they cannot diverge across a migration.
+
+- **``pop()`` and ``remove()`` now delete conditionally on the value they
+  read.** Resolving the item's storage key once was not enough: a
+  concurrent assignment to that same key between the read and the delete
+  would discard the other writer's value while reporting the one this
+  caller saw — an outcome corresponding to no serial ordering of the two
+  operations. Both now use the new
+  ``DbPropertyProtocol.delete_if_value_equals()`` and re-resolve on a
+  failed condition, so ``pop()`` always returns exactly what it removed and
+  ``remove()`` always removes exactly what it matched.
+  ``__delitem__``/``__setitem__`` remain unconditional by design.
+- ``pop()`` on a v2 list no longer raises ``pop from empty list`` against a
+  list another writer has appended to (the empty check consulted a cached
+  length before the v2 path could refresh it).
+
+- **``ListProperty.insert()`` destroyed data on every call into a non-empty
+  list on DynamoDB.** ``insert()`` reused one cached ``DbProperty`` handle
+  across its whole shift loop instead of taking a fresh handle per
+  get()/set() like every other list method; on DynamoDB this caused each
+  shifted row to be overwritten with the last value read instead of its
+  own. Fixed both at the call site (fresh handles, matching the rest of the
+  class) and in the DynamoDB and PostgreSQL backends' ``DbProperty.get()``/
+  ``set()`` (a cached handle for a different ``(actor_id, name)`` is now
+  always discarded rather than reused).
+
+- **Backend read/write failures on property (and property-list item) storage
+  were silently swallowed as absence or as a no-op.** ``DbProperty.get()``
+  now raises ``actingweb.db.exceptions.DbError`` on a genuine backend fault
+  instead of returning ``None`` (``None`` means the row does not exist, and
+  only that, on both backends). Every ``ListProperty`` mutation
+  (``append``, ``__setitem__``, ``__delitem__``, ``insert``, ``clear``,
+  ``delete``, metadata writes) now checks ``set()``'s return value and
+  raises ``RuntimeError`` instead of continuing past a failed write. This is
+  a breaking change for any code that relied on a backend fault degrading
+  to ``None``/no-op on a property read/write.
+- Backend exception text no longer reaches HTTP error responses from the
+  list-property handlers (``PUT``/POST/DELETE on ``/properties/<name>`` and
+  ``/properties/<name>/items``) — the client sees a generic message; the
+  original exception is still logged server-side.
+- Unparsable list metadata no longer self-heals into a fresh empty list
+  (which orphaned every existing item row with no way back to them) —
+  ``ListProperty`` now raises ``ValueError`` instead, and the row is left
+  untouched for repair.
+
 DOCUMENTATION
 ~~~~~~~~~~~~~
 
-*All since rc1, from a production upgrade of the release candidate.*
+- **The migration guide is organised by where you are upgrading from, not by
+  which release candidate added what.** ``docs/migration/v3.13.rst`` had grown
+  five sections titled "Behaviour change in rcN", each opening with a note
+  telling you to read every section between your version and the target. That
+  works while the rcs are current and stops working the moment they are one
+  release. It now opens with a **Start here** section giving two paths — from
+  ``3.12.x`` (do all four pieces of work, in the stated order, because two have
+  pre-upgrade steps) and from a release candidate (a table saying exactly what
+  is left to do for each of ``rc1`` through ``rc6``) — followed by what changed
+  after ``rc6`` for anyone tracking the pre-releases. The four work sections
+  are named for what they cover rather than for the rc that introduced them,
+  and the DynamoDB material is now nested under its own heading instead of
+  sitting as a flat run of peers titled "Overview".
 
 - **New page: Actor Deletion Semantics** (``docs/reference/actor-deletion.rst``).
   States the contract that previously had to be read out of the source: the
@@ -1077,39 +921,69 @@ DOCUMENTATION
   and it previously existed only in source. ``<prefix>_subscription_suspensions``
   is called out specifically: its accessor had no auto-create guard before
   3.13, so long-lived deployments frequently never created it.
+
 - **The pre-warm/IaC race is documented.** Declaring the new tables in
   CloudFormation/Terraform in the *same* deploy as the library bump lets a
   cold start create ``<prefix>_property_lookup_v2`` first, failing the stack
   with ``ResourceInUseException``. Sequence the deploys, or let auto-creation
   own the tables — not both.
+
 - **The rollback instruction is qualified.** Legacy mode needs the
   ``property-index`` GSI on the properties table; a table created before that
   index existed has no rollback path for reverse lookup. Check
   ``describe-table`` before upgrading.
+
 - **Migration rehearsal against DynamoDB Local** is documented end-to-end —
   table creation, fallback tiers, backfill, tripwire — so the backfill is not
   performed for the first time in production.
+
 - **A recipe for proving the fixes landed**, since both are invisible to
   functional tests: count DynamoDB operations via
   ``botocore.client.BaseClient._make_api_call``. Includes the trap that a
   ``before-call.dynamodb`` session handler counts *nothing* under pynamodb
   (``get_session()`` returns a fresh session per call), which makes
   ``assert scans == 0`` pass vacuously.
+
 - **Validating this release requires a DynamoDB backend** — a green suite on
   PostgreSQL exercises none of the changed code.
+
 - **Auditing your own ``DescribeTable``/``CreateTable`` use** is called out
   when recommending the flag: the IAM change is account-wide, not
   library-scoped.
+
 - **Reverse lookup is not always the login path** — apps resolving via
   ``get_from_creator()`` are unaffected, which changes how urgent the backfill
   is. The doc now says to check rather than assume.
+
 - **Direct ``DbPropertyLookup().get()`` use bypasses the fallback tiers**
   (v2-only), so operational scripts return ``None`` during the migration
   window while the app is healthy. ``get_actor_id_from_property()`` is named
   as the supported entry point.
+
 - **``describe-table``'s ``ItemCount`` refreshes only every ~6 hours**, so a
   freshly backfilled lookup table still reports ``ItemCount: 0``. Verify with
   ``scan --select COUNT``.
+
+- **Documented that ``compact()`` is not crash-safe in either storage
+  format, and that an interrupted repair leaves damage repair will not
+  itself fix.** Only the v2 rank-rebalance window was documented in
+  this release; the v1 path -- the one every upgrading operator runs via
+  ``actingweb-verify-property-lists --repair`` -- has the same shape.
+  Survivors are written to their new positions before the tail rows are
+  deleted, so an interruption leaves a copy at both, with the stored length
+  unchanged: the list reads back with **no error**. ``verify()`` catches it
+  through the adjacent-duplicate heuristic, but re-running ``--repair``
+  will not remove the copy, because duplicates are preserved by design --
+  including the one the interrupted repair created. Now covered in the
+  migration guide's repair step (where operators are told to run it), the
+  property-lists guide, and ``compact()``'s docstring, with a regression
+  test pinning the measured interruption states. No behaviour change.
+- Corrected two stale statements about lazy migration, which is **off by
+  default** in this release: the downgrade-ordering warning described a
+  50-item list as "by definition a lazy-migration candidate" (true only where
+  an operator has raised the limit), and the bulk script's own docstring
+  opened by describing lazy migration as the normal path.
+
 
 v3.12.0: July 9, 2026
 ---------------------

@@ -33,6 +33,46 @@ Two constraints the sketch below did not account for, both now established:
   this in the migration rollback. Any handle must be mutated **conditional on
   the bytes read**, never by rank name alone.
 
+## Two design gates established 2026-08-20
+
+From [`research 2026-08-20-v2-cost-in-library-callers`](../research/2026-08-20-v2-cost-in-library-callers.md),
+which closed the "Open: the v1 answer, and **Postgres**" half of this item's
+index row. Both verified first-hand.
+
+**The delete half is buildable today; the update half is not.**
+`DbPropertyProtocol` declares a conditional *create*
+(`create_if_not_exists`, `db/protocols.py:229`) and a conditional *delete*
+(`delete_if_value_equals`, `:256`) — and **no conditional set**. So:
+
+- `delete_by_handle` / `remove_where` compose out of what ships. PostgreSQL's
+  implementation (`db/postgresql/property.py:552-585`) is a single atomic
+  `DELETE ... WHERE id = %s AND name = %s AND value = %s` with
+  `rowcount == 1`, semantically identical to DynamoDB's — both return `False`
+  for "changed" and "already gone" alike, which `protocols.py:256-291`
+  explicitly declares equivalent to the caller.
+- `update_by_handle` — "the sibling on the write side" in the open questions
+  below — needs compare-and-swap, which does not exist. That is a **new method
+  on `DbPropertyProtocol` plus two implementations** (`UPDATE ... WHERE value
+  = %s` on PostgreSQL, a `ConditionExpression` on `UpdateItem` on DynamoDB).
+  Neither is hard, but it is new public backend surface, so the two halves need
+  not ship together — and the delete half is what both incidents were about.
+
+Note also `protocols.py:279-282`, the clearest statement in the codebase of why
+this primitive is not just sugar: the positional methods skip the conditional
+path *deliberately*, because *"'delete whatever is at position i' and
+last-writer-wins are both satisfied by an unconditional write"*. Positions and
+handles are different guarantees, not different spellings.
+
+**The matching contract already has a name.** `ListProperty.verify()` takes
+`identity_key` (`property_list.py:1754`) — *"Optional field name that identifies
+an item within your data (`"id"`, `"uuid"`, ...)"* — and reports
+`duplicate_identities`. The library has already accepted that items carry an
+identity field and already chose the word. `remove_where` should reuse
+`identity_key` rather than invent a second name, and `verify()`'s duplicate
+reporting is the existing answer to the "what does a duplicate `id` even mean"
+question below: it is a condition the library already detects and reports rather
+than one the API must resolve.
+
 ## The gap
 
 `ListProperty` addresses items by **position**: `__getitem__`, `__setitem__`,
@@ -96,6 +136,10 @@ conditional deletes**, against today's *k* × (range read + range read + delete)
 - **Duplicates.** `first_only` vs "remove all matches" — and what a duplicate
   `id` even means, given the consumer treats it as unique. Returning the count
   lets the caller notice rather than forcing a choice.
+- **Duplicates, narrowed.** `verify(identity_key=...)` already reports
+  `duplicate_identities` (see the gates above), so the library's existing
+  position is that duplicates are *detected and reported*, not prevented.
+  Returning a count from `remove_where` is consistent with that.
 - **v1.** It could be implemented positionally under v1 (locate, `__delitem__`,
   eat the shift) or refused. Prod is 730/730 format 2 and new lists are born
   v2, so refusing is defensible and much simpler — but it is a public API and

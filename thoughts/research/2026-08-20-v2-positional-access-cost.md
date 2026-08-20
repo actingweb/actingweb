@@ -166,6 +166,16 @@ mutation, so carrying a `last_rank` there is close to free.
 - **Status: plausible and cheap, not verified.** The retry loop's exact
   behaviour under a bad hint has not been traced.
 
+> **Corrected later the same day — do not plan on the above.** The trace was
+> done in
+> [`2026-08-20-v2-cost-in-library-callers.md`](2026-08-20-v2-cost-in-library-callers.md)
+> and **the existing retry does not cover a stale hint.** The loop reacts only
+> to a `create_if_not_exists` collision, and the dangerous case produces none: a
+> stale hint whose successor rank was *deleted* generates a key that lands
+> silently **mid-list**. The safe variant is a monotonic high-water mark, which
+> needs a conditional meta-row update the library does not have — so option C is
+> not nearly free, and Decision 3 changes accordingly.
+
 ### D. `consistent_read` opt-out on `get_range`
 
 Measured 2×. `get_range` serves both pure reads (`to_list`, `__iter__`,

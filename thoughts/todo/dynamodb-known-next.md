@@ -23,6 +23,22 @@ a disappointing one. Specifics:
 
 - **Item 1 stands, and got slightly worse** (see its own note below).
   `batch_write` / `BatchWriteItem` still appear nowhere in the package.
+
+  **Correction 2026-08-20** (verified first-hand in
+  [`research 2026-08-20-v2-cost-in-library-callers`](../research/2026-08-20-v2-cost-in-library-callers.md)):
+  the item describes `ListProperty.clear()`/`delete()` as *"per item: fresh
+  accessor + GetItem + DeleteItem"*. Under v2 that undercounts the fixed cost
+  and overcounts the per-item one. Both methods (`property_list.py:1166`,
+  `:1210`) now run `_invalidate_cache()` → `sweep_foreign_format_rows()` →
+  their own scan, which is **2 range Queries + 1 meta GetItem + n serial
+  `set(value=None)` point deletes** — no per-item GetItem. One of the two range
+  Queries is `sweep_foreign_format_rows`'s branch over the **v1** byte range
+  (`:1144-1150`), which on an all-v2 fleet is structurally guaranteed to return
+  nothing. The sweep is not gratuitous — its docstring records that cross-format
+  residue is invisible to `exists()`/`list_all()` until a new list adopts it as
+  its own items — but it is skippable when the list's own metadata says no
+  format change was ever interrupted. **The *n* serial deletes, which are what
+  this item is actually about, are unchanged.**
 - **Item 2 half stands, and the half that is gone matters.** The per-item N+1
   is unchanged: `ListProperty.__getitem__` still does a fresh accessor plus a
   `GetItem` per item, on both formats. **The `__delitem__` O(N) shift is gone

@@ -257,7 +257,13 @@ class NotifyingListProperty:
             if operation == "delete_all":
                 length = 0
             else:
-                length = len(self._list_prop)
+                # get_metadata()["length"] rather than len(self._list_prop):
+                # under v2 the latter is a whole-list range Query, doubled
+                # on every notified append (once inside append() itself,
+                # once here). The metadata length is exact under v1 and
+                # advisory-but-bounded under v2 -- see ListProperty's class
+                # docstring for the drift bound.
+                length = self._list_prop.get_metadata()["length"]
 
             if operation == "append" and index is None:
                 # Derived from the length just computed above, instead of
@@ -306,6 +312,11 @@ class NotifyingListProperty:
 
     def get_explanation(self) -> str:
         return self._list_prop.get_explanation()
+
+    def get_metadata(self) -> dict[str, Any]:
+        """List metadata -- see ListProperty.get_metadata(). Under v2,
+        ``length`` is the advisory ``count_hint``, not a counted value."""
+        return self._list_prop.get_metadata()
 
     def to_list(self) -> list[Any]:
         return self._list_prop.to_list()

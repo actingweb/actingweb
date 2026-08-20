@@ -213,6 +213,28 @@ class ListProperty:
     migration and repair docs already advise; a fix that makes ``length``
     relative is tracked in
     ``thoughts/todo/whole-list-rewrite-atomicity.md``.
+
+    v2's ``get_metadata()["length"]`` is served from ``count_hint``, an
+    ADVISORY count metadata mutations maintain as a side effect -- see
+    ``_v2_touch_metadata()``. **The drift bound is a documented contract,
+    not an implementation detail**: at any moment,
+    ``|count_hint - len(list_prop)|`` is at most the number of mutations
+    currently in flight against the list, plus -- during a rolling
+    deploy only -- mutations applied by pre-3.14 writers since the last
+    rank-counting 3.14 mutation (``_save_metadata()`` preserves fields it
+    doesn't recognise, so an old writer carries the hint forward without
+    maintaining it), plus one per mutation whose advisory metadata touch
+    failed (tolerated CAS exhaustion, or a backend fault after the item
+    write) since the last rank-counting mutation. Drift never accumulates
+    beyond those three terms, and it self-corrects: the next
+    rank-counting mutation (``insert()``/``pop()``/``remove()``/
+    ``__delitem__()``/``compact()``, all of which hold a freshly-read
+    rank map when they touch metadata) overwrites the hint with the
+    counted truth. ``len(list_prop)`` always counts the rank-key range and
+    is always exact; only ``get_metadata()["length"]`` is advisory. A quota
+    check that must never over-admit should trust the hint while strictly
+    below its limit and confirm with ``len()`` once it reaches the limit --
+    the exact read is then paid only at the boundary, not on every save.
     """
 
     def __init__(self, actor_id: str, name: str, config: Any) -> None:
@@ -327,8 +349,12 @@ class ListProperty:
 
     def _create_default_metadata_v2(self) -> dict[str, Any]:
         """Default metadata for a brand-new (v2) list. No `length` key --
-        v2 has no authoritative stored length, it's always counted from the
-        rank-key range."""
+        v2 has no authoritative stored length. `count_hint` is an ADVISORY
+        item count -- deliberately not named `length`, so it can never be
+        mistaken for v1's authoritative field -- maintained by mutations
+        as a side effect so a count doesn't have to pay for a whole-list
+        range query. See `get_metadata()` and `_v2_touch_metadata()` for
+        the drift bound this carries."""
         now = datetime.now().isoformat()
         return {
             "format": 2,
@@ -337,6 +363,7 @@ class ListProperty:
             "item_type": "json",
             "chunk_size": 1,
             "version": "1.0",
+            "count_hint": 0,
             "description": "",
             "explanation": "",
         }
@@ -452,6 +479,7 @@ class ListProperty:
         *,
         remove: tuple[str, ...] = (),
         create_if_absent: bool = True,
+        count_delta: int = 0,
     ) -> None:
         """Merge ``updates`` into a FRESH read of the meta row and write it
         back.
@@ -481,6 +509,14 @@ class ListProperty:
                 view. ``False`` skips the write entirely: for the v1 length
                 writers, an absent row means a concurrent ``delete()`` won,
                 and merging a stale length would resurrect the list.
+            count_delta: merged onto the FRESHLY-READ stored ``count_hint``
+                (not a cached one), under this same read -- for a v2
+                mutation that does not know the list's true count (append()/
+                insert(), which reuse a possibly-stale rank cache). Ignored
+                under v1, and ignored when ``count_hint`` isn't present in
+                ``updates`` and isn't an int in the stored row (a pre-3.14
+                list with no hint yet -- the next rank-counting mutation
+                establishes one instead of guessing at a delta).
         """
         stored = self._read_meta_row()
         if stored is None:
@@ -543,6 +579,10 @@ class ListProperty:
         if stored_format == 2:
             updates = {k: v for k, v in updates.items() if k != "length"}
         meta.update(updates)
+        if count_delta and stored_format == 2 and "count_hint" not in updates:
+            current_hint = meta.get("count_hint")
+            if isinstance(current_hint, int):
+                meta["count_hint"] = max(0, current_hint + count_delta)
         for field in remove:
             meta.pop(field, None)
         self._replace_metadata(meta)
@@ -709,18 +749,29 @@ class ListProperty:
             - version: Metadata schema version
             - item_type: Type of items stored (currently always "json")
             - chunk_size: Internal chunk size (currently always 1)
-            - length: Number of items in the list
+            - length: Number of items in the list. **v1: exact. v2:
+              ADVISORY** -- served from `count_hint`, a value mutations
+              maintain as a side effect rather than count() every time.
+              Drift is bounded (see the class docstring / property-lists
+              guide) and self-correcting: it never resolves which rows
+              exist, only how many. `to_list()`, `__getitem__` and
+              iteration always return the true items regardless of what
+              this says. Call `len(list_prop)` for an exact count -- it
+              always counts the rank-key range, at the cost of the
+              whole-list range query this field exists to avoid.
 
         Note: This returns a copy; modifications won't affect the stored metadata.
         Use set_description() and set_explanation() to update user-facing fields.
         """
         meta = self._load_metadata()
-        # v2 has no stored length -- meta.get("length", 0) would silently
-        # report 0 for every non-empty v2 list. len(self) counts it, which
-        # is a whole-list range query the first time it runs on this
-        # instance -- and property.py mints a fresh ListProperty per
-        # attribute access, so "the first time" is nearly every call.
-        length = len(self) if self._is_v2() else meta.get("length", 0)
+        if self._is_v2():
+            hint = meta.get("count_hint")
+            # A v2 list whose metadata predates this release has no hint
+            # yet -- count once (the first rank-counting mutation then
+            # establishes one) rather than silently reporting 0.
+            length = hint if isinstance(hint, int) else len(self)
+        else:
+            length = meta.get("length", 0)
         return {
             "created_at": meta.get("created_at", ""),
             "updated_at": meta.get("updated_at", ""),
@@ -816,7 +867,9 @@ class ListProperty:
             logger.error(f"Failed to parse list item at index {index}: {e}")
             return item_str  # Return raw string if JSON parsing fails
 
-    def _v2_touch_metadata(self) -> None:
+    def _v2_touch_metadata(
+        self, count: int | None = None, count_delta: int = 0
+    ) -> None:
         """Persist the metadata row after a v2 item mutation.
 
         v2 doesn't store an authoritative length, so unlike v1 (where every
@@ -830,11 +883,30 @@ class ListProperty:
         metadata (matching v1's per-mutation write, just without a
         `length` field to update).
 
-        Writes no fields of its own: the stored row is re-read and only its
-        ``updated_at`` moves. That is what keeps a v2 mutation from carrying
-        a cached ``format`` back to storage -- including the reverse of the
-        migration case, a stale format-2 cache over storage another process
-        has downgraded to v1.
+        Besides ``updated_at`` (always moved), this also maintains the
+        advisory ``count_hint``:
+
+        - ``count``: this mutation holds a rank cache it knows is CURRENT
+          (it forced a fresh read before mutating, and mutated the same
+          list object in place) -- write it as the counted truth.
+          ``__setitem__`` passes this too, even though it doesn't change
+          the count: writing the true count is strictly better than
+          leaving a possibly-stale one, and it's what makes the
+          "``__setitem__`` leaves the hint unchanged" contract hold in the
+          normal case (no concurrent writer) without a special case here.
+        - ``count_delta``: this mutation does NOT know the list's true
+          count (it may have reused a stale rank cache) -- merge the delta
+          onto whatever is currently stored, under the same fresh read
+          ``_save_metadata()`` already performs. This is append()/
+          insert()'s path, deliberately, so the mechanism does not have to
+          change when Phase 9B removes their rank cache entirely.
+        - neither: the stored hint is preserved as-is (not included in
+          ``updates``, so ``_save_metadata()``'s merge leaves it alone).
+
+        That is what keeps a v2 mutation from carrying a cached ``format``
+        back to storage -- including the reverse of the migration case, a
+        stale format-2 cache over storage another process has downgraded
+        to v1.
 
         It DOES create the row when absent, unlike the v1 length writers,
         which skip the write on the grounds that a vanished row means a
@@ -846,7 +918,12 @@ class ListProperty:
         never-created list gives, and the alternative is an item row no
         ``exists()`` or ``list_all()`` can see.
         """
-        self._save_metadata({})
+        updates: dict[str, Any] = {}
+        if count is not None:
+            updates["count_hint"] = count
+        self._save_metadata(
+            updates, count_delta=0 if count is not None else count_delta
+        )
 
     def _v2_setitem(self, index: int, value: Any) -> None:
         # Force a fresh rank read: this is a DESTRUCTIVE positional write,
@@ -872,7 +949,7 @@ class ListProperty:
             actor_id=self.actor_id, name=self._v2_item_name(rank), value=value_str
         ):
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
-        self._v2_touch_metadata()
+        self._v2_touch_metadata(count=len(ranks))
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Set item at index."""
@@ -933,7 +1010,7 @@ class ListProperty:
         # loop. Keep the cache consistent with the write we just made
         # (mutating the same list object _v2_ensure_rank_cache() returned).
         del ranks[index]
-        self._v2_touch_metadata()
+        self._v2_touch_metadata(count=len(ranks))
 
     def __delitem__(self, index: int) -> None:
         """Delete item at index and shift remaining items."""
@@ -1024,7 +1101,7 @@ class ListProperty:
                 value=value_str,
             ):
                 ranks.append(candidate)
-                self._v2_touch_metadata()
+                self._v2_touch_metadata(count_delta=1)
                 return
             # Collision: another writer took this rank between our cache
             # load and the write. Force-reread on the next attempt so the
@@ -1395,7 +1472,7 @@ class ListProperty:
                 actor_id=self.actor_id, name=name, value=item_str
             ):
                 del ranks[resolved]
-                self._v2_touch_metadata()
+                self._v2_touch_metadata(count=len(ranks))
                 return item
             # Value changed or row already gone -- re-resolve and retry.
         raise RuntimeError(
@@ -1456,7 +1533,7 @@ class ListProperty:
                 value=value_str,
             ):
                 ranks.insert(pos, candidate)
-                self._v2_touch_metadata()
+                self._v2_touch_metadata(count_delta=1)
                 return
             # Collision: force a fresh read (recomputing neighbours at this
             # position) on the next attempt.
@@ -1552,7 +1629,11 @@ class ListProperty:
                     del ranks[i]
                 else:  # pragma: no cover -- defensive
                     self._v2_rank_cache = None
-                self._v2_touch_metadata()
+                # len(pairs) - 1, not len(ranks): the defensive branch
+                # above can leave the cache None, but `pairs` (this
+                # attempt's fresh _v2_load_full() read) always reflects
+                # exactly one fewer item than what was just deleted.
+                self._v2_touch_metadata(count=len(pairs) - 1)
                 return
             else:
                 # Scanned every item without a match: the value genuinely
@@ -1722,24 +1803,40 @@ class ListProperty:
               tooling should gate on this, not on ``healthy``, which also
               goes false for duplicate identities that ``compact()`` will
               not touch
+            - count_hint: the stored advisory count (``None`` if this
+              list's metadata predates ``count_hint`` entirely)
+            - count_hint_drift: ``count_hint - length`` (``None`` when
+              ``count_hint`` is ``None``). Informational, NOT part of
+              ``healthy`` -- see the class docstring for the documented
+              drift bound; nonzero here is expected under concurrent
+              mutation, not corruption
             - healthy: True iff no rank key is within the rebalance
               warning zone of the cap and no identity is repeated
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
+        length = len(pairs)
 
         adjacent_duplicates: list[tuple[int, int]] = []
         for i in range(len(pairs) - 1):
             if pairs[i][1] == pairs[i + 1][1]:
                 adjacent_duplicates.append((i, i + 1))
 
+        stored = self._read_meta_row() or {}
+        count_hint = stored.get("count_hint")
+        count_hint = count_hint if isinstance(count_hint, int) else None
+
         report: dict[str, Any] = {
             "format": 2,
-            "length": len(pairs),
+            "length": length,
             "max_rank_length": max_rank_length,
             "adjacent_duplicates": adjacent_duplicates,
             "foreign_format_rows": len(self._v1_item_names_in_range()),
             "needs_rebalance": max_rank_length >= _V2_RANK_WARNING_LENGTH,
+            "count_hint": count_hint,
+            "count_hint_drift": (
+                count_hint - length if count_hint is not None else None
+            ),
             "healthy": max_rank_length < _V2_RANK_WARNING_LENGTH,
         }
         duplicates: dict[Any, list[int]] | None = None
@@ -2002,6 +2099,10 @@ class ListProperty:
                     )
 
         self._v2_rank_cache = sorted(written_ranks)
+        # compact() just counted every row it rewrote -- write the exact
+        # truth back to count_hint rather than leaving whatever drift
+        # accumulated before this repair ran.
+        self._save_metadata({"count_hint": n})
         return report
 
     def compact(self, allow_reverted: bool = False) -> dict[str, Any]:

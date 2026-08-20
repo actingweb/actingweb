@@ -140,6 +140,45 @@ a fixed-cost primitive (see the migration example above).
 New list names may not contain ``#`` (reserved for internal storage
 keys); creating one raises ``ValueError`` immediately.
 
+**Counting items without paying for the whole list**
+
+``len(lst)`` is always exact, on both formats -- under v2 it counts the
+rank-key range, which is the same whole-list query ``to_list()`` issues.
+When you only need an approximate count -- a UI badge, a rough quota
+check -- ``lst.get_metadata()["length"]`` avoids that query entirely
+under v2, where it is served from ``count_hint``: an item count list
+mutations maintain as a side effect, not counted fresh on every call.
+(Under v1 the two are identical -- ``length`` has always been an
+authoritative stored field there.)
+
+``count_hint`` is **advisory, and the drift bound is a documented
+contract**: at any moment, ``|count_hint - len(lst)|`` is at most the
+number of mutations currently in flight against the list, plus -- during
+a rolling deploy only -- mutations applied by pre-3.14 writers since the
+last rank-counting 3.14 mutation, plus one per mutation whose advisory
+metadata touch failed since the last rank-counting mutation. It never
+accumulates beyond those three terms, and it self-corrects: the next
+``insert()``/``pop()``/``remove()``/``del lst[i]``/``compact()`` call
+overwrites the hint with the counted truth (``append()``/``extend()``
+merge stored-plus-delta and never re-count on their own). A quiesced list
+whose mutations all landed cleanly reports an exact hint.
+
+A quota check that must never over-admit should trust the hint while
+strictly below its limit, and confirm with the exact ``len()`` only once
+the hint reaches the limit -- the whole-list read is then paid at the
+quota boundary, not on every save::
+
+    def within_quota(lst, limit: int) -> bool:
+        hint = lst.get_metadata()["length"]
+        if hint < limit:
+            return True          # trust the advisory count
+        return len(lst) < limit  # at the boundary: pay for the exact count
+
+``verify()`` reports drift beyond what a healthy list should show as
+``count_hint_drift`` (informational, not part of ``healthy`` -- expected
+drift under concurrent mutation is not corruption), and ``compact()``
+always rewrites the hint to the counted truth as part of its rebalance.
+
 .. note::
 
    A list created before this restriction existed may legitimately contain

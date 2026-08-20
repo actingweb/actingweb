@@ -15,9 +15,22 @@ class TestPropertyListNotifications:
     """Test NotifyingListProperty calls register_diffs on mutations with correct data."""
 
     def _create_notifying_list(self, list_values=None):
-        """Helper to create a NotifyingListProperty with mocks."""
+        """Helper to create a NotifyingListProperty with mocks.
+
+        ``get_metadata()["length"]`` (not ``len()``) is what
+        ``_register_diff()`` reads for the diff's ``length`` field as of
+        Phase 5 of thoughts/plans/2026-08-20-v2-positional-access-cost.md
+        -- a whole-list range query under v2, doubled on append, that the
+        advisory ``count_hint`` avoids. The lambda defers to whatever
+        ``__len__`` mock is current at call time, so every test below that
+        reassigns ``mock_list_prop.__len__`` per-scenario keeps working
+        without a matching ``get_metadata`` override.
+        """
         mock_list_prop = Mock()
         mock_list_prop.__len__ = Mock(return_value=len(list_values or []))
+        mock_list_prop.get_metadata = Mock(
+            side_effect=lambda: {"length": len(mock_list_prop)}
+        )
 
         mock_actor = Mock()
         mock_actor.register_diffs = Mock()

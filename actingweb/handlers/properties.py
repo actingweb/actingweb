@@ -261,7 +261,11 @@ class PropertiesHandler(base_handler.BaseHandler):
                         # This matches the format used in GET /properties?metadata=true
                         metadata = {
                             "_list": True,
-                            "count": len(list_prop),
+                            # Advisory under v2 (count_hint) -- avoids a
+                            # whole-list range query for a count-only
+                            # request. See ListProperty's class docstring
+                            # for the drift bound.
+                            "count": list_prop.get_metadata()["length"],
                             "description": list_prop.get_description(),
                             "explanation": list_prop.get_explanation(),
                         }
@@ -1496,7 +1500,9 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         metadata = {
             "name": name,
             "_list": True,
-            "count": len(list_prop),
+            # Advisory under v2 (count_hint) -- see ListProperty's class
+            # docstring for the drift bound.
+            "count": list_prop.get_metadata()["length"],
             "description": list_prop.get_description(),
             "explanation": list_prop.get_explanation(),
         }

@@ -870,12 +870,90 @@ count ranks and remains exact.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py -v` passes
-- [ ] `make test-all-parallel` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py -v` passes
+- [x] `make test-all-parallel` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] `poetry run ruff check actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:**
+
+- Implemented as specified, with two deliberate refinements to the
+  `_v2_touch_metadata()` mechanism the plan describes only in prose:
+  - `_save_metadata()` gained a `count_delta` parameter that merges onto
+    the row it *already* freshly reads (rather than a separate pre-read),
+    matching the plan's "under the same fresh read" language literally.
+    `_v2_touch_metadata(count=..., count_delta=...)` is a thin wrapper:
+    `count` writes the counted truth (used by `__setitem__`, `__delitem__`,
+    `pop()`, `remove()` — all of which force a fresh rank read before
+    mutating); `count_delta` merges onto the stored hint (used by
+    `append()`/`insert()`, which reuse a possibly-stale cache on their
+    common first-attempt path even before Phase 9B removes the cache
+    entirely). Classification by force-vs-reuse, not by mutator identity —
+    `insert()`'s first attempt is `force=False`, same as `append()`, so it
+    takes the delta path too; the plan's prose only named append/extend
+    explicitly, but the same staleness argument applies to insert's common
+    case.
+  - `remove()`'s call site couldn't use `len(self._v2_rank_cache)` for the
+    counted-truth branch: its defensive fallback (rank not found at the
+    expected cache position) sets `self._v2_rank_cache = None`. Used
+    `len(pairs) - 1` instead — `pairs` is `_v2_load_full()`'s just-taken
+    fresh snapshot, always accurate independent of cache state.
+- **Two New Tests items are deferred to the phases that make them
+  meaningful, not implemented here:**
+  - *"An append whose advisory touch fails leaves the hint low by one..."*
+    — this describes Phase 9's "advisory touch never fails a committed
+    mutation" carve-out. Today, a metadata write failure inside
+    `_v2_touch_metadata()` still raises `RuntimeError` (via
+    `_replace_metadata()`) and propagates out of the mutation that called
+    it — there is no tolerated-failure path yet for this test to exercise.
+    Deferred to Phase 9's test suite, where the CAS/tolerance mechanism
+    actually exists.
+  - *"...a Phase 9B append on such a list leaves the hint absent rather
+    than guessing"* — the surrounding regression test (a v2 list with no
+    stored `count_hint`) is implemented and passes; only this one clause,
+    which describes Phase 9B's no-rank-cache append specifically, is
+    deferred to Phase 9B. What Phase 5 actually does on a hint-less list:
+    `append()`/`insert()`'s `count_delta` merge is a no-op when the stored
+    value isn't an `int` (see `_save_metadata()`), so the hint stays
+    absent through `append()` today too — but for a different reason (the
+    merge guard, not "no rank read to count from," since Phase 5's
+    `append()` still holds one). The first **rank-counting** mutation
+    (`insert`/`pop`/`remove`/`__delitem__`/`compact`) is what establishes
+    the hint from nothing, matching the regression test as written.
+- `handlers/properties.py`'s two `count` response sites at (current) lines
+  268 and 1505 (plan cites :264/:1486 — drift from Phases 1–4 editing the
+  same file) now read `list_prop.get_metadata()["length"]`. A third site
+  at line 563 (the bulk `listall` overview) was deliberately left alone:
+  it already primes the list from a partition dump first (Phase 3), so
+  `len()` there is already free — switching it to the advisory hint would
+  trade an exact number for an approximate one at no cost saving.
+- `NotifyingListProperty.get_metadata()` was added per the plan (it didn't
+  delegate this at all before). Since `_PermissionEnforcingListView`
+  (Phase 2) has its own test (`test_proxy_surface_matches_notifying_list_property`)
+  asserting its public surface stays in sync with `NotifyingListProperty`
+  method-for-method, adding `get_metadata()` there too was required to
+  keep that test green — not called out explicitly in the plan's Phase 5
+  changes list, but a direct consequence of Phase 2's surface-parity
+  contract.
+- Found and fixed a pre-existing test file, `tests/test_property_list_notifications.py`
+  (not touched by any prior phase), that mocked `NotifyingListProperty`'s
+  `_list_prop` with `Mock()` and configured only `__len__`. Switching
+  `_register_diff()` from `len(self._list_prop)` to
+  `self._list_prop.get_metadata()["length"]` broke all 12 of its tests
+  (`Mock()["length"]` doesn't subscript). Fixed by making the shared
+  `_create_notifying_list()` helper's `get_metadata` a `side_effect`
+  lambda that reads `len(mock_list_prop)` at call time — it tracks
+  whichever `__len__` mock each test currently has configured with no
+  further per-test changes needed.
+- Full verification: `make test-all-parallel` (DynamoDB) — 2906 passed, 30
+  skipped; PostgreSQL integration (`pytest tests/integration/ -n auto
+  --dist loadgroup` against `docker-compose.test.yml`'s `postgres-test`)
+  — 845 passed, 16 skipped. New test file: `tests/test_v2_count_hint.py`
+  (10 tests, dict-backed `FakePropertyDb` fake — no real DynamoDB/Postgres
+  needed for this phase's tests, matching `test_property_list_integrity.py`'s
+  existing style rather than `test_v2_cost_*.py`'s real-backend style).
 
 ---
 

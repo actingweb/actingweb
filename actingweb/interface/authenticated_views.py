@@ -225,6 +225,9 @@ class _PermissionEnforcingListView:
     def get_explanation(self) -> str:
         return self._list_prop.get_explanation()
 
+    def get_metadata(self) -> dict[str, Any]:
+        return self._list_prop.get_metadata()
+
     def to_list(self) -> list[Any]:
         return self._list_prop.to_list()
 

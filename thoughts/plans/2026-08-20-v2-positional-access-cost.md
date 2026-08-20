@@ -1136,11 +1136,49 @@ hand is where the index escapes into a later write.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list.py tests/test_property_list_notifications.py -v` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pytest tests/test_property_list.py tests/test_property_list_notifications.py -v` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] `poetry run ruff check actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:**
+
+- Implemented as specified: `find()`/`find_all()` (universal,
+  `consistent: bool = True` forwarded to `to_list()`), `items_with_handles()`
+  (v2-only, always strongly consistent, raises naming `migrate_to_v2()` on
+  v1), and `ListItemHandle` (frozen dataclass, `rank` + `raw_value`, custom
+  `__repr__` omitting `raw_value`).
+  Match semantics: an item matches when it is a dict, HAS `identity_key`
+  as a key, and that field's value equals the target -- so `find("id",
+  None)` matches `{"id": None}` but not `{"other": 1}`, distinguishing
+  "field absent" from "field present with value None." Not spelled out
+  in the plan's prose; chosen to mirror `_identity_of()`'s existing
+  "lacks the field" exclusion rather than inventing a different rule for
+  a sibling feature.
+- Delegated all three through both wrapper layers
+  (`NotifyingListProperty` and `_PermissionEnforcingListView`), matching
+  the pattern already established for `to_list()`/`slice()`/
+  `to_indexed_list()` in Phase 6 and required by Phase 2's surface-parity
+  test — not explicit line numbers in the plan's Changes list, but the
+  only way these become reachable via `actor.property_lists.<name>`.
+- `ListItemHandle` is imported into both `interface/property_store.py`
+  and `interface/authenticated_views.py` for return-type annotations; no
+  circular import (`property_list.py` imports nothing from either
+  module).
+- New test file `tests/test_v2_value_addressed_reads.py` (14 tests):
+  `find`/`find_all` parametrized across v1 and v2 confirming identical
+  results; non-dict items and missing-vs-None-valued keys; `consistent`
+  forwarding; `items_with_handles()`'s single-query cost, v1 rejection,
+  raw-value round-trip against the actual stored bytes (not a
+  re-encoding), repr redaction, and unconditional strong consistency
+  regardless of a `RecordingPropertyDb` default; and two allowlist
+  regressions confirming both new methods reach through the fluent
+  wrapper chain.
+- Full verification: `make test-all-parallel` (DynamoDB) — 2929 passed,
+  31 skipped. No backend-specific code changed this phase (pure
+  `property_list.py`/interface-layer additions), so no PostgreSQL-gated
+  run was required by this phase's own Verification list.
 
 ---
 

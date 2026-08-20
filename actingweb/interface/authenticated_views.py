@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
+from ..property_list import ListItemHandle
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -248,6 +249,17 @@ class _PermissionEnforcingListView:
 
     def count(self, value: Any) -> int:
         return self._list_prop.count(value)
+
+    def find(self, identity_key: str, value: Any, consistent: bool = True) -> Any:
+        return self._list_prop.find(identity_key, value, consistent=consistent)
+
+    def find_all(
+        self, identity_key: str, value: Any, consistent: bool = True
+    ) -> list[Any]:
+        return self._list_prop.find_all(identity_key, value, consistent=consistent)
+
+    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        return self._list_prop.items_with_handles()
 
     def verify(self, identity_key: str | None = None) -> dict[str, Any]:
         return self._list_prop.verify(identity_key=identity_key)

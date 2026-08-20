@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -183,6 +184,37 @@ class ListPropertyIterator:
         item = self.list_prop[self.current_index]
         self.current_index += 1
         return item
+
+
+@dataclass(frozen=True)
+class ListItemHandle:
+    """Opaque handle to one v2 list item, as it existed at read time.
+
+    Carries the item's rank key and the EXACT raw stored string the read
+    returned -- both are required for Phase 10's conditional writes
+    (``set_if_value_equals()``/``delete_if_value_equals()`` require the
+    raw stored string, not a re-serialization of the decoded value; see
+    ``DbPropertyProtocol.delete_if_value_equals``).
+
+    **Not wire-stable.** A rank is unique only within a list's current
+    "generation": ``delete()`` followed by ``append()`` starts a brand new
+    rank sequence, and ``fractional_indexing.generate_n_keys_between(None,
+    None, n)`` is deterministic, so a fresh list's first rank is also
+    ``a0`` -- identical to the deleted list's first rank. A handle from
+    before the delete would silently address the wrong (new) item after
+    one. Use a handle only within the request/process that read it,
+    against the same list instance, and never persist or transmit one.
+
+    ``__repr__`` deliberately omits the raw value -- printing it would
+    invite treating this as a serializable snapshot rather than the
+    single-use read receipt it is.
+    """
+
+    rank: str
+    raw_value: str
+
+    def __repr__(self) -> str:
+        return f"ListItemHandle(rank={self.rank!r})"
 
 
 class ListProperty:
@@ -1750,6 +1782,69 @@ class ListProperty:
             if item == value:
                 count += 1
         return count
+
+    def find(self, identity_key: str, value: Any, consistent: bool = True) -> Any | None:
+        """Return the first item whose ``identity_key`` field equals
+        ``value``, or ``None`` if there is no match.
+
+        One whole-list read (``to_list()``), matched in memory -- the same
+        query cost as any other full scan, just without every caller
+        writing the scan loop by hand. Universal across v1 and v2.
+
+        Items that are not a dict, or that lack ``identity_key`` entirely,
+        never match (a missing field is not the same as the field being
+        present with value ``None``) and never raise.
+
+        Args:
+            identity_key: field name to match on -- same parameter name as
+                ``verify()``'s duplicate-identity check.
+            value: value to match.
+            consistent: see ``to_list()``. Ignored under v1.
+        """
+        for item in self.to_list(consistent=consistent):
+            if isinstance(item, dict) and identity_key in item and item[identity_key] == value:
+                return item
+        return None
+
+    def find_all(self, identity_key: str, value: Any, consistent: bool = True) -> list[Any]:
+        """Return every item whose ``identity_key`` field equals ``value``
+        -- see ``find()``. A list a caller with duplicate identities (see
+        ``verify()``'s ``duplicate_identities``) needs to see all of, not
+        just the first."""
+        return [
+            item
+            for item in self.to_list(consistent=consistent)
+            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
+        ]
+
+    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        """One range read -> ``[(handle, decoded_item), ...]``, in list
+        order.
+
+        **v2 only.** v1 has no rank identity to hand out a handle for --
+        only positional identity, which ``to_indexed_list()`` already
+        serves. Raises on a v1 list, naming ``migrate_to_v2()``.
+
+        **Always strongly consistent**, regardless of Phase 6's
+        ``consistent`` parameter or any application-level default: a
+        handle carries the raw stored bytes, and a conditional write
+        (``set_if_value_equals()``/``delete_if_value_equals()``) checks
+        exactly those bytes. A handle read from a stale replica would fail
+        its condition against a row nobody has actually touched -- the
+        bulk endpoint would then report every item as "concurrently
+        modified" and apply nothing. Same rationale
+        ``_v2_ensure_rank_cache()`` already carries, for the same reason.
+        """
+        if not self._is_v2():
+            raise ValueError(
+                f"items_with_handles() is v2-only -- list '{self.name}' is "
+                f"still v1. Call migrate_to_v2() first."
+            )
+        pairs = self._v2_load_full()  # default consistent=True, no override
+        return [
+            (ListItemHandle(rank=rank, raw_value=raw_value), self._decode_item(raw_value))
+            for rank, raw_value in pairs
+        ]
 
     def _identity_of(self, raw_value: str, identity_key: str) -> Any:
         """This row's value for ``identity_key``, or ``None`` if it has none.

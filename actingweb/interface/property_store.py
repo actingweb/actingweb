@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..property import PropertyStore as CorePropertyStore
+from ..property_list import ListItemHandle
 
 if TYPE_CHECKING:
     from ..actor import Actor as CoreActor
@@ -338,6 +339,20 @@ class NotifyingListProperty:
 
     def count(self, value: Any) -> int:
         return self._list_prop.count(value)
+
+    def find(self, identity_key: str, value: Any, consistent: bool = True) -> Any:
+        """Read-only -- see ListProperty.find()."""
+        return self._list_prop.find(identity_key, value, consistent=consistent)
+
+    def find_all(
+        self, identity_key: str, value: Any, consistent: bool = True
+    ) -> list[Any]:
+        """Read-only -- see ListProperty.find_all()."""
+        return self._list_prop.find_all(identity_key, value, consistent=consistent)
+
+    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        """Read-only -- see ListProperty.items_with_handles(). v2 only."""
+        return self._list_prop.items_with_handles()
 
     def verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check -- see ListProperty.verify(). No diff

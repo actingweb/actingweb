@@ -360,6 +360,50 @@ gradual, never required for a list to keep functioning:
    still has v2 support (the tool itself needs the v2 code to read the
    list it's converting) -- never the other way around.
 
+Finding Items by Value
+-----------------------
+
+Most lists are addressed by position (``lst[i]``), but items are often
+looked up by an identifying field instead -- the same ``identity_key``
+``verify()`` already checks for duplicates::
+
+    task = tasks.find("id", "task-42")           # first match, or None
+    matches = tasks.find_all("id", "task-42")     # every match
+
+Both are a single whole-list read (``to_list()``), matched in memory --
+the same cost as any hand-written scan loop, just without every consumer
+writing one. An item that is not a dict, or that lacks ``identity_key``
+entirely, never matches and never raises. Both accept the same
+``consistent`` keyword ``to_list()`` does (see above).
+
+**Handles: reading for a later write**
+
+``items_with_handles()`` (v2 lists only -- raises on a v1 list, naming
+``migrate_to_v2()``) returns ``[(handle, item), ...]`` for the whole list
+in one read::
+
+    for handle, item in tasks.items_with_handles():
+        if item.get("status") == "done":
+            ...  # a later phase's update_by_handle()/delete_by_handle()
+                 # write conditioned on this exact handle
+
+A handle is an opaque, **single-use read receipt** -- not a durable
+identifier. It carries the item's rank key and the exact raw stored
+string the read returned, and is only valid against the SAME list
+instance, within the same request or process that read it. Two things
+make it unsafe to persist or transmit:
+
+- **It is not wire-stable across a list "generation".** A rank is unique
+  only until the list is emptied: ``delete()`` followed by ``append()``
+  starts a brand new rank sequence from the same deterministic starting
+  point, so a fresh list's first item gets the identical rank the
+  original list's first item had. A handle read before the delete would
+  silently address the wrong (new) item after one.
+- **It is always read strongly consistent**, regardless of any
+  ``consistent=False`` used elsewhere against the same list -- a stale
+  handle's conditional write would fail against a row nobody actually
+  touched.
+
 REST API
 --------
 

@@ -314,6 +314,90 @@ class DbPropertyProtocol(Protocol):
         """
         ...
 
+    def set_if_value_equals(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        expected: Any = None,
+        value: Any = None,
+    ) -> bool:
+        """
+        Conditionally set a property row's value — succeeds only if the
+        row currently holds exactly ``expected``.
+
+        Same contract family as ``delete_if_value_equals``: a differing
+        value and a vanished row both fail the condition the same way, and
+        both mean "re-resolve and retry" to the caller, not failure. This
+        is compare-and-swap, the write-side counterpart to that method's
+        conditional delete — used wherever a caller wants to update content
+        it has already read without silently clobbering a concurrent
+        writer's change (list metadata rewrites; a value-addressed
+        update-in-place via a handle).
+
+        ``expected`` must be the RAW STORED STRING the caller read, not a
+        re-serialization of a decoded value — same requirement
+        ``delete_if_value_equals`` documents, for the same reason.
+
+        **A conditional write whose expression evaluates false still
+        consumes write capacity on DynamoDB.** A retry loop built on this
+        primitive must not be written as though a losing attempt is free.
+
+        No lookup-table maintenance is performed or needed: ``list:``-
+        prefixed names are structurally excluded from indexing by
+        ``_should_index_property()`` on both backends.
+
+        Args:
+            actor_id: The actor ID
+            name: Property name
+            expected: The exact stored value required for the set to happen
+            value: The new value to write
+
+        Returns:
+            True if the row was updated. False if it held a different
+            value or no longer exists — both normal outcomes meaning
+            "re-resolve and retry", not failures.
+
+        Raises:
+            DbError: On a backend fault (not a condition failure).
+        """
+        ...
+
+    def get_last_in_range(
+        self, actor_id: str | None = None, lower: str | None = None, upper: str | None = None
+    ) -> str | None:
+        """
+        Return the NAME of the bytewise-greatest row in ``[lower, upper]``
+        (inclusive on both ends, same bounds convention as ``get_range``),
+        or ``None`` if the range is empty.
+
+        Unlike ``get_range``, whose contract deliberately guarantees no
+        ordering, byte-order maximality IS this method's contract on both
+        backends — it exists to find a v2 list's highest rank key without
+        reading the whole list (Phase 9B's ``append()``).
+
+        **Always strongly consistent, with no caller override.** A stale
+        maximum here is a mid-list append by another route: the same
+        reasoning ``_v2_ensure_rank_cache()`` and ``items_with_handles()``
+        already carry.
+
+        No lookup-table maintenance is performed or needed: same exclusion
+        as ``get_range``.
+
+        Args:
+            actor_id: The actor ID
+            lower: Inclusive lower bound on name
+            upper: Inclusive upper bound on name (see ``get_range`` — use a
+                sentinel value)
+
+        Returns:
+            The bytewise-greatest row name in the range, or ``None`` if no
+            row falls in it.
+
+        Raises:
+            DbError: On a backend fault.
+        """
+        ...
+
 
 @runtime_checkable
 class DbPropertyListProtocol(Protocol):

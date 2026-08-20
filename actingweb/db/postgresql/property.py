@@ -591,6 +591,78 @@ class DbProperty:
             )
             raise DbError("property conditional delete", actor_id) from e
 
+    def set_if_value_equals(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        expected: Any = None,
+        value: Any = None,
+    ) -> bool:
+        """Conditionally set — see ``DbPropertyProtocol.set_if_value_equals``.
+
+        A single atomic ``UPDATE ... WHERE value = %s``, mirroring
+        ``delete_if_value_equals`` above: a zero rowcount covers both "the
+        value changed" and "the row is gone" the same way.
+        """
+        if not actor_id or not name or expected is None or value is None:
+            return False
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE properties
+                        SET value = %s
+                        WHERE id = %s AND name = %s AND value = %s
+                        """,
+                        (value, actor_id, name, expected),
+                    )
+                    updated = cur.rowcount == 1
+                conn.commit()
+            if updated:
+                self.handle = {"id": actor_id, "name": name, "value": value}
+            return updated
+        except Exception as e:
+            logger.error(f"Error conditionally setting property {actor_id}/{name}: {e}")
+            raise DbError("property conditional set", actor_id) from e
+
+    def get_last_in_range(
+        self, actor_id: str | None = None, lower: str | None = None, upper: str | None = None
+    ) -> str | None:
+        """Bytewise-greatest row name in ``[lower, upper]`` — see
+        ``DbPropertyProtocol.get_last_in_range``.
+
+        ``COLLATE "C"`` is load-bearing, not stylistic: rank keys mix
+        upper- and lower-case, and a locale collation disagrees with byte
+        order on exactly that (``max("Z", "a")`` is ``"a"`` bytewise, but
+        ``"Z"`` under en_US) — a wrong maximum here becomes a mid-list
+        append. Same caution family as ``fetch()``'s ``NOT LIKE``.
+        """
+        if not actor_id or lower is None or upper is None:
+            return None
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT name
+                        FROM properties
+                        WHERE id = %s
+                          AND name COLLATE "C" >= %s
+                          AND name COLLATE "C" <= %s
+                        ORDER BY name COLLATE "C" DESC
+                        LIMIT 1
+                        """,
+                        (actor_id, lower, upper),
+                    )
+                    row = cur.fetchone()
+                    return row[0] if row else None
+        except Exception as e:
+            logger.error(f"Error reading last-in-range for actor {actor_id}: {e}")
+            raise DbError("property last-in-range read", actor_id) from e
+
 
 class DbPropertyList:
     """

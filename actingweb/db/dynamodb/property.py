@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DeleteError, DoesNotExist, PutError
+from pynamodb.exceptions import DeleteError, DoesNotExist, PutError, UpdateError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -564,6 +564,64 @@ class DbProperty:
         except Exception as e:
             raise DbError("property conditional delete", actor_id) from e
         return True
+
+    def set_if_value_equals(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        expected: Any = None,
+        value: Any = None,
+    ) -> bool:
+        """Conditionally set — see ``DbPropertyProtocol.set_if_value_equals``.
+
+        Same condition-failure-vs-fault distinction as
+        ``delete_if_value_equals``: a differing stored value and a vanished
+        row both fail the equality condition on ``value`` the same way.
+        """
+        if not actor_id or not name or expected is None or value is None:
+            return False
+
+        item = Property(id=actor_id, name=name)
+        try:
+            item.update(
+                actions=[Property.value.set(value)],
+                condition=Property.value == expected,
+            )
+        except UpdateError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                return False
+            raise DbError("property conditional set", actor_id) from e
+        except Exception as e:
+            raise DbError("property conditional set", actor_id) from e
+        return True
+
+    def get_last_in_range(
+        self, actor_id: str | None = None, lower: str | None = None, upper: str | None = None
+    ) -> str | None:
+        """Bytewise-greatest row name in ``[lower, upper]`` — see
+        ``DbPropertyProtocol.get_last_in_range``.
+
+        ``scan_index_forward=False, limit=1`` reads DynamoDB's natural
+        range-key sort order backwards and stops at the first item — one
+        item's read capacity, not the whole range's.
+        """
+        if not actor_id or lower is None or upper is None:
+            return None
+
+        condition = Property.name.between(lower, upper)
+        try:
+            for item in Property.query(
+                actor_id,
+                range_key_condition=condition,
+                consistent_read=True,
+                scan_index_forward=False,
+                limit=1,
+                attributes_to_get=["name"],
+            ):
+                return str(item.name)
+            return None
+        except Exception as e:
+            raise DbError("property last-in-range read", actor_id) from e
 
 
 class DbPropertyList:

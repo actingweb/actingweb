@@ -173,3 +173,114 @@ class TestConditionalDelete:
             is False
         )
         assert get_property(config).get(actor_id=actor_id, name="list:cd-#b0") == '"v2"'
+
+
+class TestConditionalSet:
+    """set_if_value_equals() against the real backend (both, via
+    DATABASE_BACKEND) -- Phase 8 of thoughts/plans/2026-08-20-v2-
+    positional-access-cost.md. Compare-and-swap, the write-side
+    counterpart to TestConditionalDelete above."""
+
+    def test_sets_only_on_an_exact_value_match(self, config, actor_id):
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:cs-#a0", value='"original"')
+
+        refused = get_property(config).set_if_value_equals(
+            actor_id=actor_id,
+            name="list:cs-#a0",
+            expected='"something-else"',
+            value='"new"',
+        )
+        assert refused is False
+        assert (
+            get_property(config).get(actor_id=actor_id, name="list:cs-#a0")
+            == '"original"'
+        )
+
+        updated = get_property(config).set_if_value_equals(
+            actor_id=actor_id,
+            name="list:cs-#a0",
+            expected='"original"',
+            value='"new"',
+        )
+        assert updated is True
+        assert (
+            get_property(config).get(actor_id=actor_id, name="list:cs-#a0") == '"new"'
+        )
+
+    def test_missing_row_reports_false_not_an_error(self, config, actor_id):
+        assert (
+            get_property(config).set_if_value_equals(
+                actor_id=actor_id,
+                name="list:cs-#never",
+                expected='"x"',
+                value='"y"',
+            )
+            is False
+        )
+
+    def test_overwritten_row_is_not_set(self, config, actor_id):
+        assert get_property(config).set(
+            actor_id=actor_id, name="list:cs-#b0", value='"v1"'
+        )
+        read = get_property(config).get(actor_id=actor_id, name="list:cs-#b0")
+        assert read == '"v1"'
+
+        # Another writer replaces it before our conditional set lands.
+        assert get_property(config).set(
+            actor_id=actor_id, name="list:cs-#b0", value='"v2"'
+        )
+
+        assert (
+            get_property(config).set_if_value_equals(
+                actor_id=actor_id, name="list:cs-#b0", expected=read, value='"v3"'
+            )
+            is False
+        )
+        assert get_property(config).get(actor_id=actor_id, name="list:cs-#b0") == '"v2"'
+
+    def test_condition_failure_returns_false_not_dberror(self, config, actor_id):
+        """The distinction the whole retry design rests on: a condition
+        miss is a normal outcome, not a fault."""
+        assert get_property(config).set(
+            actor_id=actor_id, name="list:cs-#c0", value='"v1"'
+        )
+        result = get_property(config).set_if_value_equals(
+            actor_id=actor_id, name="list:cs-#c0", expected='"wrong"', value='"v2"'
+        )
+        assert result is False  # no exception raised
+
+
+class TestGetLastInRange:
+    """get_last_in_range() against the real backend -- Phase 9B's
+    append() reads a list's highest rank key from this instead of the
+    whole-list range read."""
+
+    def test_returns_the_bytewise_greatest_name(self, config, actor_id):
+        db = get_property(config)
+        for rank in ["a0", "a1", "a2"]:
+            assert db.set(actor_id=actor_id, name=f"list:gl-#{rank}", value='"x"')
+
+        result = get_property(config).get_last_in_range(
+            actor_id=actor_id, lower="list:gl-#", upper="list:gl-$"
+        )
+        assert result == "list:gl-#a2"
+
+    def test_empty_range_returns_none(self, config, actor_id):
+        result = get_property(config).get_last_in_range(
+            actor_id=actor_id, lower="list:glempty-#", upper="list:glempty-$"
+        )
+        assert result is None
+
+    def test_case_boundary_is_byte_order_not_locale_order(self, config, actor_id):
+        """The regression a locale collation fails: max("Z", "a") is "a"
+        bytewise (0x5A < 0x61) but "Z" under en_US-style locale collation.
+        A wrong answer here becomes a mid-list append."""
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:glcase-#Z", value='"upper"')
+        assert db.set(actor_id=actor_id, name="list:glcase-#a", value='"lower"')
+
+        result = get_property(config).get_last_in_range(
+            actor_id=actor_id, lower="list:glcase-#", upper="list:glcase-$"
+        )
+        assert result == "list:glcase-#a"  # bytewise-greatest, not locale-greatest

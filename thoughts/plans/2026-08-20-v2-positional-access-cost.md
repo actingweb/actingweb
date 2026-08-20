@@ -1238,14 +1238,50 @@ greatest row in a range — so both protocol additions land here together.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -k "conditional or protocol" -v` passes
-- [ ] `poetry run pytest tests/test_cold_start_budget.py -v` passes **unmodified** —
+- [x] `poetry run pytest tests/ -k "conditional or protocol" -v` passes
+- [x] `poetry run pytest tests/test_cold_start_budget.py -v` passes **unmodified** —
       no new model class was introduced
-- [ ] `make test-all-parallel` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `poetry run pyright actingweb tests` passes
+- [x] `make test-all-parallel` passes on DynamoDB
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+- [x] `poetry run pyright actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:**
+
+- Implemented as specified on `DbProperty` (both backends) — no new
+  PynamoDB Model subclass, so the cold-start `DescribeTable` budget test
+  (Phase 1) needed no changes and was re-verified passing unmodified.
+  - DynamoDB: `set_if_value_equals()` via `Property.update(actions=[...],
+    condition=...)`, catching `UpdateError`/`ConditionalCheckFailedException`
+    the same way `create_if_not_exists`/`delete_if_value_equals` catch
+    their own exception types. `get_last_in_range()` via
+    `Property.query(..., scan_index_forward=False, limit=1)`.
+  - PostgreSQL: `set_if_value_equals()` via a single atomic `UPDATE ...
+    WHERE value = %s` checking `rowcount == 1`, mirroring the existing
+    conditional delete exactly. `get_last_in_range()` via `ORDER BY name
+    COLLATE "C" DESC LIMIT 1`, with the same `COLLATE "C"` pin Phase 4's
+    `fetch()` uses and for the identical reason (locale collations
+    disagree with byte order on case, e.g. `max("Z","a")`).
+- Test placement deviates from the plan's implied "unit tests" framing:
+  used `tests/integration/test_db_property_range.py` (already the
+  cross-backend home for `create_if_not_exists`/`delete_if_value_equals`,
+  run against whichever backend `DATABASE_BACKEND` selects) rather than a
+  separate unit file with backend-specific fakes. Two new classes,
+  `TestConditionalSet` and `TestGetLastInRange`, mirroring
+  `TestConditionalDelete`'s existing structure exactly (match/no-match/
+  missing-row/overwritten-since-read cases, plus a
+  `test_condition_failure_returns_false_not_dberror` regression pinning
+  the outcome the whole retry design rests on) and adding the `Z`/`a`
+  case-boundary regression the plan's New Tests call out by name. This
+  gives the "both backends agree" parity coverage the plan asks for by
+  construction — one test file, run twice (DynamoDB default, then
+  `DATABASE_BACKEND=postgresql`) — rather than a duplicated assertion set.
+- Full verification: `make test-all-parallel` (DynamoDB) — 2936 passed,
+  31 skipped; `pytest tests/integration/ -n auto --dist loadgroup`
+  (PostgreSQL) — 852 passed, 16 skipped;
+  `tests/integration/test_db_property_range.py` alone (DynamoDB) — 16
+  passed.
 
 ---
 

@@ -486,6 +486,7 @@ class DbProperty:
         lower: str | None = None,
         upper: str | None = None,
         keys_only: bool = False,
+        consistent_read: bool = True,
     ) -> dict[str, str]:
         """Range-read rows whose name is in ``[lower, upper]``.
 
@@ -510,7 +511,7 @@ class DbProperty:
             for item in Property.query(
                 actor_id,
                 range_key_condition=condition,
-                consistent_read=True,
+                consistent_read=consistent_read,
                 attributes_to_get=attributes_to_get,
             ):
                 results[str(item.name)] = "" if keys_only else str(item.value or "")

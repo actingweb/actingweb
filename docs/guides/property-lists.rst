@@ -179,6 +179,35 @@ quota boundary, not on every save::
 drift under concurrent mutation is not corruption), and ``compact()``
 always rewrites the hint to the counted truth as part of its rebalance.
 
+**Reading with `consistent=False`**
+
+``to_list()``, ``slice()`` and ``to_indexed_list()`` accept a
+``consistent`` keyword, default ``True`` -- the default does not change,
+so nothing about an existing call changes on upgrade. On DynamoDB, an
+eventually consistent range read costs **half** the read capacity of a
+strongly consistent one (measured on an 81-row list: 241 RCU -> 120.5
+RCU). PostgreSQL accepts and ignores the parameter -- its reads are
+consistent by construction.
+
+Whether a stale read is acceptable is an application question, not a
+library one, which is why the library does not second-guess the choice:
+``consistent=False`` on an instance that just wrote to this list may not
+see that write. It is only correct where the caller cannot have just
+written the rows it is about to read -- a background report, a
+read-mostly cache refresh, a different actor's read of data it did not
+just produce::
+
+    recent_notes = actor.property_lists.notes.to_list(consistent=False)
+
+Positional access (``lst[i]``, ``__setitem__``, ``__delitem__``,
+``insert()``, ``pop()``, ``remove()``) always reads strongly consistent
+and takes no such parameter -- a stale rank feeding a positional write
+touches the wrong row, which is a correctness bug, not a cost trade.
+``__iter__`` (plain ``for item in lst``) also takes no parameter for the
+same reason iteration exists as a convenience over ``to_list()``; use
+``to_list(consistent=False)`` directly when the saving matters for a full
+scan.
+
 .. note::
 
    A list created before this restriction existed may legitimately contain

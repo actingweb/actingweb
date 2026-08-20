@@ -327,14 +327,28 @@ class ListProperty:
         )
         return self._v2_rank_cache
 
-    def _v2_load_full(self) -> list[tuple[str, str]]:
+    def _v2_load_full(self, consistent: bool = True) -> list[tuple[str, str]]:
         """One full range query -> sorted (rank, raw_value) pairs. Also
         refreshes the rank-key cache as a side effect (the invariant that
         to_list()/__iter__/slice() cost exactly one query, and warm the
-        cache for any __getitem__ calls that follow)."""
+        cache for any __getitem__ calls that follow).
+
+        ``consistent=False`` halves DynamoDB read capacity (see
+        ``get_range``'s ``consistent_read`` docstring) at the cost of
+        possibly not seeing a just-landed write -- including this
+        instance's OWN. Callers that mutate and then immediately read back
+        their own write (``_v2_remove()``, ``_v2_verify()``,
+        ``_v2_compact()``) must not pass ``False`` here; only the public
+        read methods that take an explicit ``consistent`` parameter do.
+        """
         lower, upper = self._v2_bounds()
         db = get_property(self.config)
-        rows = db.get_range(actor_id=self.actor_id, lower=lower, upper=upper)
+        rows = db.get_range(
+            actor_id=self.actor_id,
+            lower=lower,
+            upper=upper,
+            consistent_read=consistent,
+        )
         prefix_len = len(self._v2_item_prefix())
         pairs = sorted(
             (rank, value)
@@ -344,8 +358,11 @@ class ListProperty:
         self._v2_rank_cache = [rank for rank, _ in pairs]
         return pairs
 
-    def _v2_to_list(self) -> list[Any]:
-        return [self._decode_item(value) for _, value in self._v2_load_full()]
+    def _v2_to_list(self, consistent: bool = True) -> list[Any]:
+        return [
+            self._decode_item(value)
+            for _, value in self._v2_load_full(consistent=consistent)
+        ]
 
     def _create_default_metadata_v2(self) -> dict[str, Any]:
         """Default metadata for a brand-new (v2) list. No `length` key --
@@ -1344,10 +1361,18 @@ class ListProperty:
         # Clear cache
         self._meta_cache = None
 
-    def to_list(self) -> list[Any]:
+    def to_list(self, consistent: bool = True) -> list[Any]:
         """Load entire list into memory.
 
         v2: exactly one range query, regardless of length.
+
+        Args:
+            consistent: v2 only, ignored under v1 (which never issues a
+                range read here). ``False`` halves DynamoDB read capacity
+                (see ``get_range``'s ``consistent_read`` docstring) at the
+                cost of possibly not seeing a just-landed write, including
+                this instance's own. No default change -- whether a stale
+                read is acceptable is an application decision.
 
         Raises:
             ListCorruptionError: v1 only -- a row within ``[0, len(self))``
@@ -1357,7 +1382,7 @@ class ListProperty:
                 could disagree with.
         """
         if self._is_v2():
-            return self._v2_to_list()
+            return self._v2_to_list(consistent=consistent)
 
         length = len(self)
         result = []
@@ -1367,18 +1392,21 @@ class ListProperty:
 
         return result
 
-    def slice(self, start: int, end: int) -> list[Any]:
+    def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
         """Load a range of items efficiently.
 
         v2: exactly one range query (the full list), sliced in memory --
         still one query, not one per requested item.
+
+        Args:
+            consistent: see ``to_list()``.
 
         Raises:
             ListCorruptionError: v1 only -- a row within the requested
                 range is missing from storage.
         """
         if self._is_v2():
-            values = self._v2_to_list()
+            values = self._v2_to_list(consistent=consistent)
             length = len(values)
             if start < 0:
                 start = max(0, length + start)
@@ -1406,7 +1434,7 @@ class ListProperty:
 
         return result
 
-    def to_indexed_list(self) -> list[tuple[int, Any]]:
+    def to_indexed_list(self, consistent: bool = True) -> list[tuple[int, Any]]:
         """Load the list as ``(index, item)`` pairs.
 
         This is the contract the ``/items`` REST accessor documents:
@@ -1423,10 +1451,13 @@ class ListProperty:
         rank internally. This is exactly the divergence this method's
         contract was written to keep correct.
 
+        Args:
+            consistent: see ``to_list()``.
+
         Raises:
             ListCorruptionError: v1 only -- see ``to_list()``.
         """
-        return list(enumerate(self.to_list()))
+        return list(enumerate(self.to_list(consistent=consistent)))
 
     def _v2_pop(self, index: int) -> Any:
         """Read and remove the item at ``index``.

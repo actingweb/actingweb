@@ -1022,12 +1022,59 @@ the two larger versions that were cut.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list.py -v` passes
-- [ ] `make test-all-parallel` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `poetry run pyright actingweb tests` passes
+- [x] `poetry run pytest tests/test_property_list.py -v` passes
+- [x] `make test-all-parallel` passes on DynamoDB
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+- [x] `poetry run pyright actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:**
+
+- Implemented as specified: `consistent_read: bool = True` added to
+  `DbPropertyProtocol.get_range` and both backends (DynamoDB passes it
+  through to `Property.query`; PostgreSQL accepts and ignores it), and
+  `consistent: bool = True` added to `_v2_load_full()`, `_v2_to_list()`,
+  `to_list()`, `slice()`, `to_indexed_list()` — no default changes
+  anywhere. `find()`/`find_all()`/`items_with_handles()` don't exist yet
+  (Phase 7/8), so per the plan's own forward-reference they'll take the
+  parameter when they're built rather than being retrofitted here.
+- Propagated the parameter one layer further than the plan's Changes list
+  spells out: `NotifyingListProperty` and `_PermissionEnforcingListView`
+  (the two wrapper classes `to_list()`/`slice()`/`to_indexed_list()` pass
+  through on their way to the REST/fluent API) needed the same signature
+  change, or the parameter would have been unreachable from
+  `actor.property_lists.<name>.to_list(consistent=False)` — the only path
+  the fluent API offers. Not a deviation from intent, just the plan's
+  prose describing the core `property_list.py` methods and leaving the
+  wrapper propagation implicit.
+- `_v2_ensure_rank_cache()` and every positional mutator
+  (`__setitem__`/`__delitem__`/`insert()`/`pop()`/`remove()`) confirmed
+  unchanged — they still call `get_range()` with the implicit
+  `consistent_read=True` default, taking no override, exactly as
+  specified.
+- The three dict-backed `get_range()` fakes in
+  `tests/test_property_list_integrity.py` (`FakePropertyDb`,
+  `CountingPropertyDb`, `StaleReadPropertyDb`) needed a
+  `consistent_read=True` parameter added to their signatures — every v2
+  read now passes it as an explicit kwarg, which would otherwise raise
+  `TypeError` against the old three-parameter fakes. No test behavior
+  changed; this is purely keeping the fakes call-compatible.
+- New test file `tests/test_v2_consistent_read.py` (10 tests): default
+  and `consistent=False` for `to_list()`/`slice()`/`to_indexed_list()`;
+  `_v2_ensure_rank_cache` always strongly consistent; an
+  `inspect.signature()` check that no positional mutator accepts a
+  `consistent` parameter at all (not just "defaults to True" — the
+  parameter's absence is the guarantee); an AST-based grep-style
+  regression (`ast.parse` over every file in `actingweb/handlers/`,
+  flagging any call passing `consistent=False`/`consistent_read=False` as
+  a literal) rather than a text grep, so a multi-line call or unusual
+  formatting can't hide a violation; and a real-backend PostgreSQL test
+  confirming `consistent_read=False` is accepted and returns identical
+  results to `consistent_read=True`.
+- Full verification: `make test-all-parallel` (DynamoDB) — 2915 passed,
+  31 skipped; PostgreSQL (`pytest tests/test_v2_consistent_read.py
+  tests/integration/ -n auto --dist loadgroup`) — 855 passed, 16 skipped.
 
 ---
 

@@ -477,11 +477,17 @@ class DbProperty:
         lower: str | None = None,
         upper: str | None = None,
         keys_only: bool = False,
+        consistent_read: bool = True,
     ) -> dict[str, str]:
         """Range-read rows whose name is in ``[lower, upper]`` (inclusive).
 
         See ``DbPropertyProtocol.get_range`` for the contract. Uses a range
         comparison (``>=``/``<=``), never ``LIKE`` — no escaping surface.
+
+        ``consistent_read`` is accepted and ignored: PostgreSQL reads are
+        consistent by construction, there is no eventually-consistent read
+        mode to opt into. It's part of the protocol (DynamoDB's callers
+        pass it uniformly) rather than a DynamoDB detail leaking upward.
         """
         if not actor_id or lower is None or upper is None:
             return {}

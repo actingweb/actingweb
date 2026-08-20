@@ -63,7 +63,14 @@ class FakePropertyDb:
     def delete(self):
         return True
 
-    def get_range(self, actor_id=None, lower=None, upper=None, keys_only=False):
+    def get_range(
+        self,
+        actor_id=None,
+        lower=None,
+        upper=None,
+        keys_only=False,
+        consistent_read=True,
+    ):
         result = {}
         for (aid, name), value in self.store.items():
             if aid != actor_id:
@@ -447,10 +454,21 @@ class CountingPropertyDb(FakePropertyDb):
         super().__init__(store)
         self.range_call_count = 0
 
-    def get_range(self, actor_id=None, lower=None, upper=None, keys_only=False):
+    def get_range(
+        self,
+        actor_id=None,
+        lower=None,
+        upper=None,
+        keys_only=False,
+        consistent_read=True,
+    ):
         self.range_call_count += 1
         return super().get_range(
-            actor_id=actor_id, lower=lower, upper=upper, keys_only=keys_only
+            actor_id=actor_id,
+            lower=lower,
+            upper=upper,
+            keys_only=keys_only,
+            consistent_read=consistent_read,
         )
 
 
@@ -465,10 +483,21 @@ class StaleReadPropertyDb(FakePropertyDb):
         self.stale_missing_name = stale_missing_name
         self.get_range_calls = 0
 
-    def get_range(self, actor_id=None, lower=None, upper=None, keys_only=False):
+    def get_range(
+        self,
+        actor_id=None,
+        lower=None,
+        upper=None,
+        keys_only=False,
+        consistent_read=True,
+    ):
         self.get_range_calls += 1
         result = super().get_range(
-            actor_id=actor_id, lower=lower, upper=upper, keys_only=keys_only
+            actor_id=actor_id,
+            lower=lower,
+            upper=upper,
+            keys_only=keys_only,
+            consistent_read=consistent_read,
         )
         if self.get_range_calls == 1:
             result.pop(self.stale_missing_name, None)

@@ -188,6 +188,7 @@ class DbPropertyProtocol(Protocol):
         lower: str | None = None,
         upper: str | None = None,
         keys_only: bool = False,
+        consistent_read: bool = True,
     ) -> dict[str, str]:
         """
         Range-read property rows whose name falls in ``[lower, upper]``
@@ -221,6 +222,18 @@ class DbPropertyProtocol(Protocol):
                 subset of attributes "has no impact on the item size
                 calculations" for capacity purposes -- it saves network
                 bytes and deserialization, not read capacity.
+            consistent_read: Defaults to ``True`` -- this preserves today's
+                behaviour, and the default does not change. On DynamoDB, an
+                eventually consistent read costs HALF the read capacity of
+                a strongly consistent one (measured on an 81-row list: 241
+                RCU -> 120.5 RCU). PostgreSQL accepts and ignores this --
+                its reads are consistent by construction, but the
+                parameter is part of the protocol rather than a DynamoDB
+                detail leaking upward. Whether a given read may be stale
+                is an APPLICATION question: pass ``False`` only where the
+                caller cannot have just written the rows it is about to
+                read, since a write that has landed may briefly not be
+                visible to an eventually consistent read on DynamoDB.
 
         Returns:
             Dict of ``{name: value}`` (or ``{name: ""}`` when

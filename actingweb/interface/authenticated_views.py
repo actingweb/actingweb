@@ -228,11 +228,11 @@ class _PermissionEnforcingListView:
     def get_metadata(self) -> dict[str, Any]:
         return self._list_prop.get_metadata()
 
-    def to_list(self) -> list[Any]:
-        return self._list_prop.to_list()
+    def to_list(self, consistent: bool = True) -> list[Any]:
+        return self._list_prop.to_list(consistent=consistent)
 
-    def to_indexed_list(self) -> list[tuple[int, Any]]:
-        return self._list_prop.to_indexed_list()
+    def to_indexed_list(self, consistent: bool = True) -> list[tuple[int, Any]]:
+        return self._list_prop.to_indexed_list(consistent=consistent)
 
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
         self._list_prop.prime_from_rows(rows)
@@ -240,8 +240,8 @@ class _PermissionEnforcingListView:
     def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
         return self._list_prop.to_list_from_rows(rows)
 
-    def slice(self, start: int, end: int) -> list[Any]:
-        return self._list_prop.slice(start, end)
+    def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
+        return self._list_prop.slice(start, end, consistent=consistent)
 
     def index(self, value: Any, start: int = 0, stop: int | None = None) -> int:
         return self._list_prop.index(value, start, stop)

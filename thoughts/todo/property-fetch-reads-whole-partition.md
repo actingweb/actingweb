@@ -58,6 +58,45 @@ consumer, and which fix shape is right — the two-query patch or the `prop#` /
 `list#` key scheme — depends on how dominant the `list:` rows still are. Use the
 acceptance recipe below to take the new measurement; it is the same instrument.
 
+## Re-measured against 3.13.0 GA, 2026-08-20
+
+The 2026-08-14 decision asked for this before any design work. Taken with
+`ReturnConsumedCapacity` directly against production `AI_properties`
+(eu-central-1, 2,739 rows / 18.6 MB), on the reference consumer's own actor:
+
+| Query | rows | RCU |
+| --- | --- | --- |
+| the actor's **whole partition**, consistent | 1,190 | **254.0** |
+| **one list's** range (`output_space`), consistent | 81 | **241.0** |
+
+**The premise holds, and the design question has its answer: `list:` rows are
+still overwhelmingly dominant.** ~95% of what a plain-property read costs for
+this actor is one list's bytes. This is a *different* actor from the rc1
+1,014-row one, so read it as a second data point of the same shape rather than
+a like-for-like delta — the amplification survives GA either way.
+
+The second row says something the rc1 table could not: **the byte weight is
+concentrated in a few large rows, not spread evenly.** 81 wiki-document rows
+cost 241 RCU (~11.9 KB each); the remaining ~1,109 rows in the partition cost
+~13 RCU between them. Two consequences for the choice of fix:
+
+- **Either fix solves this item.** Excluding `list:` rows takes the
+  plain-property read from 254 RCU to ~13 either way, and the two-query patch
+  is much the smaller change.
+- **Only the prefix scheme helps the other list costs.** `prop#` / `list#`
+  gives each *list* its own bounded range as a first-class key, which is what
+  v2 rank storage already needs and currently re-derives from a `BETWEEN` on
+  every single call. Given how concentrated the bytes are, that is where the
+  remaining money is — see the consumer incident referenced below, where those
+  per-list range reads, not this item's partition read, were the whole cost.
+
+**Not the same defect as the 2026-08-19 consumer outage**, which is worth
+stating because both are "list reads cost too much". That one was
+`dynamodb-known-next.md` item 2: a query already bounded to a single list,
+issued once per row. This item is a query not bounded at all, issued once.
+Fixing I0 would not have prevented it and does not reduce its residual. See
+"Consumer incident 2026-08-19" in that file.
+
 ## Acceptance
 
 D7's operation-counter recipe in `docs/migration/v3.13.rst` ("Proving the fixes

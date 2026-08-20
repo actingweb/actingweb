@@ -16,7 +16,7 @@ Basics
    notes.append("First note")
    notes.append({"title": "Meeting", "content": "Team sync"})
    first = notes[0]
-   count = len(notes)
+   count = len(notes)  # see "Storage Format" below -- not free under v2
    for item in notes:
        print(item)
    all_items = notes.to_list()
@@ -97,6 +97,9 @@ Migration Example
    # New: scalable list
    notes = actor.property_lists.user_notes
    for n in ["Note 1", "Note 2"]:
+       # Under v2, append() re-reads the list's key ordering (a whole-list
+       # range query) before writing -- see "Storage Format" below. It is
+       # not a fixed-cost primitive.
        notes.append(n)
 
 Storage Format (v1 / v2)
@@ -107,14 +110,22 @@ supported, and which one a given list uses does not change any REST
 response or any value the API returns.
 
 It is not entirely invisible in one respect: **reading items one at a time
-by index costs more under v2**. ``lst[i]`` re-reads the list's key ordering
-before resolving the position, because a cached ordering can be stale and
-resolving against a stale one returns the wrong item. So a
-``for i in range(len(lst)): lst[i]`` loop is two queries per item under v2,
-where v1 was one. Use ``to_list()``, ``to_indexed_list()`` or plain
-iteration instead -- each is a single query for the whole list regardless
-of length, in both formats, and ``to_indexed_list()`` returns the
-``(index, item)`` pairs such a loop is usually after.
+by index costs more under v2, and the cost is per item, not a fixed
+factor**. ``lst[i]`` re-derives the position from the list's key ordering
+before resolving it, because a cached ordering can be stale and resolving
+against a stale one returns the wrong item, and that re-derivation is a
+**whole-list range query** -- the same query ``to_list()`` issues to read
+every item. So a ``for i in range(len(lst)): lst[i]`` loop over an
+*n*-item v2 list issues *n* whole-list queries -- O(n) total capacity for
+the loop, not "two queries per item" -- where the same loop under v1 costs
+one point read per item. On a 2026-08-19 production incident this made a
+10-item delete cost roughly 1.19M RCU. Use ``to_list()``,
+``to_indexed_list()`` or plain iteration instead -- each is a **single**
+query for the whole list regardless of length, in both formats, and
+``to_indexed_list()`` returns the ``(index, item)`` pairs such a loop is
+usually after. ``append()`` has the same shape under v2: it re-reads the
+list's key ordering before writing, so it is also a whole-list read, not
+a fixed-cost primitive (see the migration example above).
 
 - **v1** (dense integers): items stored as ``list:{name}-{index}``, with
   an authoritative ``length`` in metadata. Every list created before this

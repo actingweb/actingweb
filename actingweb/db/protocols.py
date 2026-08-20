@@ -213,9 +213,14 @@ class DbPropertyProtocol(Protocol):
             lower: Inclusive lower bound on name
             upper: Inclusive upper bound on name (see above — use a
                 sentinel value)
-            keys_only: If True, returned values are ``""`` (a cheaper
-                projection read used when only presence/count/order is
-                needed); if False, values are the actual property values.
+            keys_only: If True, returned values are ``""`` (a projection
+                read used when only presence/count/order is needed).
+                Cheaper on PostgreSQL, where it is a genuine ``SELECT
+                name``. **No capacity saving on DynamoDB**: this is still
+                a base-table Query, and AWS documents that requesting a
+                subset of attributes "has no impact on the item size
+                calculations" for capacity purposes -- it saves network
+                bytes and deserialization, not read capacity.
 
         Returns:
             Dict of ``{name: value}`` (or ``{name: ""}`` when

@@ -286,10 +286,12 @@ class ListProperty:
         return (self._v2_item_prefix(), f"list:{self.name}-$")
 
     def _v2_ensure_rank_cache(self, force: bool = False) -> list[str]:
-        """Return the sorted rank-key cache, loading it (one keys-only
-        range query) if absent or `force`d. The returned list is the SAME
-        object held in `self._v2_rank_cache` -- callers that insert/delete
-        a single entry may mutate it in place instead of forcing a reload."""
+        """Return the sorted rank-key cache, loading it (one whole-list
+        range query -- `keys_only` saves bytes on PostgreSQL but no
+        capacity on DynamoDB, see `DbPropertyProtocol.get_range`) if
+        absent or `force`d. The returned list is the SAME object held in
+        `self._v2_rank_cache` -- callers that insert/delete a single entry
+        may mutate it in place instead of forcing a reload."""
         if self._v2_rank_cache is not None and not force:
             return self._v2_rank_cache
         lower, upper = self._v2_bounds()
@@ -598,9 +600,10 @@ class ListProperty:
         `remove()` re-read the rank keys before acting, deliberately: a
         primed snapshot can be arbitrarily old by the time one of them
         runs, and resolving a position against a stale map means reading —
-        or destroying — the wrong item. So a `for i in range(len(lst))`
-        loop over `lst[i]` costs two queries per item under v2 even after
-        priming.
+        or destroying — the wrong item. That re-read is a whole-list range
+        query, so a `for i in range(len(lst))` loop over `lst[i]` costs
+        one whole-list query PER ITEM under v2 -- O(n) total, not a fixed
+        two-query factor -- even after priming.
 
         Use `to_list()`, `to_indexed_list()` or iteration for that: all
         three are a single range query regardless of length, and
@@ -713,8 +716,10 @@ class ListProperty:
         """
         meta = self._load_metadata()
         # v2 has no stored length -- meta.get("length", 0) would silently
-        # report 0 for every non-empty v2 list. len(self) counts it (and
-        # is cheap after the first call, via the cached rank-key range).
+        # report 0 for every non-empty v2 list. len(self) counts it, which
+        # is a whole-list range query the first time it runs on this
+        # instance -- and property.py mints a fresh ListProperty per
+        # attribute access, so "the first time" is nearly every call.
         length = len(self) if self._is_v2() else meta.get("length", 0)
         return {
             "created_at": meta.get("created_at", ""),
@@ -1606,9 +1611,10 @@ class ListProperty:
         """
         if self._is_v2():
             # One range query for the whole list, then scan in memory. Going
-            # through self[i] would cost two queries PER ITEM now that
-            # positional reads refresh the rank map, and it would compare
-            # against a list that can shift under the loop.
+            # through self[i] would cost a whole-list range query PER ITEM
+            # (O(n) total) now that positional reads refresh the rank map,
+            # and it would compare against a list that can shift under the
+            # loop.
             values = self._v2_to_list()
             begin, end = self._normalize_search_bounds(start, stop, len(values))
             for i in range(begin, end):

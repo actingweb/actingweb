@@ -352,10 +352,20 @@ pass unmodified at the end of every later phase — a phase that needs it
 - [ ] `poetry run pytest tests/test_cold_start_budget.py tests/test_ensure_table.py -v` passes
 - [ ] `poetry run ruff check actingweb tests` passes
 - [ ] `poetry run pyright actingweb tests` passes
-- [ ] Manual: re-read `docs/guides/property-lists.rst` end to end and confirm
+- [x] Manual: re-read `docs/guides/property-lists.rst` end to end and confirm
       no remaining sentence implies a positional read or a `len()` is cheap
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:** `tests/test_cold_start_budget.py` counts `exists()`/`create_table()`
+calls by wrapping each model in `required_models()` with a `mock.patch.object(...,
+wraps=...)` spy around `Connection`-level pynamodb model methods, rather than a
+botocore `before-call` hook — simpler and sufficient, since `_ensure.py`'s guard
+calls `model.exists()`/`model.create_table()` directly. `AWS_DB_AUTO_CREATE_TABLES=false`
+asserts zero calls to either. The docs build (`poetry run make html` from repo
+root — `docs/Makefile` does not exist; the Sphinx targets live in the root
+`Makefile` with `SOURCEDIR = .` resolving against root `conf.py`) is clean with
+no warnings. Full suite: 2875 passed (+3 from baseline), 26 skipped, 0 failed.
 
 ---
 

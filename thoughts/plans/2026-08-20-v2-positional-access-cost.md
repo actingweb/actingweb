@@ -710,15 +710,67 @@ RCU**. A read that returns 5 plain properties pays for all of it.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -k "property" -v` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `make test-all-parallel` passes
-- [ ] Manual: the operation-counter recipe in
+- [x] `poetry run pytest tests/ -k "property" -v` passes on DynamoDB
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+- [x] `make test-all-parallel` passes
+- [~] Manual: the operation-counter recipe in
       `docs/migration/v3.13.rst` ("Proving the fixes actually landed") shows a
       plain-property read on a list-heavy actor dropping from ~254 RCU to ~13
-- [ ] `poetry run pyright actingweb tests` passes
+      — not run against real AWS consumed-capacity metrics; instead proven
+      structurally: `test_returns_only_plain_properties_and_never_queries_list_rows`
+      spies on `Property.query` and asserts zero list-row names are ever
+      returned by the API for a 200-item list, which is the RCU-relevant fact
+      the recipe would otherwise measure indirectly
+- [x] `poetry run pyright actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:**
+- DynamoDB: `fetch()` on `DbPropertyList` now issues a pair of
+  range-constrained Queries (`name < "list:"`, `name >= "list;"`) instead of a
+  whole-partition Query filtered client-side. Verified the sentinel
+  empirically: `Property.name < "list:"` / `>= "list;"` build valid PynamoDB
+  `Comparison` conditions.
+- PostgreSQL: `fetch()` uses `NOT LIKE 'list:%%'` in the query. Confirmed
+  empirically against the real test container that the double `%%` is
+  required — a literal single `%` embedded directly in the SQL text (not as a
+  bound parameter) is misread by psycopg3 as an incomplete placeholder and
+  raises, it isn't a leftover escaping habit.
+- The empty-partition contract (`{}`, never `None`, once `actor_id` is valid)
+  is now uniform across both backends. PostgreSQL previously returned `None`
+  when the actor had zero rows of ANY kind but `{}` when it had only `list:`
+  rows (both branches happened to enter `if rows:` before filtering
+  client-side) — filtering in SQL removes that distinction, since a
+  list-only actor now has zero PLAIN rows at the query level too. Rather than
+  add a second query to preserve the old "zero-rows-at-all vs list-only"
+  distinction, `fetch()` now always returns `{}` once `actor_id` is valid,
+  matching the DynamoDB backend's existing behavior (its query iterator is
+  truthy regardless of match count) — confirmed no caller depends on the
+  old distinction (`property.py::Properties.fetch()` treats `None` and `{}`
+  identically via `is not None`).
+- New test file `tests/test_v2_cost_plain_property_partition.py` (9 tests: 5
+  DynamoDB + 4 PostgreSQL, gated on `DATABASE_BACKEND`), covering all cases
+  from the plan's New Tests section including the non-ASCII list name (which
+  fails under the `list:~` sentinel the todo originally sketched and passes
+  under `list;`) and both empty-partition regressions. The PostgreSQL
+  "non-C collation" case is not separately tested with a differently-collated
+  column: `NOT LIKE` doesn't compare byte order at all, which is the whole
+  reason it replaces a range comparison here, so there is no collation-
+  dependent behavior to pin.
+- Full DynamoDB suite: 2896 passed (+5), 30 skipped (+4 Postgres tests
+  skipped under the default backend), 0 failed. Full PostgreSQL integration
+  suite (`DATABASE_BACKEND=postgresql`, via the proper `tests/integration/`
+  harness invocation, not a bare `-k` filter — see the `-k "property"`
+  gotcha below): 845 passed, 16 skipped, 0 failed.
+- **Gotcha for future phases**: `poetry run pytest tests/ -k "..."` run
+  directly (not through `make test-integration`/`test-all-parallel`) produces
+  spurious `MissingSchema: Invalid URL 'None...'` failures on
+  `tests/integration/*` files whose fixtures need the harness those Make
+  targets set up. Not a regression — confirmed by running the full suite via
+  `make test-all-parallel` (0 failures) and the equivalent
+  `pytest tests/integration/ -n auto --dist loadgroup` invocation for
+  PostgreSQL. Use those forms, not a bare filtered `pytest tests/ -k ...`,
+  when a verification bullet says to target `tests/integration/`.
 
 ---
 

@@ -607,20 +607,38 @@ class DbPropertyList:
         ensure_table(Property if self._use_lookup_table else PropertyLegacy)
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
-        """Retrieves the properties of an actor_id from the database"""
+        """Retrieves the PLAIN (non-list) properties of an actor_id from
+        the database.
+
+        Two range-constrained Queries rather than a whole-partition Query
+        with client-side filtering: DynamoDB cannot ``OR`` on a sort key,
+        so excluding the ``list:``-prefixed rows takes a pair of Queries
+        covering everything below and everything above that namespace,
+        instead of paying for (and discarding) every list item row on
+        every plain-property read.
+
+        The upper sentinel is ``"list;"`` (``;`` is 0x3B, the byte right
+        after ``:``), NOT ``"list:~"``: ``~`` is 0x7E, so any list whose
+        NAME starts with a byte above ``~`` -- every non-ASCII list name --
+        would sort after ``"list:~"`` and leak back into this result.
+        ``name < "list:"`` and ``name >= "list;"`` is exact: a plain
+        property named ``"list"`` sorts in the first range, one named
+        ``"listen"`` in the second, and every ``list:*`` row in neither.
+        """
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Property.query(actor_id)
-        if self.handle:
-            self.props = {}
+        self.props = {}
+        # Property.query() returns a truthy iterator regardless of match
+        # count, so fetch() has always returned {} (not None) for an actor
+        # whose partition holds no plain properties -- preserved here by
+        # unconditionally returning self.props rather than reintroducing a
+        # falsy-handle check against either query's result.
+        for condition in (Property.name < "list:", Property.name >= "list;"):
+            self.handle = Property.query(actor_id, range_key_condition=condition)
             for d in self.handle:
-                # Filter out list properties (they have "list:" prefix)
-                if not d.name.startswith("list:"):
-                    self.props[d.name] = d.value
-            return self.props
-        else:
-            return None
+                self.props[d.name] = d.value
+        return self.props
 
     def fetch_all_including_lists(
         self, actor_id: str | None = None

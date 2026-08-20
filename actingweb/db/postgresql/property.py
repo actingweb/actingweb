@@ -629,7 +629,19 @@ class DbPropertyList:
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
         """
-        Retrieve all properties for an actor (excluding list: properties).
+        Retrieve the PLAIN (non-list) properties for an actor.
+
+        Filters ``list:``-prefixed rows in the query itself via
+        ``NOT LIKE 'list:%%'`` rather than fetching the whole partition and
+        discarding list item rows client-side. Deliberately not a range
+        comparison (unlike the DynamoDB backend, which cannot ``OR`` on a
+        sort key and so needs one): PostgreSQL text ordering is
+        collation-dependent, and a non-``C`` collation does not agree with
+        byte order on punctuation, so a ``name < 'list:'`` condition would
+        not reliably exclude every ``list:*`` row. ``NOT LIKE`` has no such
+        dependency. (The ``%%`` is not a client-side-filter leftover: a
+        literal, unparameterised ``%`` in the query text is misread by
+        psycopg as an incomplete placeholder.)
 
         Args:
             actor_id: The actor ID
@@ -650,22 +662,24 @@ class DbPropertyList:
                         SELECT name, value
                         FROM properties
                         WHERE id = %s
+                          AND name NOT LIKE 'list:%%'
                         ORDER BY name
                         """,
                         (actor_id,),
                     )
                     rows = cur.fetchall()
 
-                    if rows:
-                        self.props = {}
-                        for row in rows:
-                            name, value = row
-                            # Filter out list properties (they have "list:" prefix)
-                            if not name.startswith("list:"):
-                                self.props[name] = value
-                        return self.props
-                    else:
-                        return None
+                    # Always {}, never None, once actor_id is valid --
+                    # matching the DynamoDB backend, whose query iterator
+                    # is truthy regardless of match count. Filtering
+                    # list:-prefixed rows in SQL now (rather than
+                    # client-side over the whole partition) means an actor
+                    # with ONLY list: rows returns zero rows here same as
+                    # one with none at all; both must still answer {},
+                    # not None -- a caller distinguishing "no properties"
+                    # from "an error" depends on it.
+                    self.props = dict(rows)
+                    return self.props
         except Exception as e:
             logger.error(f"Error fetching properties for actor {actor_id}: {e}")
             return None

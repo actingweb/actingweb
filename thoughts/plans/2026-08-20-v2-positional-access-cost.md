@@ -419,12 +419,32 @@ more serious than the bug it was filed for.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list_notifications.py -v` passes
-- [ ] `poetry run pytest tests/ -k authenticated -v` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pytest tests/test_property_list_notifications.py -v` passes
+- [x] `poetry run pytest tests/ -k authenticated -v` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] `poetry run ruff check actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes:** The permission-enforcing proxy is `_PermissionEnforcingListView`
+(`authenticated_views.py`), constructed by `AuthenticatedPropertyListStore.__getattr__`
+after its `read` check. Per the plan's literal wording ("re-checks `write`
+before each mutator and `delete` before `__delitem__`/`clear()`/`delete()`"),
+`pop()` and `remove()` are gated on `write`, not `delete`, even though they
+remove items -- only the three named methods get the `delete` check. New
+tests live in `tests/test_authenticated_views.py` (a new
+`TestAuthenticatedPropertyListStore` class), not
+`test_property_list_notifications.py`, since the existing authenticated-views
+test file already has the permission-mocking pattern to reuse and the `-k
+authenticated` filter picks it up either way. Running `-k authenticated`
+against the full `tests/` tree (rather than scoped to a file) also surfaced
+2 unrelated failures in `tests/integration/test_actor_root_redirect.py`
+(`-k` substring-matched "unauthenticated"); these fail the same way with or
+without this phase's changes when run outside `make test-all-parallel`'s
+harness setup (a `MissingSchema: Invalid URL 'None'` from a base-URL fixture
+that isn't populated when the file runs standalone) and are absent from the
+full-suite run below, so they're a pre-existing test-isolation artifact, not
+a regression. Full suite: 2881 passed (+6), 26 skipped, 0 failed.
 
 ---
 

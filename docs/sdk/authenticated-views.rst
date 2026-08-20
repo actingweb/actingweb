@@ -119,6 +119,43 @@ The ``AuthenticatedPropertyStore`` wraps property access with permission checks:
     # to_dict - returns only accessible properties
     visible_props = peer_view.properties.to_dict()
 
+Property List Access
+---------------------
+
+The ``AuthenticatedPropertyListStore`` wraps ``actor.property_lists`` with
+per-operation permission checks, mirroring ``AuthenticatedPropertyStore``:
+
+.. code-block:: python
+
+    # Reading a list - checks "read" on the list name
+    notes = peer_view.property_lists.notes
+    items = notes.to_list()
+
+    # Mutating - each call re-checks "write" (or "delete" for
+    # __delitem__/clear()/delete()) before delegating, even though the
+    # object above was already obtained under a "read" check
+    notes.append("a new note")        # requires "write"
+    del notes[0]                      # requires "delete"
+    notes.clear()                     # requires "delete"
+
+    # Deleting an entire named list
+    peer_view.property_lists.delete("notes")   # requires "delete"
+
+    # Existence check - requires "read"; returns False rather than raising
+    # when denied
+    peer_view.property_lists.exists("notes")
+
+There is no ``create()``: lists are created lazily on first write, so a
+separate creation step has no meaning. (An earlier ``create()`` existed but
+had never worked -- it resolved through ``PropertyListStore.__getattr__`` to
+a ``NotifyingListProperty`` named ``"create"`` and then called it, raising
+``TypeError``.)
+
+Every method ``actor.property_lists.<name>`` exposes -- ``to_list()``,
+``append()``, ``pop()``, ``slice()``, ``compact()``, ``migrate_to_v2()``, and
+so on -- is reachable through the authenticated view with the matching
+permission check applied per call, not once when the list was obtained.
+
 Permission Errors
 -----------------
 

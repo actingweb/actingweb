@@ -259,6 +259,11 @@ class NotifyingListProperty:
             else:
                 length = len(self._list_prop)
 
+            if operation == "append" and index is None:
+                # Derived from the length just computed above, instead of
+                # a second len(self._list_prop) call in append() below.
+                index = length - 1
+
             diff_info: dict[str, Any] = {
                 "list": self._list_name,
                 "operation": operation,
@@ -351,9 +356,11 @@ class NotifyingListProperty:
 
     def append(self, item: Any) -> None:
         self._list_prop.append(item)
-        # Include the item in the callback so subscribers can use it directly
-        # Index is length - 1 since append adds to the end
-        self._register_diff("append", item=item, index=len(self._list_prop) - 1)
+        # Include the item in the callback so subscribers can use it
+        # directly. Index is length - 1 since append adds to the end --
+        # left to _register_diff to derive from the length it already
+        # computes, rather than a second len(self._list_prop) call here.
+        self._register_diff("append", item=item)
 
     def extend(self, items: list[Any]) -> None:
         self._list_prop.extend(items)
@@ -423,6 +430,17 @@ class PropertyListStore:
     def list_all(self) -> list[str]:
         """List all existing list property names."""
         return self._core_store.list_all()
+
+    def list_all_with_rows(self) -> tuple[list[str], dict[str, str]]:
+        """List all existing list property names, alongside the raw rows
+        the names were derived from -- see
+        `property.PropertyListStore.list_all_with_rows()`.
+
+        The rows are an opaque, point-in-time snapshot of the actor's
+        whole partition: feed them to a list's `prime_from_rows()` /
+        `to_list_from_rows()`, never inspect or parse a row name.
+        """
+        return self._core_store.list_all_with_rows()
 
     def __getattr__(self, name: str) -> NotifyingListProperty:
         """Return a NotifyingListProperty for the requested list name."""

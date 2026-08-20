@@ -633,6 +633,19 @@ class PropertiesHandler(base_handler.BaseHandler):
                     return
 
                 list_prop = getattr(myself.property_lists, name)
+                # This read cannot be deleted (unlike the bounds checks
+                # below, which just validate an IndexError the write would
+                # raise anyway): the spec branch below needs the actual
+                # length value, not just a yes/no bounds answer. It costs
+                # one whole-list range query under v2 -- and that query is
+                # NOT wasted: append()'s first attempt reuses the same
+                # instance's now-populated rank cache (force=False), so the
+                # index == length branch below costs no second read.
+                # __setitem__ (the index != length branch) forces its own
+                # reload regardless, by design (a cached rank list can be
+                # stale on a destructive positional write) -- removing
+                # that residual read needs the handle API Phases 8-11 add,
+                # not a change here.
                 length = len(list_prop)
 
                 # Spec (docs/protocol/actingweb-spec.rst "List Property PUT"):
@@ -1745,6 +1758,9 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     return
 
                 list_prop.append(item_value)
+                # Computed once and reused below, rather than two separate
+                # len(list_prop) - 1 calls for the diff and the response.
+                new_index = len(list_prop) - 1
 
                 # Register diff for subscription notifications
                 myself.register_diffs(
@@ -1753,7 +1769,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     blob=json.dumps(
                         {
                             "action": "add",
-                            "index": len(list_prop) - 1,
+                            "index": new_index,
                             "value": item_value,
                         }
                     ),
@@ -1761,7 +1777,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
 
                 if self.response:
                     self.response.write(
-                        json.dumps({"success": True, "index": len(list_prop) - 1})
+                        json.dumps({"success": True, "index": new_index})
                     )
                     self.response.headers["Content-Type"] = "application/json"
                     self.response.set_status(201)
@@ -1787,12 +1803,16 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                         self.response.set_status(400, "Invalid 'item_index' value")
                     return
 
-                if index < 0 or index >= len(list_prop):
+                # No length pre-check: __setitem__ already raises IndexError
+                # on an out-of-range index, and a separate len() here would
+                # be a second whole-list read under v2 on top of the
+                # write's own reload.
+                try:
+                    list_prop[index] = item_value
+                except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
                     return
-
-                list_prop[index] = item_value
 
                 # Register diff for subscription notifications
                 myself.register_diffs(
@@ -1822,12 +1842,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                         self.response.set_status(400, "Invalid 'item_index' value")
                     return
 
-                if index < 0 or index >= len(list_prop):
+                # No length pre-check -- see the "update" branch above.
+                try:
+                    del list_prop[index]
+                except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
                     return
-
-                del list_prop[index]
 
                 # Register diff for subscription notifications
                 myself.register_diffs(

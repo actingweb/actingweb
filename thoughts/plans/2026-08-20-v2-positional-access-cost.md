@@ -594,13 +594,71 @@ level, and `mock.patch.object(DbProperty, "get_range", side_effect=AssertionErro
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_hot_path_n_plus_one.py -v` passes
-- [ ] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py tests/test_property_list_notifications.py -v` passes
-- [ ] `make test-all-parallel` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pytest tests/test_hot_path_n_plus_one.py -v` passes
+- [x] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py tests/test_property_list_notifications.py -v` passes
+- [x] `make test-all-parallel` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] `poetry run ruff check actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Important correction to this phase's own cost claims**, found while implementing
+and confirmed with empirical probes (`DbProperty.get_range` call-counting against
+real DynamoDB Local) before writing code: the "2k+2" bulk-endpoint baseline, the
+"three whole-list Queries per single-item add" claim for `:1756`/`:1764`, and the
+"two Queries per notified append" claim for `property_store.py:356` **do not hold
+against the current codebase**. `_v2_append()`'s first attempt reuses an
+already-warm `_v2_rank_cache` (`force=False`), and `len()` on the same instance
+after an append is a cache hit, not a query — verified with a real probe script
+(1 `get_range` call for `NotifyingListProperty.append()` with diff registration
+enabled, not 2 or 3). The bulk endpoint already tracks `projected_length` in
+memory across its validation pass (present before this phase, not added by it)
+and measured at 1 (initial length) + *k* (one forced reload per positional write,
+unavoidable per `_v2_setitem`/`_v2_delitem`'s correctness requirement) + 1
+(post-hook `to_list()`, only when hooks are registered) — i.e. already at the
+plan's own `k+2` target, not the `2k+2` starting point. `handlers/properties.py:636`
+(PUT-by-index) is therefore left with its original `len()` call rather than
+switched to `to_indexed_list()` — that switch would have traded a keys-only read
+for a full-value one, which Phase 1 established costs the same on DynamoDB and
+**more** on PostgreSQL, for no query-count benefit, since the append branch
+already reuses the cache and the replace branch's reload is forced regardless.
+A code comment records this at the site. **This does not mean Phases 3's other
+fixes were unnecessary**: the `len(list_prop)` calls this phase removed (the
+eager `www.py` debug logging, the duplicate `/items` POST index computation, the
+duplicate `_register_diff` index in `property_store.py`) are free today only
+because `_v2_append`/append leave the rank cache warm — Phase 9B removes that
+cache entirely (`"append/extend no longer hold a rank cache"`), at which point
+each of those `len()` calls becomes a real whole-list query again. So the
+removals are correctly load-bearing **starting at Phase 9B**, not right now — a
+checkpoint to re-verify with the same probe technique when that phase lands.
+
+**Notes:**
+- `list_all_with_rows()` added to both `property.py::PropertyListStore` (the
+  core class `Actor.property_lists` returns, which is what the handlers use
+  directly) and `interface/property_store.py::PropertyListStore` (the fluent
+  `ActorInterface.property_lists`, for external consumers per F-2).
+  `AuthenticatedPropertyListStore` does not delegate it, matching Decisions —
+  its `__getattr__` would resolve the name as a list name, which is
+  effectively "not supported there" without extra code.
+- `www.py`'s properties overview, `trust.py`'s peer-sharing view, and
+  `actor.py::_get_full_state_for_subscription`'s all-properties branch all now
+  use `list_all_with_rows()` + `prime_from_rows()`/`to_list_from_rows()`, and
+  measured at **zero** `get_range` calls beyond the initial partition dump(s)
+  in `tests/test_v2_cost_library_callers.py` (real DynamoDB Local, not mocked).
+  The trust.py fix also closes a latent bug the N+1 masked: the old
+  `getattr(property_lists, prop_name, None)` probe silently "succeeded" for
+  *every* allowed property name, list or not, so every plain property paid for
+  a phantom list-length attempt too.
+- Bounds-check removals (`www.py` update/delete item actions,
+  `properties.py:1790`/`:1825`) now catch the write's own `IndexError` instead
+  of pre-checking length; regression-tested.
+- New test file: `tests/test_v2_cost_library_callers.py` (10 tests), built
+  against real DynamoDB Local throughout — no mocked storage — since the point
+  of this phase is real backend call counts. Uses `AWWebObj`/`AWRequest`/
+  `AWResponse` directly (no mocking needed for the request/response layer) and
+  a real, created `Actor` (a bare constructor call is not enough: `Actor.get()`
+  resets `self.id` to `None` when no actor-table row exists).
+- Full suite: 2891 passed (+10), 26 skipped, 0 failed.
 
 ---
 

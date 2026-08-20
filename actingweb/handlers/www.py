@@ -154,32 +154,36 @@ class WwwHandler(base_handler.BaseHandler):
             display_properties = {}
             all_properties = properties.copy() if properties else {}
 
-            # Discover standalone list properties using the proper interface
+            # Discover standalone list properties using the proper interface.
+            # list_all_with_rows() pays for exactly one whole-partition dump
+            # -- the same one list_all() alone already paid for and
+            # discarded -- and the rows below serve every list's length
+            # from that dump instead of a whole-list Query + an exists()
+            # GetItem per list property.
+            list_names: list[str] = []
+            list_rows: dict[str, str] = {}
             if (
                 myself
                 and hasattr(myself, "property_lists")
                 and myself.property_lists is not None
             ):
-                list_names = myself.property_lists.list_all()
+                list_names, list_rows = myself.property_lists.list_all_with_rows()
                 logger.debug(f"Found list properties: {list_names}")
                 for list_name in list_names:
                     if list_name not in all_properties:
                         # This is a standalone list property
                         all_properties[list_name] = None  # Placeholder value
 
+            list_name_set = set(list_names)
+
             # Process all properties (regular + list)
             for prop_name, prop_value in all_properties.items():
-                # Check if this is a list property using the proper interface
-                if (
-                    myself
-                    and hasattr(myself, "property_lists")
-                    and myself.property_lists is not None
-                    and myself.property_lists.exists(prop_name)
-                ):
+                if prop_name in list_name_set:
                     # This is a list property
                     list_properties.add(prop_name)
                     try:
                         list_prop = getattr(myself.property_lists, prop_name)
+                        list_prop.prime_from_rows(list_rows)
                         list_length = len(list_prop)
                         display_properties[prop_name] = (
                             f"[List with {list_length} items]"
@@ -882,13 +886,17 @@ class WwwHandler(base_handler.BaseHandler):
                             parsed_value = item_value
                             logger.debug(f"Using item_value as string: {parsed_value}")
 
-                        # Get the list property and append
+                        # Get the list property and append. No length
+                        # logging here: under v2 len() is a whole-list
+                        # range query, and Python evaluates an f-string's
+                        # interpolation before logger.debug() checks the
+                        # level, so those calls ran in production with
+                        # DEBUG off -- three whole-list reads for what
+                        # should be one point write.
                         if myself and hasattr(myself, "property_lists"):
                             logger.debug(f"Getting list property: {prop_name}")
                             list_prop = getattr(myself.property_lists, prop_name)
-                            logger.debug(f"List length before append: {len(list_prop)}")
                             list_prop.append(parsed_value)
-                            logger.debug(f"List length after append: {len(list_prop)}")
                         else:
                             logger.error("List properties not supported")
                             self.response.set_status(
@@ -919,15 +927,20 @@ class WwwHandler(base_handler.BaseHandler):
                         except json.JSONDecodeError:
                             parsed_value = item_value
 
-                        # Get the list property and update
+                        # Get the list property and update. No length
+                        # pre-check: __setitem__ already raises IndexError
+                        # on an out-of-range index, and a separate len()
+                        # here would be a second whole-list read under v2
+                        # on top of the write's own reload.
                         if myself and hasattr(myself, "property_lists"):
                             list_prop = getattr(myself.property_lists, prop_name)
-                            if index < 0 or index >= len(list_prop):
+                            try:
+                                list_prop[index] = parsed_value
+                            except IndexError:
                                 self.response.set_status(
                                     400, f"Index {index} out of range"
                                 )
                                 return
-                            list_prop[index] = parsed_value
                         else:
                             self.response.set_status(
                                 500, "List properties not supported"
@@ -950,15 +963,17 @@ class WwwHandler(base_handler.BaseHandler):
                             self.response.set_status(400, "Invalid item_index")
                             return
 
-                        # Get the list property and delete
+                        # Get the list property and delete. No length
+                        # pre-check -- see the "update" branch above.
                         if myself and hasattr(myself, "property_lists"):
                             list_prop = getattr(myself.property_lists, prop_name)
-                            if index < 0 or index >= len(list_prop):
+                            try:
+                                del list_prop[index]
+                            except IndexError:
                                 self.response.set_status(
                                     400, f"Index {index} out of range"
                                 )
                                 return
-                            del list_prop[index]
                         else:
                             self.response.set_status(
                                 500, "List properties not supported"
@@ -1028,7 +1043,11 @@ class WwwHandler(base_handler.BaseHandler):
                         # Create empty list by accessing it (this initializes the ListProperty)
                         list_prop = getattr(myself.property_lists, property_name)
 
-                        # Initialize the list by ensuring metadata exists (this creates the list in the database)
+                        # Initialize the list by ensuring metadata exists (this creates the list in the database).
+                        # Load-bearing, and deliberately left as a real len() call: this list is empty by
+                        # construction (just created above), so the range query it issues reads zero items --
+                        # there is no N+1 here to fix. See Phase 3 of
+                        # thoughts/plans/2026-08-20-v2-positional-access-cost.md.
                         _ = len(
                             list_prop
                         )  # This will trigger metadata creation if it doesn't exist

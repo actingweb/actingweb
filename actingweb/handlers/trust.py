@@ -1145,17 +1145,30 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
         all_properties = myself.get_properties()
         property_names = list(all_properties.keys()) if all_properties else []
 
-        # Also check property lists (distributed storage)
+        # Also check property lists (distributed storage). list_all_with_rows()
+        # pays for one whole-partition dump and returns it alongside the
+        # names, so each list's item count below is served from that dump
+        # instead of a second whole-list Query per list property -- and,
+        # unlike the previous `getattr(..., prop_name, None)` probe, only
+        # actual list names pay for a count at all: that probe silently
+        # succeeded for every property name (list or not), because
+        # PropertyListStore.__getattr__ hands back a wrapper for any name.
         actor_interface = None
+        list_names: list[str] = []
+        list_rows: dict[str, str] = {}
         try:
             from actingweb.interface.actor_interface import ActorInterface
 
             actor_interface = ActorInterface(myself, self.config)
             if hasattr(actor_interface, "property_lists"):
-                list_names = actor_interface.property_lists.list_all()
+                list_names, list_rows = (
+                    actor_interface.property_lists.list_all_with_rows()
+                )
                 property_names.extend(list_names)
         except Exception as e:
             logger.debug(f"Could not get property lists: {e}")
+
+        list_name_set = set(list_names)
 
         # Remove duplicates
         property_names = list(set(property_names))
@@ -1171,17 +1184,17 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
             if result == PermissionResult.ALLOWED:
                 # Get item count if it's a property list
                 item_count = 0
-                try:
-                    if actor_interface and hasattr(actor_interface, "property_lists"):
+                if prop_name in list_name_set and actor_interface is not None:
+                    try:
                         prop_list = getattr(
-                            actor_interface.property_lists, prop_name, None
+                            actor_interface.property_lists, prop_name
                         )
-                        if prop_list and hasattr(prop_list, "__len__"):
-                            item_count = len(prop_list)
-                except Exception as e:
-                    logger.debug(
-                        f"Could not get item count for property list {prop_name}: {e}"
-                    )
+                        prop_list.prime_from_rows(list_rows)
+                        item_count = len(prop_list)
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not get item count for property list {prop_name}: {e}"
+                        )
 
                 shared.append(
                     {
